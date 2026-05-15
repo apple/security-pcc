@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple Inc. All rights reserved.
-
 /// A limited abstraction over the various attributes that can be configured on a
 /// ``LaunchdJobDefinitionProtocol``, the underlying API provides them on instances of
 /// the job as well.

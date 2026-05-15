@@ -12,25 +12,29 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardJob
 import CloudBoardLogging
+import Foundation
 import os
+internal import CloudBoardDomain
 
 internal struct NullAppRequestSummary: RequestSummary {
     var startTimeNanos: Int64?
 
-    var parentSpanID: String
+    var parentSpanID: UInt64
 
-    var spanID: String
+    var spanID: UInt64
 
     var endTimeNanos: Int64?
 
     var requestID: String? {
         self.requestMetadata.requestID
     }
+
+    var rackID: String?
+    var bootID: String?
+    var ensembleID: String?
 
     let automatedDeviceGroup: String?
 
@@ -47,15 +51,18 @@ internal struct NullAppRequestSummary: RequestSummary {
     var timeToCloudAppInvoke: ContinuousClock.Duration?
     var timeToReceiveParameters: ContinuousClock.Duration?
 
-    public init(app: NullAppServiceName, from environment: CloudAppEnvironment, spanID: String) {
+    public init(app: NullAppServiceName, from environment: CloudAppEnvironment, spanID: UInt64) {
         self.nullServiceName = app
         self.requestMetadata = environment.plaintextMetadata
         self.timeToReceiveParameters = environment.metrics.timeToReceiveParameters
         self.timeToCloudAppInvoke = environment.metrics.timeToCloudAppInvoke
         self.automatedDeviceGroup = environment.plaintextMetadata.automatedDeviceGroup
-        self.parentSpanID = environment.traceContext.spanID
+        self.parentSpanID = environment.updatedTraceContext.spanID
         self.spanID = spanID
         self.namespace = (app == NullAppServiceName.proxyApp ? "NullProxyApp" : "NullCloudApp")
+        self.rackID = environment.rackID.rackId
+        self.bootID = environment.ensembleInstanceID.bootId
+        self.ensembleID = environment.ensembleInstanceID.ensembleId
     }
 
     public func log(to logger: Logger) {
@@ -67,8 +74,8 @@ internal struct NullAppRequestSummary: RequestSummary {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.spanID, privacy: .public)
-        tracing.parent_span_id=\(self.parentSpanID, privacy: .public)
+        tracing.span_id=\(self.spanID.hexEncoded, privacy: .public)
+        tracing.parent_span_id=\(self.parentSpanID.hexEncoded, privacy: .public)
         tracing.start_time_unix_nano=\(self.startTimeNanos ?? 0, privacy: .public)
         tracing.end_time_unix_nano=\(self.endTimeNanos ?? 0, privacy: .public)
         request.duration_ms=\(self.durationMicros.map { String($0 / 1000) } ?? "", privacy: .public)
@@ -79,6 +86,10 @@ internal struct NullAppRequestSummary: RequestSummary {
         error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
         workloadType=\(self.requestMetadata.workloadType, privacy: .public)
         featureId=\(self.requestMetadata.featureID, privacy: .public)
+        rackId=\(self.rackID ?? "", privacy: .public)
+        bootID=\(self.bootID ?? "", privacy: .public)
+        ensembleID=\(self.ensembleID ?? "", privacy: .public)
+
         timeToCloudAppInvokeMicros=\(
             self.timeToCloudAppInvoke?.microsecondsClamped ?? -1,
             privacy: .public

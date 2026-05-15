@@ -20,8 +20,10 @@
 //
 
 public import CryptoKit
+internal import EnsembleWardenCommon
 public import Foundation
 public import IOSurface
+private import OSLog
 
 /// Describes the behaviour required for handling reuests as an EnsembleWardenServer
 ///
@@ -32,42 +34,166 @@ public protocol EnsembleWardenServerHandler {
     @available(*, deprecated)
     func start(keyID: UUID, requestID: UUID, spanID: UUID)
 
+    // Exists for us to use internally in the daemon.
+    @available(*, deprecated)
+    func start(keyEncryptionKey: SymmetricKey?, keyID: UUID, requestID: UUID, spanID: UInt64)
+
     /// Called when a new EnsembleWarden instance is created with a new keyID.
     ///
     /// N.b. Adopting this is not usually required and the API is not usually called.
-    // Exists for us to use internally in the daemon.
-    func start(keyEncryptionKey: SymmetricKey?, keyID: UUID, requestID: UUID, spanID: UInt64)
+    func start(ensembleWardenCryptoHandles: EnsembleWardenCryptoHandles,
+               requestID: UUID, spanID: UInt64) async throws -> FollowerTokens
 
     /// Called whenever new ioSurfaces are published.
     func onPublish(serializedXPCRequest: Data, privateData: [IOSurface], requestID: UUID, spanID: UUID) async throws
-    
+
+    /// Called whenever new ioSurfaces are published.
+    func onPublish(serializedXPCRequest: Data, privateData: [IOSurface], purpose: KVCacheTransferPurpose,
+                   requestID: UUID, spanID: UInt64) async throws
+
     /// Called whenever ioSurfaces are being fetched.
     func onFetch(serializedXPCRequest: Data, requestID: UUID, spanID: UUID) async throws -> [IOSurface]
+
+    /// Called to prefault IOSurfaces into memory
+    func onPrefault(ioSurfaces: [IOSurface], requestID: UUID, spanID: UInt64) async throws
+
+    /// Called whenever new ioSurfaces are published.
+    /// This version is for the new EnsembleTransport backend.
+    /// Eventually, this should replace the other onPublish.
+    func onPublish2(
+        identifier: String,
+        privateData: IOSurface,
+        privateMetadata: IOSurface?,
+        ttl: Duration,
+        purpose: KVCacheTransferPurpose,
+        requestID: UUID,
+        spanID: UInt64) async throws
+
+    /// Called whenever ioSurfaces are being fetched.
+    /// This version is for the new EnsembleTransport backend.
+    /// Eventually, this should replace the other onFetch.
+    func onFetch2(
+        identifier: String,
+        range: ClosedRange<Int>?,
+        host: String,
+        requestID: UUID,
+        spanID: UInt64) async throws -> IOSurface
+
+    /// Called whenever ioSurfaces metadata are being fetched.
+    /// This is only supported with EnsembleTransport backend.
+    func onFetchMetadata(
+        identifier: String,
+        host: String,
+        requestID: UUID,
+        spanID: UInt64) async throws -> IOSurface?
+
+    func onDelete(
+        identifier: String,
+        host: String?,
+        requestID: UUID,
+        spanID: UInt64) async throws
 
     /// Called whenever the client indicates it has finished
     func onFinish() async throws
 
     func onCancellation() throws
+
+    /// Called to drop all cached data in EnsembleTransport
+    func onDropAll() async throws
 }
 
 extension EnsembleWardenServerHandler {
 
     @available(*, deprecated)
-    public func start(keyID: UUID, requestID: UUID, spanID: UUID) {
-        self.start(keyEncryptionKey: nil, keyID: keyID, requestID: requestID, spanID: .init(uuid: spanID))
+    public func start(keyID: UUID, requestID: UUID, spanID: UUID)  {
+        fatalError("Function should be dead. Pls file a radar")
     }
 
-    public func start(keyEncryptionKey: SymmetricKey?, keyID: UUID, requestID: UUID, spanID: UInt64) {
-        // Only needed for EnsembleWardenDaemon, not for general servers.
-        // Don't require adopters to provide an implementation.
+    @available(*, deprecated)
+    public func start(keyEncryptionKey: SymmetricKey?, keyID: UUID, requestID: UUID, spanID: UInt64)  {
+        fatalError("Function should be dead. Pls file a radar")
     }
-    
+
+    public func onPublish(serializedXPCRequest: Data, privateData: [IOSurface], requestID: UUID, spanID: UUID) async throws {
+        // Defualt implementation of the old API.
+        // No-op function so adopters can adopt the new API and not have their build break.
+    }
+
+    /// Called whenever new ioSurfaces are published.
+    public func onPublish(serializedXPCRequest: Data, privateData: [IOSurface], purpose: KVCacheTransferPurpose,
+                          requestID: UUID, spanID: UInt64) async throws {
+        // Forwarding implementation of the new API.
+        // If this is called users haven't adopted the new API. So call the old one.
+        Logger(subsystem: "com.apple.cloudos.ensemblewarden", category: "EnsembleWardenServerHandler").warning("PLEASE ADOPT NEW ENSEMBLEWARDEN API - onPublish(serializedXPCRequest:privateData:purpose:requestID:spanID:)")
+        try await self.onPublish(serializedXPCRequest: serializedXPCRequest, privateData: privateData, requestID: requestID, spanID: UUID(uint: spanID))
+    }
+
+    // MARK: New publish/fetch API
+
+    public func onPublish2(
+        identifier: String,
+        privateData: IOSurface,
+        privateMetadata: IOSurface?,
+        ttl: Duration,
+        purpose: KVCacheTransferPurpose,
+        requestID: UUID,
+        spanID: UInt64
+    ) async throws {
+        fatalError("\(#function) not implemented")
+    }
+
+    public func onFetch2(
+        identifier: String,
+        range: ClosedRange<Int>?,
+        host: String,
+        requestID: UUID,
+        spanID: UInt64
+    ) async throws -> IOSurface {
+        fatalError("\(#function) not implemented")
+    }
+
+    public func onFetchMetadata(
+        identifier: String,
+        host: String,
+        requestID: UUID,
+        spanID: UInt64
+    ) async throws -> IOSurface? {
+        fatalError("\(#function) not implemented")
+    }
+
+    public func onDelete(
+        identifier: String,
+        host: String?,
+        requestID: UUID,
+        spanID: UInt64
+    ) async throws {
+        fatalError("\(#function) not implemented")
+    }
+
+    // MARK: Permanent
+
+    public func start(ensembleWardenCryptoHandles: EnsembleWardenCryptoHandles, requestID: UUID, spanID: UInt64) async throws -> FollowerTokens {
+        // Don't require adopters to provide an implementation.
+        return .init(nodeRanks: [])
+    }
+
+    public func onPrefault(ioSurfaces: [IOSurface], requestID: UUID, spanID: UInt64) async throws {
+        // Default implementation calls prefault on each IOSurface
+        for ioSurface in ioSurfaces {
+            try ioSurface.prefault()
+        }
+    }
+
     public func onFinish() async throws {
         // Don't require adopters to provide an implementation.
     }
-    
+
     public func onCancellation() throws {
         // Don't require adopters to provide an implementation.
     }
-    
+
+    public func onDropAll() async throws {
+        // Default no-op implementation
+    }
+
 }

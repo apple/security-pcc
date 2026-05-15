@@ -25,7 +25,6 @@ import Foundation
 package enum TC2Environment: String, CaseIterable {
     case production = "production"
     case carry = "carry"
-    case liveon = "liveon"
     case uat = "uat"
     case staging = "staging"
     case qa = "qa"
@@ -46,7 +45,6 @@ package enum TC2Environment: String, CaseIterable {
         switch self {
         case .production: return "ropes.apple.com"
         case .carry: return "ropes.apple.com"
-        case .liveon: return "ropes-liveon.edge.icloud.ase.apple.com"
         case .uat: return "ropes-uat.apple.com"
         case .staging: return "ropes-staging.corp.apple.com"
         case .qa: return "ropes-qa.corp.apple.com"
@@ -61,7 +59,6 @@ package enum TC2Environment: String, CaseIterable {
         switch self {
         case .production: return URL(string: "https://ropes.apple.com/prod")!
         case .carry: return URL(string: "https://ropes.apple.com/carry")!
-        case .liveon: return URL(string: "https://ropes-liveon.edge.icloud.ase.apple.com/liveon")!
         case .uat: return URL(string: "https://ropes-uat.apple.com")!
         case .staging: return URL(string: "https://ropes-staging.corp.apple.com")!
         case .qa: return URL(string: "https://ropes-qa.corp.apple.com")!
@@ -76,7 +73,6 @@ package enum TC2Environment: String, CaseIterable {
         switch self {
         case .production: return URL(string: "https://gateway-oblivious.apple.com/pcc/bag")!
         case .carry: return URL(string: "https://gateway-oblivious.apple.com/pcc/bag-carry")!
-        case .liveon: return URL(string: "https://gateway-oblivious.apple.com/pcc/bag-liveon")!
         case .uat: return URL(string: "https://gateway-oblivious.apple.com/pcc/bag-uat")!
         case .staging: return URL(string: "https://gateway-oblivious-ic1.apple.com/pcc/bag-staging")!
         case .qa: return URL(string: "https://gateway-oblivious-ic1.apple.com/pcc/bag-qa")!
@@ -89,7 +85,7 @@ package enum TC2Environment: String, CaseIterable {
 
     package var forceOHTTP: Bool {
         switch self {
-        case .carry, .production, .liveon: return true
+        case .carry, .production: return true
         default: return false
         }
     }
@@ -100,7 +96,6 @@ extension CloudAttestation.Environment {
         switch env {
         case .production: self = .production
         case .carry: self = .carry
-        case .liveon: self = .liveon
         case .uat: self = .uat
         case .staging: self = .staging
         case .qa: self = .qa

@@ -1,3 +1,0 @@
-// DO NOT CHANGE THE ORDER ELSE IT WILL OVERWRITES SWIFT VERSION
-#include "common.xcconfig"
-#include "swift6.xcconfig"

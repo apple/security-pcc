@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple Inc. All rights reserved.
-
 /// In all cases the jobhelper (via``CloudBoardMessanger``) is being launched and communicated to by cloudboard daemon,
 /// This describes _why_ it is being instantiated at the point it is started.
 /// We do not know the full details till the Parameters message is processed

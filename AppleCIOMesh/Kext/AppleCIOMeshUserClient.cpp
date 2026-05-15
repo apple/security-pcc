@@ -209,6 +209,11 @@ const IOExternalTrap AppleCIOMeshUserClient::_traps[MUCI::Trap::NumTraps] = {
             NULL,
             (IOTrap)&AppleCIOMeshUserClient::trapStopForwardChain,
         },
+    [MUCI::Trap::ResetBuffer] =
+        {
+            NULL,
+            (IOTrap)&AppleCIOMeshUserClient::trapResetBuffer,
+        },
 };
 
 bool
@@ -489,7 +494,6 @@ AppleCIOMeshUserClient::setMaxWaitTime(OSObject * target, __unused void * refere
 	}
 
 	nanoseconds_to_absolutetime(maxWaitNanos, &me->_maxWaitTime);
-	nanoseconds_to_absolutetime(maxWaitNanos, &me->_maxWaitTimeBatchNode);
 
 	return me->_provider->setMaxWaitTime(me->_maxWaitTime);
 }
@@ -1821,4 +1825,24 @@ AppleCIOMeshUserClient::trapStopForwardChain()
 	}
 
 	return _provider->stopForwardChain();
+}
+
+IOReturn
+AppleCIOMeshUserClient::trapResetBuffer(uintptr_t bufferId_)
+{
+    if (_provider->isShuttingDown()) {
+        LOG("system is shutting down.  go away");
+        return kIOReturnError;
+    }
+
+    auto sm = _provider->getRetainSharedMemory((MUCI::BufferId)bufferId_);
+    if (sm == nullptr) {
+        LOG("Invalid bufferId: %lld\n", (MUCI::BufferId)bufferId_);
+        return kIOReturnBadArgument;
+    }
+
+    sm->resetForwardingChains();
+    sm->release();
+
+    return kIOReturnSuccess;
 }

@@ -16,6 +16,7 @@
 //
 
 import ArgumentParserInternal
+import CloudAttestation
 import Foundation
 import Network
 import OSPrivate_os_log
@@ -77,6 +78,30 @@ struct CLI: AsyncParsableCommand {
                     throw CLIError("executable not found")
                 }
                 PCCVREHelper.configuredPath = helperPath
+            }
+        }
+    }
+
+    struct AttestationFormatOptions: ParsableArguments {
+        @Option(name: [.customLong("input-format"), .customShort("I")],
+                help: "Input format. Can be any of [attestation-bundle:json, attestation-bundle:protobuf, apple-intelligence-report]")
+        var format: AttestationBundle.AttestationFormat = .appleIntelligenceReport
+
+        @Option(name: [.customLong("request-index"), .customShort("r")],
+                help: "Index of the request to use when parsing an Apple Intelligence Report. Must be used in combination with --attestation-index.")
+        var requestIndex: Int?
+
+        @Option(name: [.customLong("attestation-index"), .customShort("a")],
+                help: "Index of the attestation to use when parsing an Apple Intelligence Report. Must be used in combination with --request-index.")
+        var attestationIndex: Int?
+
+        func validate() throws {
+            guard case .appleIntelligenceReport = format else {
+                return
+            }
+
+            if requestIndex == nil || attestationIndex == nil {
+                throw ValidationError("Both --request-index and --attestation-index need to be supplied for --input-format apple-intelligence-report.")
             }
         }
     }
@@ -795,7 +820,9 @@ extension CLI {
     }
 
     static func checkReleaseRequirements(metadata: SWReleaseMetadata) throws {
-        let supportedFeatures: [String] = [] // no backwards-incompatible features yet
+        let supportedFeatures: [String] = [
+            "tie_proxy"
+        ]
 
         let missingFeatures = metadata.metadata.requirements.filter {
             !supportedFeatures.contains($0.feature)
@@ -809,6 +836,24 @@ extension CLI {
             errorString += "\n\(feature.feature) - \(feature.availability)"
         }
         throw CLIError(errorString)
+    }
+}
+
+extension CloudAttestation.AttestationBundle.AttestationFormat: ExpressibleByArgument {
+    init?(argument: String) {
+        switch argument {
+        case "attestation-bundle:json":
+            self = .attestationBundle(.json)
+
+        case "attestation-bundle:protobuf":
+            self = .attestationBundle(.protobuf)
+
+        case "apple-intelligence-report":
+            self = .appleIntelligenceReport
+
+        default:
+            return nil
+        }
     }
 }
 

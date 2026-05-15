@@ -12,23 +12,25 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
-
 import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardJobHelperAPI
 import Foundation
 import os
+import Synchronization
 
 // cb_jobhelper response to be returned as a response in the InvokeWorkload gRPC call
 enum JobHelperInvokeWorkloadResponse: Sendable {
     case responseChunk(ResponseChunk)
     case failureReport(FailureReason)
-    case findWorker(FindWorkerQuery)
+    case findWorker(query: FindWorkerQuery, negotiate: Negotiate)
     case workerError(UUID)
+    case requestExecutionError(RequestExecutionError)
 }
 
 // cb_jobhelper response to be returned as a response in the InvokeProxyDialBack gRPC call
 enum JobHelperInvokeProxyDialBackResponse {
+    case negotiatePickResponse(selectableEnsembles: EnsembleNegotiation)
     case decryptionKey(keyID: Data, Data)
     case workerRequestMessage(Data, isFinal: Bool)
     case workerRequestEOF
@@ -39,6 +41,7 @@ protocol JobHelperResponseDelegateProtocol: CloudBoardJobHelperAPIClientDelegate
         uuid: UUID,
         responseContinuation: AsyncStream<JobHelperInvokeProxyDialBackResponse>.Continuation
     )
+    func waitForLAContextUsedNotification() async throws
 }
 
 // Delegate to handle messages from cb_jobhelper
@@ -48,10 +51,16 @@ final class JobHelperResponseDelegate: JobHelperResponseDelegateProtocol {
         category: "JobHelperResponseDelegate"
     )
 
+    enum JobHelperResponseDelegateError: Error {
+        case delegateDestroyedBeforeLAContextUsed
+    }
+
     private let invokeWorkloadResponseContinuation: AsyncStream<JobHelperInvokeWorkloadResponse>.Continuation
     typealias ProxyDialbackResponseContinuation = AsyncStream<JobHelperInvokeProxyDialBackResponse>.Continuation
-    private let workerContinuations: OSAllocatedUnfairLock<[UUID: ProxyDialbackResponseContinuation]> =
-        .init(initialState: [:])
+    private let workerContinuations: Mutex<[UUID: ProxyDialbackResponseContinuation]> = .init([:])
+
+    private let laContextUsedPromise: Promise<Void, Error> =
+        .init(autoFailureIfUnfulfilled: JobHelperResponseDelegateError.delegateDestroyedBeforeLAContextUsed)
 
     init(invokeWorkloadResponseContinuation: AsyncStream<JobHelperInvokeWorkloadResponse>.Continuation) {
         self.invokeWorkloadResponseContinuation = invokeWorkloadResponseContinuation
@@ -74,8 +83,16 @@ final class JobHelperResponseDelegate: JobHelperResponseDelegateProtocol {
             self.invokeWorkloadResponseContinuation.yield(.responseChunk(responseChunk))
         case .failureReport(let failureReason):
             self.invokeWorkloadResponseContinuation.yield(.failureReport(failureReason))
-        case .findWorker(let query):
-            self.invokeWorkloadResponseContinuation.yield(.findWorker(query))
+        case .findWorker(let query, let negotiate):
+            self.invokeWorkloadResponseContinuation.yield(.findWorker(query: query, negotiate: negotiate))
+        case .workerNegotiatePickResponse(let uuid, let selectableEnsembles):
+            guard let workerContinuation = self.workerContinuations.withLock({ $0[uuid] }) else {
+                Self.logger.fault(
+                    "Received negotiate pick response for unknown worker ID: \(uuid, privacy: .public). Ignoring."
+                )
+                return
+            }
+            workerContinuation.yield(.negotiatePickResponse(selectableEnsembles: selectableEnsembles))
         case .workerDecryptionKey(let uuid, let keyID, let encapsulatedKey):
             guard let workerContinuation = self.workerContinuations.withLock({ $0[uuid] }) else {
                 Self.logger.fault(
@@ -106,7 +123,7 @@ final class JobHelperResponseDelegate: JobHelperResponseDelegateProtocol {
                 return
             }
         case .workerError(let uuid):
-            // If a continuation exists for the worker where an error occured
+            // If a continuation exists for the worker where an error occurred
             // we indicate that there would be no further messages
             if let workerContinuation = self.workerContinuations.withLock({ $0.removeValue(forKey: uuid) }) {
                 workerContinuation.yield(.workerRequestEOF)
@@ -116,7 +133,15 @@ final class JobHelperResponseDelegate: JobHelperResponseDelegateProtocol {
             self.invokeWorkloadResponseContinuation.yield(.workerError(uuid))
         case .jobHelperEOF:
             self.invokeWorkloadResponseContinuation.finish()
+        case .usedLAContext:
+            self.laContextUsedPromise.succeed()
+        case .requestExecutionError(let error):
+            self.invokeWorkloadResponseContinuation.yield(.requestExecutionError(error))
         }
+    }
+
+    func waitForLAContextUsedNotification() async throws {
+        try await Future(self.laContextUsedPromise).valueWithCancellation
     }
 
     func registerWorker(
@@ -137,8 +162,10 @@ final class JobHelperResponseDelegate: JobHelperResponseDelegateProtocol {
 
 struct JobHelperResponseDelegateProvider: CloudBoardJobHelperResponseDelegateProvider {
     func makeDelegate(
-        invokeWorkloadResponseContinuation: AsyncStream<JobHelperInvokeWorkloadResponse>.Continuation
+        invokeWorkloadResponseContinuation: AsyncStream<JobHelperInvokeWorkloadResponse>.Continuation,
     ) -> JobHelperResponseDelegateProtocol {
-        return JobHelperResponseDelegate(invokeWorkloadResponseContinuation: invokeWorkloadResponseContinuation)
+        return JobHelperResponseDelegate(
+            invokeWorkloadResponseContinuation: invokeWorkloadResponseContinuation,
+        )
     }
 }

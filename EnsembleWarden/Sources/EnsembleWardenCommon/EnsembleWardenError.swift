@@ -19,19 +19,45 @@
 //  Created by Oliver Chick (ORAC) on 12/11/2024.
 //
 
+import Darwin
 
-public enum EnsembleWardenError: Error {
-
-    case unexpectedError
-    case invalidStateTransition
+public enum EnsembleWardenError: Codable, Equatable, Hashable, Error {
+    // MARK: XPC
     case unexpectedXPCMessageType
+    case invalidSyncRequest
+    case clientNoLongerActive
+    case unsupportedXPCRequestType
+    case invalidXPCResponse
+
+    // MARK: internal errors
     case failedToCreateIOSurface
     case failedToAccessDataPointer
+    case failedToTakeOwnership(kern_return_t)
+    case failedToPrefaultIOSurface
     case launchdMisconfiguration
-    case clientNoLongerActive
+    case invalidStateTransition
+    case clientNotYetConnected
+    case invalidFollowerToken
+    case unexpectedError
+    case externalError(type: String)
+    case kvCacheTransferFetchFailed
+    case kvCacheTransferPublishFailed
+    case failedToGenerateRandomBytes
+    case unimplemented
+    case emptyFetchResult
+    case ioSurfaceDataMismatch
+    case invalidStartMessage
+
+    // MARK: key errors
+    case ensemblePorterHandleNotSupplied
     case keyIDNotSupplied
     case keyIDSuppliedTwice
-    case invalidSyncRequest
+    case keyAlreadyFetched
+
+    // MARK: Crypto errors
+    case invalidSealedBox
+    case failedToGenerateIOSurface
+    case invalidIOSurfaceRange
 }
 
 extension EnsembleWardenError: ReportableError {
@@ -39,24 +65,62 @@ extension EnsembleWardenError: ReportableError {
         switch self {
         case .unexpectedError:
             "An unexpected error occurred"
+        case .externalError(let type):
+            "An external error occurred: \(type)"
+        case .kvCacheTransferFetchFailed:
+            "Failed to fetch from transfer daemon"
+        case .kvCacheTransferPublishFailed:
+            "Failed to publish to transfer daemon"
+        case .unimplemented:
+            "Unimplemented"
         case .invalidStateTransition:
             "An invalid state transition was attempted"
+        case .invalidFollowerToken:
+            "An invalid follower token was supplied. No matching instance."
         case .unexpectedXPCMessageType:
             "XPC received an unexpected message type"
+        case .unsupportedXPCRequestType:
+            "Unsupported XPC request type"
+        case .invalidXPCResponse:
+            "Invalid XPC response format"
         case .failedToCreateIOSurface:
             "Failed to create XPC surface"
+        case .failedToGenerateRandomBytes:
+            "Failed to generate random bytes"
         case .failedToAccessDataPointer:
             "Error accessing IOSurface"
+        case .failedToTakeOwnership(let errorCode):
+            "Failed to take ownership of IOSurface (\(errorCode))"
+        case .failedToPrefaultIOSurface:
+            "Failed to prewarm IOSurface"
         case .launchdMisconfiguration:
             "Launchd is misconfigured"
         case .clientNoLongerActive:
             "Client is no longer active. ensemblewardend likely crashed and no longer has access to the key for this session. Create a fresh ensemblewarden client."
+        case .ensemblePorterHandleNotSupplied:
+            "No ensembleporter handle was supplied"
         case .keyIDNotSupplied:
             "A keyID was not yet supplied to the ensemblewarden client. The caller should have called `ensembleWardenClient.supply(keyID:)`"
         case .keyIDSuppliedTwice:
             "A keyID was supplied twice. Each ensemblewarden client can only be supplied a single keyID."
         case .invalidSyncRequest:
             "An invalid XPC request was made with a synchronous function"
+        case .invalidSealedBox:
+            "Invalid encrypted IOSurface sealed box"
+        case .failedToGenerateIOSurface:
+            "Failed to create an IOSurface"
+        case .invalidIOSurfaceRange:
+            "Invalid IOSurface data range"
+        case .keyAlreadyFetched:
+            "Keys have already been fetched"
+        case .emptyFetchResult:
+            "Fetch operation returned no IOSurfaces"
+        case .ioSurfaceDataMismatch:
+            "Fetched IOSurface data does not match published data"
+        case .clientNotYetConnected:
+            "Client not yet connected"
+        case .invalidStartMessage:
+            "Invalid start message"
         }
     }
 

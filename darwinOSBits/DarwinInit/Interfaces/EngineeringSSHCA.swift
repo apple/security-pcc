@@ -19,6 +19,7 @@
 
 import Foundation
 import System
+import os
 
 enum EngineeringSSHCA {
 	
@@ -26,7 +27,12 @@ enum EngineeringSSHCA {
 		case principals
 		case groups
 	}
-	
+
+    struct Config {
+        var principals: [String]?
+        var groups: [String]?
+    }
+
 	static let logger = Logger.esc
 	static let sshUsersBaseFolder = "/private/var/db/ssh/users"
 
@@ -63,7 +69,7 @@ enum EngineeringSSHCA {
 		return all_retrictions_applied
 	}
 
-	static func restrictAccessTo(account:String, config:DInitAppleConnectSSHConfig?) -> Bool {
+	static func restrictAccessTo(account: String, config: Config?) -> Bool {
 		// check that principals have a realm and append @APPLECONNNECT.APPLE.COM if they dont
 		var appleConnectPrincipals:[String] = []
 		if let principals = config?.principals {

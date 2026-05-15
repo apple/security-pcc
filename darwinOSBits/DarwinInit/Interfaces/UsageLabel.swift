@@ -17,6 +17,8 @@
 //  
 //
 
+import CoreFoundation
+
 enum UsageLabel {
 	static func setUsageLabel(to value: String) -> Bool {
 		let domain = CFPreferences.Domain(

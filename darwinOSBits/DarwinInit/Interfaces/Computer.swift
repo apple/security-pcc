@@ -17,55 +17,279 @@
 //  darwin-init
 //
 
+import Darwin
 import os
+import RemoteServiceDiscovery
 import System
 import SystemConfiguration
 import MobileGestaltPrivate
+import reboot2
+internal import DarwinInitBridging
 
-enum Computer {
+
+// MARK: - Platform
+
+enum ComputerPlatform: Codable {
+    case macOS
+    case tvOS
+    case iOS
+    case watchOS
+    case other
+}
+
+// MARK: - Protocol
+protocol Computer {
+
+    typealias Platform = ComputerPlatform
+
+    var platform: ComputerPlatform { get }
+
     /// Sets the computerName using SystemConfiguration.
-	///
-	/// The computer name is used for user displays and is used by bonjour.
-    static func set(computerName name: String) async throws {
-        logger.log("Setting computerName to \(name)")
-        let preferences = try SCPreferences.create()
-		try await preferences.withLock(lockRetryLimit: 5) { preferences in
-			try preferences.computerName(name)
-			try preferences.commit()
-			try preferences.apply()
-		}
-    }
+    ///
+    /// The computer name is used for user displays and is used by bonjour.
+    func set(computerName name: String) async throws
 
     /// Sets the host name using SystemConfiguration.
-	///
-	/// The host name can be queried via SystemConfiguration and bsd APIs.
-    static func set(hostName name: String) async throws {
-        logger.log("Setting hostName to \(name)")
-        let preferences = try SCPreferences.create()
-		try await preferences.withLock(lockRetryLimit: 5) { preferences in
-			try preferences.hostName(name)
-			try preferences.commit()
-			try preferences.apply()
-		}
-    }
+    ///
+    /// The host name can be queried via SystemConfiguration and bsd APIs.
+    func set(hostName name: String) async throws
 
-	/// Sets the local host name using SystemConfiguration.
-	///
-	/// The local host name is used by bonjour.
-	static func set(localHostName name: String) async throws {
-		logger.log("Setting localHostName to \(name)")
-		let preferences = try SCPreferences.create()
-		try await preferences.withLock(lockRetryLimit: 5) { preferences in
-			try preferences.localHostname(name)
-			try preferences.commit()
-			try preferences.apply()
-		}
-	}
+    /// Sets the local host name using SystemConfiguration.
+    ///
+    /// The local host name is used by bonjour.
+    func set(localHostName name: String) async throws
+
+    /// Set CFPreferences
+    ///
+    /// The levels are [User: App: Key: Values]]]
+    /// AnyUser will be translated to `kCFPreferencesAnyUser`
+    /// AnyApplication will be translated to `kCFPreferencesAnyApplication`
+    func set(preferences: [String: [String: [String: JSON]]]) -> [String: [String: [String: JSON]]]?
 
     /// Configures password-less sudo for the admin group.
     ///
     /// - Returns: `true` for success, `false` for failure.
-    static func configurePasswordlessSudo() -> Bool {
+    func configurePasswordlessSudo() -> Bool
+
+    /// Set the current locale for all users. Default locale is `en_US_POSIX`
+    ///
+    /// - Returns: true if successful (result can be ignored).
+    func setLocale(_ locale: String) -> Bool
+
+    func getAutomatedDeviceGroup() -> String?
+
+    func setAutomatedDeviceGroup(to group: String) -> Bool
+
+    var uniqueChipID: Int? { get }
+
+    var serialNumber: String? { get }
+
+    var securityDomain: Int? { get }
+
+    var boardID: Int? { get }
+
+    var chipID: Int? { get }
+
+    var oceanComputeCarrierID: Int? { get }
+
+    var oceanComputeCarrierSlot: Int? { get }
+
+    var isComputeNode: Bool { get }
+
+    var isBMC: Bool { get }
+
+    var isHostAttached: Bool { get }
+
+    var isVM: Bool { get }
+
+    var isDarwinCloud: Bool { get }
+    
+    var isFactorySignedRestore: Bool { get }
+
+    var buildVersion: String? { get }
+
+    var releaseType: String { get }
+
+    var shouldLoadConfigFromNVRAM: Bool { get }
+
+    var allowsInternalSecurityPolicies: Bool { get }
+
+    func lockCryptexes() throws
+
+    var defaultUSRAction: DInitUSR? { get  }
+
+    func userspaceReboot(_ USR: DInitUSR) throws
+
+    func reboot() throws
+
+    func shutdown() throws
+
+    var console: UnsafeMutablePointer<FILE>? { get }
+
+    var osVariantHasInternalContent: Bool { get }
+
+    /// Location of the rego bundle, abstracted for testing
+    var regoBundle: String { get }
+
+    // MARK: Run commands
+    @discardableResult
+    func run(executable: URL, arguments: [CustomStringConvertible]) throws -> String
+    func run(shell: String?, command: String, savingStandardOutTo path: FilePath?) -> Bool
+
+
+    // MARK: Secure Config
+    func registerSecureconfig(parameters: Data?, securityPolicy: String?) -> Int32
+    func registerSecureconfig(config: Data?) -> Int32
+
+    // MARK: subsystems
+    var nvram: any NVRAM { get throws }
+    var fileSystem: any FileSystem { get }
+    var systemLog: any SystemLog { get }
+}
+
+extension Computer {
+
+    func run(shell: String?, command: String) -> Bool {
+        return self.run(shell: shell, command: command, savingStandardOutTo: nil)
+    }
+
+}
+
+// MARK: - RealComputer
+class RealComputer: Computer {
+
+    var platform: Platform {
+#if os(macOS)
+        return .macOS
+#elseif os(iOS)
+        return .iOS
+#elseif os(watchOS)
+        return .watchOS
+#else
+        return .other
+#endif
+    }
+
+    /// Globallay shared RealComputer Instance
+    static var shared: RealComputer = RealComputer()
+
+    var _nvram: RealNVRAM?
+    var nvram: NVRAM {
+        get throws {
+            guard let _nvram else {
+                let nvram = try RealNVRAM()
+                _nvram = nvram
+                return nvram
+            }
+            return _nvram
+        }
+    }
+
+    let fileSystem: any FileSystem = RealFileSystem.shared
+    let systemLog: any SystemLog = RealSystemLog()
+
+    /// Sets the computerName using SystemConfiguration.
+    ///
+    /// The computer name is used for user displays and is used by bonjour.
+    func set(computerName name: String) async throws {
+        logger.log("Setting computerName to \(name)")
+        let preferences = try SCPreferences.create()
+        try await preferences.withLock(lockRetryLimit: 5) { preferences in
+            try preferences.computerName(name)
+            try preferences.commit()
+            try preferences.apply()
+        }
+    }
+
+    /// Sets the host name using SystemConfiguration.
+    ///
+    /// The host name can be queried via SystemConfiguration and bsd APIs.
+    func set(hostName name: String) async throws {
+        logger.log("Setting hostName to \(name)")
+        let preferences = try SCPreferences.create()
+        try await preferences.withLock(lockRetryLimit: 5) { preferences in
+            try preferences.hostName(name)
+            try preferences.commit()
+            try preferences.apply()
+        }
+    }
+
+    /// Sets the local host name using SystemConfiguration.
+    ///
+    /// The local host name is used by bonjour.
+     func set(localHostName name: String) async throws {
+        logger.log("Setting localHostName to \(name)")
+        let preferences = try SCPreferences.create()
+        try await preferences.withLock(lockRetryLimit: 5) { preferences in
+            try preferences.localHostname(name)
+            try preferences.commit()
+            try preferences.apply()
+        }
+    }
+
+    /// Sets the preferences
+    func set(preferences: [String: [String: [String: JSON]]]) -> [String: [String: [String: JSON]]]? {
+        var result: [String: [String: [String: JSON]]] = [:]
+
+        for (user, userPrefs) in preferences {
+            var appVerified: [String: [String: JSON]] = [:]
+
+            for (app, appPrefs) in userPrefs {
+
+                let cfUser = if user == "AnyUser" {
+                    kCFPreferencesAnyUser
+                } else {
+                    user as CFString
+                }
+
+                let cfApp = if app == "AnyApplication" {
+                    kCFPreferencesAnyApplication
+                } else {
+                    app as CFString
+                }
+
+                let domain = CFPreferences.Domain(
+                    applicationId: cfApp,
+                    userName: cfUser,
+                    hostName: kCFPreferencesCurrentHost
+                )
+
+                for (key, value) in appPrefs {
+                    CFPreferences.set(value: value.propertyListValue, for: key, in: domain)
+                }
+
+                let ok = CFPreferences.synchronize(domain: domain)
+                if !ok {
+                    logger.warning("Failed to synchronize \(cfUser).\(cfApp)")
+                }
+
+                var verified: [String: JSON] = [:]
+                for (key, value) in appPrefs {
+                    let want = value.propertyListValue
+                    let have = CFPreferences.getValue(for: key, in: domain)
+
+                    if CFEqual(want ?? kCFNull, have ?? kCFNull) {
+                        verified[key] = value
+                    }
+                }
+
+                if !verified.isEmpty {
+                    appVerified[app] = verified
+                }
+            }
+
+            if !appVerified.isEmpty {
+                result[user] = appVerified
+            }
+        }
+
+        return result.isEmpty ? nil : result
+    }
+
+    /// Configures password-less sudo for the admin group.
+    ///
+    /// - Returns: `true` for success, `false` for failure.
+    func configurePasswordlessSudo() -> Bool {
 #if os(macOS)
         logger.log("Configuring password-less sudo for admin group")
         do {
@@ -83,109 +307,155 @@ enum Computer {
 #endif
     }
 
-	/// Set the current locale for all users. Default locale is `en_US_POSIX`
-	///
-	/// - Returns: true if successful (result can be ignored).
-	static func setLocale(_ locale: String = "en_US_POSIX") -> Bool {
-		let key = "AppleLocale"
-		let value = locale as CFString
+    /// Set the current locale for all users. Default locale is `en_US_POSIX`
+    ///
+    /// - Returns: true if successful (result can be ignored).
+    func setLocale(_ locale: String) -> Bool {
+        let key = "AppleLocale"
+        let value = locale as CFString
 
-		let domain = CFPreferences.Domain(
-			applicationId: kCFPreferencesAnyApplication,
-			userName: kCFPreferencesCurrentUser,
-			hostName: kCFPreferencesAnyHost)
-		CFPreferences.set(value: value, for: key, in: domain)
+        let domain = CFPreferences.Domain(
+            applicationId: kCFPreferencesAnyApplication,
+            userName: kCFPreferencesCurrentUser,
+            hostName: kCFPreferencesAnyHost)
+        CFPreferences.set(value: value, for: key, in: domain)
 
-		guard CFPreferences.synchronize(domain: domain) else {
-			logger.error("Failed to set AppleLocale to \(locale, privacy: .public): Failed to synchronize preferences.")
-			return false
-		}
-		CFPreferences.flushCaches()
+        guard CFPreferences.synchronize(domain: domain) else {
+            logger.error("Failed to set AppleLocale to \(locale, privacy: .public): Failed to synchronize preferences.")
+            return false
+        }
+        CFPreferences.flushCaches()
 
-		guard let actualValue = CFPreferences.getValue(for: key, in: domain) else {
-			logger.error("Failed to set AppleLocale to \(locale, privacy: .public): Failed persist preferences.")
-			return false
-		}
+        guard let actualValue = CFPreferences.getValue(for: key, in: domain) else {
+            logger.error("Failed to set AppleLocale to \(locale, privacy: .public): Failed persist preferences.")
+            return false
+        }
 
-		guard CFEqual(actualValue, value) else {
-			logger.error("Failed to set AppleLocale to \(locale, privacy: .public): Invalid persisted value.")
-			return false
-		}
+        guard CFEqual(actualValue, value) else {
+            logger.error("Failed to set AppleLocale to \(locale, privacy: .public): Invalid persisted value.")
+            return false
+        }
 
-		logger.log("Set AppleLocale to \(locale, privacy: .public).")
-		return true
-	}
-	
-	static func getAutomatedDeviceGroup() -> String? {
-		guard let group = shim_automatedDeviceGroup() else {
-			logger.log("Failed to find an AutomatedDeviceGroup for this device")
-			return nil
-		}
-		logger.log("Found AutomatedDeviceGroup: \(group, privacy: .public)")
-		return group
-	}
-	
-	static func setAutomatedDeviceGroup(to group: String) -> Bool {
-		shim_setAutomatedDeviceGroup(group)
-		let actual = getAutomatedDeviceGroup()
-		guard actual == group else {
-			logger.error("Failed to set AutomatedDeviceGroup to \(group, privacy: .public)")
-			return false
-		}
-		logger.log("Successfully set AutomatedDeviceGroup to \(group, privacy: .public)")
-		return true
-	}
+        logger.log("Set AppleLocale to \(locale, privacy: .public).")
+        return true
+    }
 
-    static func uniqueChipID() -> Int? {
+    func getAutomatedDeviceGroup() -> String? {
+        guard let group = shim_automatedDeviceGroup() else {
+            logger.log("Failed to find an AutomatedDeviceGroup for this device")
+            return nil
+        }
+        logger.log("Found AutomatedDeviceGroup: \(group, privacy: .public)")
+        return group
+    }
+
+    func setAutomatedDeviceGroup(to group: String) -> Bool {
+        shim_setAutomatedDeviceGroup(group)
+        let actual = getAutomatedDeviceGroup()
+        guard actual == group else {
+            logger.error("Failed to set AutomatedDeviceGroup to \(group, privacy: .public)")
+            return false
+        }
+        logger.log("Successfully set AutomatedDeviceGroup to \(group, privacy: .public)")
+        return true
+    }
+
+    var uniqueChipID: Int? {
         let id = Int(shim_MGQUniqueChipID())
         return id != -1 ? id : nil
     }
 
-    static func serialNumber() -> String? {
+    var serialNumber: String? {
         shim_MGQSerialNumber() as String?
     }
 
-    static func securityDomain() -> Int? {
+    var securityDomain: Int? {
         let id =  Int(shim_MGQSecurityDomain())
         return id != -1 ? id : nil
     }
 
-    static func boardID() -> Int? {
+    var boardID: Int? {
         let id =  Int(shim_MGQBoardID())
         return id != -1 ? id : nil
     }
 
-    static func chipID() -> Int? {
+    var chipID: Int? {
         let id =  Int(shim_MGQChipID())
         return id != -1 ? id : nil
     }
 
-    static func isComputeNode() -> Bool {
+    var oceanComputeCarrierID: Int? {
+        shim_MGQOceanComputeCarrierID() as? Int
+    }
+
+    var oceanComputeCarrierSlot: Int? {
+        shim_MGQOceanComputeCarrierSlot() as? Int
+    }
+
+    var isComputeNode: Bool {
         MobileGestalt.current.isComputeNode
     }
 
-    static func isBMC() -> Bool {
+    var isBMC: Bool {
         MobileGestalt.current.isComputeController
     }
 
-    static func isVM() -> Bool {
+    var isHostAttached: Bool {
+        return remote_device_copy_unique_of_type(REMOTE_DEVICE_TYPE_NCM_HOST) != nil
+    }
+
+    var isVM: Bool {
         MobileGestalt.current.isVirtualDevice
     }
 
-    static func isDarwinCloud() -> Bool {
-        self.releaseType().contains("Darwin Cloud")
-    }
-    
-    static func isFactorySignedRestore() -> Bool {
-        MobileGestalt.current.isFactorySignedRestore
+    var nvramConfigAllowedOnCustomerOS: Bool {
+        MobileGestalt.current.deviceSupportsDarwinInitConfigFromNVRAM
     }
 
-    static func buildVersion() -> String? {
+    var isDarwinCloud: Bool {
+        self.releaseType.contains("Darwin Cloud")
+    }
+
+    var isFactorySignedRestore: Bool {
+            MobileGestalt.current.isFactorySignedRestore
+    }
+    
+    var buildVersion: String? {
         MobileGestalt.current.buildVersion
     }
 
-    static func releaseType() -> String {
+    var releaseType: String {
         MobileGestalt.current.releaseType
+    }
+
+    var shouldLoadConfigFromNVRAM: Bool {
+        if self.allowsInternalSecurityPolicies || self.isVM || self.nvramConfigAllowedOnCustomerOS {
+            return true
+        }
+
+        /*
+         * Hardware that operates in Ephemeral Data Mode by default
+         * should only trust the BMC on customer builds, and not use NVRAM.
+         * However, hardware that does not normally run in EphDM
+         * could use EphDM, but lacks a BMC from which to fetch its config.
+         *
+         * The EphDM Tatsu entitlement requires explicit action and permission
+         * from Tatsu to enable, making it a safe indicator for trusting
+         * NVRAM on customer builds, without affecting existing hardware.
+         *
+         * This allows us to configure shelf-stable EphDM devices that can
+         * reliably boot a given darwin-init config, even without a network
+         * connection.
+         *
+         * NOTE: This could also be used to enable trusting NVRAM on customer
+         * builds on prod fused EphDM hardware, if the hardware is authorized
+         * to request this entitlement.
+         */
+        let override: NSNumber? = MobileGestalt.current.ephemeralDataModeOverride
+        if let value = override {
+            return value == 1
+        }
+        return false
     }
 
     private static func hasServiceNamed(_ name: String) -> Bool {
@@ -201,18 +471,22 @@ enum Computer {
         return result
     }
 
-    static func allowsInternalSecurityPolicies() -> Bool {
+    var allowsInternalSecurityPolicies: Bool {
         shim_allows_internal_security_policies()
     }
 
-    static func lockCryptexes() throws {
+    var osVariantHasInternalContent: Bool {
+        os_variant_has_internal_content(Logger.subsystem)
+    }
+
+    func lockCryptexes() throws {
         let e = shim_cryptex_lockdown()
         if e != 0 {
             throw Errno(rawValue: e)
         }
     }
 
-    static func defaultUSRAction() -> DInitUSRPurpose? {
+    var defaultUSRAction: DInitUSR? {
         let entry = IORegistryEntryFromPath(kIOMainPortDefault, kIODeviceTreePlane + ":/chosen")
         guard entry > 0 else {
             return nil
@@ -237,32 +511,39 @@ enum Computer {
         }
     }
 
-    static func userspaceReboot(_ purposeString: DInitUSRPurpose) throws {
-		let purpose: rb3_userreboot_purpose_t_t
-
-		do {
-            purpose = try DInitUSRPurpose.determineRebootPurpose(purposeString)
-		} catch {
-			throw DInitError.userspaceRebootFailed(error, description: "Failed to determine reboot purpose")
-		}
-
+    fileprivate static func userspaceReboot(USRType: UInt64, USRPurpose: rb3_userreboot_purpose_t_t?) throws {
         var timeout:mach_timespec_t = mach_timespec(tv_sec: 60, tv_nsec: 0)
         let kr = IOKitWaitQuiet(kIOMainPortDefault, &timeout)
         logger.log("IOKitWaitQuiet returned \(kr)")
 
-        let rc = shim_usr(purpose)
+        var rc: Int32 = -1
+        if let USRPurpose {
+            rc = shim_reboot3_with_purpose(USRType, USRPurpose)
+        } else {
+            rc = shim_reboot3(USRType)
+        }
+
         if rc != 0  {
-			throw DInitError.userspaceRebootFailed(Errno(rawValue: rc))
+            throw DInitError.userspaceRebootFailed(Errno(rawValue: rc))
         }
     }
 
-    static func reboot() throws {
+    func userspaceReboot(_ USR: DInitUSR) throws {
+        logger.info("Getting ready to reboot with type \(USR.rawValue)")
+        if USR != .none && USR != .empty {
+            try Self.userspaceReboot(USRType: USR.rebootType, USRPurpose: USR.rebootPurpose)
+        } else {
+            throw DInitError.userspaceRebootInvalidInput
+        }
+    }
+
+    func reboot() throws {
         guard 0 == shim_reboot3(RB2_FULLREBOOT) else {
-			throw DInitError.rebootFailed(Errno.current)
+            throw DInitError.rebootFailed(Errno.current)
         }
     }
 
-    static func shutdown() throws {
+    func shutdown() throws {
 #if os(macOS)
         if !Subprocess.run(shell: nil, command: "shutdown -h now") {
             throw DInitError.shutdownFailed
@@ -271,5 +552,32 @@ enum Computer {
         logger.error("Shutdown only available on macOS")
         throw DInitError.shutdownFailed
 #endif
+    }
+
+    var console: UnsafeMutablePointer<FILE>? {
+        return fopen("/dev/console", "a")
+    }
+
+    var regoBundle: String {
+        kDInitValidatorBundle
+    }
+
+    // MARK: Run commands
+    @discardableResult
+    func run(executable: URL, arguments: [CustomStringConvertible]) throws -> String {
+        try Subprocess.run(executable: executable, arguments: arguments)
+    }
+
+    func run(shell: String?, command: String, savingStandardOutTo path: FilePath?) -> Bool {
+        Subprocess.run(shell: shell, command: command, savingStandardOutTo: path)
+    }
+
+    // MARK: Secure Config
+    func registerSecureconfig(parameters: Data?, securityPolicy: String?) -> Int32 {
+        shim_register_secureconfig_parameters(parameters, securityPolicy)
+    }
+
+    func registerSecureconfig(config: Data?) -> Int32 {
+        shim_register_config(config)
     }
 }

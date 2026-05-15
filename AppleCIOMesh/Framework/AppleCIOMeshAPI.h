@@ -25,7 +25,7 @@ __BEGIN_DECLS
 // bumped when there are additions or changes that
 // are not compatible.
 //
-#define MESHAPI_VERSION 222
+#define MESHAPI_VERSION 223
 
 typedef struct MeshHandle MeshHandle_t;
 

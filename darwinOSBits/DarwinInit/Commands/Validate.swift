@@ -18,10 +18,11 @@
 //
 
 import ArgumentParserInternal
+import Foundation
 
 struct Validate: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Validate a darwin-init configuration against a configuration security policy: customer, customerProxy or carry",
+        abstract: "Validate a darwin-init configuration array against a configuration security policy: customer, customerProxy or carry",
         discussion: """
             Takes the file name of a json file, parses it, and validates it against the \
             configuration security policy specified in the config. All validation errors will be printed.
@@ -40,14 +41,23 @@ struct Validate: AsyncParsableCommand {
     }
 
     func run() async throws {
-        let loadedConfig = try await DInitConfigLoader.load(from: source)
-        let prettyJson = try loadedConfig.config.jsonString(redactCredentialStrings: false)
-        if let policyString = loadedConfig.config.configSecurityPolicy {
-            print("Validating config under \(policyString) policy: \(prettyJson)")
-            try Apply.validateConfig(policyString: policyString, config: loadedConfig.config)
-            print("darwin-init config is valid with respect to \(policyString) policy.")
+        let computer = RealComputer.shared
+        try await run(on: computer)
+    }
+
+    func run(on computer: Computer) async throws {
+        let loader = ConfigLoader(computer: computer)
+        let configs = try await loader.load(from: source)
+        let json = try configs.jsonString(redacted: false)
+
+        // validate all configs in the array under the security policy set in config 0
+        // (the validator will report an error if policy set in configs at index > 0)
+        if let policyConfig = configs[0].configSecurityPolicy, let policyString = policyConfig.policy {
+            print("Validating configs against \(policyString) security policy: \(json)")
+            try await Apply.validateConfigs(policyString: policyString, configs: configs, on: computer)
+            print("Configs valid with respect to \(policyString) security policy")
         } else {
-            print("No config-security-policy specified in config. This config will not be validated before it is applied.")
+            print("No config-security-policy specified in config 0. Configs cannot be validated")
         }
     }
 }

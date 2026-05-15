@@ -12,7 +12,7 @@
 // EA1937
 // 10/02/2024
 
-/*swift tabwidth="4" prefertabs="false"*/
+/* swift tabwidth="4" prefertabs="false" */
 //
 //  MetricsFilter.swift
 //  CloudMetricsDaemon
@@ -40,6 +40,7 @@ package final class MetricsFilter: Sendable {
             fileprivate var loggedMetrics: [String: [LogEventType: ContinuousClock.Instant]] = [:]
             fileprivate var logThrottleInterval: Duration
         }
+
         private let state: OSAllocatedUnfairLock<State>
         private let logger = Logger(subsystem: "MetricsFilter", category: "FrequencyTracker")
 
@@ -101,15 +102,17 @@ package final class MetricsFilter: Sendable {
 
     package init(configuration: Configuration) {
         self.allowList = configuration.auditLists?.allowedMetrics.reduce(
-            into: [ClientName: [MetricName: Configuration.FilterRule]]()) { result, rule in
+            into: [ClientName: [MetricName: Configuration.FilterRule]]()
+        ) { result, rule in
             if result[rule.client] != nil {
                 result[rule.client]?[rule.label] = rule
             } else {
                 result[rule.client] = [rule.label: rule]
             }
-            } ?? [:]
-        self.allMetricsByName = allowList.values.reduce(
-            into: [String: [Configuration.FilterRule]]()) { result, rules in
+        } ?? [:]
+        self.allMetricsByName = self.allowList.values.reduce(
+            into: [String: [Configuration.FilterRule]]()
+        ) { result, rules in
             for (_, rule) in rules {
                 if result[rule.label] != nil {
                     result[rule.label]?.append(rule)
@@ -120,7 +123,7 @@ package final class MetricsFilter: Sendable {
         }
 
         self.ignoreList = configuration.auditLists?.ignoredMetrics ?? [:]
-        self.allIgnoredMetrics = ignoreList.values.flatMap { $0 }
+        self.allIgnoredMetrics = self.ignoreList.values.flatMap { $0 }
 
         self.globalDimensions = configuration.globalLabels.keys.sorted()
         // Check if allow lists are disabled from the configuration
@@ -137,14 +140,15 @@ package final class MetricsFilter: Sendable {
                 enableFiltering = configuration.requireAllowList
             }
         } catch {
-            logger.error("Can't access `metricsFilteringEnforced` in SecureConfigParameters: \(error, privacy: .public)")
+            self.logger
+                .error("Can't access `metricsFilteringEnforced` in SecureConfigParameters: \(error, privacy: .public)")
             #if DEBUG
-                // In DEBUG, in case there is no SecureConfig setting available,
-                // we still want to enable filtering if there is an allow list defined
-                // in order to support development/testing
-                enableFiltering = !self.allowList.isEmpty
+            // In DEBUG, in case there is no SecureConfig setting available,
+            // we still want to enable filtering if there is an allow list defined
+            // in order to support development/testing
+            enableFiltering = !self.allowList.isEmpty
             #else
-                enableFiltering = configuration.requireAllowList
+            enableFiltering = configuration.requireAllowList
             #endif
         }
 
@@ -156,95 +160,98 @@ package final class MetricsFilter: Sendable {
         self.frequencyTracker = FrequencyTracker(logThrottleInterval: configuration.auditLogThrottleInterval)
     }
 
-    package func shouldRecord(metric: CloudMetric, client: String) -> Bool {
+    package func shouldRecord(metric: CloudMetric, client: MetricsClient) -> Bool {
         let metricName = metric.label
 
-        if disabled {
+        if self.disabled {
             return true
         }
 
         // Check if the allow list is allowing any metric
         // (either for any client or for this specific one)
-        if allowList["*"] != nil || allowList[client]?["*"] != nil {
+        if self.allowList["*"] != nil || self.allowList[client.name]?["*"] != nil {
             return true
         }
 
-        guard let rule = allowList[client]?[metricName] else {
+        guard let rule = allowList[client.name]?[metricName] else {
             var ignore = false
-            if let ignoreList = self.ignoreList[client] {
+            if let ignoreList = self.ignoreList[client.name] {
                 ignore = ignoreList.contains(metric.label)
             }
             if !ignore {
-                if frequencyTracker.shouldLog(metricName, .onRecord) {
-                    logger.error("\(client, privacy: .public) is trying to record an unaudited metric: '\(metricName, privacy: .private)'")
+                if self.frequencyTracker.shouldLog(metricName, .onRecord) {
+                    self.logger
+                        .error(
+                            "\(client.name, privacy: .public) is trying to record an unaudited metric: '\(metricName, privacy: .private)'"
+                        )
                 }
             }
             return false
         }
 
         guard rule.type == metric.type || rule.type == .all else {
-            if frequencyTracker.shouldLog(metricName, .onRecord) {
-                logger.error("""
-                    Metric '\(metricName, privacy: .public)' of type '\(metric.type, privacy: .public)' \
-                    doesn't match the allowed type: '\(String(describing: rule.type), privacy: .public)'
-                    """)
+            if self.frequencyTracker.shouldLog(metricName, .onRecord) {
+                self.logger.error("""
+                Metric '\(metricName, privacy: .public)' of type '\(metric.type, privacy: .public)' \
+                doesn't match the allowed type: '\(String(describing: rule.type), privacy: .public)'
+                """)
             }
             return false
         }
 
-        let dimensions = metric.dimensions.filter { !globalDimensions.contains($0.key) }
+        let dimensions = metric.dimensions.filter { !self.globalDimensions.contains($0.key) }
         for dimension in dimensions {
             // if dimensions are being mentioned in the rule,
             // all non-global dimensions for this metric need to be present
             if let valuesList = rule.dimensions[dimension.key] {
                 // if possible values are defined, the dimension value must also be included
                 if !valuesList.isEmpty, !valuesList.contains(dimension.1) {
-                    if frequencyTracker.shouldLog(metricName, .onRecord) {
-                        logger.error("""
-                                     Dimension '\(dimension.0, privacy: .public)' in Metric '\(metricName, privacy: .public)' \
-                                     contains a not allowed value \(dimension.1, privacy: .private)
-                                     """)
+                    if self.frequencyTracker.shouldLog(metricName, .onRecord) {
+                        self.logger.error("""
+                        Dimension '\(dimension.0, privacy: .public)' in Metric '\(metricName, privacy: .public)' \
+                        contains a not allowed value \(dimension.1, privacy: .private)
+                        """)
                     }
                     return false
                 }
             } else {
-                if frequencyTracker.shouldLog(metricName, .onRecord) {
-                    logger.error("Metric '\(metricName, privacy: .public)' contains unaudited dimensions")
+                if self.frequencyTracker.shouldLog(metricName, .onRecord) {
+                    self.logger.error("Metric '\(metricName, privacy: .public)' contains unaudited dimensions")
                 }
                 return false
             }
         }
 
-        let lastUpdate = frequencyTracker.lastUpdated(metricName)
+        let lastUpdate = self.frequencyTracker.lastUpdated(metricName)
         if rule.minUpdateInterval > .seconds(0),
-            lastUpdate.timeIntervalSinceNow < Double(rule.minUpdateInterval.components.seconds) {
-            logger.error("""
-                Metric '\(metricName, privacy: .public) is updating too frequently. \
-                (lastUpdate=\(lastUpdate), now=\(Date.now)
-                """)
-            logger.info("Rate limiting on record() is current disabled")
+           lastUpdate.timeIntervalSinceNow < Double(rule.minUpdateInterval.components.seconds) {
+            self.logger.error("""
+            Metric '\(metricName, privacy: .public) is updating too frequently. \
+            (lastUpdate=\(lastUpdate), now=\(Date.now)
+            """)
+            self.logger.info("Rate limiting on record() is current disabled")
             // TODO: rdar://119687218 (Find a way to implement this by aggregating
             // values before recording them in the MetricStore)
             // return false
         }
-        frequencyTracker.recordUpdate(metricName)
+        self.frequencyTracker.recordUpdate(metricName)
         return true
     }
 
     package func shouldPublish(metricName: String, destination: Configuration.Destination) -> Bool {
-        if disabled {
+        if self.disabled {
             return true
         }
 
-        // TODO : rdar://125978998 (We should preserve a link to the client in metrics recorded in the MetricsStore)
-        if allMetricsByName["*"] != nil {
+        // TODO: rdar://125978998 (We should preserve a link to the client in metrics recorded in the MetricsStore)
+        if self.allMetricsByName["*"] != nil {
             return true
         }
 
         guard let rules = allMetricsByName[metricName] else {
-            if !allIgnoredMetrics.contains(metricName) {
-                if frequencyTracker.shouldLog(metricName, .onPublish) {
-                    logger.error("Trying to publish an unaudited metric: '\(metricName, privacy: .private)'")
+            if !self.allIgnoredMetrics.contains(metricName) {
+                if self.frequencyTracker.shouldLog(metricName, .onPublish) {
+                    self.logger.error("Trying to publish an unaudited metric: '\(metricName, privacy: .private)'")
                 }
             }
             return false
@@ -252,8 +259,11 @@ package final class MetricsFilter: Sendable {
 
         let destinations = rules.flatMap { $0.destinations }
         if !destinations.isEmpty && !destinations.contains(destination) {
-            if frequencyTracker.shouldLog(metricName, .onPublish) {
-                logger.error("Trying to publish metric '\(metricName, privacy: .public)' to unallowed destination '\(destination, privacy: .private)'")
+            if self.frequencyTracker.shouldLog(metricName, .onPublish) {
+                self.logger
+                    .error(
+                        "Trying to publish metric '\(metricName, privacy: .public)' to unallowed destination '\(destination, privacy: .private)'"
+                    )
             }
             return false
         }
@@ -262,17 +272,17 @@ package final class MetricsFilter: Sendable {
             // Note: if there are more rules matching this same metric name
             // (let's say coming from different clients) this will actually
             // apply the strictest interval among the all the matching rules
-            let lastPublished = frequencyTracker.lastPublished(metricName)
+            let lastPublished = self.frequencyTracker.lastPublished(metricName)
             if rule.minPublishInterval > .seconds(0),
                lastPublished.timeIntervalSinceNow < TimeInterval(rule.minPublishInterval.components.seconds) {
-                logger.error("""
+                self.logger.error("""
                 Metric '\(metricName, privacy: .public) is publishing too frequently. \
                 (lastPublish=\(lastPublished), now=\(Date.now)
                 """)
                 return false
             }
         }
-        frequencyTracker.recordPublish(metricName)
+        self.frequencyTracker.recordPublish(metricName)
         return true
     }
 }

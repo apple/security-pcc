@@ -12,18 +12,9 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal import CloudBoardAsyncXPC
 
 internal enum CloudBoardControllerAPIXPCServerToClientMessage {
-    internal struct UpdateConfiguration: CloudBoardAsyncXPCCodableMessage {
-        internal typealias Success = ExplicitSuccess
-        internal typealias Failure = CloudBoardControllerAPIError
-
-        internal var config: WorkloadConfig
-    }
-
     internal struct Shutdown: CloudBoardAsyncXPCCodableMessage {
         internal typealias Success = ExplicitSuccess
         internal typealias Failure = CloudBoardControllerAPIError

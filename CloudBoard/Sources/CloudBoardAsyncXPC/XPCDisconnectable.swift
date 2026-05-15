@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple Inc. All rights reserved.
-
 /// Wrapper containing either the payload message of interest or XPc disconnection signal.
 ///
 /// XPC connections can get disconnected/invalidated, and these messages do not really originate from the

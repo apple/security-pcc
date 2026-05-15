@@ -12,9 +12,8 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
-package import CloudBoardAsyncXPC
+internal import CloudBoardAsyncXPC
+package import CloudBoardDomain
 import Foundation
 import os
 
@@ -58,13 +57,19 @@ CloudBoardJobHelperAPIServerToClientHandlerProtocol {
     }
 
     public func teardown() async throws {
-        try await self.connection?
-            .send(CloudBoardJobHelperAPIXPCClientToServerMessages.Teardown())
+        try await self.getConnection()?.send(CloudBoardJobHelperAPIXPCClientToServerMessages.Teardown())
     }
 
     public func abandon() async throws {
-        try await self.connection?
-            .send(CloudBoardJobHelperAPIXPCClientToServerMessages.Abandon())
+        try await self.getConnection()?.send(CloudBoardJobHelperAPIXPCClientToServerMessages.Abandon())
+    }
+
+    public func warmup(_ info: WarmupInfo) async throws {
+        try await self.getConnection()?.send(CloudBoardJobHelperAPIXPCClientToServerMessages.Warmup(info: info))
+    }
+
+    public func assignLAContext() async throws {
+        try await self.getConnection()?.send(CloudBoardJobHelperAPIXPCClientToServerMessages.AssignLAContext())
     }
 
     public func set(delegate: CloudBoardJobHelperAPIClientDelegateProtocol) async {
@@ -111,7 +116,7 @@ CloudBoardJobHelperAPIServerToClientHandlerProtocol {
             await connection.handleConnectionInterrupted(handler: nil)
             await connection.cancel()
         }
-        // no more connection - no more delegat as there won't be any responses anymore
+        // no more connection - no more delegate as there won't be any responses anymore
         self.delegate.withLock { $0 = nil }
     }
 }

@@ -22,7 +22,7 @@
 import Foundation
 
 package struct TrustedRequestEndpointMetadata: Sendable, Codable, TC2JSON {
-    package let nodeState: String
+    package let nodeState: String?
     package let nodeIdentifier: String
     package let ohttpContext: UInt64
     package let hasReceivedSummary: Bool
@@ -39,7 +39,7 @@ package struct TrustedRequestEndpointMetadata: Sendable, Codable, TC2JSON {
     package let requestExecutionLogFinalized: Bool?
 
     package init(
-        nodeState: String,
+        nodeState: String?,
         nodeIdentifier: String,
         ohttpContext: UInt64,
         hasReceivedSummary: Bool,
@@ -66,132 +66,5 @@ package struct TrustedRequestEndpointMetadata: Sendable, Codable, TC2JSON {
         self.servedRequest = servedRequest
         self.proxiedBy = proxiedBy
         self.requestExecutionLogFinalized = requestExecutionLogFinalized
-    }
-}
-
-package struct TC2TrustedRequestMetadata: Sendable, Codable, TC2JSON {
-    package let clientRequestID: UUID
-    package let serverRequestID: UUID
-    package let environment: String
-    package let creationDate: Date
-    package let bundleIdentifier: String
-    package let featureIdentifier: String?
-    package let sessionIdentifier: UUID?
-    package let qos: String
-    package let workloadName: String
-    package let workloadParameters: [String: String]
-    package let state: String
-    package let payloadTransportState: String
-    package let requestHeaders: [String: String]
-    package let responseState: String
-    package let responseCode: Int?
-    package let ropesVersion: String?
-    package let endpoints: [TrustedRequestEndpointMetadata]
-
-    package init(
-        clientRequestID: UUID,
-        serverRequestID: UUID,
-        environment: String,
-        creationDate: Date,
-        bundleIdentifier: String,
-        featureIdentifier: String?,
-        sessionIdentifier: UUID?,
-        qos: String,
-        parameters: Workload,
-        state: String,
-        payloadTransportState: String,
-        requestHeaders: [String: String],
-        responseState: String,
-        responseCode: Int?,
-        ropesVersion: String?,
-        endpoints: [TrustedRequestEndpointMetadata]
-    ) {
-        self.clientRequestID = clientRequestID
-        self.serverRequestID = serverRequestID
-        self.environment = environment
-        self.creationDate = creationDate
-        self.bundleIdentifier = bundleIdentifier
-        self.featureIdentifier = featureIdentifier
-        self.sessionIdentifier = sessionIdentifier
-        self.qos = qos
-        self.workloadName = parameters.type
-        self.workloadParameters = parameters.parameters
-        self.state = state
-        self.payloadTransportState = payloadTransportState
-        self.requestHeaders = requestHeaders
-        self.responseState = responseState
-        self.responseCode = responseCode
-        self.ropesVersion = ropesVersion
-        self.endpoints = endpoints
-    }
-}
-
-package struct TC2TrustedRequestFactoryMetadata: Sendable, Codable, TC2JSON {
-    package let requests: [TC2TrustedRequestMetadata]
-
-    package init(requests: [TC2TrustedRequestMetadata]) {
-        self.requests = requests
-    }
-}
-
-package struct TC2TrustedRequestFactoriesMetadata: Sendable, Codable, TC2JSON {
-    package let requests: [TC2TrustedRequestFactoryMetadata]
-
-    package init(requests: [TC2TrustedRequestFactoryMetadata]) {
-        self.requests = requests
-    }
-}
-
-// These types exist solely to write log entries that record the various requests.
-// Once we have moved away from the existing `thtool request` implementation, we
-// will delete `TC2TrustedRequestMetadata` et al and only the following will remain.
-// The reason for the separation right now is that some of the names and formats are
-// wrong and the json should be pretty stable.
-
-package enum RequestLogEntryType: String, Codable, Sendable {
-    case trustedRequest
-    case prefetchRequest  // Unused
-}
-
-package struct TrustedRequestLogEntry: Sendable, Codable {
-    static let dateStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
-    package let type: RequestLogEntryType
-    package let clientRequestID: UUID
-    package let serverRequestID: UUID
-    package let environment: String
-    package let creationDate: String
-    package let bundleIdentifier: String
-    package let featureIdentifier: String?
-    package let sessionIdentifier: UUID?
-    package let qos: String
-    package let workloadName: String
-    package let workloadParameters: [String: String]
-    package let state: String
-    package let payloadTransportState: String
-    package let requestHeaders: [String: String]
-    package let responseState: String
-    package let responseCode: Int?
-    package let ropesVersion: String?
-    package let endpoints: [TrustedRequestEndpointMetadata]
-
-    package init(_ metadata: TC2TrustedRequestMetadata) {
-        self.type = .trustedRequest
-        self.clientRequestID = metadata.clientRequestID
-        self.serverRequestID = metadata.serverRequestID
-        self.environment = metadata.environment
-        self.creationDate = metadata.creationDate.formatted(Self.dateStyle)
-        self.bundleIdentifier = metadata.bundleIdentifier
-        self.featureIdentifier = metadata.featureIdentifier
-        self.sessionIdentifier = metadata.sessionIdentifier
-        self.qos = metadata.qos
-        self.workloadName = metadata.workloadName
-        self.workloadParameters = metadata.workloadParameters
-        self.state = metadata.state
-        self.payloadTransportState = metadata.payloadTransportState
-        self.requestHeaders = metadata.requestHeaders
-        self.responseState = metadata.responseState
-        self.responseCode = metadata.responseCode
-        self.ropesVersion = metadata.ropesVersion
-        self.endpoints = metadata.endpoints
     }
 }

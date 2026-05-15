@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 import AsyncAlgorithms
 import Atomics
 import CloudBoardCommon
@@ -23,7 +21,7 @@ import Foundation
 import HeartbeatClient
 import os
 
-protocol HeartbeatPublisherClientProtocol {
+protocol HeartbeatPublisherClientProtocol: Sendable {
     func sendHeartbeat(_ heartbeat: Heartbeat) async throws
     func updateCredentialProvider(_ provider: @escaping @Sendable () async -> URLCredential?) async
 }
@@ -58,10 +56,12 @@ public actor HeartbeatPublisher {
         var maximumToleranceRatio: Double = 0.25
     }
 
+    typealias StatusUpdates = AsyncSequence<DaemonStatus, Never> & Sendable
+
     private let configuration: Configuration
     private let identifier: String
     private let nodeInfo: NodeInfo?
-    private let statusUpdates: any AsyncSequence<DaemonStatus, Never>
+    private let statusUpdates: any StatusUpdates
     private let client: any HeartbeatPublisherClientProtocol
     private let hotProperties: HotPropertiesController
     private let metrics: MetricsSystem
@@ -135,7 +135,7 @@ public actor HeartbeatPublisher {
         configuration: Configuration = .init(),
         identifier: String,
         nodeInfo: NodeInfo?,
-        statusUpdates: any AsyncSequence<DaemonStatus, Never>,
+        statusUpdates: any StatusUpdates,
         client: any HeartbeatPublisherClientProtocol,
         hotProperties: HotPropertiesController,
         metrics: MetricsSystem,
@@ -199,7 +199,7 @@ public actor HeartbeatPublisher {
     }
 
     private func publish() async throws {
-        let hotPropsVersion = await self.hotProperties.versions.appliedVersion?.description
+        let hotPropsVersion = await self.hotProperties.version
         let identifier = self.identifier
         let status = Heartbeat.Status(from: self.daemonStatus)
         let nodeInfo = self.nodeInfo

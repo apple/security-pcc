@@ -12,13 +12,12 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple. All rights reserved.
-
 import CFPreferenceCoder
 import CloudAttestation
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
 import CloudBoardIdentity
+import CloudBoardLogging
 import CloudBoardMetrics
 import Foundation
 import MobileGestaltPrivate
@@ -88,24 +87,112 @@ package actor CloudBoardAttestationDaemon {
         }
     }
 
+    /// An ensemble loses all state when it reboots, and any prior degree of trust associated with it having been used
+    /// before. Therefore in many cases when we refer to "an ensemble" we are really referring to "an ensemble which has
+    /// not rebooted".
+    /// On first boot cb_attestationd creates a UUID(bootId) and writes it to a file on disk. On subsequent restarts it
+    /// reads the bootId from this file.
+    /// cb_attestationd inserts this into our attestations each time as a piece of application data.
+    /// We also advertise this to ROPES through service discovery.
+    internal func loadBootID(customSearchPath: CustomSearchPathDirectory) -> String? {
+        var bootID = nil as String?
+        do {
+            let cacheDirectory: URL = try customSearchPath.lookup(for: .cachesDirectory, in: .userDomainMask)
+                .appending(component: CFPreferences.cbAttestationPreferencesDomain)
+
+            let fileManager: FileManager = .init()
+            do {
+                // Ensure cache directory exists and create missing parent directories if needed.
+                // If the directory already exists, the function succeeds without error.
+                try fileManager.createDirectory(
+                    at: cacheDirectory,
+                    withIntermediateDirectories: true
+                )
+            } catch {
+                Self.logger
+                    .error("Failed to create cache directory, error: \(String(unredacted: error), privacy: .public)")
+                return nil
+            }
+
+            let bootIdFileURL = cacheDirectory.appending(component: "boot-id")
+            if fileManager.fileExists(atPath: bootIdFileURL.path()) {
+                do {
+                    bootID = try Data(contentsOf: bootIdFileURL, options: .uncached).utf8String
+                    if let bootID {
+                        Self.logger.log("Loaded bootId: \(bootID) from the on disk file: \(bootIdFileURL)")
+                    } else {
+                        Self.logger.error("Failed to decode bootId from disk file as UTF8 string: \(bootIdFileURL)")
+                    }
+                } catch {
+                    Self.logger
+                        .error(
+                            "Unable to read file \(bootIdFileURL) to load bootId, error: \(String(unredacted: error), privacy: .public)"
+                        )
+                }
+            } else {
+                // File doesn't exist. Create bootId and write to file on disk.
+                bootID = Self.generateTimeOrderedBootID()
+                if fileManager.createFile(atPath: bootIdFileURL.path(), contents: bootID?.data) {
+                    if let bootID {
+                        Self.logger.log("Written bootId: \(bootID) to the on disk file: \(bootIdFileURL)")
+                    }
+                } else {
+                    Self.logger
+                        .error("Unable to write bootId: \(bootID ?? "nil") to the on disk file: \(bootIdFileURL)")
+                    bootID = nil
+                }
+            }
+        } catch {
+            Self.logger
+                .error("Unable to load bootId for ensemble node, error: \(String(unredacted: error), privacy: .public)")
+        }
+        return bootID
+    }
+
+    /// Generates a time-ordered bootID that allows chronological comparison
+    /// Format: {ISO-8601-basic-format-timestamp-with-milliseconds}-{random-uuid}
+    /// Example: 20231114T160530.123Z-550e8400-e29b-41d4-a716-446655440000
+    /// Uses ISO 8601 basic format (no colons or dashes in time/date) to be compatible with EnsembleInstanceId
+    /// which uses ':' as a delimiter in its serialization format.
+    /// This enables ROPES to determine the most recent bootID when multiple Service Discovery
+    /// updates arrive with the same endpoint but different bootIDs.
+    /// - Parameter date: Defaults to the current date. Needed for testing.
+    internal static func generateTimeOrderedBootID(date: Date = Date.now) -> String {
+        let formatter = ISO8601DateFormatter()
+        // Use basic format: remove colon and dash separators
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        formatter.formatOptions.subtract(.withColonSeparatorInTime)
+        formatter.formatOptions.subtract(.withDashSeparatorInDate)
+        let timestamp = formatter.string(from: date)
+        let randomUUID = UUID().uuidString
+        return "\(timestamp)-\(randomUUID)"
+    }
+
     /// The means to make and validate attestations
     /// This is fundamentally different depending on whether we are doing proper Customer validatable
     /// SEP backed attestation or the in memory keys that allow testing
     private func makeAttestationFunctionality(
+        nodeInfo: NodeInfo,
+        bootID: String?
     ) throws -> (provider: any AttestationProviderProtocol, validatorFactory: any AttestationValidatorFactoryProtocol) {
         if self.config.useInMemoryKey {
             let attestationProvider = InMemoryKeyAttestationProvider(
                 // Leave this simple until someone has a use case to test it using in memory keys
                 // By simply agreeing it everywhere any tests using the proxy paths relying on this
                 // "just working" will not have to do anything
-                releaseDigest: CloudBoardAttestation.neverKnownReleaseDigest
+                releaseDigest: CloudBoardAttestation.neverKnownReleaseDigest,
+                ensembleID: self.config.testEnsembleID,
+                bootID: self.config.testBootID,
+                rackID: self.config.testRackID
             )
             return (attestationProvider, InMemoryAttestationValidatorFactory())
         } else {
             let attestationProvider = CloudAttestationProvider(
                 configuration: self.config,
                 metrics: self.metrics,
-                releaseDigestExpiryGracePeriod: self.config.transparencyLog.releaseDigestExpiryGracePeriodMinutes
+                releaseDigestExpiryGracePeriod: self.config.transparencyLog.releaseDigestExpiryGracePeriodMinutes,
+                nodeInfo: nodeInfo,
+                bootID: bootID
             )
             return (attestationProvider, CloudAttestationValidatorFactory())
         }
@@ -159,7 +246,7 @@ package actor CloudBoardAttestationDaemon {
             }
         }
 
-        let nodeInfo = NodeInfo.load()
+        let nodeInfo = NodeInfo.load(secureConfig: self.config.secureConfig)
         if let isLeader = nodeInfo.isLeader {
             if !isLeader {
                 Self.logger.log("Not a leader node. Exiting.")
@@ -168,10 +255,24 @@ package actor CloudBoardAttestationDaemon {
         } else {
             Self.logger.error("Unable to check if node is a leader. Continuing.")
         }
+        // only start emitting metrics if we are a leader node
+        try await CloudBoardMetrics.Uptime.withStandardMetrics(
+            processInfo: Metrics.ProcessInfo.self,
+            metrics: self.metrics
+        ) {
+            try await self._start(customSearchPath: customSearchPath, nodeInfo: nodeInfo)
+        }
+    }
 
+    private func _start(
+        customSearchPath: CustomSearchPathDirectory,
+        nodeInfo: NodeInfo
+    ) async throws {
+        let bootID = self.loadBootID(customSearchPath: customSearchPath)
         do {
             let attestationBundleCache = try self.makeAttestationBundleCache(customSearchPath: customSearchPath)
-            let (attestationProvider, attestationValidatorFactory) = try self.makeAttestationFunctionality()
+            let (attestationProvider, attestationValidatorFactory) = try self
+                .makeAttestationFunctionality(nodeInfo: nodeInfo, bootID: bootID)
             let releasesProviderResult = try self.makeReleasesProvider()
 
             try await withThrowingTaskGroup(of: Void.self) { group in
@@ -202,7 +303,8 @@ package actor CloudBoardAttestationDaemon {
                             .existingAttestationsAvailableOnlyOnNodeAfterReleaseEntryAddition,
                         maximumValidatedEntryCacheSize: self.config.maximumValidatedEntryCacheSize,
                         isProxy: self.config.isProxy,
-                        clock: self.clock
+                        clock: self.clock,
+                        workerRackIDCacheTTL: self.config.rackIdCacheLifetime
                     ).run()
                 }
 

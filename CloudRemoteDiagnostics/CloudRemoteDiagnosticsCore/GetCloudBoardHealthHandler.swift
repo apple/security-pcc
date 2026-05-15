@@ -19,7 +19,9 @@
 //  Created by Mark Hamilton on 5/16/24.
 //
 
-import CloudBoardHealth
+#if canImport(CloudBoardHealth)
+@_weakLinked import CloudBoardHealth
+#endif
 import Foundation
 import os
 
@@ -34,36 +36,8 @@ extension CloudRemoteDiagnosticsHandler {
         queue: DispatchQueue,
         completion: @escaping ((String) -> Void)) {
         Task.detached {
-            let healthState: CloudBoardHealthState
-            var done: Bool = false
-
-            let healthMonitor = CloudBoardHealthMonitor()
-            // Ignore any state change from CloudBoard since we will just
-            // request the state explicitly.
-            await healthMonitor.onHealthStateChange { _ in }
-            await healthMonitor.onDisconnect {
-                if done == false {
-                    log.error("Unexpected disconnect from CloudBoard")
-                }
-            }
-            log.notice("Trying to async connect to CloudBoard health monitor")
-            await healthMonitor.connect()
-
-            log.notice("Async connected to CloudBoard health monitor")
-            do {
-                healthState = try await healthMonitor.getHealthState()
-                log.notice("Got CloudBoard health state")
-            } catch {
-                healthState = .unknown
-                log.error("Unable to get CloudBoard health: \(error)")
-            }
-            done = true
-            log.notice("Async disconnecting from CloudBoard")
-            await healthMonitor.disconnect()
-            log.notice("Async disconnected from CloudBoard successfully")
-
-            let result = [
-                kCloudBoardHealthStateKey: healthState.description.lowercased()]
+            let healthStateString = await self.getCloudBoardHealth()
+            let result = [kCloudBoardHealthStateKey: healthStateString]
             guard let jsonOutput = try? JSONEncoder().encode(result) else {
                 log.error("Error encoding CloudBoard health state to JSON data")
                 let error = "Error encoding CloudBoard health state to JSON data"
@@ -80,5 +54,46 @@ extension CloudRemoteDiagnosticsHandler {
                 completion(jsonString)
             }
         }
+    }
+
+    private func getCloudBoardHealth() async -> String {
+        var healthStateString: String = "unknown"
+
+#if canImport(CloudBoardHealth)
+        guard #_hasSymbol(CloudBoardHealthMonitor.self) else {
+            return healthStateString
+        }
+
+        let healthState: CloudBoardHealthState
+        var done: Bool = false
+
+        let healthMonitor = CloudBoardHealthMonitor()
+        // Ignore any state change from CloudBoard since we will just
+        // request the state explicitly.
+        await healthMonitor.onHealthStateChange { _ in }
+        await healthMonitor.onDisconnect {
+            if done == false {
+                log.error("Unexpected disconnect from CloudBoard")
+            }
+        }
+        log.notice("Connecting to CloudBoard health monitor")
+        await healthMonitor.connect()
+
+        log.notice("Connected to CloudBoard health monitor")
+        do {
+            healthState = try await healthMonitor.getHealthState()
+            log.notice("Got CloudBoard health state: \(healthState)")
+        } catch {
+            healthState = .unknown
+            log.error("Unable to get CloudBoard health: \(error)")
+        }
+        done = true
+        log.notice("Disconnecting from CloudBoard")
+        await healthMonitor.disconnect()
+        log.notice("Disconnected from CloudBoard")
+        healthStateString = healthState.description.lowercased()
+#endif
+
+        return healthStateString
     }
 }

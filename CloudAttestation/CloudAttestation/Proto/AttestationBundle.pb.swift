@@ -130,6 +130,22 @@ public struct Proto_AttestationBundle: @unchecked Sendable {
   /// Clears the value of `transparencyProofs`. Subsequent reads from it will return its default value.
   public mutating func clearTransparencyProofs() {_uniqueStorage()._transparencyProofs = nil}
 
+  /// Local boot policy used on macOS
+  public var localPolicy: Proto_LocalPolicy {
+    get {return _storage._localPolicy ?? Proto_LocalPolicy()}
+    set {_uniqueStorage()._localPolicy = newValue}
+  }
+  /// Returns true if `localPolicy` has been explicitly set.
+  public var hasLocalPolicy: Bool {return _storage._localPolicy != nil}
+  /// Clears the value of `localPolicy`. Subsequent reads from it will return its default value.
+  public mutating func clearLocalPolicy() {_uniqueStorage()._localPolicy = nil}
+
+  /// System, firmware & restore manifest used on macOS
+  public var sfrManifest: Data {
+    get {return _storage._sfrManifest}
+    set {_uniqueStorage()._sfrManifest = newValue}
+  }
+
   public var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -166,6 +182,54 @@ public struct Proto_AppData: Sendable {
   public init() {}
 
   fileprivate var _metadata: InternalSwiftProtobuf.Google_Protobuf_Any? = nil
+}
+
+public struct Proto_LocalPolicy: @unchecked Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var policy: Data = Data()
+
+  public var implementation: Proto_LocalPolicy.Implementation = .unknown
+
+  public var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  public enum Implementation: InternalSwiftProtobuf.Enum, Swift.CaseIterable {
+    public typealias RawValue = Int
+    case unknown // = 0
+    case ec384Sha384 // = 1
+    case UNRECOGNIZED(Int)
+
+    public init() {
+      self = .unknown
+    }
+
+    public init?(rawValue: Int) {
+      switch rawValue {
+      case 0: self = .unknown
+      case 1: self = .ec384Sha384
+      default: self = .UNRECOGNIZED(rawValue)
+      }
+    }
+
+    public var rawValue: Int {
+      switch self {
+      case .unknown: return 0
+      case .ec384Sha384: return 1
+      case .UNRECOGNIZED(let i): return i
+      }
+    }
+
+    // The compiler won't synthesize support with the UNRECOGNIZED case.
+    public static let allCases: [Proto_LocalPolicy.Implementation] = [
+      .unknown,
+      .ec384Sha384,
+    ]
+
+  }
+
+  public init() {}
 }
 
 public struct Proto_SealedHashLedger: Sendable {
@@ -389,6 +453,8 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
     5: .standard(proto: "app_data"),
     6: .standard(proto: "key_expiration"),
     8: .standard(proto: "transparency_proofs"),
+    9: .standard(proto: "local_policy"),
+    10: .standard(proto: "sfr_manifest"),
   ]
 
   fileprivate class _StorageClass {
@@ -399,6 +465,8 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
     var _appData: Data = Data()
     var _keyExpiration: InternalSwiftProtobuf.Google_Protobuf_Timestamp? = nil
     var _transparencyProofs: Proto_TransparencyProofs? = nil
+    var _localPolicy: Proto_LocalPolicy? = nil
+    var _sfrManifest: Data = Data()
 
     #if swift(>=5.10)
       // This property is used as the initial default value for new instances of the type.
@@ -420,6 +488,8 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
       _appData = source._appData
       _keyExpiration = source._keyExpiration
       _transparencyProofs = source._transparencyProofs
+      _localPolicy = source._localPolicy
+      _sfrManifest = source._sfrManifest
     }
   }
 
@@ -445,6 +515,8 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
         case 5: try { try decoder.decodeSingularBytesField(value: &_storage._appData) }()
         case 6: try { try decoder.decodeSingularMessageField(value: &_storage._keyExpiration) }()
         case 8: try { try decoder.decodeSingularMessageField(value: &_storage._transparencyProofs) }()
+        case 9: try { try decoder.decodeSingularMessageField(value: &_storage._localPolicy) }()
+        case 10: try { try decoder.decodeSingularBytesField(value: &_storage._sfrManifest) }()
         default: break
         }
       }
@@ -478,6 +550,12 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
       try { if let v = _storage._transparencyProofs {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
       } }()
+      try { if let v = _storage._localPolicy {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 9)
+      } }()
+      if !_storage._sfrManifest.isEmpty {
+        try visitor.visitSingularBytesField(value: _storage._sfrManifest, fieldNumber: 10)
+      }
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -494,6 +572,8 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
         if _storage._appData != rhs_storage._appData {return false}
         if _storage._keyExpiration != rhs_storage._keyExpiration {return false}
         if _storage._transparencyProofs != rhs_storage._transparencyProofs {return false}
+        if _storage._localPolicy != rhs_storage._localPolicy {return false}
+        if _storage._sfrManifest != rhs_storage._sfrManifest {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -555,6 +635,51 @@ extension Proto_AppData: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._M
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
+}
+
+extension Proto_LocalPolicy: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".LocalPolicy"
+  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .same(proto: "policy"),
+    2: .same(proto: "implementation"),
+  ]
+
+  public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.policy) }()
+      case 2: try { try decoder.decodeSingularEnumField(value: &self.implementation) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.policy.isEmpty {
+      try visitor.visitSingularBytesField(value: self.policy, fieldNumber: 1)
+    }
+    if self.implementation != .unknown {
+      try visitor.visitSingularEnumField(value: self.implementation, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Proto_LocalPolicy, rhs: Proto_LocalPolicy) -> Bool {
+    if lhs.policy != rhs.policy {return false}
+    if lhs.implementation != rhs.implementation {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_LocalPolicy.Implementation: InternalSwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    0: .same(proto: "IMPLEMENTATION_UNKNOWN"),
+    1: .same(proto: "IMPLEMENTATION_EC384SHA384"),
+  ]
 }
 
 extension Proto_SealedHashLedger: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {

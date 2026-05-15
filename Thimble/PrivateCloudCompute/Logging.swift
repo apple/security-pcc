@@ -27,6 +27,8 @@ package enum TC2LogCategory: String {
     case trustedRequest = "TrustedRequest"
     case trustedRequestXPCProxy = "TrustedRequestXPCProxy"
     case client = "Client"
+    /// Used for multi-turn requests.
+    case connection = "Connection"
     case configuration = "Configuration"
     case tool = "Tool"
     case scheduledTask = "ScheduledTask"
@@ -43,6 +45,8 @@ package enum TC2LogCategory: String {
     case tokenProvider = "TokenProvider"
     case updateServerDrivenConfiguration = "UpdateServerDrivenConfig"
     case requestLog = "RequestLog"
+    case catalogService = "CatalogService"
+    case notifications = "Notifications"
 }
 
 package func tc2Logger(forCategory: TC2LogCategory) -> Logger {

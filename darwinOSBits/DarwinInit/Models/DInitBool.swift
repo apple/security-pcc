@@ -17,6 +17,8 @@
 //  DarwinInit
 //
 
+import Foundation
+
 /// `DInitBool` is a wrapper around a single bool with a custom `init(from:)`
 /// method to allow for strings like `"YES"` to be decoded as booleans using
 /// `NSString.boolValue`

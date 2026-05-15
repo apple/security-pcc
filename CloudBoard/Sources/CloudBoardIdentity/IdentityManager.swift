@@ -12,9 +12,8 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
+import CloudBoardLogging
 import CloudBoardMetrics
 import Foundation
 @_weakLinked import libnarrativecert
@@ -23,6 +22,7 @@ import notify
 import os
 import Security
 import Security_Private.SecCertificatePriv
+import Synchronization
 
 public final class IdentityManager: Sendable {
     public static let logger: os.Logger = .init(
@@ -32,7 +32,8 @@ public final class IdentityManager: Sendable {
 
     private static let metricsRecordingInterval: Duration = .seconds(60)
 
-    private let cached: OSAllocatedUnfairLock<ResolvedIdentity?>
+    private let cached: Mutex<ResolvedIdentity?>
+    private let updatedLoopStarted: Mutex<Bool>
     private let metricsSystem: any MetricsSystem
     private let metricProcess: String
     private let backend: any IdentityBackend
@@ -58,15 +59,21 @@ public final class IdentityManager: Sendable {
         self.metricsSystem = metricsSystem
         self.metricProcess = metricProcess
         self.backend = backend
-        self.cached = OSAllocatedUnfairLock(initialState: initialIdentity)
+        self.cached = Mutex(initialIdentity)
+        self.updatedLoopStarted = Mutex(false)
     }
 
     public var identity: ResolvedIdentity? {
         self.cached.withLock { $0 }
     }
 
-    public var identityCallback: @Sendable () -> ResolvedIdentity? {
-        { self.identity }
+    public var identityCallback: @Sendable () throws -> ResolvedIdentity? {
+        {
+            guard self.updatedLoopStarted.withLock({ $0 }) else {
+                throw IdentityManagerError.updateLoopNotStarted
+            }
+            return self.identity
+        }
     }
 
     public func identityUpdateLoop() async {
@@ -78,7 +85,7 @@ public final class IdentityManager: Sendable {
 
     private func runIdentityUpdateLoop() async {
         let initialIdentity = self.identity
-
+        self.updatedLoopStarted.withLock { $0 = true }
         Self.logger.log("Identity update loop starting")
         for await _ in CertificateReloadNotifications(identity: initialIdentity) {
             Self.logger.debug("Attempting to reload identity")
@@ -245,17 +252,14 @@ struct CertificateReloadNotifications: AsyncSequence {
     }
 }
 
-public enum IdentityManagerError: Error {
+public enum IdentityManagerError: Error, Equatable {
     case certificateNotAvailable(NarrativeDomain, NarrativeIdentityType)
     case unableToRunSecureService
     case unableToCreateIdentity(NarrativeDomain, NarrativeIdentityType)
     case unableToParseChainCert(NarrativeDomain, NarrativeIdentityType, String)
     case unimplementedFunctionality
+    case updateLoopNotStarted
 }
-
-// rdar://142404105 (Make NarrativeDomain and NarrativeIdentityType etc Sendable)
-extension NarrativeDomain: @unchecked @retroactive Sendable {}
-extension NarrativeIdentityType: @unchecked @retroactive Sendable {}
 
 extension SecCertificate {
     var commonName: String {

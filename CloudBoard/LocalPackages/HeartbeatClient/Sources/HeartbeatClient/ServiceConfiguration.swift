@@ -17,7 +17,7 @@
 import Foundation
 
 /// A set of values needed to create a service client.
-public struct ServiceConfiguration {
+public struct ServiceConfiguration: Sendable {
     /// The URL of the heartbeat service.
     public var serviceURL: URL
 

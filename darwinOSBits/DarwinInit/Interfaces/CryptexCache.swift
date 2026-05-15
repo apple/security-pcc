@@ -14,463 +14,295 @@
 
 //
 //  CryptexCache.swift
-//	DarwinInit
+//  darwinOSBits
+//
 //
 
 import Foundation
 import System
 import CryptoKit
 import DarwinPrivate.os.variant
+import os
 
-extension DInitCryptexConfig {
-	var cacheEntryName: String {
-		DInitSHA256Digest(SHA256.hash(data: url.dataRepresentation)).description
-	}
-}
+typealias CryptexCache = Cache<CryptexCacheDelegate>
+    
+class CryptexCacheDelegate: CacheDelegate {
+    static let logger = Logger.cryptexcache
+	static private let permittedFiles: [String] = ["aea", "ticket", "ginf"]
 
-class CryptexCache {
-	static let logger = Logger.cryptexcache
-	
-	enum Error: Swift.Error {
-		case failedToConvertDigestToSymmetricKey(DInitSHA256Digest)
-		case failedToEnumerateCacheContents
-		case evictionFailure
-		case validationFailure
-		case extractionFailure
-	}
+    class Entry {
+        let path: FilePath
+        let lock: ExclusiveLockedFile
+        let archivePath: FilePath
+        let removeArchiveOnDeInit: Bool // For when "archivePath" is pointing to the unencrypted copy of the archive.
+        let aeaDecryptionParameters: AEADecryptionParameters?
+        var extractionPath: FilePath?
+        
+        init(at path: FilePath, lock: ExclusiveLockedFile, archivePath: FilePath, removeArchiveOnDeinit: Bool, aeaDecryptionParameters: AEADecryptionParameters?) {
+            self.path = path
+            self.lock = lock
+            self.archivePath = archivePath
+            self.removeArchiveOnDeInit = removeArchiveOnDeinit
+            self.aeaDecryptionParameters = aeaDecryptionParameters
+            self.extractionPath = nil
+        }
 
-	protocol Delegate {
-		// Handlers should return the path to the directory of the extracted cryptex.
-		// NOTE: The "cacheInsertionHandler" will move (NOT copy) the file into the cache.
-		func handleCacheMiss(config: DInitCryptexConfig, cacheInsertionHandler: (FilePath) throws -> Void, tempDir: FilePath) async throws -> FilePath
-		func handleCacheHit(config: DInitCryptexConfig, cachedFile: FilePath, tempDir: FilePath) async throws -> FilePath
-	}
-	
-	enum CacheMissError: Swift.Error {
-		case downloadFailed
-		case failedToCreateCacheEntry(DInitCryptexConfig.DownloadedCryptex)
-	}
-
-	enum FetchResult {
-		case nonCacheable // The cryptex cache will not handle (download or extract) non-cacheable cryptexes.
-		case found(DInitCryptexConfig.ExtractedCryptex)
-		case cachingFailure(DInitCryptexConfig.DownloadedCryptex)
-	}
-	
-	private class LoggingDelegate: Delegate {
-		let wrappedDelegate: Delegate
-		
-		init(wrapping delegate: Delegate) {
-			self.wrappedDelegate = delegate
-		}
-		
-		func handleCacheMiss(config: DInitCryptexConfig, cacheInsertionHandler: (FilePath) throws -> Void, tempDir: FilePath) async throws -> FilePath {
-			CryptexCache.logger.log("[\(config.url)] Cache miss")
-			return try await self.wrappedDelegate.handleCacheMiss(config: config, cacheInsertionHandler: cacheInsertionHandler, tempDir: tempDir)
-		}
-		
-		func handleCacheHit(config: DInitCryptexConfig, cachedFile: FilePath, tempDir: FilePath) async throws -> FilePath {
-			return try await self.wrappedDelegate.handleCacheHit(config: config, cachedFile: cachedFile, tempDir: tempDir)
-		}
-	}
-	
-	class DefaultDelegate: Delegate {
-		func handleCacheMiss(config: DInitCryptexConfig, cacheInsertionHandler: (FilePath) throws -> Void, tempDir: FilePath) async throws -> FilePath {
-			// The cache entries are stored as Apple Encrypted Archives.
-			guard let downloadedCryptex = await config.download(to: tempDir) else {
-				CryptexCache.logger.error("[\(config.url)] Failed to download")
-				throw CacheMissError.downloadFailed
-			}
-
-			// Set up path to extract cryptex to
-			guard let extractedCryptexPath = LibCryptex.setUpExtractedPath() else {
-				throw Error.extractionFailure
-			}
-
-			let downloadedCryptexArchiveMagic: FilePath.ArchiveType?
-
+		internal func copyObject(fromPath: FilePath, toPath: FilePath) {
 			do {
-				downloadedCryptexArchiveMagic = try downloadedCryptex.path.readArchiveMagic()
+				try FileManager.default.copyItem(atPath: fromPath.string, toPath: toPath.string)
 			} catch {
-				logger.error("[\(config.url)] Failed to read archive magic for \(downloadedCryptex.path): \(error)")
-				throw Error.extractionFailure
-			}
-
-			switch downloadedCryptexArchiveMagic {
-			case .AppleEncryptedArchive:
-				guard let extractedCryptexPath = await LibCryptex.extractCryptex(
-					at: downloadedCryptex.path,
-					url: config.url,
-                    dawToken: config.dawToken?.string,
-                    wgUsername: config.wgUsername,
-                    wgToken: config.wgToken?.string,
-					altCDN: config.alternateCDNHost,
-					retries: config.networkRetryCount,
-					aeaDecryptionParams: config.aeaDecryptionParams) else {
-					throw Error.extractionFailure
-				}
-
-				do {
-					// If the file is already an AEA, just move it into the cache
-					try cacheInsertionHandler(downloadedCryptex.path)
-				} catch {
-					// Failed to insert into cache, so the next time will have a cache miss,
-					// but extraction succeeded, so we can continue.
-					CryptexCache.logger.warning("[\(config.url)] Failed to insert Apple Encrypted Archive into cache: \(error)")
-				}
-				
-				return extractedCryptexPath
-			case .UncompressedAppleArchive:
-				try downloadedCryptex.path.extractUncompressedAppleArchive(to: extractedCryptexPath)
-			default:
-				try downloadedCryptex.path.extract(to: extractedCryptexPath)
-			}
-
-			do {
-				let extractedContents = try extractedCryptexPath.performDeepEnumerationOfFiles()
-				logger.info("Extracted \(downloadedCryptex.path.description) with contents: \(extractedContents)")
-			} catch {
-				logger.error("Failed to enumerate the contents of \(extractedCryptexPath): \(error)")
-			}
-
-			// Non-AEA cases must be wrapped in an AEA before inserted into the cache
-			guard let downloadedFileName = downloadedCryptex.path.lastComponent else {
-				CryptexCache.logger.error("[\(config.url)] Failed to get file name of downloaded file")
-					throw CacheMissError.failedToCreateCacheEntry(downloadedCryptex)
-			}
-
-			let stagedCacheArchive = tempDir.appending("\(downloadedFileName.stem).aea")
-
-			guard let digest = config.sha256 else {
-				CryptexCache.logger.error("[\(config.url)] No digest found when digest is required.")
-				throw Error.validationFailure
-			}
-			
-			do {
-				let key = try CryptexCache.generateKey(from: digest)
-
-				try downloadedCryptex.path.wrapFileContentsInAppleEncryptedArchive(
-					at: stagedCacheArchive,
-					using: key,
-					permissions: [.ownerReadWrite],
-					compression: downloadedCryptexArchiveMagic == .UncompressedAppleArchive)
-
-				try cacheInsertionHandler(stagedCacheArchive)
-			} catch {
-				// Failed to insert into cache, so the next time will have a cache miss,
-				// but extraction succeeded, so we can continue.
-				CryptexCache.logger.warning("[\(config.url)] Failed to insert archive into cache: \(error)")
-			}
-
-			return extractedCryptexPath
-		}
-		
-		func handleCacheHit(config: DInitCryptexConfig, cachedFile: FilePath, tempDir: FilePath) async throws -> FilePath {
-			let finalArchivePath: FilePath
-			
-			if config.url.scheme == kKnoxURLScheme || config.aeaDecryptionParams != nil {
-				finalArchivePath = cachedFile
-			} else {
-				let innerArchivePath = tempDir.appending("inner")
-
-				guard let digest = config.sha256 else {
-					CryptexCache.logger.error("[\(config.url)] No digest found when digest is required.")
-					throw Error.validationFailure
-				}
-
-				do {
-					try cachedFile.extractAppleEncryptedArchive(
-						to: innerArchivePath,
-						using: CryptexCache.generateKey(from: digest),
-						mode: .extractRawBytes(outputFilePermissions: [.ownerReadWrite]))
-				} catch {
-					// Give an opportunity for a second chance.
-					throw Error.validationFailure
-				}
-
-				if (try? innerArchivePath.fileExists()) != true {
-					// If the path doesn't point to a regular file, bail.
-					throw Error.extractionFailure
-				}
-
-				do {
-					try innerArchivePath.sha256Equals(expectedSHA256: digest)
-				} catch {
-					do {
-						try innerArchivePath.remove()
-					} catch {
-						CryptexCache.logger.fault("Failed to remove \"\(innerArchivePath)\" after failed validation: \(error)")
-						throw error
-					}
-					throw CryptexCache.Error.validationFailure
-				}
-				
-				finalArchivePath = innerArchivePath
-			}
-
-			guard let extractedCryptexPath = await LibCryptex.extractCryptex(
-				at: finalArchivePath,
-				url: config.url,
-                dawToken: config.dawToken?.string,
-                wgUsername: config.wgUsername,
-                wgToken: config.wgToken?.string,
-				altCDN: config.alternateCDNHost,
-				retries: config.networkRetryCount,
-				aeaDecryptionParams: config.aeaDecryptionParams) else {
-				// Validation is done by this function for Knox and non-Knox AEA archives
-				if config.url.scheme == kKnoxURLScheme || config.aeaDecryptionParams != nil {
-					throw Error.validationFailure
-				} else {
-					throw Error.extractionFailure
-				}
-			}
-
-			return extractedCryptexPath
-		}
-	}
-
-	private let cacheDirectoryPath: FilePath
-	private let maxTotalSize: Int
-	private let delegate: Delegate
-
-#if os(macOS)
-	internal static let defaultCacheDirectoryPath: FilePath = "/System/Volumes/Preboot/DarwinInitCache"
-#else
-	internal static let defaultCacheDirectoryPath: FilePath = "/private/preboot/DarwinInitCache"
-#endif
-	
-	init?(at cacheDirectoryPath: FilePath, delegate: Delegate = DefaultDelegate(), maxTotalSize: Int = Int.max) {
-		self.cacheDirectoryPath = cacheDirectoryPath
-		self.maxTotalSize = max(0, maxTotalSize)
-		self.delegate = LoggingDelegate(wrapping: delegate)
-
-		do {
-			try CryptexCache.createDirectory(at: self.cacheDirectoryPath)
-		} catch {
-			CryptexCache.logger.fault("Failed to create CryptexCache directory at \(self.cacheDirectoryPath): \(error)")
-			return nil
-		}
-	}
-
-	class func generateKey(from digest: DInitSHA256Digest) throws -> SymmetricKey {
-		guard let bytes = digest.description.hexadecimalASCIIBytes else {
-			throw CryptexCache.Error.failedToConvertDigestToSymmetricKey(digest)
-		}
-
-		return SymmetricKey(data: Data(bytes))
-	}
-
-	struct CacheItemInfo {
-		let totalFileAllocatedSize: Int
-		let contentAccessDate: Date
-	}
-
-	func fetch<T>(configs: [DInitCryptexConfig], removeCacheEntriesNotInInputSet: Bool = true, _ body: (DInitCryptexConfig, FetchResult) async throws -> T?) async throws -> [T] {
-		let annotatedConfigs = configs.map { config in
-			let isCacheable = (config.cacheable != false) && ((config.sha256 != nil) || (config.url.scheme == kKnoxURLScheme) || (config.aeaDecryptionParams?.aeaArchiveId != nil))
-			let cacheEntryName = config.cacheEntryName
-			return (config, isCacheable, cacheEntryName)
-		}
-		
-		let inputSet = Set<String>(annotatedConfigs.compactMap { config, isCacheable, cacheEntryName in
-			return (isCacheable) ? (cacheEntryName) : (nil)
-		})
-
-		var cacheContents: [String:CacheItemInfo] = [:]
-		var cacheContentsTotalSize: Int = 0
-
-		let resourceKeys = Set<URLResourceKey>([
-			.isRegularFileKey,
-			.totalFileAllocatedSizeKey,
-			.contentAccessDateKey])
-
-		guard let directoryEnumerator = FileManager.default.enumerator(
-			at: URL(filePath: self.cacheDirectoryPath.description, directoryHint: .isDirectory),
-			includingPropertiesForKeys: Array(resourceKeys),
-			options: .skipsSubdirectoryDescendants)
-		else {
-			CryptexCache.logger.error("Failed to create directory enumerator")
-			throw CryptexCache.Error.failedToEnumerateCacheContents
-		}
-
-		for case let fileSystemItem as URL in directoryEnumerator {
-			guard let resourceValues = try? fileSystemItem.resourceValues(forKeys: resourceKeys),
-				  let isRegularFile = resourceValues.isRegularFile
-			else {
-				CryptexCache.logger.fault("Failed to get \"isRegularFile\" for \(fileSystemItem.lastPathComponent)")
-				throw CryptexCache.Error.failedToEnumerateCacheContents
-			}
-
-			if !isRegularFile {
-				CryptexCache.logger.debug("Removing \"\(fileSystemItem.lastPathComponent)\" from cache because it is not a regular file")
-				try CryptexCache.removeItem(at: fileSystemItem)
-				continue
-			}
-
-			guard let totalFileAllocatedSize = resourceValues.totalFileAllocatedSize,
-				  let contentAccessDate = resourceValues.contentAccessDate
-			else {
-				CryptexCache.logger.fault("Failed to get file attributes for \(fileSystemItem.lastPathComponent)")
-				throw CryptexCache.Error.failedToEnumerateCacheContents
-			}
-
-			CryptexCache.logger.debug("\"\(fileSystemItem.lastPathComponent)\" size: \(totalFileAllocatedSize.formatted(.byteCount(style: .memory)))")
-
-			if removeCacheEntriesNotInInputSet && !inputSet.contains(fileSystemItem.lastPathComponent) {
-				CryptexCache.logger.log("Removing \"\(fileSystemItem.lastPathComponent)\" from cache")
-				try CryptexCache.removeItem(at: fileSystemItem)
-				continue
-			}
-
-			let cacheItemInfo = CacheItemInfo(
-				totalFileAllocatedSize: totalFileAllocatedSize,
-				contentAccessDate: contentAccessDate)
-			cacheContents[fileSystemItem.lastPathComponent] = cacheItemInfo
-
-			cacheContentsTotalSize += totalFileAllocatedSize
-		}
-
-		let tempDirRoot = self.cacheDirectoryPath.appending("tmp")
-		let outputArray: [T] = try await CryptexCache.withTemporaryDirectory(at: tempDirRoot) {
-			return await annotatedConfigs.asyncSerialCompactMap { (config, isCacheable, cacheEntryName) in
-				if (isCacheable) {
-					let cacheFilePath = self.cacheDirectoryPath.appending(cacheEntryName)
-					let tempDir = tempDirRoot.appending(cacheEntryName)
-					
-					CryptexCache.logger.log("[\(config.url)] Fetching from cache")
-
-					return try? await CryptexCache.withTemporaryDirectory(at: tempDir) {
-						func cacheInsertionHandler(inputFilePath: FilePath) throws -> Void {
-							let resourceKeys = Set<URLResourceKey>([
-								.totalFileAllocatedSizeKey,
-								.creationDateKey])
-
-							guard let url = URL(filePath: inputFilePath),
-								  let resourceValues = try? url.resourceValues(forKeys: resourceKeys),
-								  let totalFileAllocatedSize = resourceValues.totalFileAllocatedSize,
-								  let creationDate = resourceValues.creationDate
-							else {
-								CryptexCache.logger.error("Failed to get file attributes for \(inputFilePath.description)")
-								throw CryptexCache.Error.failedToEnumerateCacheContents
-							}
-
-							CryptexCache.logger.debug("[\(config.url)] Size: \(totalFileAllocatedSize.formatted(.byteCount(style: .memory))) (Current Total Cache Size: \(cacheContentsTotalSize.formatted(.byteCount(style: .memory))))")
-
-							while (cacheContentsTotalSize + totalFileAllocatedSize) > self.maxTotalSize {
-								guard let evictionCandidate = cacheContents.min(by: { a, b in a.value.contentAccessDate < b.value.contentAccessDate }) else {
-									CryptexCache.logger.error("[\(config.url)] No more cache entries to evict! New archive too big for cache!")
-									throw CryptexCache.Error.evictionFailure
-								}
-
-								do {
-									CryptexCache.logger.info("Evicting \"\(evictionCandidate.key)\" from cache (\(evictionCandidate.value.totalFileAllocatedSize.formatted(.byteCount(style: .memory))))")
-									try CryptexCache.removeItem(at: self.cacheDirectoryPath.appending(evictionCandidate.key))
-									cacheContentsTotalSize -= evictionCandidate.value.totalFileAllocatedSize
-									cacheContents.removeValue(forKey: evictionCandidate.key)
-								} catch {
-									CryptexCache.logger.error("Failed to evict cache entry \"\(evictionCandidate.key)\"")
-									throw error
-								}
-							}
-
-							CryptexCache.logger.debug("[\(config.url)] Moving \(inputFilePath) into cache entry at \(cacheFilePath)")
-
-							try FileManager.default.moveItem(
-								atPath: inputFilePath.description,
-								toPath: cacheFilePath.description)
-
-							let cacheItemInfo = CacheItemInfo(
-								totalFileAllocatedSize: totalFileAllocatedSize,
-								contentAccessDate: creationDate)
-							cacheContents[cacheEntryName] = cacheItemInfo
-
-							cacheContentsTotalSize += totalFileAllocatedSize
-						}
-
-						let extractedCryptexDir: FilePath
-
-						if cacheContents[cacheEntryName] == nil {
-							do {
-								extractedCryptexDir = try await self.delegate.handleCacheMiss(
-									config: config,
-									cacheInsertionHandler: cacheInsertionHandler,
-									tempDir: tempDir)
-							} catch CacheMissError.failedToCreateCacheEntry(let downloadedFile) {
-								CryptexCache.logger.warning("[\(config.url)] Failed to create cache entry; falling back to using downloaded file directly")
-
-								do {
-									return try await body(config, FetchResult.cachingFailure(downloadedFile))
-								} catch {
-									CryptexCache.logger.error("[\(config.url)] Failed to handle caching failure: \(error)")
-									return nil
-								}
-							} catch {
-								CryptexCache.logger.error("[\(config.url)] Failed to handle cache miss: \(error)")
-								return nil
-							}
-						} else {
-							CryptexCache.logger.log("[\(config.url)] Found in cache")
-
-							do {
-								do {
-									extractedCryptexDir = try await self.delegate.handleCacheHit(
-										config: config,
-										cachedFile: cacheFilePath,
-										tempDir: tempDir)
-								} catch Error.validationFailure {
-									CryptexCache.logger.log("[\(config.url)] Cache entry validation failed; triggering cache miss")
-
-									do {
-										try cacheFilePath.remove()
-									} catch {
-										CryptexCache.logger.fault("[\(config.url)] Failed to remove file that failed validation \(cacheFilePath): \(error)")
-										throw error
-									}
-
-									// Clean slate for the cache miss
-									try tempDir.removeAllFilesInDirectory()
-
-									extractedCryptexDir = try await self.delegate.handleCacheMiss(
-										config: config,
-										cacheInsertionHandler: cacheInsertionHandler,
-										tempDir: tempDir)
-								}
-							} catch {
-								CryptexCache.logger.error("[\(config.url)] Failed to handle cache hit: \(error)")
-								return nil
-							}
-						}
-
-						do {
-							return try await body(config, FetchResult.found(
-								DInitCryptexConfig.ExtractedCryptex(config: config, path: extractedCryptexDir)))
-						} catch {
-							CryptexCache.logger.error("[\(config.url)] Failed to handle fetch: \(error)")
-							return nil
-						}
-					}
-				} else {
-					CryptexCache.logger.log("[\(config.url)] Not cacheable")
-					do {
-						return try await body(config, FetchResult.nonCacheable)
-					} catch {
-						CryptexCache.logger.error("Failed to handle non-cacheable cryptex: \(error)")
-						return nil
-					}
-				}
+				logger.info("Caught copyItem error \(error).")
 			}
 		}
-		
-		return outputArray
-	}
-	
-	static private func removeItem(at url: URL) throws {
-		logger.debug("Removing item at \(url)")
-		do {
-			try FileManager.default.removeItem(at: url)
-		} catch {
-			CryptexCache.logger.fault("Failed to remove \"\(url)\" from cache: \(error)")
-			throw error
+
+		func fetchTicketandGinfPath() throws -> (FilePath, FilePath) {
+			let dirPath = try CryptexManager.setUpExtractedPath()
+			let toTmpTicketPath = dirPath.appending("ticket")
+			let toTmpGINFPath = dirPath.appending("ginf")
+			let fromTicketPath = self.path.appending("/ticket")
+			let fromGINFPath = self.path.appending("/ginf")
+
+			copyObject(fromPath: fromTicketPath, toPath: toTmpTicketPath)
+			copyObject(fromPath: fromGINFPath, toPath: toTmpGINFPath)
+
+			return (toTmpTicketPath, toTmpGINFPath)
+		}
+
+		func deleteTicketAndginf() {
+			let ticketPath = self.path.appending("/ticket")
+			let ginfPath = self.path.appending("/ginf")
+
+			do { try FileManager.default.removeItem(atPath: ticketPath.string) } catch {
+				logger.error("No ticket to delete")
+			}
+
+			do { try FileManager.default.removeItem(atPath: ginfPath.string) } catch {
+				logger.error("No ginf to delete")
+			}
+		}
+
+		func ingestTicketandGINF(ticket ticketFromPath: FilePath, ginfPath ginfFromPath: FilePath) throws {
+			let ticketToPath = self.path.appending("/ticket")
+			let ginfToPath = self.path.appending("/ginf")
+
+			logger.info("Copying ginf ticket from \(ginfFromPath) to \(ginfToPath)")
+			try FileManager.default.copyItem(at: URL(filePath: ginfFromPath)!, to:  URL(filePath: ginfToPath)!)
+
+			logger.info("Copying personalized ticket from \(ticketFromPath) to \(ticketToPath)")
+			try FileManager.default.copyItem(at: URL(filePath: ticketFromPath)!, to:  URL(filePath: ticketToPath)!)
+		}
+
+        func extract() throws -> FilePath {
+            if let extractionPath = self.extractionPath {
+                return extractionPath
+            } else {
+                let extractionPath = try CryptexManager.setUpExtractedPath()
+                self.extractionPath = extractionPath
+                do {
+                    try self.archivePath.extract(to: extractionPath, using: self.aeaDecryptionParameters)
+                } catch {
+                    // We should cleanup the entry if it's failed to extract
+                    self.extractionPath = nil
+                    self.cleanup()
+                    throw error
+                }
+
+                return extractionPath
+            }
+        }
+
+        private func cleanup() {
+            do {
+                try self.archivePath.remove()
+            } catch {
+                Logger.caching.fault("Failed to remove \"\(self.archivePath)\" from cache: \(error)")
+            }
+        }
+
+        deinit {
+            if self.removeArchiveOnDeInit {
+                self.cleanup()
+            }
+        }
+    }
+    
+    struct AccessParameter {
+        let digest: [UInt8]?
+        let alternateKnoxCDNHost: String?
+        let aeaDecryptionParameters: AEADecryptionParameters?
+        let maxActiveNetworkTasks: Int?
+        let chunkSize: UInt64?
+    }
+    
+    enum Error: Swift.Error {
+        case extractionFailure
+        case missingRequiredDigest
+        case downloadFailure
+    }
+    
+    func handleCacheMiss(forCacheEntryDirectory entryDir: FilePath,
+                         lock: ExclusiveLockedFile,
+                         downloadInformation: CacheDownloadInformation,
+                         downloadedFile: FilePath,
+                         tempDir: FilePath,
+                         delegateParameter: AccessParameter) async throws -> Entry {
+        let aeaPath = entryDir.appending("aea")
+        let downloadedCryptexArchiveMagic: FilePath.ArchiveType?
+
+        do {
+            downloadedCryptexArchiveMagic = try downloadedFile.readArchiveMagic()
+        } catch {
+            CryptexCacheDelegate.logger.error("[\(downloadInformation.url)] Failed to read archive magic for \(downloadedFile): \(error)")
+            throw Error.extractionFailure
+        }
+        
+        if downloadedCryptexArchiveMagic == .AppleEncryptedArchive {
+            // If the file is already an AEA, just move it into the cache
+            try FileManager.default.moveItem(atPath: downloadedFile.string, toPath: aeaPath.string)
+            
+            return Entry(at: entryDir, lock: lock, archivePath: aeaPath, removeArchiveOnDeinit: false, aeaDecryptionParameters: delegateParameter.aeaDecryptionParameters)
+        } else {
+            // Non-AEA cases must be wrapped in an AEA before inserted into the cache
+            guard let digest = delegateParameter.digest else {
+                CryptexCacheDelegate.logger.error("[\(downloadInformation.url)] No digest found when digest is required.")
+                throw Error.missingRequiredDigest
+            }
+            
+            do {
+                try downloadedFile.wrapFileContentsInAppleEncryptedArchive(
+                    at: aeaPath,
+                    using: SymmetricKey(data: digest),
+                    permissions: [.ownerReadWrite],
+                    compression: downloadedCryptexArchiveMagic == .UncompressedAppleArchive)
+            } catch {
+                // Failed to create cache archive, so the next time will have a cache miss,
+                // but we still try to extract the inner archive.
+                CryptexCacheDelegate.logger.warning("[\(downloadInformation.url)] Failed to create archive in cache: \(error)")
+            }
+            
+            // "downloadedFile" will be deleted soon after returning. Moving to extend life.
+            let innerArchivePath: FilePath = entryDir.appending("inner")
+            try FileManager.default.moveItem(atPath: downloadedFile.string, toPath: innerArchivePath.string)
+            
+            return Entry(at: entryDir,
+                         lock: lock,
+                         archivePath: innerArchivePath,
+                         removeArchiveOnDeinit: true,
+                         aeaDecryptionParameters: delegateParameter.aeaDecryptionParameters)
+        }
+    }
+
+    func handleCacheHit(forCacheEntryDirectory entryDir: FilePath,
+                        lock: ExclusiveLockedFile,
+                        downloadInformation: CacheDownloadInformation,
+                        tempDir: FilePath,
+                        delegateParameter: AccessParameter) async throws -> Entry {
+        let cachedFile = entryDir.appending("aea")
+        
+        if (try? cachedFile.exists()) != true {
+            CryptexCacheDelegate.logger.error("[\(downloadInformation.url)] Cached archive missing")
+            throw CacheError.validationFailure
+        }
+        
+        let removeArchiveOnDeinit: Bool
+        let finalArchivePath: FilePath
+        
+        if downloadInformation.url.scheme == kKnoxURLScheme || delegateParameter.aeaDecryptionParameters != nil {
+            finalArchivePath = cachedFile
+            removeArchiveOnDeinit = false
+        } else {
+            let innerArchivePath = entryDir.appending("inner")
+
+            guard let digest = delegateParameter.digest else {
+                CryptexCacheDelegate.logger.error("[\(downloadInformation.url)] No digest found when digest is required.")
+                throw Error.missingRequiredDigest
+            }
+
+            do {
+                try cachedFile.extractAppleEncryptedArchive(
+                    to: innerArchivePath,
+                    using: SymmetricKey(data: digest),
+                    mode: .extractRawBytes(outputFilePermissions: [.ownerReadWrite]))
+            } catch {
+                // Give an opportunity for a second chance.
+                throw CacheError.validationFailure
+            }
+
+            if (try? innerArchivePath.fileExists()) != true {
+                // If the path doesn't point to a regular file, bail.
+                throw Error.extractionFailure
+            }
+
+            if (try? SHA256.Digest(innerArchivePath) == digest) != true {
+                CryptexCacheDelegate.logger.error("[\(downloadInformation.url)] Cached file failed sha validation!")
+                throw CacheError.validationFailure
+            }
+            
+            finalArchivePath = innerArchivePath
+            removeArchiveOnDeinit = true
+        }
+        
+        return Entry(at: entryDir,
+                     lock: lock,
+                     archivePath: finalArchivePath,
+                     removeArchiveOnDeinit: removeArchiveOnDeinit,
+                     aeaDecryptionParameters: delegateParameter.aeaDecryptionParameters)
+    }
+
+    func handleDownload(from url: URL,
+                        to downloadDirectory: FilePath,
+                        authentication: DownloadAuthentication,
+                        downloadConfiguration: DownloadConfiguration,
+                        delegateParameter: AccessParameter) async throws -> FilePath {
+        let downloaded: FilePath
+        
+        if url.scheme == kKnoxURLScheme {
+            guard let encrypted = await KnoxClientWrapper.downloadRaw(from: url,
+                                                                      to: downloadDirectory,
+                                                                      configuration: downloadConfiguration,
+                                                                      authentication: authentication,
+                                                                      alternateCDNHost: delegateParameter.alternateKnoxCDNHost) else {
+                throw Error.downloadFailure
+            }
+            
+            // At the time of writing, Knox digests are commonly the digest of the decrypted asset.
+            // In addition, Knox may use algorithms other than SHA-256.
+            // I have observed Knox returning a SHA-512/256 digest and that algorithm is not supported by CryptoKit.
+            // Because there are configs out there that erroneously contain the SHA-512/256 digest of the decrypted asset
+            // for Knox URLs, the digest check is not done here. It is also redundant.
+            // At extraction time, the AEA decryption process combined with an archive ID check ensures the integrity of the download.
+            
+            downloaded = encrypted
+        } else {
+            guard let compressed = await Network.downloadItem(at: url,
+                                                              to: downloadDirectory,
+                                                              attempts: Int(truncatingIfNeeded: downloadConfiguration.downloadRetries),
+                                                              background: downloadConfiguration.networkServiceType == .background,
+                                                              maxActiveTasks: delegateParameter.maxActiveNetworkTasks,
+                                                              chunkSize: delegateParameter.chunkSize) else {
+                throw Error.downloadFailure
+            }
+
+            if let digest = delegateParameter.digest {
+                if (try? SHA256.Digest(compressed) == digest) != true {
+                    Logger.caching.error("[\(url)] Downloaded file failed sha validation!")
+                    throw Error.downloadFailure
+                }
+            }
+
+            downloaded = compressed
+        }
+
+        return downloaded
+    }
+
+	func entryPurge(from: FilePath) throws {
+		//Parse filename, remove anything not in the "allow" list
+		for fileEntry in try FileManager.default.contentsOfDirectory(atPath: from.string) {
+			if (!Self.permittedFiles.contains(fileEntry)) {
+				Logger.caching.error("\(fileEntry) is not a permitted file, removing it from the cache")
+				try Self.removeItem(at: FilePath(from.string + "/" + fileEntry))
+			}
 		}
 	}
 
@@ -478,37 +310,18 @@ class CryptexCache {
 		do {
 			try path.remove()
 		} catch {
-			CryptexCache.logger.fault("Failed to remove \"\(path)\" from cache: \(error)")
+			Logger.caching.fault("Failed to remove \"\(path)\" from cache: \(error)")
 			throw error
 		}
 	}
+}
 
-	static private func createDirectory(at path: FilePath) throws {
-		try path.createDirectory(permissions: .ownerReadWriteExecute, intermediateDirectories: true)
-	}
-
-	static private func withTemporaryDirectory<T>(at path: FilePath, _ body: () async throws -> T) async throws -> T {
-		let returnValue: T
-
-		try CryptexCache.createDirectory(at: path)
-
-		do {
-			returnValue = try await body()
-		} catch {
-			let preexistingError = error
-
-			do {
-				try CryptexCache.removeItem(at: path)
-			} catch {
-				CryptexCache.logger.fault("Removal of file system item failed after pre-existing error thrown: \(preexistingError)")
-				throw error
-			}
-
-			throw preexistingError
-		}
-
-		try CryptexCache.removeItem(at: path)
-
-		return returnValue
-	}
+extension CryptexCache {
+    static let logger = Logger.cryptexcache
+    
+#if os(macOS)
+    internal static let defaultCacheDirectoryPath: FilePath = "/System/Volumes/Preboot/DarwinInitCache/cryptex"
+#else
+    internal static let defaultCacheDirectoryPath: FilePath = "/private/preboot/DarwinInitCache/cryptex"
+#endif
 }

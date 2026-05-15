@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardOSActivity
 import Foundation
 import OSLog
@@ -207,6 +205,15 @@ package actor CloudBoardAsyncXPCConnection: Identifiable {
     }
 
     public func registerHandler<Message: CloudBoardAsyncXPCCodableMessage>(
+        _: Message.Type,
+        handler: @Sendable @escaping (Message) async throws -> Message.Success
+    ) {
+        var store = CloudBoardAsyncXPCConnection.MessageHandlerStore()
+        store.register(Message.self, handler: handler)
+        self.nonPostedMessageHandlers.merge(store.handlers, uniquingKeysWith: { _, newHandler in newHandler })
+    }
+
+    public func registerHandler<Message: CloudBoardAsyncXPCByteBufferMessage>(
         _: Message.Type,
         handler: @Sendable @escaping (Message) async throws -> Message.Success
     ) {

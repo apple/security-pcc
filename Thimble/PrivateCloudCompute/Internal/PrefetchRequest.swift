@@ -21,12 +21,12 @@
 
 import Foundation
 
-package struct Prefetch {
+package struct Prefetch: Sendable {
     /// The response of a prefetch request which is
     /// A prefetch can result in one or more prefetch requests to ROPES
-    package struct Response: Codable {
-        package struct Node: Codable, Equatable {
-            package enum ValidationResult: Codable, Equatable {
+    package struct Response: Codable, Sendable {
+        package struct Node: Codable, Equatable, Sendable {
+            package enum ValidationResult: Codable, Equatable, Sendable {
                 case valid(publicKey: Data, expiry: Date)
                 case invalid(error: String)
                 case nodeAlreadyExistsInBatch

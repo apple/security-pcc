@@ -12,19 +12,11 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 internal import CloudBoardCommon
 import CloudBoardJobAPI
 import CryptoKit
 import Foundation
 import os
-
-public enum KeyDerivationError: Error {
-    case noHandlerResult
-    case illegalTransition
-    case usedAfterFinalizedCalled
-}
 
 /// Maps to AppleComputeEnsembler.framework KeyDistributionType
 public enum EnsembleKeyDistributionType: Sendable {

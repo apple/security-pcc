@@ -12,10 +12,10 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CFPreferenceCoder
+internal import CloudBoardLogging
 import Foundation
+import os
 
 extension CFPreferences {
     static var cloudBoardWorkloadControllerPreferencesDomain: String? {

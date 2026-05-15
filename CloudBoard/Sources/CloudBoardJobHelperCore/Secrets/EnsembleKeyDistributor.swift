@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardLogging
 import CryptoKit
@@ -21,6 +19,27 @@ import CryptoKit
 @_weakLinked import AppleComputeEnsembler
 #endif
 import Foundation
+
+/// Shared type to define distribution type for DEK-derived request specific keys used within ensembles
+package enum CloudBoardInternalEnsembleKeyDistributionType: String, Codable, Sendable {
+    /// Makes the key only available via ensembled on the leader of an ensemble
+    case local
+    /// Distribute the key to follower nodes of an ensemble
+    case distributed
+}
+
+/// Shared type to define distribution type for DEK-derived request specific keys used within ensembles
+package struct CloudBoardInternalEnsembleKeyInfo: Sendable {
+    /// ID of the encrypted ensemble key assigned by ensembled
+    package var keyID: UUID
+    /// Symmetric 256-bit key used to encrypt/decrypt
+    package var keyEncryptionKey: SymmetricKey
+
+    package init(keyID: UUID, keyEncryptionKey: SymmetricKey) {
+        self.keyID = keyID
+        self.keyEncryptionKey = keyEncryptionKey
+    }
+}
 
 package protocol EnsembleKeyDistributorProtocol: Sendable {
     func distributeKey(
@@ -30,7 +49,9 @@ package protocol EnsembleKeyDistributorProtocol: Sendable {
 
     func distributeSealedKey(
         key: AES.GCM.SealedBox,
-        distributionType: CloudBoardInternalEnsembleKeyDistributionType
+        distributionType: CloudBoardInternalEnsembleKeyDistributionType,
+        requestID: String,
+        spanID: UInt64
     ) async throws -> UUID
 }
 
@@ -60,11 +81,23 @@ struct EnsembleKeyDistributor: EnsembleKeyDistributorProtocol {
 
     func distributeSealedKey(
         key: AES.GCM.SealedBox,
-        distributionType: CloudBoardInternalEnsembleKeyDistributionType
+        distributionType: CloudBoardInternalEnsembleKeyDistributionType,
+        requestID: String,
+        spanID: UInt64
     ) async throws -> UUID {
         #if canImport(AppleComputeEnsembler)
         if #_hasSymbol(EnsemblerSession.self) {
-            return try await EnsemblerSession().distributeDataKey(key: key, type: .init(distributionType))
+            let tracingContext = EnsembleTracingContext(
+                name: "cb_jobhelper",
+                requestID: UUID(uuidString: requestID) ?? UUID(),
+                spanID: spanID,
+                parentSpanID: nil
+            )
+            return try await EnsemblerSession().distributeDataKey(
+                key: key,
+                type: .init(distributionType),
+                tracingContext: tracingContext
+            )
         }
         #endif
         throw EnsembleKeyError.ensembleFrameworkUnavailable

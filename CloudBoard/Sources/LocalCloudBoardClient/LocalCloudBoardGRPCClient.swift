@@ -12,15 +12,16 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
+// Don't add any dependencies here to CloudBoard itself except static libraries
 internal import CloudAttestation
 internal import Crypto
 @_spi(HPKEAlgID) import CryptoKit
+internal import DequeModule
 import Foundation
 internal import HTTPClientStateMachine
 internal import InternalGRPC
-internal import DequeModule
+internal import InternalSwiftProtobuf
+internal import NIOCore
 internal import Synchronization
 import os
 
@@ -41,6 +42,11 @@ public enum LocalCloudBoardGRPCClientError: Error {
     case proxyInternalError
     case incompleteInfoForCreatingRequestExecutionLogEntry
     case invalidEndpointProvidedForFetchingAttestation
+}
+
+public enum ApplicationDataChunkingConfiguration: Sendable {
+    case disabled
+    case enabled(chunkSize: Int)
 }
 
 @available(*, deprecated, renamed: "LocalCloudBoardGRPCClientProxyWorkflowError")
@@ -111,6 +117,14 @@ public struct RequestExecutionLogEntry: Sendable {
     public var endpoint: LocalCloudBoardGRPCAsyncClient.EndPoint
     public var trustedProxyAttestationBundle: LocalCloudBoardAttestationBundle
     public var computeNodeAttestationBundle: LocalCloudBoardAttestationBundle?
+    public var assetsMetata: [LocalCloudBoardAssetMetadata]
+}
+
+public struct LocalCloudBoardAssetMetadata: Sendable {
+    public var assetID: String
+    public var applicationID: String
+    public var assetIdentityHash: String
+    public var version: String
 }
 
 // namespace for translated forms of the real protobuf types to avoid confusion
@@ -130,7 +144,7 @@ public enum Translated: Sendable {
         public var protobufTextEncodedForm: String
         public var responseStatus: ResponseStatus
 
-        internal init(_ responseSummary: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ResponseSummary) {
+        internal init(_ responseSummary: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePayload) {
             self.protobufTextEncodedForm = responseSummary.textFormatString()
             self.responseStatus =
                 switch responseSummary.responseStatus {
@@ -242,6 +256,37 @@ public struct ChooseWorkerContext: Sendable {
         }
     }
 
+    /// Simplified subset of InvokeProxyInitiate.ReuseConstraints
+    /// Note: This is package only this till it's more stable
+    package struct ReuseConstraints: Sendable, CustomStringConvertible {
+        // note: naming convention matches the protos! ID not Id
+        package var ensembleID: String
+        package var bootID: String
+        package var rackID: String?
+        package var workloadAdditions: [String: [String]]
+
+        /// local cloudboard client concept allowing explicit control of whether the reuse
+        /// is considered to be viable - remember this doesn't mean you have to *send the Initiate to
+        /// that endpoint* just that the target is "present" (no restarted and registered with SD)
+        package var forceReuseFailure: Bool
+
+        // only the normal parts that were in the proto included
+        package var description: String {
+            "ensembleID: \(self.ensembleID) bootID: \(self.bootID) rackID: \(self.rackID ?? "nil") workloadAdditions: \(self.workloadAdditions)"
+        }
+
+        internal init(
+            proto: Com_Apple_Cloudboard_Api_V1_InvokeProxyInitiate.ReuseConstraints,
+            forceReuseFailure: Bool
+        ) {
+            self.ensembleID = proto.ensemble.ensembleID
+            self.bootID = proto.ensemble.bootID
+            self.rackID = proto.hasRackID ? proto.rackID : nil
+            self.workloadAdditions = proto.workloadAdditions.param.asMap()
+            self.forceReuseFailure = forceReuseFailure
+        }
+    }
+
     public struct InvokeProxyInitiate: Sendable {
         /// Unique id for this worker request - used to tie everything together
         public var taskId: String
@@ -251,18 +296,44 @@ public struct ChooseWorkerContext: Sendable {
         /// Workload parameters, sometimes called tags
         public var workloadParameters: [String: [String]]
 
+        package var reuseConstraints: ReuseConstraints?
+
+        package var groupID: String?
+
         // not exposed - likely never needed
         // var responseBypassMode: Com_Apple_Cloudboard_Api_V1_ResponseBypassMode
         // var forwardBypassedRequestChunks: Bool = false
+
+        // not exposed - not yet needed
+        // var efforts: [Com_Apple_Cloudboard_Api_V1_InvokeProxyInitiate.Effort]
+        // var negotiate: Com_Apple_Cloudboard_Api_V1_InvokeProxyInitiate.NegotiateEnsembleChoice
 
         public init(
             taskID: String,
             workloadType: String,
             workloadParameters: [String: [String]]
         ) {
+            self.init(
+                taskID: taskID,
+                workloadType: workloadType,
+                workloadParameters: workloadParameters,
+                reuseConstraints: nil,
+                groupID: nil
+            )
+        }
+
+        package init(
+            taskID: String,
+            workloadType: String,
+            workloadParameters: [String: [String]],
+            reuseConstraints: ReuseConstraints?,
+            groupID: String?
+        ) {
             self.taskId = taskID
             self.workloadType = workloadType
             self.workloadParameters = workloadParameters
+            self.reuseConstraints = reuseConstraints
+            self.groupID = groupID
         }
     }
 
@@ -282,7 +353,9 @@ public struct ChooseWorkerContext: Sendable {
 
     internal init(
         originalRequestParameters: Com_Apple_Cloudboard_Api_V1_InvokeWorkloadRequest.Parameters,
-        initiate: Com_Apple_Cloudboard_Api_V1_InvokeProxyInitiate
+        initiate: Com_Apple_Cloudboard_Api_V1_InvokeProxyInitiate,
+        forceReuseFailure: Bool,
+        groupID: String?
     ) {
         self.originalRequest = .init(
             requestID: originalRequestParameters.requestID,
@@ -292,7 +365,9 @@ public struct ChooseWorkerContext: Sendable {
         self.initiate = .init(
             taskID: initiate.taskID,
             workloadType: initiate.workload.type,
-            workloadParameters: initiate.workload.param.asMap()
+            workloadParameters: initiate.workload.param.asMap(),
+            reuseConstraints: .init(proto: initiate.reuseConstraints, forceReuseFailure: forceReuseFailure),
+            groupID: groupID
         )
     }
 }
@@ -318,6 +393,21 @@ public class LocalCloudBoardGRPCAsyncClient {
 
         public var description: String {
             "\(self.host):\(self.port)"
+        }
+    }
+
+    /// This provides full control of the "ROPES simulation" path as to whether the selection
+    /// is considered to be a reuse or not.
+    public struct SelectedComputeNode: Sendable {
+        var endpoint: EndPoint
+        var computeNodeWorkload: [String: [String]]
+
+        public init(
+            endpoint: LocalCloudBoardGRPCAsyncClient.EndPoint,
+            computeNodeWorkload: [String: [String]]
+        ) {
+            self.endpoint = endpoint
+            self.computeNodeWorkload = computeNodeWorkload
         }
     }
 
@@ -383,8 +473,17 @@ public class LocalCloudBoardGRPCAsyncClient {
     private let proxyWorkerErrors: Mutex<[String: Error]> = .init([:])
 
     private typealias UsageTrackedClient = TrackedPool<EndPoint, StatefulClient>.Token
-    // pick the worker to use (if any) for an ProxyInvokeClient calls
-    private let proxyInvokeClientChoice: @Sendable (ChooseWorkerContext) -> UsageTrackedClient?
+    // pick the worker to use (if any) for an ProxyInvokeClient call
+    private let proxyInvokeClientChoice: @Sendable (ChooseWorkerContext) -> InvokeProxyInitiateResult
+
+    private let _forceReuseFailure = Mutex<Bool>(false)
+    /// Setting this to true will make all future proxy Initiate requests which
+    /// attempt to make use of the ReuseTargets be considered to *not* be able to
+    /// achieve this regarless of any other code that would control this
+    public var forceReuseFailure: Bool {
+        get { self._forceReuseFailure.withLock { $0 } }
+        set { self._forceReuseFailure.withLock { $0 = newValue } }
+    }
 
     private static func determineEnvironment(_ env: String?) -> CloudAttestation.Environment {
         if let env {
@@ -442,7 +541,7 @@ public class LocalCloudBoardGRPCAsyncClient {
             isProxy: false
         )
         self.clientByEndpoint[endpoint] = self.initialClient
-        self.proxyInvokeClientChoice = { _ in nil }
+        self.proxyInvokeClientChoice = { _ in .unavailable }
     }
 
     /// Kept for API and ABI compatibility, Creates a proxy targetted client with a single worker
@@ -464,8 +563,12 @@ public class LocalCloudBoardGRPCAsyncClient {
         let compute = Self.makeGRPCClient(computeEndpoint, isProxy: false)
         self.clientByEndpoint[computeEndpoint] = compute
         let workers = TrackedPool([compute.endPoint: compute])
-        self.proxyInvokeClientChoice = { _ in
-            try! workers.useSpecific(compute.endPoint)
+        self.proxyInvokeClientChoice = { context -> InvokeProxyInitiateResult in
+            let choice = try! workers.useSpecific(compute.endPoint)
+            let workload = try! Self.applyConventionalROPESWorkloadManipulation(
+                context: context, serviceDiscovery: nil
+            )
+            return .directChoice(choice, workload: workload)
         }
     }
 
@@ -502,7 +605,7 @@ public class LocalCloudBoardGRPCAsyncClient {
         attestationEnvironment: String? = nil
     ) {
         self.attestationEnvironment = Self.determineEnvironment(attestationEnvironment)
-        self.proxyInvokeClientChoice = { _ in nil }
+        self.proxyInvokeClientChoice = { _ in .unavailable }
         self.initialClient = Self.makeGRPCClient(
             computeHost,
             isProxy: false
@@ -568,22 +671,154 @@ public class LocalCloudBoardGRPCAsyncClient {
         self.init(
             proxy: proxy,
             computeHosts: computeHosts,
-            proxyInvokeClientChoice: .explicit(proxyChooseEndPoint),
+            proxyInvokeClientChoice: .explicitSimple(proxyChooseEndPoint),
             attestationEnvironment: attestationEnvironment
         )
+    }
+
+    /// Create for proxy use with a predefined selection of worker nodes (which can be empty)
+    /// and a callback selection function to pick the next request.
+    /// This is an *advanced usage API* take care.
+    ///
+    /// The function provided is:
+    /// * Required to either return one of the endpoints in `computeHosts` or `nil`
+    ///    * `nil` implies no node is available (which is a legal response)
+    /// * Is (always) executed whilst holding a lock, so is required to not use any locks itself
+    package convenience init(
+        proxy: EndPoint,
+        computeHosts: [EndPoint],
+        proxyChooseEndPoint: @escaping @Sendable (ChooseWorkerContext) -> EndPoint?,
+        attestationEnvironment: String? = nil,
+        serviceDiscovery: (any ServiceDiscoveryAbstraction.ConsumerClientProtocol)? = nil
+    ) {
+        self.init(
+            proxy: proxy,
+            computeHosts: computeHosts,
+            proxyInvokeClientChoice: .explicitSimple(proxyChooseEndPoint),
+            attestationEnvironment: attestationEnvironment,
+            serviceDiscovery: serviceDiscovery
+        )
+    }
+
+    /// Create for proxy use with a predefined selection of worker nodes (which can be empty)
+    /// and a callback selection function to pick the next request which is capable of deliberately violating
+    /// the normal ROPES mimicry to test 'illegal' validation code paths if desired.
+    ///
+    /// This is an *advanced usage API* take care.
+    ///
+    ///
+    /// The function provided is:
+    /// * Required to either return one of the endpoints in `computeHosts` or `nil`
+    ///    * `nil` implies no node is available (which is a legal response)
+    /// * Is (always) executed whilst holding a lock, so is required to not use any locks itself
+    public convenience init(
+        proxy: EndPoint,
+        computeHosts: [EndPoint],
+        proxyChooseEndPointFullControl: @escaping @Sendable (ChooseWorkerContext) -> SelectedComputeNode?,
+        attestationEnvironment: String? = nil
+    ) {
+        self.init(
+            proxy: proxy,
+            computeHosts: computeHosts,
+            proxyChooseEndPointFullControl: proxyChooseEndPointFullControl,
+            attestationEnvironment: attestationEnvironment,
+            serviceDiscovery: nil
+        )
+    }
+
+    /// Create for proxy use with a predefined selection of worker nodes (which can be empty)
+    /// and a callback selection function to pick the next request which is capable of deliberately violating
+    /// the normal ROPES mimicry to test 'illegal' validation code paths if desired.
+    ///
+    /// This is an *advanced usage API* take care.
+    ///
+    ///
+    /// The function provided is:
+    /// * Required to either return one of the endpoints in `computeHosts` or `nil`
+    ///    * `nil` implies no node is available (which is a legal response)
+    /// * Is (always) executed whilst holding a lock, so is required to not use any locks itself
+    package convenience init(
+        proxy: EndPoint,
+        computeHosts: [EndPoint],
+        proxyChooseEndPointFullControl: @escaping @Sendable (ChooseWorkerContext) -> SelectedComputeNode?,
+        attestationEnvironment: String? = nil,
+        serviceDiscovery _: ServiceDiscoveryAbstraction.ConsumerClientProtocol? = nil
+    ) {
+        self.init(
+            proxy: proxy,
+            computeHosts: computeHosts,
+            proxyInvokeClientChoice: .explicitFullControl(proxyChooseEndPointFullControl),
+            attestationEnvironment: attestationEnvironment
+        )
+    }
+
+    private enum InvokeProxyInitiateResult {
+        // covers unknownWorkload and nodesBusy
+        // if we want to control the error to indicate that update accordingly
+        case unavailable
+        /// pick is only supported in LocalCloudBoardClient V2
+        case pick
+        /// where to talk to, and the workload to use for it (may be edited from the original!)
+        case directChoice(UsageTrackedClient, workload: [String: [String]])
     }
 
     private enum ProxyInvokeClientChoice {
         case none
         case automatic
-        case explicit(@Sendable (ChooseWorkerContext) -> EndPoint?)
+        case explicitSimple(@Sendable (ChooseWorkerContext) -> EndPoint?)
+        case explicitFullControl(@Sendable (ChooseWorkerContext) -> SelectedComputeNode?)
+    }
+
+    /// This replicates the logic in ROPES where workloads are transformed based on reuse requirements
+    /// this logic is deliberately *not* application specific (for example injecting the run mode for
+    /// split FT/ET or not) only generalised so one would expect it to always be applied
+    package static func applyConventionalROPESWorkloadManipulation(
+        context: ChooseWorkerContext,
+        serviceDiscovery: ServiceDiscoveryAbstraction.ConsumerClientProtocol?
+    ) throws -> [String: [String]] {
+        var workloadParameters = context.initiate.workloadParameters
+        if let reuseConstraints = context.initiate.reuseConstraints {
+            var reuseConsideredViable = false
+            if reuseConstraints.forceReuseFailure {
+                Self.logger.log("reuse target \(reuseConstraints, privacy: .public) is forced to be unviable")
+            } else if let sd = serviceDiscovery {
+                let snapshot = try sd.snapshot()
+                if let target = snapshot.values
+                    .first(where: { $0.ensembleId == reuseConstraints.ensembleID }) {
+                    if target.bootId == reuseConstraints.bootID {
+                        Self.logger.log("reuse target \(reuseConstraints, privacy: .public) is present")
+                    } else {
+                        Self.logger
+                            .log("reuse target \(reuseConstraints, privacy: .public) bootId does not match")
+                    }
+                } else {
+                    Self.logger.log("reuse target \(reuseConstraints, privacy: .public) is not present")
+                }
+                // we don't care about the rack (yet) - nothing is currently enforcing the negotiate cycle
+            } else {
+                // We convert the choice decisions into the simple legal happy path
+                // if consumers want to control this they can use the forceReuseFailure
+                // property directly
+                reuseConsideredViable = true
+                Self.logger.log("reuse simply assumed to work")
+            }
+            if reuseConsideredViable {
+                workloadParameters = workloadParameters.merging(reuseConstraints.workloadAdditions) { a, b in
+                    // ROPES would cause a grpc error, we aren't interested in testing this
+                    // as we should always prevent it happening
+                    fatalError("attempt to override via reuse workload \(a) vs \(b)")
+                }
+            }
+        }
+        return workloadParameters
     }
 
     private init(
         proxy: EndPoint,
         computeHosts: [EndPoint],
         proxyInvokeClientChoice: ProxyInvokeClientChoice,
-        attestationEnvironment: String? = nil
+        attestationEnvironment: String? = nil,
+        serviceDiscovery: ServiceDiscoveryAbstraction.ConsumerClientProtocol? = nil
     ) {
         self.attestationEnvironment = Self.determineEnvironment(attestationEnvironment)
         self.initialClient = Self.makeGRPCClient(
@@ -599,15 +834,14 @@ public class LocalCloudBoardGRPCAsyncClient {
         for (endPoint, client) in clients {
             self.clientByEndpoint[endPoint] = client
         }
-
         let workers = TrackedPool(.init(uniqueKeysWithValues: clients))
         self.proxyInvokeClientChoice =
             if computeHosts.isEmpty {
-                { _ in nil }
+                { _ in .unavailable }
             } else {
                 switch proxyInvokeClientChoice {
                 case .none:
-                    { _ in nil }
+                    { _ in .unavailable }
                 case .automatic:
                     // This is *not* enforcement, it's best effort distribution
                     // ROPES is inherently reactive for this (as another ROPES instance might grab the PCC node)
@@ -616,14 +850,49 @@ public class LocalCloudBoardGRPCAsyncClient {
                     // to distribute evenly as, in the realistic case (max one request per node) then doing this will
                     // behave reasonably if the consumer of the framework has configured the maximum concurrent requests
                     // to match the available workers
-                    { _ in try! workers.useLeastBusy() }
-                case .explicit(let choose):
-                    { context -> UsageTrackedClient? in
+                    { context in
+                        let choice = try! workers.useLeastBusy()
+                        let workload = try! Self.applyConventionalROPESWorkloadManipulation(
+                            context: context, serviceDiscovery: serviceDiscovery
+                        )
+                        return .directChoice(choice, workload: workload)
+                    }
+                case .explicitSimple(let choose):
+                    { context -> InvokeProxyInitiateResult in
                         guard let endpoint = choose(context) else {
-                            return nil
+                            return .unavailable
+                        }
+                        let choice: UsageTrackedClient
+                        do {
+                            choice = try workers.useSpecific(endpoint)
+                        } catch let error as TrackedPoolError {
+                            switch error {
+                            case .keyNotFound(let choice):
+                                fatalError(
+                                    "The worker choice function selected \(choice) but that is not a valid worker"
+                                )
+                            default:
+                                fatalError("Unexpected error \(error)")
+                            }
+                        } catch {
+                            fatalError("Unexpected error \(error)")
+                        }
+                        let workload = try! Self.applyConventionalROPESWorkloadManipulation(
+                            context: context, serviceDiscovery: serviceDiscovery
+                        )
+                        return .directChoice(choice, workload: workload)
+                    }
+                case .explicitFullControl(let choose):
+                    { context -> InvokeProxyInitiateResult in
+                        guard let selection = choose(context) else {
+                            return .unavailable
                         }
                         do {
-                            return try workers.useSpecific(endpoint)
+                            let client = try workers.useSpecific(selection.endpoint)
+                            return .directChoice(
+                                client,
+                                workload: selection.computeNodeWorkload
+                            )
                         } catch let error as TrackedPoolError {
                             switch error {
                             case .keyNotFound(let choice):
@@ -760,7 +1029,106 @@ public class LocalCloudBoardGRPCAsyncClient {
         }
         let session = try await self.streamPrivateRequestInternal(
             requestSender: .plainPayloadSender(parameters: parameters),
-            requestDumpFileURLs: requestDumpFileURLs
+            requestDumpFileURLs: requestDumpFileURLs,
+            cryptoMaterial: nil
+        )
+        guard case .forPlainPayloadSender(let requestContinuation, let responseStream, let nackContext) = session else {
+            fatalError("Unexpected request session type")
+        }
+        return (
+            requestContinuation,
+            LocalCloudboardClientResponse(
+                responseStream: responseStream,
+                nackRequests: nackContext.nackRequests,
+                nackResponseStreams: nackContext.nackResponseStreams
+            )
+        )
+    }
+
+    /// create a stream for sending the request
+    /// - Parameter requestID: client request ID for logging
+    /// - Parameter useRequestBypass: If the target is a proxy hold the request data for sending to the first worker
+    /// - Parameter metaData: meta data to pass through to cloudboard and the cloud app on the initial request
+    /// - Parameter requestDumpFileURLs: a dictionary mapping each endpoint to a file URL that is used for dumping
+    /// the InvokeWorkloadRequest messages for that endpoint
+    /// - Parameter applicationDataChunkingConfiguration: Enables data chunking support and defines the chunk size
+    /// - Returns: a tuple with AsyncStream continuation to write request data chunks into and response stream
+    public func streamPrivateRequest(
+        requestID: String,
+        useRequestBypass: Bool,
+        metaData: InvokeWorkloadRequestMetaData,
+        requestDumpFileURLs: [EndPoint: URL],
+        applicationDataChunkingConfiguration: ApplicationDataChunkingConfiguration
+    ) async throws -> (AsyncStream<Data>.Continuation, LocalCloudboardClientResponse) {
+        let parameters = InvokeWorkloadRequest.Parameters.with {
+            $0.requestID = requestID
+            $0.requestBypassed = useRequestBypass
+            $0.workload = .init(type: metaData.workloadType, parameters: metaData.workloadParameters)
+        }
+        let session = try await self.streamPrivateRequestInternal(
+            requestSender: .plainPayloadSender(parameters: parameters),
+            requestDumpFileURLs: requestDumpFileURLs,
+            cryptoMaterial: nil,
+            applicationDataChunkingConfiguration: applicationDataChunkingConfiguration
+        )
+        guard case .forPlainPayloadSender(let requestContinuation, let responseStream, let nackContext) = session else {
+            fatalError("Unexpected request session type")
+        }
+        return (
+            requestContinuation,
+            LocalCloudboardClientResponse(
+                responseStream: responseStream,
+                nackRequests: nackContext.nackRequests,
+                nackResponseStreams: nackContext.nackResponseStreams
+            )
+        )
+    }
+
+    public struct CryptoMaterial: Sendable {
+        public let id: String
+        public let material: Data
+
+        public init(id: String, material: Data) {
+            self.id = id
+            self.material = material
+        }
+    }
+
+    /// create a stream for sending the request
+    /// - Parameter requestID: client request ID for logging
+    /// - Parameter metaData: meta data to pass through to cloudboard and the cloud app on the initial request
+    /// - Parameter cryptoMaterial: Crypto/key material to send to the PCC node alongside the application payload stream
+    /// - Returns: a tuple with AsyncStream continuation to write request data chunks into and response stream
+    public func streamPrivateComputeRequest(
+        requestID: String,
+        cryptoMaterial: [CryptoMaterial]?
+    ) async throws -> (AsyncStream<Data>.Continuation, LocalCloudboardClientResponse) {
+        return try await self.streamPrivateComputeRequest(
+            requestID: requestID,
+            metaData: .init(),
+            cryptoMaterial: cryptoMaterial
+        )
+    }
+
+    /// create a stream for sending the request
+    /// - Parameter requestID: client request ID for logging
+    /// - Parameter metaData: meta data to pass through to cloudboard and the cloud app on the initial request
+    /// - Parameter cryptoMaterial: Crypto/key material to send to the PCC node alongside the application payload stream
+    /// - Returns: a tuple with AsyncStream continuation to write request data chunks into and response stream
+    public func streamPrivateComputeRequest(
+        requestID: String,
+        metaData: InvokeWorkloadRequestMetaData,
+        cryptoMaterial: [CryptoMaterial]?
+    ) async throws -> (AsyncStream<Data>.Continuation, LocalCloudboardClientResponse) {
+        let parameters = InvokeWorkloadRequest.Parameters.with {
+            $0.requestID = requestID
+            $0.requestBypassed = false
+            $0.workload = .init(type: metaData.workloadType, parameters: metaData.workloadParameters)
+        }
+        let session = try await self.streamPrivateRequestInternal(
+            requestSender: .plainPayloadSender(parameters: parameters),
+            requestDumpFileURLs: [:],
+            cryptoMaterial: cryptoMaterial
         )
         guard case .forPlainPayloadSender(let requestContinuation, let responseStream, let nackContext) = session else {
             fatalError("Unexpected request session type")
@@ -798,7 +1166,9 @@ public class LocalCloudBoardGRPCAsyncClient {
 
     func streamPrivateRequestInternal(
         requestSender: RequestSender,
-        requestDumpFileURLs: [EndPoint: URL] = [:]
+        requestDumpFileURLs: [EndPoint: URL] = [:],
+        cryptoMaterial: [CryptoMaterial]?,
+        applicationDataChunkingConfiguration: ApplicationDataChunkingConfiguration = .disabled
     ) async throws -> StreamPrivateRequestSession {
         let requestStreamContext = await PrivateRequestStreamContext.forSender(requestSender)
         let responseStreamContext = PrivateResponseStreamContext.forSender(requestSender)
@@ -894,21 +1264,55 @@ public class LocalCloudBoardGRPCAsyncClient {
                     initialAuthenticatedRequestContinuation
                 )
             }
+
         // Only now we have finalised the _authenticated_ output should we start sending encrypted things
-        // the first of which is the TGT
+        // the first of which is the auth token message
         let authTokenGRPCMessage: InvokeWorkloadRequest
         switch requestStreamContext {
         case .plainPayload:
-            var authToken = Proto_PrivateCloudCompute_AuthToken()
-            // We generate random tokens here which will fail validation but allow us to track token propagation across
-            // PCC nodes in testing when enforcement is disabled
-            authToken.tokenGrantingToken = Data(randomByteCount: 16)
-            authToken.ottSalt = Data(randomByteCount: 16)
-            let pccAuthRequest = try ProtoPrivateCloudComputeRequest.serialized(with: .authToken(authToken))
-            let encapsulatedTGT = try oHTTPClientStateMachine.encapsulateMessage(
-                message: pccAuthRequest, isFinal: false
-            )
-            authTokenGRPCMessage = asyncWorkloadClient.makeAuthToken(encapsulatedTGT)
+            // Right now LocalCloudBoardClient only support providing crypto material to compute nodes
+            if let cryptoMaterial {
+                var proxyInvokeOpen = Proto_PrivateCloudCompute_ProxyInvokeOpen()
+                proxyInvokeOpen.opaqueCryptoMaterial = cryptoMaterial.map { material in
+                    .with {
+                        $0.id = material.id
+                        $0.material = material.material
+                    }
+                }
+                if case .enabled(let chunkSize) = applicationDataChunkingConfiguration {
+                    proxyInvokeOpen.capabilities = .with {
+                        $0.applicationDataChunking = .with {
+                            $0.size = UInt32(chunkSize)
+                        }
+                    }
+                }
+                let pccProxyInvokeOpen = try ProtoPrivateCloudComputeRequest.serialized(
+                    with: .proxyInvokeOpen(proxyInvokeOpen)
+                )
+                let encapsulatedProxyInvokeOpen = try oHTTPClientStateMachine.encapsulateMessage(
+                    message: pccProxyInvokeOpen, isFinal: false
+                )
+                authTokenGRPCMessage = asyncWorkloadClient.makeAuthToken(encapsulatedProxyInvokeOpen)
+            } else {
+                var authToken = Proto_PrivateCloudCompute_OpenRequestPayload()
+                // We generate random tokens here which will fail validation but allow us to track token propagation
+                // across
+                // PCC nodes in testing when enforcement is disabled
+                authToken.tokenGrantingToken = Data(randomByteCount: 16)
+                authToken.ottSalt = Data(randomByteCount: 16)
+                if case .enabled(let chunkSize) = applicationDataChunkingConfiguration {
+                    authToken.capabilities = .with {
+                        $0.applicationDataChunking = .with {
+                            $0.size = UInt32(chunkSize)
+                        }
+                    }
+                }
+                let pccAuthRequest = try ProtoPrivateCloudComputeRequest.serialized(with: .open(authToken))
+                let encapsulatedTGT = try oHTTPClientStateMachine.encapsulateMessage(
+                    message: pccAuthRequest, isFinal: false
+                )
+                authTokenGRPCMessage = asyncWorkloadClient.makeAuthToken(encapsulatedTGT)
+            }
         case .invokeWorkloadRequest(let stream, _):
             var streamIterator = stream.makeAsyncIterator()
             let nextMessage = await streamIterator.next()
@@ -990,43 +1394,39 @@ public class LocalCloudBoardGRPCAsyncClient {
                 pccResponseContinuation.yield(PrivateCloudComputeResponse.attestation(attestationData))
                 pccResponseContinuation.yield(PrivateCloudComputeResponse.attestationBundle(parsedAttestationBundle))
             }
-            var workloadResponseIterator = grpcResponseStream.makeAsyncIterator()
-            do {
-                try await withThrowingDiscardingTaskGroup { group in
-                    let (
-                        bypassDecapStream,
-                        bypassDecapContinuation
-                    ) = AsyncStream<Proto_PrivateCloudCompute_ResponseContext>.makeStream()
+
+            // encrypted response payload from the original node that the client directly attests to.
+            let (
+                originalResponseStream,
+                originalResponseContinuation
+            ) = AsyncThrowingStream<Proto_Ropes_Common_Chunk, Error>.makeStream()
+            // encrypted response payload from the worker node when response bypass is enabled.
+            let (
+                bypassResponseStream,
+                bypassResponseContinuation
+            ) = AsyncThrowingStream<Proto_Ropes_Common_Chunk, Error>.makeStream()
+            // context for decapsulating bypassed response payload
+            let (
+                bypassDecapStream,
+                bypassDecapContinuation
+            ) = AsyncStream<Proto_PrivateCloudCompute_ResponseContext>.makeStream()
+
+            try await withThrowingDiscardingTaskGroup { group in
+                group.addTask {
+                    await self.handleInvokeWorkloadResponse(
+                        originalResponseContinuation: originalResponseContinuation,
+                        bypassResponseContinuation: bypassResponseContinuation,
+                        grpcResponseStream: grpcResponseStream,
+                        authenticatedRequestContinuation: authenticatedRequestContinuation,
+                        requestParameters: requestParameters
+                    )
+                }
+
+                // decapsulate response payload from the original PCC node
+                group.addTask {
                     var receivedFinalRequestExecutionLogEntry = false
-                    while let message = try await workloadResponseIterator.next() {
-                        switch message.type {
-                        case .invokeProxyInitiate(let proxyInitiate):
-                            LocalCloudBoardGRPCAsyncClient.logger.log("Received proxy initiate")
-                            if authenticatedRequestContinuation.hasPendingBypass {
-                                if !proxyInitiate.forwardBypassedRequestChunks {
-                                    LocalCloudBoardGRPCAsyncClient.logger.error(
-                                        "Pending bypassed request chunks but proxy did not request for them to be forwarded."
-                                    )
-                                    throw LocalCloudBoardGRPCClientError.expectedRequestToForwardBypassedRequestChunks
-                                }
-                                LocalCloudBoardGRPCAsyncClient.logger.log(
-                                    "Will forward the original request stream to worker"
-                                )
-                            }
-                            group.addTask {
-                                try await self.handleProxyWorkflow(
-                                    originalRequestParameters: requestParameters,
-                                    proxyInitiate: proxyInitiate,
-                                    potentialRequestByPass: authenticatedRequestContinuation,
-                                    bypassMode: proxyInitiate.responseBypassMode,
-                                    bypassResponseStreamContext: responseStreamContext,
-                                    bypassDecapStream: bypassDecapStream,
-                                )
-                            }
-                        case .responseChunk(let chunk):
-                            LocalCloudBoardGRPCAsyncClient.logger.log(
-                                "Received response chunk of \(chunk.encryptedPayload.count) bytes"
-                            )
+                    do {
+                        for try await chunk in originalResponseStream {
                             let pccResponseContinuation: AsyncThrowingStream<PrivateCloudComputeResponse, Error>
                                 .Continuation
                             switch responseStreamContext {
@@ -1050,7 +1450,6 @@ public class LocalCloudBoardGRPCAsyncClient {
                             if let chunkData = data.readLengthPrefixedChunk() {
                                 let pccResponse = try LocalCloudBoardGRPCAsyncClient
                                     .ProtoPrivateCloudComputeResponse(serializedBytes: chunkData)
-
                                 if case .requestExecutionLogEntry(let requestExecutionLogEntry) = pccResponse.type {
                                     if receivedFinalRequestExecutionLogEntry {
                                         LocalCloudBoardGRPCAsyncClient.logger.error(
@@ -1084,27 +1483,79 @@ public class LocalCloudBoardGRPCAsyncClient {
                             } else {
                                 pccResponseContinuation.yield(PrivateCloudComputeResponse.payload(.init()))
                             }
-                        case .setupAck:
-                            LocalCloudBoardGRPCAsyncClient.logger.log("Received setup ack")
-                        case .proxyWorkerError(let proxyError):
-                            LocalCloudBoardGRPCAsyncClient.logger
-                                .log("Received proxy worker error for workerId: \(proxyError.taskID, privacy: .public)")
-                            let error: Error = self.proxyWorkerErrors.withLock {
-                                $0[proxyError.taskID]
-                            } ?? LocalCloudBoardGRPCClientError.proxyInternalError
-                            responseStreamContext.finishStream(throwing: error)
-                        default:
-                            LocalCloudBoardGRPCAsyncClient.logger.warning("Received something unknown")
                         }
-                    }
-                    responseStreamContext.finishStream()
-                    if !receivedFinalRequestExecutionLogEntry {
-                        LocalCloudBoardGRPCAsyncClient.logger
-                            .error("Final request execution log entry not received for the request")
+                        responseStreamContext.finishStream()
+                        if !receivedFinalRequestExecutionLogEntry {
+                            LocalCloudBoardGRPCAsyncClient.logger
+                                .error("Final request execution log entry not received for the request")
+                        }
+                    } catch {
+                        responseStreamContext.finishStream(throwing: error)
                     }
                 }
-            } catch {
-                responseStreamContext.finishStream(throwing: error)
+
+                // optionally decapsulate response payload from the worker node
+                group.addTask {
+                    var bypassDecapsulator: StreamingResponseBypassDecapsulator?
+                    for try await chunk in bypassResponseStream {
+                        let pccResponseContinuation: AsyncThrowingStream<PrivateCloudComputeResponse, Error>
+                            .Continuation
+                        switch responseStreamContext {
+                        case .encryptedPayload(_, let continuation):
+                            continuation.yield(chunk.encryptedPayload)
+                            if chunk.isFinal {
+                                continuation.finish()
+                            }
+                            continue
+                        case .privateCloudComputeResponse(_, let continuation):
+                            pccResponseContinuation = continuation
+                        }
+
+                        // Wait for Decapsulator to be available
+                        if bypassDecapsulator == nil {
+                            var decapIter = bypassDecapStream.makeAsyncIterator()
+                            let bypassContext = await decapIter.next()
+                            guard let bypassContext else {
+                                throw LocalCloudBoardGRPCClientError.failedToGetBypassDecapsulator
+                            }
+                            let aeadType = if HPKE.AEAD.AES_GCM_128.value == bypassContext.aeadID {
+                                HPKE.AEAD.AES_GCM_128
+                            } else if HPKE.AEAD.AES_GCM_256.value == bypassContext.aeadID {
+                                HPKE.AEAD.AES_GCM_256
+                            } else {
+                                throw LocalCloudBoardGRPCClientError.invalidAeadType
+                            }
+                            bypassDecapsulator = try StreamingResponseBypassDecapsulator(
+                                aead: aeadType,
+                                aeadKey: SymmetricKey(data: bypassContext.aeadKey),
+                                aeadNonce: bypassContext.aeadNonce
+                            )
+                        }
+
+                        guard chunk.encryptedPayload.count > 0 else {
+                            pccResponseContinuation.yield(PrivateCloudComputeResponse.payload(.init()))
+                            continue
+                        }
+
+                        precondition(bypassDecapsulator != nil)
+                        var data = try bypassDecapsulator!.decapsulateResponseMessage(
+                            chunk.encryptedPayload,
+                            isFinal: chunk.isFinal
+                        )
+                        if let chunkData = data.readLengthPrefixedChunk() {
+                            let pccResponse = try LocalCloudBoardGRPCAsyncClient
+                                .ProtoPrivateCloudComputeResponse(serializedBytes: chunkData)
+                            try pccResponseContinuation.yield(self.convertToClientResponse(
+                                pccResponse,
+                                attestationEnvironment: self.attestationEnvironment
+                            ))
+                        } else {
+                            pccResponseContinuation.yield(PrivateCloudComputeResponse.payload(.init()))
+                        }
+                        LocalCloudBoardGRPCAsyncClient.logger
+                            .log("Sent (bypassed) response chunk from compute to client")
+                    }
+                }
             }
         }
 
@@ -1114,6 +1565,74 @@ public class LocalCloudBoardGRPCAsyncClient {
             nackRequests: nackRequests,
             nackResponseStreams: nackResponseStreams
         )
+    }
+
+    private func handleInvokeWorkloadResponse(
+        originalResponseContinuation: AsyncThrowingStream<Proto_Ropes_Common_Chunk, Error>.Continuation,
+        bypassResponseContinuation: AsyncThrowingStream<Proto_Ropes_Common_Chunk, Error>.Continuation,
+        grpcResponseStream: GRPCAsyncResponseStream<InvokeWorkloadResponse>,
+        authenticatedRequestContinuation: any BypassContinuationProtocol<InvokeWorkloadRequest>,
+        requestParameters: InvokeWorkloadRequest.Parameters
+    ) async {
+        var workloadResponseIterator = grpcResponseStream.makeAsyncIterator()
+        do {
+            try await withThrowingDiscardingTaskGroup { group in
+                while let message = try await workloadResponseIterator.next() {
+                    switch message.type {
+                    case .invokeProxyInitiate(let proxyInitiate):
+                        LocalCloudBoardGRPCAsyncClient.logger.log("Received proxy initiate")
+                        if authenticatedRequestContinuation.hasPendingBypass {
+                            if !proxyInitiate.forwardBypassedRequestChunks {
+                                LocalCloudBoardGRPCAsyncClient.logger.error(
+                                    "Pending bypassed request chunks but proxy did not request for them to be forwarded."
+                                )
+                                throw LocalCloudBoardGRPCClientError.expectedRequestToForwardBypassedRequestChunks
+                            }
+                            LocalCloudBoardGRPCAsyncClient.logger.log(
+                                "Will forward the original request stream to worker"
+                            )
+                        }
+                        group.addTask {
+                            try await self.handleProxyWorkflow(
+                                originalRequestParameters: requestParameters,
+                                proxyInitiate: proxyInitiate,
+                                potentialRequestByPass: authenticatedRequestContinuation,
+                                bypassMode: proxyInitiate.responseBypassMode,
+                                bypassResponseContinuation: bypassResponseContinuation
+                            )
+                        }
+                    case .responseChunk(let chunk):
+                        LocalCloudBoardGRPCAsyncClient.logger.log(
+                            "Received response chunk of \(chunk.encryptedPayload.count) bytes"
+                        )
+                        originalResponseContinuation.yield(chunk)
+                    case .setupAck:
+                        LocalCloudBoardGRPCAsyncClient.logger.log("Received setup ack")
+                    case .proxyWorkerError(let proxyError):
+                        LocalCloudBoardGRPCAsyncClient.logger
+                            .log("Received proxy worker error for workerId: \(proxyError.taskID, privacy: .public)")
+                        let error: Error = self.proxyWorkerErrors.withLock {
+                            $0[proxyError.taskID]
+                        } ?? LocalCloudBoardGRPCClientError.proxyInternalError
+                        originalResponseContinuation.finish(throwing: error)
+                    case .requestExecutionError(let error):
+                        LocalCloudBoardGRPCAsyncClient.logger.log(
+                            """
+                            Received requestExecutionError:
+                            errorSource: \(error.source.rawValue, privacy: .public)
+                            errorMessage: \(error.errorMessage, privacy: .public)
+                            errorCode: \(error.errorCode, privacy: .public)
+                            """
+                        )
+                    default:
+                        LocalCloudBoardGRPCAsyncClient.logger.warning("Received something unknown")
+                    }
+                }
+                originalResponseContinuation.finish()
+            }
+        } catch {
+            originalResponseContinuation.finish(throwing: error)
+        }
     }
 
     /// Replays a request. Request data for this call is retrieved from the specified file. The data should be
@@ -1186,7 +1705,8 @@ public class LocalCloudBoardGRPCAsyncClient {
         Self.logger.debug("Replay request - provided all messages")
 
         let session = try await self.streamPrivateRequestInternal(
-            requestSender: .invokeWorkloadRequestSender(requestStream: requestStream)
+            requestSender: .invokeWorkloadRequestSender(requestStream: requestStream),
+            cryptoMaterial: nil
         )
         guard case .forInvokeWorkloadRequestSender(let responseStream) = session else {
             fatalError("Unexpected request session type")
@@ -1379,6 +1899,9 @@ public class LocalCloudBoardGRPCAsyncClient {
                             "Received empty request execution log entry NACK from \(client.endPoint, privacy: .public)"
                         )
                         state = state.moveToNext()
+                    case .payloadChunk, .subClose, .subOpen:
+                        // Unsupported in V1 of LocalCloudBoardClient
+                        ()
                     }
                 default:
                     guard let type = message.type else {
@@ -1470,7 +1993,8 @@ public class LocalCloudBoardGRPCAsyncClient {
         }
     }
 
-    private func selectWorkerNode(context: ChooseWorkerContext) -> UsageTrackedClient? {
+    private func selectWorkerNode(context: ChooseWorkerContext) -> InvokeProxyInitiateResult {
+        // This is the probable point at which the pick negotiation would be (semi transparently) handled)
         return self.proxyInvokeClientChoice(context)
     }
 
@@ -1481,33 +2005,38 @@ public class LocalCloudBoardGRPCAsyncClient {
         potentialRequestByPass: any BypassContinuationProtocol<InvokeWorkloadRequest>,
         // Response bypass
         bypassMode: Com_Apple_Cloudboard_Api_V1_ResponseBypassMode,
-        bypassResponseStreamContext: PrivateResponseStreamContext,
-        bypassDecapStream: AsyncStream<Proto_PrivateCloudCompute_ResponseContext>
+        bypassResponseContinuation: AsyncThrowingStream<Proto_Ropes_Common_Chunk, Error>.Continuation
     ) async throws {
         guard self.initialClient.isProxy else {
             throw LocalCloudBoardGRPCClientError.proxyClientNotSet
         }
         let workerContext = ChooseWorkerContext(
             originalRequestParameters: originalRequestParameters,
-            initiate: proxyInitiate
+            initiate: proxyInitiate,
+            forceReuseFailure: self._forceReuseFailure.withLock { $0 },
+            groupID: proxyInitiate.groupID
         )
         // pick the compute node
-        let chosenWorker = self.selectWorkerNode(context: workerContext)
-        guard let chosenWorker else {
+        let selectionResult = self.selectWorkerNode(context: workerContext)
+        switch selectionResult {
+        case .unavailable:
             return self.handleFailureToFindWorker(
                 workerId: workerContext.initiate.taskId,
                 errorCode: LocalCloudBoardGRPCClientProxyWorkflowError.unknownWorkload.rawValue
             )
-        }
-        return await chosenWorker.withValueAsync { statefulClient in
-            return await self.handleProxyWorkflowWithChosenWorker(
-                workerContext: workerContext,
-                potentialRequestByPass: potentialRequestByPass,
-                bypassMode: bypassMode,
-                bypassResponseStreamContext: bypassResponseStreamContext,
-                bypassDecapStream: bypassDecapStream,
-                compute: statefulClient
-            )
+        case .pick:
+            fatalError("pick flow is not implemented! pick flow is only supported in LocalCloudBoardClient V2")
+        case .directChoice(let chosenWorker, workload: let workload):
+            return await chosenWorker.withValueAsync { statefulClient in
+                return await self.handleProxyWorkflowWithChosenWorker(
+                    workerContext: workerContext,
+                    workload: workload,
+                    potentialRequestByPass: potentialRequestByPass,
+                    bypassMode: bypassMode,
+                    bypassResponseContinuation: bypassResponseContinuation,
+                    compute: statefulClient
+                )
+            }
         }
     }
 
@@ -1517,12 +2046,12 @@ public class LocalCloudBoardGRPCAsyncClient {
 
     private func handleProxyWorkflowWithChosenWorker(
         workerContext: ChooseWorkerContext,
+        workload: [String: [String]],
         // Request bypass
         potentialRequestByPass: any BypassContinuationProtocol<InvokeWorkloadRequest>,
         // Response bypass
         bypassMode: Com_Apple_Cloudboard_Api_V1_ResponseBypassMode,
-        bypassResponseStreamContext: PrivateResponseStreamContext,
-        bypassDecapStream: AsyncStream<Proto_PrivateCloudCompute_ResponseContext>,
+        bypassResponseContinuation: AsyncThrowingStream<Proto_Ropes_Common_Chunk, Error>.Continuation,
         compute: StatefulClient
     ) async {
         let workerId = workerContext.initiate.taskId
@@ -1543,18 +2072,32 @@ public class LocalCloudBoardGRPCAsyncClient {
             )
             return
         }
-        proxyDialBackContinuation.yield(ProxyDialBackStream.attestationBundleDialBackRequest(
-            computeAttestation,
-            bypassMode == .matchRequestCiphersuiteSharedAeadState
+        // Make sure the workload passed to the worker matches that passed back to the proxy and are
+        // consistent with ROPES semantics.
+        // ROPES passes through all inputs, on an application specific basis it might inject additional ones
+        // like RunMode for TIE - if someone wants to test that they can use the FullControl path
+        let workloadPostRopes = workload
+        let metaData = InvokeWorkloadRequestMetaData(
+            workloadType: workerContext.initiate.workloadType,
+            workloadParameters: workloadPostRopes,
+        )
+        let workloadProto = Proto_Ropes_Common_Workload.with {
+            $0.type = workerContext.initiate.workloadType
+            $0.param = .init(metaData.workloadParameters)
+        }
+        proxyDialBackContinuation.yield(ProxyDialBackStream.initiateProxyWorkerSelected(
+            attestation: computeAttestation,
+            workload: workloadProto,
+            isResponseBypass: bypassMode == .matchRequestCiphersuiteSharedAeadState
         ))
 
         do {
             try await self.handleProxyWorkflowMessages(
                 workerContext: workerContext,
+                metaData: metaData,
                 potentialRequestByPass: potentialRequestByPass,
                 bypassMode: bypassMode,
-                bypassDecapStream: bypassDecapStream,
-                bypassResponseStreamContext: bypassResponseStreamContext,
+                bypassResponseContinuation: bypassResponseContinuation,
                 compute: compute,
                 proxyDialBackResponseStream: proxyDialBackResponseStream,
                 proxyDialBackContinuation: proxyDialBackContinuation
@@ -1570,10 +2113,10 @@ public class LocalCloudBoardGRPCAsyncClient {
 
     private func handleProxyWorkflowMessages(
         workerContext: ChooseWorkerContext,
+        metaData: InvokeWorkloadRequestMetaData,
         potentialRequestByPass: any BypassContinuationProtocol<InvokeWorkloadRequest>,
         bypassMode: Com_Apple_Cloudboard_Api_V1_ResponseBypassMode,
-        bypassDecapStream: AsyncStream<Proto_PrivateCloudCompute_ResponseContext>,
-        bypassResponseStreamContext: PrivateResponseStreamContext,
+        bypassResponseContinuation: AsyncThrowingStream<Proto_Ropes_Common_Chunk, Error>.Continuation,
         compute: StatefulClient,
         proxyDialBackResponseStream: GRPCAsyncResponseStream<InvokeProxyDialBackResponse>,
         proxyDialBackContinuation: AsyncStream<Com_Apple_Cloudboard_Api_V1_InvokeProxyDialBackRequest>.Continuation,
@@ -1599,11 +2142,7 @@ public class LocalCloudBoardGRPCAsyncClient {
                 // The requestId on worker requests is the same as the original
                 // We consider this the trace (and until there is a specific TraceID this fulfills that need)
                 requestID: workerContext.originalRequest.requestID,
-                // ROPES ignores the original workload and respects exactly what is asked for in the initiate
-                metaData: .init(
-                    workloadType: workerContext.initiate.workloadType,
-                    workloadParameters: workerContext.initiate.workloadParameters
-                ),
+                metaData: metaData,
                 // the bypass is to indicate to the proxy it's not getting the message
                 requestBypassed: false,
                 responseByPass: bypassMode
@@ -1640,8 +2179,7 @@ public class LocalCloudBoardGRPCAsyncClient {
                     try await self.handleProxyWorkflowWorkerMessages(
                         computeResponseStream: computeResponseStream,
                         isResponseBypassMode: bypassMode == .matchRequestCiphersuiteSharedAeadState,
-                        bypassDecapStream: bypassDecapStream,
-                        bypassResponseStreamContext: bypassResponseStreamContext,
+                        bypassResponseContinuation: bypassResponseContinuation,
                         proxyDialBackContinuation: proxyDialBackContinuation
                     )
                 } catch {
@@ -1707,72 +2245,16 @@ public class LocalCloudBoardGRPCAsyncClient {
     private func handleProxyWorkflowWorkerMessages(
         computeResponseStream: GRPCAsyncResponseStream<Com_Apple_Cloudboard_Api_V1_InvokeWorkloadResponse>,
         isResponseBypassMode: Bool,
-        bypassDecapStream: AsyncStream<Proto_PrivateCloudCompute_ResponseContext>,
-        bypassResponseStreamContext: PrivateResponseStreamContext,
+        bypassResponseContinuation: AsyncThrowingStream<Proto_Ropes_Common_Chunk, Error>.Continuation,
         proxyDialBackContinuation: AsyncStream<ProxyDialBackStream.InvokeProxyDialBackRequest>.Continuation
     ) async throws {
         var computeResponseStreamIterator = computeResponseStream.makeAsyncIterator()
-        var bypassDecapsulator: StreamingResponseBypassDecapsulator?
         while let computeMessage = try await computeResponseStreamIterator.next() {
             switch computeMessage.type {
             case .responseChunk(let chunk):
-                let bypassResponseContinuation: AsyncThrowingStream<PrivateCloudComputeResponse, Error>.Continuation
                 if isResponseBypassMode {
-                    switch bypassResponseStreamContext {
-                    case .encryptedPayload(_, let continuation):
-                        continuation.yield(chunk.encryptedPayload)
-                        if chunk.isFinal {
-                            continuation.finish()
-                        }
-                        continue
-                    case .privateCloudComputeResponse(_, let continuation):
-                        bypassResponseContinuation = continuation
-                    }
                     // Response bypass enabled, send the response directly to the client
-
-                    // Wait for Decapsulator to be available
-                    if bypassDecapsulator == nil {
-                        var decapIter = bypassDecapStream.makeAsyncIterator()
-                        let bypassContext = await decapIter.next()
-                        guard let bypassContext else {
-                            throw LocalCloudBoardGRPCClientError.failedToGetBypassDecapsulator
-                        }
-                        let aeadType = if HPKE.AEAD.AES_GCM_128.value == bypassContext.aeadID {
-                            HPKE.AEAD.AES_GCM_128
-                        } else if HPKE.AEAD.AES_GCM_256.value == bypassContext.aeadID {
-                            HPKE.AEAD.AES_GCM_256
-                        } else {
-                            throw LocalCloudBoardGRPCClientError.invalidAeadType
-                        }
-                        bypassDecapsulator = try StreamingResponseBypassDecapsulator(
-                            aead: aeadType,
-                            aeadKey: SymmetricKey(data: bypassContext.aeadKey),
-                            aeadNonce: bypassContext.aeadNonce
-                        )
-                    }
-
-                    guard chunk.encryptedPayload.count > 0 else {
-                        bypassResponseContinuation.yield(PrivateCloudComputeResponse.payload(.init()))
-                        continue
-                    }
-
-                    precondition(bypassDecapsulator != nil)
-                    var data = try bypassDecapsulator!.decapsulateResponseMessage(
-                        chunk.encryptedPayload,
-                        isFinal: chunk.isFinal
-                    )
-                    if let chunkData = data.readLengthPrefixedChunk() {
-                        let pccResponse = try LocalCloudBoardGRPCAsyncClient
-                            .ProtoPrivateCloudComputeResponse(serializedBytes: chunkData)
-                        try bypassResponseContinuation.yield(self.convertToClientResponse(
-                            pccResponse,
-                            attestationEnvironment: self.attestationEnvironment
-                        ))
-                    } else {
-                        bypassResponseContinuation.yield(PrivateCloudComputeResponse.payload(.init()))
-                    }
-
-                    LocalCloudBoardGRPCAsyncClient.logger.log("Sent (bypassed) response chunk from compute to client")
+                    bypassResponseContinuation.yield(chunk)
                 } else {
                     // Response bypass not enabled, send back to proxy app
                     proxyDialBackContinuation.yield(ProxyDialBackStream.InvokeProxyDialBackRequest.with {
@@ -1784,9 +2266,18 @@ public class LocalCloudBoardGRPCAsyncClient {
                 }
             case .setupAck:
                 LocalCloudBoardGRPCAsyncClient.logger.log("Received setup ack from compute")
+            case .requestExecutionError(let error):
+                LocalCloudBoardGRPCAsyncClient.logger.log(
+                    """
+                    Received requestExecutionError from compute node:
+                    errorSource: \(error.source.rawValue, privacy: .public)
+                    errorMessage: \(error.errorMessage, privacy: .public)
+                    errorCode: \(error.errorCode, privacy: .public)
+                    """
+                )
             default:
                 LocalCloudBoardGRPCAsyncClient.logger.error(
-                    "Received computeMessage of unknown type: \(String(describing: computeMessage))"
+                    "Received computeMessage of unknown type: \(String(describing: computeMessage.type))"
                 )
                 throw LocalCloudBoardGRPCClientError.invalidComputeNodeMessage
             }
@@ -1864,7 +2355,15 @@ public class LocalCloudBoardGRPCAsyncClient {
                     isFinal: requestExecutionLogEntry.final,
                     endpoint: endpoint,
                     trustedProxyAttestationBundle: trustedProxyAttestationBundle,
-                    computeNodeAttestationBundle: computeNodeAttestationBundle
+                    computeNodeAttestationBundle: computeNodeAttestationBundle,
+                    assetsMetata: requestExecutionLogEntry.assetMetadata.map {
+                        .init(
+                            assetID: $0.assetID,
+                            applicationID: $0.applicationID,
+                            assetIdentityHash: $0.hash,
+                            version: $0.version
+                        )
+                    }
                 )
                 message = PrivateCloudComputeResponse.requestExecutionLogEntry(requestExecutionLogEntryData)
             } else {

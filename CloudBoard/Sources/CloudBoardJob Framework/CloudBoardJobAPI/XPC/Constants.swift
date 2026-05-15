@@ -12,9 +12,9 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal let kCloudBoardJobAPIXPCLocalServiceEntitlement =
     "com.apple.private.cloudos.cloudboardjob"
-internal let kCloudBoardJobAPIOutboundPCCRequestEntitlement =
+package let kCloudBoardJobAPIOutboundPCCRequestEntitlement =
     "com.apple.private.cloudos.cb_jobhelper.outbound-pcc-request"
+package let kCloudBoardJobAPIOutboundPIRRequestEntitlement =
+    "com.apple.private.cloudos.cb_jobhelper.outbound-pir-request"

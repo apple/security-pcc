@@ -21,11 +21,6 @@ import Foundation
 
 extension CLI {
     struct AttestationCmd: AsyncParsableCommand {
-        enum Format: String, ExpressibleByArgument, CaseIterable {
-            case protobuf
-            case json
-        }
-
         static var configuration = CommandConfiguration(
             commandName: "attestation",
             abstract: "Operations over PCC Attestation Bundles.",
@@ -35,29 +30,5 @@ extension CLI {
                 CanonicalizeCmd.self
             ]
         )
-
-        // readAttestationBundle loads an AttestationBundle from filePath of expected format
-        static func readAttestationBundle(filePath: String, format: Format) throws -> AttestationBundle {
-            let fileData: Data
-            if filePath == "-" {
-                fileData = try FileHandle.standardInput.readToEnd() ?? Data()
-            } else {
-                fileData = try Data(contentsOf: URL(filePath: filePath))
-            }
-
-            let attestationBundle: AttestationBundle
-            switch format {
-                case .protobuf:
-                    attestationBundle = try .init(data: fileData)
-                case .json:
-                    guard let jsonString = String(data: fileData, encoding: .utf8) else {
-                        throw CLIError("invalid JSON string")
-                    }
-
-                    attestationBundle = try .init(jsonString: jsonString)
-            }
-
-            return attestationBundle
-        }
     }
 }

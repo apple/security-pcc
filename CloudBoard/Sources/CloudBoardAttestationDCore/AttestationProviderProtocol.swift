@@ -12,8 +12,8 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
 import CloudBoardAttestationDAPI
+import CloudBoardCommon
 import CryptoKit
 import Foundation
 
@@ -23,7 +23,9 @@ protocol AttestationProviderProtocol: Sendable {
     /// Note: Implementations are *required* to ensure that the key is different *every* time
     /// even test implementations
     func createAttestedKey(
-        attestationBundleExpiry: Date,
+        clock: any DateAwareClock,
+        attestationLifetime: Duration,
+        keyExpiryGracePeriod: TimeInterval,
         proxiedReleaseDigests: [ReleaseDigestEntry]
     ) async throws -> InternalAttestedKey
 
@@ -31,7 +33,7 @@ protocol AttestationProviderProtocol: Sendable {
     /// The last key in the array is the latest created key.
     /// In case of any error, empty array is returned.
     func restoreKeysFromDisk(attestationCache: AttestationBundleCache, keyExpiryGracePeriod: TimeInterval) async
-        -> [AttestedKey]
+        -> [InternalAttestedKey]
 }
 
 /// Extremely similar to ``AttestedKey`` but using SPI available representations which are faster
@@ -46,4 +48,27 @@ struct InternalAttestedKey: Sendable {
     var attestationBundle: Data
     var releaseDigest: String
     var proxiedReleaseDigests: [String]
+    var expiry: Date
+    var appData: [String: Data]
+    var availableOnNodeOnly: Bool = false
+}
+
+extension InternalAttestedKey {
+    /// Key ID, used by ROPES as "node identifier". This is the SHA256 sum of the key's attestation bundle allowing the
+    /// client to verify that the "node identifier" has not been modified in-flight. Also used by cb_jobhelper to
+    /// determine which key to use for unwrapping the client's session key material.
+    public var keyID: Data {
+        Data(SHA256.hash(data: self.attestationBundle))
+    }
+}
+
+extension InternalAttestedKey: CustomStringConvertible {
+    public var description: String {
+        """
+        key ID \(self.keyID.base64EncodedString()), \
+        expiry \(self.expiry), \
+        proxied releases \(String(describing: self.proxiedReleaseDigests)), \
+        compute node app data \(String(describing: self.appData.mapValues { String(data: $0, encoding: .utf8) }))
+        """
+    }
 }

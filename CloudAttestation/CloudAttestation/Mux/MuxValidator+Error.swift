@@ -25,7 +25,7 @@ extension MuxValidator {
         case missingNonce
         case untrustedAppData
 
-        public static var errorDomain = "com.apple.CloudAttestaton.MuxValidator"
+        public static let errorDomain = "com.apple.CloudAttestaton.MuxValidator"
 
         public var errorCode: Int {
             switch self {

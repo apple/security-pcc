@@ -22,6 +22,27 @@ import Foundation
 import System
 import RemoteServiceDiscovery
 
+/// NVRAM variables known to contain darwin-init configuration data.
+///
+/// - warning: The order of these cases matters to the loader, which uses it
+///            to determine the order these variables are read from NVRAM. Do not
+///            reorder these cases without refactoring the loader first.
+enum DInitNVRAMConfigSource: Codable, CaseIterable {
+    /// The `darwin-init-system` NVRAM variable
+    case system
+    /// The `darwin-init` NVRAM variable
+    case normal
+
+    var variable: NVRAMVariable {
+        switch self {
+        case .system:
+            .darwinInitSystem
+        case .normal:
+            .darwinInit
+        }
+    }
+}
+
 enum DInitConfigSource {
     case fileSystem(FilePath)
     case json(String)
@@ -57,6 +78,8 @@ extension DInitConfigSource: Decodable {
         if let url = URL(string: stringValue), ["http", "https"].contains(url.scheme) {
             self = .network(url)
         } else if stringValue.hasPrefix("{"), stringValue.hasSuffix("}") {
+            self = .json(stringValue)
+        } else if stringValue.hasPrefix("["), stringValue.hasSuffix("]") {
             self = .json(stringValue)
         } else if stringValue.hasPrefix(kDInitEC2Prefix) {
             self = .ec2imds(String(stringValue.dropFirst(kDInitEC2Prefix.count)))
@@ -94,6 +117,8 @@ extension DInitConfigSource: ExpressibleByArgument {
         if argument == "-" {
             self = .standardInput
         } else if argument.hasPrefix("{"), argument.hasSuffix("}") {
+            self = .json(argument)
+        } else if argument.hasPrefix("["), argument.hasSuffix("]") {
             self = .json(argument)
         } else if let url = URL(string: argument), ["http", "https"].contains(url.scheme) {
             self = .network(url)

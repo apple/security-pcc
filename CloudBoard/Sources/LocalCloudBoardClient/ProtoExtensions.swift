@@ -12,9 +12,9 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 // helpers for converting to/from the protobuf types used when communicating with ROPES
+
+internal import InternalSwiftProtobuf
 
 extension [Proto_Ropes_Common_Workload.Parameter] {
     init(_ parameters: [String: [String]]) {

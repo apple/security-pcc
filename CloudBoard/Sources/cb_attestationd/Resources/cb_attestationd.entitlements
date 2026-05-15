@@ -49,7 +49,7 @@
 	<true/>
 	<key>com.apple.security.exception.mach-lookup.global-name</key>
 	<array>
-		<string>com.apple.cloudos.cb_configurationd</string>
+		<string>com.apple.cloudos.cloudconfigurationd</string>
 		<string>com.apple.securityd</string>
 		<string>com.apple.trustd</string>
 		<string>com.apple.acdc.cloudmetricsd</string>

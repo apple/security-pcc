@@ -25,3 +25,28 @@ package let kvCacheXPCServiceName = "com.apple.thimble.inference.service.tie-kvc
 package let kEnsembleWardenServerEntitlement = "com.apple.cloudos.ensemblewarden.server"
 /// Required to communicate ensemblewarden.framework -> ensemblewardend
 package let kEnsembleWardenClientEntitlement = "com.apple.cloudos.ensemblewarden.client"
+
+package enum EnsembleWardenConstants {
+    /// Name we use to put the ensemble porter connection in an XPC dictionary
+    package static let ensemblePorterConnectionNameInXPCDict = "ensemble_porter_connection"
+
+    /// Processes started by EnsembleWardenFramework.
+    ///
+    /// Note: these are usually the ensemblewardend instances started by TIE
+    package static let managedByEnsembleWardenFrameworkLabel = "com.apple.cloudos.ensemblewardenframework"
+
+    package static let loggingSubsystem = "com.apple.cloudos.ensemblewarden"
+
+    /// The label used by OSLaunchDJob to monitor the processes whose lifetime is managed by ensembleportercontroller
+    package static let managedByEnsemblePorterControllerLabel = "com.apple.cloudos.ensembleportercontroller"
+
+    /// The name of the XPC service that ensembleporter uses to provide keys to the client.
+    ///
+    /// Must match the ensembleporter launchd plist file.
+    package static let ensemblePorterXPCKeyProviderClientName = "com.apple.cloudos.ensembleporter.keyfetcherclient"
+
+    package static let ensembleFollowerPorterXPCKeyProviderClientName = "com.apple.cloudos.ensemblefollowerporter"
+
+    /// The label used by OSLaunchDJob to monitor the processes whose lifetime is managed by cloudboardd (leader porter)
+    package static let managedByCloudboarddLabel = "com.apple.cloudos.cloudboardd"
+}

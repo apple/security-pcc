@@ -13,8 +13,8 @@
 // 10/02/2024
 
 //
-//  CloudMetricsServiceProtocol.swift
-//  
+//  CloudMetricsServerProtocol.swift
+//
 //
 //  Created by Andrea Guzzo on 8/24/22.
 //
@@ -25,36 +25,72 @@ import Foundation
 
 // swiftlint:disable function_parameter_count
 package protocol CloudMetricsServerProtocol: AnyObject {
-    func setConfiguration(_ configuration: CloudMetricsConfigurationDictionary, client: String) async throws
-    func incrementCounter(_ counter: CloudMetricsCounter, by amount: Int64, epoch: Double, client: String) async throws
-    func incrementCounter(_ counter: CloudMetricsCounter, by amount: Double, epoch: Double, client: String) async throws
-    func resetCounter(_ counter: CloudMetricsCounter, epoch: Double, client: String) async throws
-    func recordInteger(recorder: CloudMetricsRecorder, value: Int64, epoch: Double, client: String) async throws
-    func recordDouble(recorder: CloudMetricsRecorder, value: Double, epoch: Double, client: String) async throws
-    func recordNanoseconds(timer: CloudMetricsTimer, duration: Int64, epoch: Double, client: String) async throws
+    func setConfiguration(_ configuration: CloudMetricsConfigurationDictionary, client: MetricsClient) throws
+    func incrementCounter(_ counter: CloudMetricsCounter, by amount: Int64, epoch: Double, client: MetricsClient) throws
+    func incrementCounter(
+        _ counter: CloudMetricsCounter,
+        by amount: Double,
+        epoch: Double,
+        client: MetricsClient
+    ) throws
+    func resetCounter(_ counter: CloudMetricsCounter, epoch: Double, client: MetricsClient) throws
+    func recordInteger(recorder: CloudMetricsRecorder, value: Int64, epoch: Double, client: MetricsClient) throws
+    func recordDouble(recorder: CloudMetricsRecorder, value: Double, epoch: Double, client: MetricsClient) throws
+    func recordNanoseconds(timer: CloudMetricsTimer, duration: Int64, epoch: Double, client: MetricsClient) throws
 
     // Counter CM extensions
-    func resetCounter(_ counter: CloudMetricsCounter, initialValue: Double, epoch: Double, client: String) async throws
-    func resetCounter(_ counter: CloudMetricsCounter, initialValue: Int64, epoch: Double, client: String) async throws
+    func resetCounter(_ counter: CloudMetricsCounter, initialValue: Double, epoch: Double, client: MetricsClient) throws
+    func resetCounter(_ counter: CloudMetricsCounter, initialValue: Int64, epoch: Double, client: MetricsClient) throws
 
     // Histogram CM extensions
-    func recordInteger(histogram: CloudMetricsHistogram, buckets: [Double], value: Int64, epoch: Double, client: String) async throws
-    func recordDouble(histogram: CloudMetricsHistogram, buckets: [Double], value: Double, epoch: Double, client: String) async throws
-    func recordBuckets(histogram: CloudMetricsHistogram,
-                       buckets: [Double],
-                       bucketValues: [Int],
-                       sum: Double,
-                       count: Int,
-                       epoch: Double,
-                       client: String) async throws
+    func recordInteger(
+        histogram: CloudMetricsHistogram,
+        buckets: [Double],
+        value: Int64,
+        epoch: Double,
+        client: MetricsClient
+    ) throws
+    func recordDouble(
+        histogram: CloudMetricsHistogram,
+        buckets: [Double],
+        value: Double,
+        epoch: Double,
+        client: MetricsClient
+    ) throws
+    func recordBuckets(
+        histogram: CloudMetricsHistogram,
+        buckets: [Double],
+        bucketValues: [Int],
+        sum: Double,
+        count: Int,
+        epoch: Double,
+        client: MetricsClient
+    ) throws
     // Histogram CM extensions
-    func recordInteger(summary: CloudMetricsSummary, quantiles: [Double], value: Int64, epoch: Double, client: String) async throws
-    func recordDouble(summary: CloudMetricsSummary, quantiles: [Double], value: Double, epoch: Double, client: String) async throws
-    func recordQuantiles(summary: CloudMetricsSummary,
-                         quantiles: [Double],
-                         quantileValues: [Double],
-                         sum: Double,
-                         count: Int,
-                         epoch: Double,
-                         client: String) async throws
+    func recordInteger(
+        summary: CloudMetricsSummary,
+        quantiles: [Double],
+        value: Int64,
+        epoch: Double,
+        client: MetricsClient
+    ) throws
+    func recordDouble(
+        summary: CloudMetricsSummary,
+        quantiles: [Double],
+        value: Double,
+        epoch: Double,
+        client: MetricsClient
+    ) throws
+    func recordQuantiles(
+        summary: CloudMetricsSummary,
+        quantiles: [Double],
+        quantileValues: [Double],
+        sum: Double,
+        count: Int,
+        epoch: Double,
+        client: MetricsClient
+    ) throws
+
+    func clientConnected(client: MetricsClient)
+    func clientDisconnected(client: MetricsClient)
 }

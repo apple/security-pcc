@@ -12,11 +12,10 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CryptoKit
 import Foundation
 package import CloudBoardAsyncXPC
+package import CloudBoardDomain
 
 /// An abstraction for making CloudBoardJobHelperAPIClientProtocol instances
 package protocol CloudBoardJobHelperAPIClientFactoryProtocol: Sendable {
@@ -31,6 +30,8 @@ package protocol CloudBoardJobHelperAPIClientToServerProtocol: Actor {
     func invokeWorkloadRequest(_ request: CloudBoardDaemonToJobHelperMessage) async throws
     func teardown() async throws
     func abandon() async throws
+    func warmup(_ info: WarmupInfo) async throws
+    func assignLAContext() async throws
 }
 
 /// call back notifications available to ``CloudBoardJobHelperAPIClientProtocol``
@@ -49,7 +50,7 @@ package protocol CloudBoardJobHelperAPIClientProtocol: CloudBoardJobHelperAPICli
 }
 
 package struct WorkerAttestationInfo: ByteBufferCodable, Sendable, Hashable, CustomStringConvertible {
-    /// The id we used when requesting the worker, rather an something identifying the node itself
+    /// The id we used when requesting the worker, rather than something identifying the node itself
     public var workerID: UUID
     /// The id identifying the key within the ``attestationBundle`` on the worker
     public var keyID: Data
@@ -58,14 +59,14 @@ package struct WorkerAttestationInfo: ByteBufferCodable, Sendable, Hashable, Cus
     /// Present if response bypass was requested, this is then the OHTTP contextId
     /// the bypass will be presented to the client on
     public var bypassContextID: UInt32?
-    public var spanID: String?
+    public var spanID: UInt64?
 
     public init(
         workerID: UUID,
         keyID: Data,
         attestationBundle: Data,
         bypassContextID: UInt32?,
-        spanID: String?
+        spanID: UInt64?
     ) {
         self.workerID = workerID
         self.keyID = keyID
@@ -101,13 +102,45 @@ package struct WorkerAttestationInfo: ByteBufferCodable, Sendable, Hashable, Cus
     }
 }
 
+package struct WorkerNegotiatePickInfo: ByteBufferCodable, Sendable, Hashable, CustomStringConvertible {
+    public var workerID: UUID
+    public var spanID: UInt64?
+    public var proposed: EnsembleNegotiation
+
+    package init(workerID: UUID, spanID: UInt64? = nil, proposed: EnsembleNegotiation) {
+        self.workerID = workerID
+        self.spanID = spanID
+        self.proposed = proposed
+    }
+
+    package var description: String {
+        "worker: \(self.workerID), proposed: \(self.proposed)"
+    }
+
+    package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        try self.workerID.encode(to: &buffer)
+        try self.spanID.encode(to: &buffer)
+        try self.proposed.encode(to: &buffer)
+    }
+
+    package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        try self.workerID = .init(from: &buffer)
+        try self.spanID = .init(from: &buffer)
+        try self.proposed = .init(from: &buffer)
+    }
+}
+
 package enum CloudBoardDaemonToJobHelperMessage: ByteBufferCodable, Sendable, Hashable, CustomStringConvertible {
     public typealias KeyID = Data
 
-    case warmup(WarmupData)
     case parameters(Parameters)
     case requestChunk(Data, isFinal: Bool)
-    case workerAttestation(WorkerAttestationInfo)
+    /// ROPES wishes to negotiate a new ensemble to trust
+    case workerNegotiatePick(providedByRopes: WorkerNegotiatePickInfo)
+    /// Once a compute node worker has been selected by ROPES we are provided the attestation and
+    /// the workload that applied to the sub request (which may have values injected by ROPES,
+    /// including dealing with reuse or not)
+    case workerAttestation(attestation: WorkerAttestationInfo, workloadParameters: [String: [String]])
     case workerResponseChunk(UUID, Data, isFinal: Bool)
     case workerResponseClose(
         UUID,
@@ -120,14 +153,14 @@ package enum CloudBoardDaemonToJobHelperMessage: ByteBufferCodable, Sendable, Ha
 
     public var description: String {
         switch self {
-        case .warmup(let data):
-            "warmup(\(data))"
         case .parameters(let parameters):
             "parameters(\(parameters))"
         case .requestChunk(let data, isFinal: let isFinal):
             "requestChunk(\(data.count) bytes, isFinal: \(isFinal))"
-        case .workerAttestation(let info):
-            "workerAttestation(\(info))"
+        case .workerNegotiatePick(providedByRopes: let providedByRopes):
+            "workerNegotiatePick(\(providedByRopes))"
+        case .workerAttestation(let info, let workloadParameters):
+            "workerAttestation(\(info), \(workloadParameters))"
         case .workerResponseChunk(let workerID, let data, isFinal: let isFinal):
             "workerResponseChunk(worker: \(workerID), \(data.count) bytes, isFinal: \(isFinal))"
         case .workerResponseClose(
@@ -145,9 +178,6 @@ package enum CloudBoardDaemonToJobHelperMessage: ByteBufferCodable, Sendable, Ha
 
     public func encode(to buffer: inout ByteBuffer) throws {
         switch self {
-        case .warmup(let warmupData):
-            buffer.writeInteger(0)
-            try warmupData.encode(to: &buffer)
         case .parameters(let parameters):
             buffer.writeInteger(1)
             try parameters.encode(to: &buffer)
@@ -155,9 +185,10 @@ package enum CloudBoardDaemonToJobHelperMessage: ByteBufferCodable, Sendable, Ha
             buffer.writeInteger(2)
             try data.encode(to: &buffer)
             try isFinal.encode(to: &buffer)
-        case .workerAttestation(let attestationInfo):
+        case .workerAttestation(let attestationInfo, let workloadParameter):
             buffer.writeInteger(3)
             try attestationInfo.encode(to: &buffer)
+            try workloadParameter.encode(to: &buffer)
         case .workerResponseChunk(let uuid, let data, let isFinal):
             buffer.writeInteger(4)
             try uuid.encode(to: &buffer)
@@ -173,6 +204,9 @@ package enum CloudBoardDaemonToJobHelperMessage: ByteBufferCodable, Sendable, Ha
         case .workerResponseEOF(let uuid):
             buffer.writeInteger(6)
             try uuid.encode(to: &buffer)
+        case .workerNegotiatePick(providedByRopes: let providedByRopes):
+            buffer.writeInteger(7)
+            try providedByRopes.encode(to: &buffer)
         }
     }
 
@@ -184,14 +218,15 @@ package enum CloudBoardDaemonToJobHelperMessage: ByteBufferCodable, Sendable, Ha
             )
         }
         switch enumCase {
-        case 0:
-            self = try .warmup(.init(from: &buffer))
         case 1:
             self = try .parameters(.init(from: &buffer))
         case 2:
             self = try .requestChunk(Data(from: &buffer), isFinal: .init(from: &buffer))
         case 3:
-            self = try .workerAttestation(.init(from: &buffer))
+            self = try .workerAttestation(
+                attestation: .init(from: &buffer),
+                workloadParameters: .init(from: &buffer)
+            )
         case 4:
             self = try .workerResponseChunk(
                 .init(from: &buffer),
@@ -221,6 +256,10 @@ package enum CloudBoardDaemonToJobHelperMessage: ByteBufferCodable, Sendable, Ha
             )
         case 6:
             self = try .workerResponseEOF(.init(from: &buffer))
+        case 7:
+            self = try .workerNegotiatePick(
+                providedByRopes: .init(from: &buffer)
+            )
         case let value:
             throw DecodingError.dataCorrupted(.init(
                 codingPath: [ByteBufferCodingKey(Self.self)],
@@ -441,11 +480,11 @@ extension Parameters {
 
     package struct TraceContext: ByteBufferCodable, Sendable, Hashable {
         public var traceID: String
-        public var spanID: String
+        public var spanID: UInt64
 
         public init(
             traceID: String,
-            spanID: String
+            spanID: UInt64
         ) {
             self.traceID = traceID
             self.spanID = spanID
@@ -459,20 +498,7 @@ extension Parameters {
 
         public init(from buffer: inout ByteBuffer) throws {
             self.traceID = try String(from: &buffer)
-            self.spanID = try String(from: &buffer)
+            self.spanID = try .init(from: &buffer)
         }
     }
-}
-
-package struct WarmupData: ByteBufferCodable, Sendable, Hashable, CustomStringConvertible {
-    public init() {}
-
-    public var description: String {
-        return "WarmupData"
-    }
-
-    @inlinable
-    public func encode(to _: inout ByteBuffer) throws {}
-
-    public init(from _: inout ByteBuffer) throws {}
 }

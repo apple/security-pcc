@@ -52,11 +52,38 @@
 {
 	return self.obj.research_disableAppleInfrastructureEnforcement;
 }
+
+- (NSArray<NSString *> *)cryptexAppIdentifiers
+{
+	return self.obj.cryptexAppIdentifiers;
+}
+
 @end
 
 secure_config_database_t _Nullable
 secure_config_get_default_database(void) {
 	return [[SCDataBase alloc] init];
+}
+
+secure_config_parameters_t
+secure_config_parameters_load_with_error(CFErrorRef _Nullable *_Nullable outError) {
+	NSError *error = nil;
+	SecureConfigParameters *parameters = [SecureConfigParameters loadContentsAndReturnError:&error];
+	if (outError) {
+		*outError = (__bridge CFErrorRef)error;
+	}
+	return parameters;
+}
+
+CFArrayRef
+secure_config_parameters_copy_cryptex_app_identifiers_4libcryptex(secure_config_parameters_t parameters) {
+	// N.B. Do not send this object -copy
+	// rdar://156916451 (Copying Bridged Swift Array Object Results in Invalid (CF) Object)
+	CFArrayRef res = (__bridge CFArrayRef)[parameters cryptexAppIdentifiers];
+	if (res) {
+		CFRetain(res);
+	}
+	return res;
 }
 
 secure_config_slot_t
@@ -123,7 +150,7 @@ secure_config_entry_set_metadata(secure_config_entry_t entry,
 }
 
 int
-secure_config_slot_append_entry(secure_config_slot_t slot, secure_config_entry_t entry){
+secure_config_slot_append_entry(secure_config_slot_t slot, secure_config_entry_t entry) {
 	NSError *error = nil;
 	bool result = [slot append:entry error:&error];
 

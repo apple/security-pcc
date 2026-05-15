@@ -20,7 +20,9 @@
 //
 
 private import CryptoKit
-private import EnsembleWardenServer
+internal import EnsemblePorter
+private import EnsembleWardenCommon
+internal import EnsembleWardenServer
 private import EnsembleWardenXPCAPI
 internal import IOSurface
 private import os
@@ -34,96 +36,112 @@ extension DaemonHandler {
     ///
     /// - Returns: an array of IOSurfaces, each of which has its contents encrypted with the key from the
     /// key provider.
-    internal func encrypt(decryptedSurfaces: [IOSurface], requestID: UUID, spanID: UInt64) throws -> [IOSurface] {
+    internal func encrypt(decryptedSurfaces: [IOSurface], purpose: KVCacheTransferPurpose) async throws -> [IOSurface] {
+        // Tell the kernel that we're going to access all of the decrypted surfaces so we can start to page
+        // them in.
+        _ = decryptedSurfaces.map {
+            do {
+                try $0.prefault()
+            } catch {
+                logger.warning("Failed to prefault IOSurface")
+            }
+        }
         logger.debug("""
                         Fetching key for encryption. \
-                        request_id=\(requestID, privacy: .public) \
-                        span_id=\(spanID.hexEncoded, privacy: .public)
+                        request_id=\(PrismTracing.requestID, privacy: .public) \
+                        span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
                         """)
-        let key = try self.getKey(requestID: requestID, spanID: spanID)
-        let encryptedSurfaces = try decryptedSurfaces.enumerated().map { n, surface in
-            logger.log("""
-                Encrypting IOSurface. \
-                iosurface_no=\(n) \
-                iosurface_width=\(IOSurfaceGetWidth(surface)) \
-                iosurface_height=\(IOSurfaceGetHeight(surface)) \
-                iosurface_bytes_per_element=\(IOSurfaceGetBytesPerElement(surface)) \
-                key_length=\(key.bitCount) \
-                request_id=\(requestID, privacy: .public) \
-                span_id=\(spanID.hexEncoded, privacy: .public)
-                """)
+        let keyType: DaemonHandler.KeyType
+        switch purpose {
+        case .ftET:
+            keyType = .ftET
+        }
+        let (key, turnNumber) = try await self.getKey(keyType: keyType)
+        var encryptedSurfaces: [IOSurface] = []
+
+        for (n, surface) in decryptedSurfaces.enumerated() {
+            let turnID: UInt64
+            switch purpose {
+            case .ftET: turnID = UInt64.max
+            }
             let timeBefore = Date()
-            let encryptedSurface = try IOSurfaceSealedBox.seal(surface, using: key)
+            let encryptedSurface = try IOSurfaceSealedBox.seal(surface, metadata: turnID, using: key)
             let timeAfter = Date()
             let timeCompletedSurfaceIO = timeAfter.timeIntervalSince(timeBefore)
-            let bandwidthBps = Double(encryptedSurface.bytesPerRow) / timeCompletedSurfaceIO * 8.0
+            let bandwidthBps = Double(encryptedSurface.bytesPerRow) / max(1, timeCompletedSurfaceIO) * 8.0
             let bandwidthGbps = bandwidthBps / (1024 * 1024 * 1024)
             logger.debug("""
                 Encrypted IOSurface. \
                 time_completed_s=\(timeCompletedSurfaceIO) \
+                encrypted_size_bytes=\(encryptedSurface.bytesPerRow) \
                 bandwidth_bps=\(Int(bandwidthBps)) \
-                bandwidth_gbps=\(String(format: "%.2f", bandwidthGbps)) \
-                request_id=\(requestID, privacy: .public) \
-                span_id=\(spanID.hexEncoded, privacy: .public)
+                bandwidth_gbps=\(String(format: "%.2f", bandwidthGbps), privacy: .public) \
+                request_id=\(PrismTracing.requestID, privacy: .public) \
+                span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
                 """)
             let count = IOSurfaceGetWidth(encryptedSurface) * IOSurfaceGetHeight(encryptedSurface) * IOSurfaceGetBytesPerElement(encryptedSurface)
-            let rowCount = IOSurfaceGetBytesPerRow(encryptedSurface) * IOSurfaceGetHeight(encryptedSurface)
-            logger.log("""
-                        Created encrypted surface. \
-                        surface_size=\(count) \
-                        surface_size_using_rows=\(rowCount) \
-                        request_id=\(requestID, privacy: .public) \
-                        span_id=\(spanID.hexEncoded, privacy: .public)
-                        """)
-            return encryptedSurface
+            encryptedSurfaces.append(encryptedSurface)
         }
-        logger.log("""
-                        Encrypted all surfaces. \
-                        request_id=\(requestID, privacy: .public) \
-                        span_id=\(spanID.hexEncoded, privacy: .public)
-                        """)
         return encryptedSurfaces
     }
 
-    func decrypt(encryptedSurfaces: [IOSurface], requestID: UUID, spanID: UInt64) throws -> [IOSurface] {
-        logger.debug("""
-                        Fetching key for decryption. \
-                        request_id=\(requestID, privacy: .public) \
-                        span_id=\(spanID.hexEncoded, privacy: .public)
-                        """)
-        let key = try self.getKey(requestID: requestID, spanID: spanID)
-        let decryptedSurfaces = try encryptedSurfaces.enumerated().map { n, encryptedIOSurface in
-            logger.log("""
-                Decrypting IOSurface. \
-                iosurface_no=\(n) \
-                iosurface_height=\(IOSurfaceGetHeight(encryptedIOSurface)) \
-                iosurface_width=\(IOSurfaceGetWidth(encryptedIOSurface)) \
-                iosurface_bytes_per_element=\(IOSurfaceGetBytesPerElement(encryptedIOSurface)) \
-                request_id=\(requestID, privacy: .public) \
-                span_id=\(spanID.hexEncoded, privacy: .public)
-                """)
+    func decrypt(encryptedSurfaces: [IOSurface]) async throws -> [IOSurface] {
+        // Begin to fault in pages we'll access.
+        _ = encryptedSurfaces.map {
+            do {
+                try $0.prefault()
+            } catch {
+                logger.warning("Failed to prefault IOSurface")
+            }
+        }
+        var decryptedSurfaces: [IOSurface] = []
+
+        for (n, encryptedIOSurface) in encryptedSurfaces.enumerated() {
+            let additionalData = try IOSurfaceSealedBox.extractMetadata(sealedBox: encryptedIOSurface)
+            let purpose = KVCacheTransferPurpose(additionalData: additionalData)
+
+            let keyType: DaemonHandler.KeyType
+            switch purpose {
+            case .ftET:
+                keyType = .ftET
+            }
+            let (key, _) = try await self.getKey(keyType: keyType)
+
             let timeBefore = Date()
             let decryptedSurface = try IOSurfaceSealedBox.open(encryptedIOSurface, using: key)
             let timeAfter = Date()
             let timeCompletedSurfaceIO = timeAfter.timeIntervalSince(timeBefore)
 
-            let bandwidthBps = Double(decryptedSurface.bytesPerRow) / timeCompletedSurfaceIO * 8.0
+            let bandwidthBps = Double(decryptedSurface.bytesPerRow) / max(1, timeCompletedSurfaceIO) * 8.0
             let bandwidthGbps = bandwidthBps / (1024 * 1024 * 1024)
             logger.debug("""
                             Decrypted IOSurface. \
                             time_completed=\(timeCompletedSurfaceIO) \
                             bandwidth_bps=\(Int(bandwidthBps)) \
-                            bandwidth_gbps=\(String(format: "%.2f", bandwidthGbps)) \
-                            request_id=\(requestID, privacy: .public) \
-                            span_id=\(spanID.hexEncoded, privacy: .public)
+                            bandwidth_gbps=\(String(format: "%.2f", bandwidthGbps), privacy: .public) \
+                            request_id=\(PrismTracing.requestID, privacy: .public) \
+                            span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
                             """)
-            return decryptedSurface
+            decryptedSurfaces.append(decryptedSurface)
         }
-        logger.log("""
-                    Decrypted all IOSurfaces. \
-                    request_id=\(requestID, privacy: .public) \
-                    span_id=\(spanID.hexEncoded, privacy: .public)
-                    """)
         return decryptedSurfaces
+    }
+}
+
+/// Extension to encode the purpose as a UInt64
+extension KVCacheTransferPurpose {
+    fileprivate var additionalData: UInt64 {
+        switch self {
+            // Encode FT/ET as max value
+        case .ftET: UInt64.max
+        }
+    }
+
+    fileprivate init(additionalData: UInt64) {
+        if additionalData == UInt64.max {
+            self = .ftET
+        } else {
+            self = .ftET
+        }
     }
 }

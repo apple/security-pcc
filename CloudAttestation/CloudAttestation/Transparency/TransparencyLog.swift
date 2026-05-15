@@ -23,6 +23,19 @@ public typealias TransparencyLog = TransparencyProver & TransparencyVerifier
 
 public protocol TransparencyProver: Sendable {
     func proveInclusion(of digest: Data) async throws -> TransparencyLogProofs
+    func proveInclusion(of digests: [Data]) async throws -> [TransparencyLogProofs]
+}
+
+extension TransparencyProver {
+    public func proveInclusion(of digest: Data) async throws -> TransparencyLogProofs {
+        let proofs = try await proveInclusion(of: [digest])
+
+        guard let proof = proofs.first else {
+            throw TransparencyLogError.notFound
+        }
+
+        return proof
+    }
 }
 
 public protocol TransparencyVerifier: Sendable {
@@ -32,10 +45,12 @@ public protocol TransparencyVerifier: Sendable {
 public struct TransparencyLogProofs: Sendable, Hashable {
     let proofs: ATLogProofs
     let expiration: Date?
+    let digest: Data?
 
-    init(proofs: ATLogProofs, expiry: Int64) {
+    init(proofs: ATLogProofs, expiry: Int64, digest: Data) {
         self.proofs = proofs
         self.expiration = Date(millisecondsSince1970: expiry)
+        self.digest = digest
     }
 
     init?(proxiedRelease: PrivateCloudCompute_ProxyNodeMetadata.ProxiedRelease) {
@@ -53,6 +68,7 @@ public struct TransparencyLogProofs: Sendable, Hashable {
 
         self.proofs = proofs
         self.expiration = nil
+        self.digest = nil
     }
 
     public init?(bundle: AttestationBundle) {
@@ -70,6 +86,7 @@ public struct TransparencyLogProofs: Sendable, Hashable {
 
         self.proofs = proofs
         self.expiration = nil
+        self.digest = nil
     }
 
     public func verify(expiration: Date) throws {
@@ -99,10 +116,11 @@ public enum TransparencyLogError: Error {
     case clientError(any Error)
     case expired
     case pendingExpiration(proofsExpiration: Date, expiration: Date)
+    case requestLimitExceeded(requested: Int)
 }
 
 extension TransparencyLogError: CustomNSError {
-    public static var errorDomain: String = "com.apple.CloudAttestation.TransparencyLogError"
+    public static let errorDomain: String = "com.apple.CloudAttestation.TransparencyLogError"
 
     /// The error code within the given domain.
     public var errorCode: Int {
@@ -120,6 +138,7 @@ extension TransparencyLogError: CustomNSError {
         case .clientError(_): return 11
         case .expired: return 12
         case .pendingExpiration(_, _): return 13
+        case .requestLimitExceeded(_): return 14
         }
     }
 

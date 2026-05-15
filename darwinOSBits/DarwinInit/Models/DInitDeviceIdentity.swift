@@ -28,9 +28,9 @@ struct DInitDeviceIdentity {
 extension DInitDeviceIdentity {
     static var shared: Self {
         DInitDeviceIdentity(
-            ecid: Computer.uniqueChipID(),
-            serialNumber: Computer.serialNumber(),
-            buildVersion: Computer.buildVersion()
+            ecid: RealComputer.shared.uniqueChipID,
+            serialNumber: RealComputer.shared.serialNumber,
+            buildVersion: RealComputer.shared.buildVersion
         )
     }
 }

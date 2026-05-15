@@ -12,11 +12,10 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
-
 internal import Combine
 import Foundation
 internal import InternalGRPC
+internal import InternalSwiftProtobuf
 
 typealias InvokeWorkloadRequest = Com_Apple_Cloudboard_Api_V1_InvokeWorkloadRequest
 typealias InvokeWorkloadResponse = Com_Apple_Cloudboard_Api_V1_InvokeWorkloadResponse

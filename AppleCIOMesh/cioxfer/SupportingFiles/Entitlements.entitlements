@@ -26,6 +26,8 @@
 	<true/>
 	<key>com.apple.private.appleciomesh.config-access</key>
 	<true/>
+	<key>com.apple.kernel.large-file-virtual-addressing</key>
+	<true/>
 	<key>com.apple.security.iokit-user-client-class</key>
 	<array>
 		<string>AppleCIOMeshConfigUserClient</string>

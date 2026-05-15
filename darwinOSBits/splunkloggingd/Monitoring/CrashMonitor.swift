@@ -19,13 +19,12 @@
 //  Copyright © 2024 Apple, Inc.  All rights reserved.
 //
 
+import CoreDiagnostics
 import Foundation
 import LoggingSupport
 import OSAServicesClient
 
 fileprivate let log = Logger(subsystem: sharedSubsystem, category: "CrashMonitor")
-fileprivate let redactedStr = "<redacted>"
-fileprivate let secondsPerHour: TimeInterval = 60 * 60
 
 protocol CrashMonitorDelegate: AnyObject {
     func handleJetsamEvent(_ event: SplunkEvent) async
@@ -36,7 +35,7 @@ protocol CrashMonitorDelegate: AnyObject {
 func pruneCrashes(atDir dir: URL) {
     let fm = FileManager.default
     let keys: [URLResourceKey] = [.creationDateKey]
-    let cutoffTime = Date.now.addingTimeInterval(-CrashMonitor.maxCrashAgeSec)
+    let cutoffTime = Date.now.addingTimeInterval(-CrashDeleter.maxCrashAgeSec)
     log.log("Requested to prune crashes")
 
     guard let enumerator = fm.enumerator(at: dir, includingPropertiesForKeys: keys) else {
@@ -65,8 +64,8 @@ func pruneCrashes(atDir dir: URL) {
     }
 
     // Delete at least these many. May delete more if too-old crashes found
-    var numToDelete = max(allItems.count - CrashMonitor.maxCrashes, 0)
-    log.log("Pruning crashes created before \(cutoffTime, privacy: .public) or more than max crashes (\(CrashMonitor.maxCrashes)). Found \(allItems.count); deleting at least \(numToDelete)")
+    var numToDelete = max(allItems.count - CrashDeleter.maxCrashes, 0)
+    log.log("Pruning crashes created before \(cutoffTime, privacy: .public) or more than max crashes (\(CrashDeleter.maxCrashes)). Found \(allItems.count); deleting at least \(numToDelete)")
 
     for item in allItems {
         let date: Date = item.0
@@ -91,18 +90,12 @@ func pruneCrashes(atDir dir: URL) {
     // if we find we *don't* want them deleted, we either need to parse the file or check the xattrs for bug type 309
 }
 
-class CrashMonitor: NSObject {
-    static let maxPartialReportsPerHour = 3
-    static let maxBacktraceLen = 32
-
+class CrashDeleter {
     // Deletion policy is anything older than maxCrashAgeSec, or any crashes over maxCrashes (oldest first)
     static let maxCrashAgeSec: Double = (60 * 60 * 24 * 7) // 7 days
     static let maxCrashes = 100
     static let defaultDeletionInterval: Double = 10 * 60 // 10 minutes
     private let deletionInterval: Double // Break out from default for testing
-
-    // Abstract this out so that we can unit test it. Randomness otherwise makes testing hard
-    private let randGenerator: (Range<Int>) -> Int
 
     // Timer to check for old crashes that should be deleted.
     // In PRCOS the thing that normally does crash retiring / deletion (OTACrashCopier) doesn't exist. If nothing
@@ -110,234 +103,47 @@ class CrashMonitor: NSObject {
     // splunkloggingd to do the deletion as it's the only crash consumer
     private var deletionTimer: DispatchSourceTimer?
 
+    init(withInterval interval: Double) {
+        self.deletionTimer = nil
+        self.deletionInterval = interval
+    }
+
+    func start() {
+        if !shouldOwnCrashDeletion() {
+            log.log("Not configured to own crash deletion, so not setting deletion timer")
+            return
+        }
+
+        // Only schedule deletion if we have a path to delete from
+        guard let crashDir = systemCrashDir() else {
+            log.error("Failed to get crash dir from OSAnalytics, not setting deletion timer")
+            return
+        }
+
+        let crashDirURL = URL(filePath: crashDir)
+        let queue = DispatchQueue(label: "com.apple.splunkloggingd.CrashMonitor.DeletionQueue")
+        self.deletionTimer = DispatchSource.makeTimerSource(queue: queue)
+
+        log.log("Scheduling crash deletion for every \(self.deletionInterval) seconds")
+        self.deletionTimer?.schedule(deadline: .now() + self.deletionInterval, repeating: self.deletionInterval)
+        self.deletionTimer?.setEventHandler {
+            pruneCrashes(atDir: crashDirURL)
+        }
+        self.deletionTimer?.setCancelHandler {
+            log.log("Crash deletion timer source cancelled")
+        }
+        self.deletionTimer?.activate()
+    }
+}
+
+class CrashMonitor: NSObject {
     weak var delegate: CrashMonitorDelegate? = nil
-
-    enum CrashRedactionAmount {
-        case None    // Not running in setting where redaction required
-        case Partial // Able to only redact some data. Sending of partial logs is throttled
-        case Full    // The default, safest case. Most logs sent are sent as fully redacted when redaction is required
-    }
-
-    // This needs to be behind a lock so multiple threads can try to handle crash submission
-    let partialSubmissions: OSAllocatedUnfairLock <[Date]> = .init(initialState: [])
-
-    // Partially redacted: 20% of the time
-    // Fully redacted: 80% of the time
-    // Limit 3 partially redacted logs per hour
-    func calculateRedaction(forTimestamp newTime: Date?) -> CrashRedactionAmount {
-        if !crashRedactionEnabled() {
-            return .None
-        }
-        guard let newTime else {
-            log.error("Given a nil timestamp, using full redaction")
-            return .Full
-        }
-
-        // Full redaction 80% of the time
-        let rand = self.randGenerator(0..<5)
-        log.log("Generated random number \(rand) for redaction")
-        if rand > 0 {
-            return .Full
-        }
-
-        // For the 20% partial redaction, we must limit number sent in the past hour
-        let needsFullRedaction = self.partialSubmissions.withLock { submissions in
-            var count = submissions.count
-            if Self.maxPartialReportsPerHour == 0 {
-                return true
-            }
-            if count > Self.maxPartialReportsPerHour {
-                log.error("Error: expecting max of \(Self.maxPartialReportsPerHour) reports per hour, but found \(count)")
-                let slice = submissions[0..<Self.maxPartialReportsPerHour]
-                submissions = Array(slice)
-                count = submissions.count
-            }
-            if count == Self.maxPartialReportsPerHour {
-                if newTime.timeIntervalSince(submissions[count-1]) < secondsPerHour {
-                    // List is full and less than an hour has passed
-                    return true
-                }
-                submissions.remove(at: count-1)
-            }
-            submissions.insert(newTime, at: 0)
-            return false
-        }
-
-        return (needsFullRedaction) ? .Full : .Partial
-    }
-
-    /// Remove the register values for all threads
-    private func redactRegisterValues(from body: inout [String:Any]) -> Bool {
-        guard var threads = body["threads"] as? [[String:Any]] else {
-            log.error("Crash report missing thread data")
-            return false
-        }
-
-        for i in threads.indices {
-            if let _ = threads[i]["threadState"] {
-                threads[i]["threadState"] = redactedStr
-            }
-        }
-
-        body["threads"] = threads
-        return true
-    }
-
-    /// Remove the exception message
-    private func redactExceptionMessage(from body: inout [String:Any]) -> Bool {
-        if let _ = body["exception"] {
-            body["exception"] = redactedStr
-        }
-        return true
-    }
-
-    /// Remove the last exception backtrace
-    private func redactLastExceptionBacktrace(from body: inout [String:Any]) -> Bool {
-        // This is an optional key sometimes included by Foundation to provide an alternate call stack
-        if let _ = body["lastExceptionBacktrace"] {
-            body["lastExceptionBacktrace"] = redactedStr
-        }
-
-        return true
-    }
-
-    /// Limit the number of frames in the last exception backtrace to a fixed limit
-    private func truncateLastExceptionBacktrace(from body: inout [String:Any]) -> Bool {
-        // This is an optional key sometimes included by Foundation to provide an alternate call stack
-        guard let rawExceptionBacktrace = body["lastExceptionBacktrace"] else {
-            return true
-        }
-
-        guard let exceptionBacktrace = rawExceptionBacktrace as? [Any] else {
-            log.error("Unexpected type for exception backtrace")
-            return false
-        }
-
-        if exceptionBacktrace.count > Self.maxBacktraceLen {
-            let slice = exceptionBacktrace[0..<Self.maxBacktraceLen]
-            body["lastExceptionBacktrace"] = Array(slice)
-        }
-
-        return true
-    }
-
-    /// Limit the number of frames in each stack backtrace to a fixed limit
-    private func truncateStacks(from body: inout [String:Any]) -> Bool {
-        guard var threads = body["threads"] as? [[String:Any]] else {
-            log.error("Crash report missing thread data")
-            return false
-        }
-
-        for i in threads.indices {
-            if let frames = threads[i]["frames"] {
-                guard let frames = frames as? [Any] else {
-                    log.error("Thread has backtrace with unexpected type")
-                    return false
-                }
-                if frames.count > Self.maxBacktraceLen {
-                    let slice = frames[0..<Self.maxBacktraceLen]
-                    threads[i]["frames"] = Array(slice)
-                }
-            }
-        }
-
-        body["threads"] = threads
-        return true
-    }
-
-    /// Redact stack backtraces from all threads but the crashing one
-    private func redactNonCrashingStacks(from body: inout [String:Any]) -> Bool {
-        guard var threads = body["threads"] as? [[String:Any]] else {
-            log.error("Crash report missing thread data")
-            return false
-        }
-
-        for i in threads.indices {
-            // Only keep the triggering stack's frames
-            if let isCrashingStack = threads[i]["triggered"] as? Bool,
-               isCrashingStack == true {
-                continue
-            }
-
-            if let _ = threads[i]["frames"] {
-                threads[i].updateValue([[redactedStr:redactedStr]], forKey: "frames")
-            }
-        }
-
-        body["threads"] = threads
-        return true
-    }
-
-    private func _redactFrames(for frames: inout [[String:Any]], usingImages usedImages: [[String:Any]]) -> Bool {
-        for i in frames.indices {
-            guard let imageIndex = frames[i]["imageIndex"] as? Int else {
-                log.error("Crash frame missing image index")
-                return false
-            }
-
-            // Found invalid index. Redact frame and continue
-            if (imageIndex < 0) || (imageIndex >= usedImages.count) {
-                frames[i] = [redactedStr:redactedStr]
-                continue
-            }
-
-            // Found frame with valid index, but frame points to the "absolute image". OSAnalytics uses this to
-            // represent an invalid image -> redact this frame
-            guard let source = usedImages[imageIndex]["source"] as? String else {
-                log.error("Crash frame has valid image index, but image missing source name")
-                return false
-            }
-
-            // A for "absolute image"
-            if source == "A" {
-                frames[i] = [redactedStr:redactedStr]
-            }
-        }
-        return true
-    }
-
-    /// If a frame points to an image not listed in the images (or an invalid one), redact it
-    private func redactInvalidFrames(from body: inout [String: Any]) -> Bool {
-        guard var threads = body["threads"] as? [[String:Any]] else {
-            log.error("Crash report missing thread data")
-            return false
-        }
-
-        let usedImages = body["usedImages"] as? [[String:Any]] ?? []
-
-        for i in threads.indices {
-            guard var frames = threads[i]["frames"] as? [[String:Any]] else {
-                log.error("Crash report frames have unexpected type")
-                return false
-            }
-
-            if !_redactFrames(for: &frames, usingImages:usedImages) {
-                log.error("Failed to redact frames for normal thread")
-                return false
-            }
-            threads[i].updateValue(frames, forKey: "frames")
-        }
-        body["threads"] = threads
-
-        // This is an optional key sometimes included by Foundation to provide an alternate call stack
-        if let rawExceptionBacktrace = body["lastExceptionBacktrace"] {
-            guard var exceptionBacktrace = rawExceptionBacktrace as? [[String:Any]] else {
-                log.error("Unexpected type for exception backtrace")
-                return false
-            }
-
-            if !_redactFrames(for: &exceptionBacktrace, usingImages:usedImages) {
-                log.error("Failed to redact frames for lastExceptionBacktrace")
-                return false
-            }
-            body["lastExceptionBacktrace"] = exceptionBacktrace
-        }
-
-        return true
-    }
+    let deleter: CrashDeleter
 
     // On failure, we still want to send something to Splunk to denote a crash
     private func fallbackReportData(from reportData: Data, atPath pathString: String) -> [String:Any] {
+        log.error("Failed to decode crash report. Sending failure breadcrumb for path \(pathString)")
+
         let data: String
         if crashRedactionEnabled() {
             data = "Failed to decode crash report format for path \(pathString)"
@@ -348,64 +154,23 @@ class CrashMonitor: NSObject {
         return ["crashReport": data]
     }
 
-    func redactCrashReport(from report: [String:Any], withRedaction redaction: CrashRedactionAmount) -> [String:Any]? {
-        guard var body = report["body"] as? [String:Any] else {
-            log.error("Unable to parse body from crash report for redaction")
-            return nil
-        }
-
-        var success = true
-        switch redaction {
-        case .None:
-            break
-
-        case .Partial:
-            success = success && redactRegisterValues(from: &body)
-            success = success && redactInvalidFrames(from: &body)
-
-            success = success && truncateLastExceptionBacktrace(from: &body)
-
-        case .Full:
-            success = success && redactRegisterValues(from: &body)
-            success = success && redactInvalidFrames(from: &body)
-
-            success = success && redactExceptionMessage(from: &body)
-            success = success && redactNonCrashingStacks(from: &body)
-            success = success && truncateStacks(from: &body)
-            success = success && redactLastExceptionBacktrace(from: &body)
-        }
-
-        if !success {
-            return nil
-        }
-
-        var result = report
-        result["body"] = body
-        return result
-    }
-
     func formatCrashReport(atPath pathString: String) -> SplunkEvent? {
         let pathURL = URL(fileURLWithPath: pathString)
         log.log("Formatting crash report at path: \(pathString, privacy: .public)")
-        let reportData: Data
-        do {
-            reportData = try Data(contentsOf: pathURL)
-        } catch {
-            log.error("Couldn't read crash report: \(error.localizedDescription, privacy: .public)")
+
+        guard let report = CrashReport(reportPath: pathURL) else {
+            log.error("Failed to initialize crash report")
+            return nil
+        }
+        report.prepareReportForSubmission()
+
+        guard let redactedReportData: Data = report.reportData else {
+            log.error("Failed to redact crash report")
             return nil
         }
 
-        var event: [String:Any]
-        let date = modificationDate(forFile: pathString)
-        let redaction = calculateRedaction(forTimestamp: date)
-        if let rawReport = extractOSAnalyticsJson(from: reportData),
-           let redactedReport = redactCrashReport(from: rawReport, withRedaction: redaction)
-        {
-            event = redactedReport
-        } else {
-            log.error("Failed to decode crash report. Sending failure breadcrumb for path \(pathString)")
-            event = fallbackReportData(from: reportData, atPath: pathString)
-        }
+        var event: [String:Any] = extractOSAnalyticsJson(from: redactedReportData) ??
+                                  fallbackReportData(from: redactedReportData, atPath: pathString)
 
         if let serialNo = getSerialNo() {
             event["serial"] = serialNo
@@ -415,7 +180,7 @@ class CrashMonitor: NSObject {
             "event": event,
             "source": pathString
         ]
-        if let date {
+        if let date = modificationDate(forFile: pathString) {
             payload["time"] = date.timeIntervalSince1970
         }
 
@@ -464,34 +229,6 @@ class CrashMonitor: NSObject {
 
     }
 
-    private func _setupCrashDeletion() {
-        if !shouldOwnCrashDeletion() {
-            log.log("Not configured to own crash deletion, so not setting deletion timer")
-            return
-        }
-
-        // Only schedule deletion if we have a path to delete from
-        guard let crashDir = systemCrashDir() else {
-            log.error("Failed to get crash dir from OSAnalytics, not setting deletion timer")
-            return
-        }
-
-        let crashDirURL = URL(filePath: crashDir)
-        let queue = DispatchQueue(label: "com.apple.splunkloggingd.CrashMonitor.DeletionQueue")
-        self.deletionTimer = DispatchSource.makeTimerSource(queue: queue)
-
-        let interval = self.deletionInterval
-        log.log("Scheduling crash deletion for every \(interval) seconds")
-        self.deletionTimer?.schedule(deadline: .now() + interval, repeating: interval)
-        self.deletionTimer?.setEventHandler {
-            pruneCrashes(atDir: crashDirURL)
-        }
-        self.deletionTimer?.setCancelHandler {
-            log.log("Crash deletion timer source cancelled")
-        }
-        self.deletionTimer?.activate()
-    }
-
     func start() {
         // Per discussion with OSAnalytics, ReportSystemMemory will write out a JetsamEvent report if the proc is
         // actually terminated by jetsam with bug type 298.
@@ -502,17 +239,13 @@ class CrashMonitor: NSObject {
         }
         log.log("Registering for logs of types: \(types)")
         registerForOSAnalyticsReports(observer: self, types: types)
-        self._setupCrashDeletion()
+        self.deleter.start()
     }
 
-    // Allow passing these vars in for testing
-    init(withRandGenerator generator: @escaping (Range<Int>) -> Int = Int.random,
-         withDeletionTimeout timeout: Double = CrashMonitor.defaultDeletionInterval)
-    {
-        self.randGenerator = generator
-        self.deletionTimer = nil
-        self.deletionInterval = timeout
-     }
+    // Allow passing this in for testing
+    init(withDeletionTimeout timeout: Double = CrashDeleter.defaultDeletionInterval) {
+        self.deleter = CrashDeleter(withInterval: timeout)
+    }
 }
 
 extension CrashMonitor: OSADiagnosticObserver {

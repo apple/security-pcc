@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import Foundation
 
 internal enum BufferingContinuationError: Error {
@@ -22,9 +20,9 @@ internal enum BufferingContinuationError: Error {
     case useAfterComplete
 }
 
-/// Allows abstractiong away the AsyncStream Continuation so we can buffer/resend parts of it
-protocol BypassContinuationProtocol<Element> {
-    associatedtype Element
+/// Allows abstracting away the AsyncStream Continuation so we can buffer/resend parts of it
+protocol BypassContinuationProtocol<Element>: Sendable {
+    associatedtype Element: Sendable
 
     /// Resume the task awaiting the next iteration point by having it return
     /// normally from its suspension point with a given element.
@@ -67,7 +65,7 @@ protocol BypassContinuationProtocol<Element> {
 
 /// Wrap the normal target and send to it with no changes or capturing
 struct NotBypassedContinuation<Element>: BypassContinuationProtocol {
-    /// This always false, using it implies we are not doing request bypass
+    /// This is always false, using it implies we are not doing request bypass
     var hasPendingBypass: Bool { false }
 
     private let continuation: AsyncStream<Element>.Continuation

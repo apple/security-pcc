@@ -12,12 +12,12 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardLogging
 import CloudBoardMetrics
-import CloudBoardPreferences
+#if canImport(CloudConfigurationPreferences)
+@_weakLinked import CloudConfigurationPreferences
+#endif
 import Foundation
 import os
 
@@ -33,8 +33,6 @@ public struct CloudBoardHotProperties: Decodable, Sendable, Hashable {
     /// It is only logged and reported as a metric, but the value isn't used directly.
     public var canary: Int?
 
-    public var pushFailureReportsToROPES: Bool?
-
     /// The maximum number of bytes we may receive on a single GRPC stream
     public var maxCumulativeRequestBytes: Int?
 
@@ -44,12 +42,36 @@ public struct CloudBoardHotProperties: Decodable, Sendable, Hashable {
     public var idleTimeoutMilliseconds: Int?
 }
 
+public struct PreferencesVersionProvider: Sendable {
+    public var version: String? {
+        get async {
+            await self.getCurrentVersion()
+        }
+    }
+
+    private let getCurrentVersion: @Sendable () async -> String?
+
+    init(versionGetter: @escaping @Sendable () async -> String?) {
+        self.getCurrentVersion = versionGetter
+    }
+
+    static var current: PreferencesVersionProvider {
+        #if canImport(CloudConfigurationPreferences)
+        .init(versionGetter: {
+            await PreferencesVersionInfo.current.appliedVersion?.description
+        })
+        #else
+        .init(versionGetter: { nil })
+        #endif
+    }
+}
+
 /// A type storing the current latest received hot property values.
 ///
 /// Note that when using `HotPropertiesController`, every received update is immediately considered
 /// successfully applied.
 ///
-/// If your configuration update can be slow or fail, use the `CloudBoardPreferences` APIs directly.
+/// If your configuration update can be slow or fail, use the `CloudConfigurationPreferences` APIs directly.
 public actor HotPropertiesController {
     private static let logger: os.Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
@@ -60,7 +82,7 @@ public actor HotPropertiesController {
     private let updates: Updates
 
     /// A getter for the current version info.
-    private let getCurrentVersionInfo: () async -> PreferencesVersionInfo
+    private let versionProvider: PreferencesVersionProvider
 
     /// The last published value.
     public private(set) var currentValue: CloudBoardHotProperties? {
@@ -96,28 +118,47 @@ public actor HotPropertiesController {
         }
     }
 
-    /// Creates a new controller that uses CloudBoardPreferences to subscribe to preference updates.
+    /// Creates a new controller that uses CloudConfigurationPreferences to subscribe to preference updates.
     public init() {
-        let updates = PreferencesUpdates(
-            preferencesDomain: CloudBoardHotProperties.domain,
-            maximumUpdateDuration: .seconds(15),
-            forType: CloudBoardHotProperties.self
-        )
-        let autoConfirmedUpdates = updates.map { update in
-            await update.successfullyApplied()
-            return update.newValue
+        #if canImport(CloudConfigurationPreferences)
+        if #_hasSymbol(PreferencesUpdates<CloudBoardHotProperties>.self) {
+            let updates = PreferencesUpdates(
+                preferencesDomain: CloudBoardHotProperties.domain,
+                maximumUpdateDuration: .seconds(15),
+                forType: CloudBoardHotProperties.self
+            )
+            let stream = updates.map { update in
+                await update.successfullyApplied()
+                return update.newValue
+            }
+            self.init(
+                wrapping: stream,
+                initialValue: nil,
+                versionProvider: PreferencesVersionProvider.current
+            )
+        } else {
+            let (stream, _) = AsyncStream<CloudBoardHotProperties>.makeStream()
+            self.init(
+                wrapping: stream,
+                initialValue: nil,
+                versionProvider: PreferencesVersionProvider.current
+            )
         }
+        #else
+        Self.logger.warning("CloudConfigurationPreferences is unavailable, providing empty stream")
+        let (stream, _) = AsyncStream<CloudBoardHotProperties>.makeStream()
         self.init(
-            wrapping: autoConfirmedUpdates,
+            wrapping: stream,
             initialValue: nil,
-            getCurrentVersionInfo: { await PreferencesVersionInfo.current }
+            versionProvider: PreferencesVersionProvider.current
         )
+        #endif
     }
 
     /// Returns the current preferences version information.
-    public var versions: PreferencesVersionInfo {
+    public var version: String? {
         get async {
-            await self.getCurrentVersionInfo()
+            await self.versionProvider.version
         }
     }
 
@@ -125,26 +166,24 @@ public actor HotPropertiesController {
     private init<S: AsyncSequence & Sendable>(
         wrapping upstream: S,
         initialValue: CloudBoardHotProperties?,
-        getCurrentVersionInfo: @escaping () async -> PreferencesVersionInfo
+        versionProvider: PreferencesVersionProvider
     ) where S.Element == CloudBoardHotProperties {
         self.updates = .init { upstream.makeAsyncIterator() }
         self.currentValue = initialValue
-        self.getCurrentVersionInfo = getCurrentVersionInfo
+        self.versionProvider = versionProvider
     }
 
     /// Creates a controller and an async stream continuation appropriate for testing.
     static func makeForTesting(
         initialValue: CloudBoardHotProperties? = nil,
-        getCurrentVersionInfo: @escaping () async -> PreferencesVersionInfo = {
-            .init(appliedVersion: nil)
-        }
+        versionProvider: PreferencesVersionProvider = .init(versionGetter: { nil })
     )
         -> (HotPropertiesController, AsyncStream<CloudBoardHotProperties>.Continuation) {
         let (stream, continuation) = AsyncStream<CloudBoardHotProperties>.makeStream()
         let controller = HotPropertiesController(
             wrapping: stream,
             initialValue: initialValue,
-            getCurrentVersionInfo: getCurrentVersionInfo
+            versionProvider: versionProvider
         )
         return (controller, continuation)
     }

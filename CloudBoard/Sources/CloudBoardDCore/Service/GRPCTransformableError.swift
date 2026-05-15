@@ -12,11 +12,10 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardJobHelperAPI
 import CloudBoardLogging
+import Foundation
 import InternalGRPC
 
 enum GRPCTransformableError: GRPCStatusTransformable {
@@ -30,6 +29,7 @@ enum GRPCTransformableError: GRPCStatusTransformable {
     case ohttpEncapsulationFailure
     case unknownKeyID
     case expiredKey
+    case initiateNegotiationViolation
     case idleTimeoutExceeded
     case protocolError(Error)
     case abortedCleanly
@@ -83,6 +83,8 @@ enum GRPCTransformableError: GRPCStatusTransformable {
             return .init(code: .unimplemented, message: "response bypass version indicated not supported")
         case .providedRequestWhenBypassExpected:
             return .init(code: .failedPrecondition, message: "provided request chunk when request bypass configured")
+        case .initiateNegotiationViolation:
+            return .init(code: .aborted, message: "Negotiation for a compute node was invalid")
         }
     }
 }
@@ -126,6 +128,8 @@ extension GRPCTransformableError: ReportableError {
             "GRPCTransformableError.bypassVersionInvalid"
         case .providedRequestWhenBypassExpected:
             "GRPCTransformableError.providedRequestWhenBypassExpected"
+        case .initiateNegotiationViolation:
+            "GRPCTransformableError.initiateNegotiationViolation"
         }
     }
 }
@@ -143,6 +147,8 @@ extension GRPCTransformableError {
             self = .unknownKeyID
         case .expiredKey:
             self = .expiredKey
+        case .initiateNegotiationViolation:
+            self = .initiateNegotiationViolation
         }
     }
 }

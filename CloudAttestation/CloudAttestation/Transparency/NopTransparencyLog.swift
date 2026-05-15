@@ -19,6 +19,8 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
+import InternalSwiftProtobuf
+
 public struct NopTransparencyLog: TransparencyLog {
     let nonEmptyProofs: Bool
 
@@ -30,8 +32,8 @@ public struct NopTransparencyLog: TransparencyLog {
         self.nonEmptyProofs = nonEmptyProofs
     }
 
-    public func proveInclusion(of digest: Data) async throws -> TransparencyLogProofs {
-        return TransparencyLogProofs(nonEmptyProofs: self.nonEmptyProofs)
+    public func proveInclusion(of digests: [Data]) async throws -> [TransparencyLogProofs] {
+        return digests.map { TransparencyLogProofs(nonEmptyProofs: self.nonEmptyProofs, digest: $0) }
     }
 
     public func verifyExpiringInclusion(of digest: Data, proofs: TransparencyLogProofs) async throws -> Date {
@@ -40,7 +42,7 @@ public struct NopTransparencyLog: TransparencyLog {
 }
 
 extension TransparencyLogProofs {
-    init(nonEmptyProofs: Bool) {
+    init(nonEmptyProofs: Bool, digest: Data) {
         self.expiration = Date.distantFuture
         if nonEmptyProofs {
             self.proofs = ATLogProofs.with { builder in
@@ -50,5 +52,6 @@ extension TransparencyLogProofs {
         } else {
             self.proofs = ATLogProofs()
         }
+        self.digest = digest
     }
 }

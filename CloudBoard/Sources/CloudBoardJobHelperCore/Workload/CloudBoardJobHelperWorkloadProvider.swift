@@ -12,16 +12,24 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import Foundation
 
-protocol CloudBoardJobHelperWorkloadProvider {
-    func getCloudAppWorkload(
-        cloudAppNameOverride: String?,
+protocol CloudBoardJobHelperWorkloadProvider: Sendable {
+    func getCloudApp(
+        cloudAppName: String,
         requestSecrets: RequestSecrets,
         ensembleKeyDistributor: EnsembleKeyDistributorProtocol,
+        pirHelper: PIRHelperProtocol,
         jobUUID: UUID,
         cbJobHelperLogMetadata: CloudBoardJobHelperLogMetadata
-    ) throws -> CloudAppWorkloadProtocol
+    ) throws -> ManagedCloudAppProtocol
+
+    func getSupportApp(
+        forCloudApp cloudApp: String,
+        name: String,
+        requestSecrets: RequestSecrets,
+        jobUUID: UUID,
+        cbJobHelperLogMetadata: CloudBoardJobHelperLogMetadata,
+        terminationHandler: @Sendable @escaping (_ cleanTermination: Bool) async -> Void
+    ) throws -> ManagedSupportAppProtocol
 }

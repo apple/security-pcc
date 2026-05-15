@@ -34,11 +34,18 @@ public struct TrustedRequest: Sendable {
         private let id: UUID
         private let xpcRequestProxy: any XPCRequestProxyProtocol
         private let telemetryEventID: EventIdentifier?
+        private let isChunkingEnabled: Bool
 
-        init<XPCRequestProxy: XPCRequestProxyProtocol>(id: UUID, xpcRequestProxy: XPCRequestProxy, telemetryEventID: EventIdentifier? = nil) {
+        init<XPCRequestProxy: XPCRequestProxyProtocol>(
+            id: UUID,
+            xpcRequestProxy: XPCRequestProxy,
+            telemetryEventID: EventIdentifier? = nil,
+            isChunkingEnabled: Bool
+        ) {
             self.id = id
             self.xpcRequestProxy = xpcRequestProxy
             self.telemetryEventID = telemetryEventID
+            self.isChunkingEnabled = isChunkingEnabled
         }
 
         /// Writes the contents of the sequence to the request.
@@ -47,7 +54,7 @@ public struct TrustedRequest: Sendable {
         /// flow control has opened up the method will resume and allow more data to be written.
         ///
         /// - Parameter contentsOf: The sequence of data to write to the request.
-        public func write(contentsOf sequence: some Sequence<UInt8>) async throws {
+        @concurrent public func write(contentsOf sequence: some Sequence<UInt8>) async throws {
             try await self.write(data: Data(sequence))
         }
 
@@ -57,10 +64,22 @@ public struct TrustedRequest: Sendable {
         /// flow control has opened up the method will resume and allow more data to be written.
         ///
         /// - Parameter data: The data to write to the request.
-        public func write(data: Data) async throws {
+        @concurrent public func write(data: Data) async throws {
             try await withTaskCancellationHandler {
                 do {
-                    return try await self.xpcRequestProxy.send(data: data, isComplete: true)
+                    if self.isChunkingEnabled {
+                        var iterator = try DataChunker(data: data).makeIterator()
+                        var current = iterator.next()
+
+                        while let chunk = current {
+                            let next = iterator.next()
+                            try await self.xpcRequestProxy.send(data: chunk, isComplete: next == nil)
+                            current = next
+                        }
+                    } else {
+                        // No chunking: use legacy behavior
+                        return try await self.xpcRequestProxy.send(data: data, isComplete: true)
+                    }
                 } catch {
                     try? EventReporter().emitAppleIntelligenceEndEvent(
                         eventInfo: trustedRequestEventInfo(step: .privateCloudComputeRequestInProcess, errors: [error]),
@@ -80,7 +99,7 @@ public struct TrustedRequest: Sendable {
         /// This method will run until the passed asynchronous sequence has finished.
         ///
         /// - Parameter contentsOf: The asynchronous sequence of data to write to the request.
-        public func write<AS: AsyncSequence>(contentsOf sequence: AS) async throws where AS.Element == Data {
+        @concurrent public func write<AS: AsyncSequence>(contentsOf sequence: AS) async throws where AS.Element == Data {
             var it = sequence.makeAsyncIterator()
 
             // if the provided AsyncSequence throws, we cancel. We will
@@ -99,9 +118,17 @@ public struct TrustedRequest: Sendable {
             try await withTaskCancellationHandler {
                 do {
                     while let element = try await nextWithCancel(&it) {
-                        try await self.xpcRequestProxy.send(data: element, isComplete: false)
+                        if self.isChunkingEnabled {
+                            let chunker = try DataChunker(data: element)
+                            for chunk in chunker {
+                                try await self.xpcRequestProxy.send(data: chunk, isComplete: false)
+                            }
+                        } else {
+                            // No chunking: use legacy behavior
+                            try await self.xpcRequestProxy.send(data: element, isComplete: false)
+                        }
                     }
-                    try await self.xpcRequestProxy.send(data: Data(), isComplete: true)
+                    try await self.xpcRequestProxy.send(message: .final)
                 } catch {
                     try? EventReporter().emitAppleIntelligenceEndEvent(
                         eventInfo: trustedRequestEventInfo(step: .privateCloudComputeRequestInProcess, errors: [error]),
@@ -119,20 +146,33 @@ public struct TrustedRequest: Sendable {
 
     /// A struct representing the returned data for a ``TrustedRequest``.
     public struct Response: AsyncSequence {
+        public typealias Element = Data
+
         // The underlying trusted request.
         private let id: UUID
         private let xpcRequestProxy: any XPCRequestProxyProtocol
         private let telemetryEventID: EventIdentifier?
+        private let isChunkingEnabled: Bool
         private let madeAsyncIteratorAtomic = ManagedAtomic(false)
 
-        init<XPCRequestProxy: XPCRequestProxyProtocol>(id: UUID, xpcRequestProxy: XPCRequestProxy, telemetryEventID: EventIdentifier? = nil) {
+        init<XPCRequestProxy: XPCRequestProxyProtocol>(
+            id: UUID,
+            xpcRequestProxy: XPCRequestProxy,
+            telemetryEventID: EventIdentifier? = nil,
+            isChunkingEnabled: Bool
+        ) {
             self.id = id
             self.xpcRequestProxy = xpcRequestProxy
             self.telemetryEventID = telemetryEventID
+            self.isChunkingEnabled = isChunkingEnabled
         }
 
         public func makeAsyncIterator() -> AsyncIterator {
-            guard !self.madeAsyncIteratorAtomic.compareExchange(expected: false, desired: true, ordering: .acquiringAndReleasing).original else {
+            guard
+                !self.madeAsyncIteratorAtomic.compareExchange(
+                    expected: false, desired: true, ordering: .acquiringAndReleasing
+                ).original
+            else {
                 fatalError(
                     """
                     Bug in PrivateCloudCompute adopter code!
@@ -143,22 +183,45 @@ public struct TrustedRequest: Sendable {
                     """
                 )
             }
-            return AsyncIterator(id: self.id, xpcRequestProxy: self.xpcRequestProxy, telemetryEventID: telemetryEventID)
+
+            return AsyncIterator(
+                id: self.id,
+                xpcRequestProxy: self.xpcRequestProxy,
+                telemetryEventID: self.telemetryEventID,
+                isChunkingEnabled: self.isChunkingEnabled)
         }
 
         public struct AsyncIterator: AsyncIteratorProtocol {
+            // For chunking mode
+            private var assemblerIterator: DataAssembler<AsyncSequenceFromClosure<Data>>.AsyncIterator?
+
             private let id: UUID
             private let xpcRequestProxy: any XPCRequestProxyProtocol
             private let telemetryEventID: EventIdentifier?
             private let concurrentNextCallsAtomic = ManagedAtomic(false)
 
-            fileprivate init<XPCRequestProxy: XPCRequestProxyProtocol>(id: UUID, xpcRequestProxy: XPCRequestProxy, telemetryEventID: EventIdentifier?) {
+            fileprivate init<XPCRequestProxy: XPCRequestProxyProtocol>(
+                id: UUID,
+                xpcRequestProxy: XPCRequestProxy,
+                telemetryEventID: EventIdentifier?,
+                isChunkingEnabled: Bool
+            ) {
                 self.id = id
                 self.xpcRequestProxy = xpcRequestProxy
                 self.telemetryEventID = telemetryEventID
+
+                if isChunkingEnabled {
+                    let xpcStream = AsyncSequenceFromClosure { [xpcRequestProxy] in
+                        try await xpcRequestProxy.next() as Data?
+                    }
+                    let assembler = DataAssembler(xpcStream)
+                    self.assemblerIterator = assembler.makeAsyncIterator()
+                } else {
+                    self.assemblerIterator = nil
+                }
             }
 
-            public mutating func next() async throws -> Data? {
+            @concurrent public mutating func next() async throws -> Data? {
                 guard !self.concurrentNextCallsAtomic.compareExchange(expected: false, desired: true, ordering: .acquiringAndReleasing).original else {
                     fatalError(
                         """
@@ -173,9 +236,15 @@ public struct TrustedRequest: Sendable {
                     let changed = self.concurrentNextCallsAtomic.compareExchange(expected: true, desired: false, ordering: .acquiringAndReleasing)
                     precondition(changed.original)
                 }
+
                 return try await withTaskCancellationHandler {
                     do {
-                        let result = try await self.xpcRequestProxy.next()
+                        let result: Data?
+                        if self.assemblerIterator != nil {
+                            result = try await self.assemblerIterator?.next()
+                        } else {
+                            result = try await self.xpcRequestProxy.next()
+                        }
 
                         if result == nil {
                             try? EventReporter().emitAppleIntelligenceEndEvent(

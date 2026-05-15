@@ -12,17 +12,55 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 package import CloudBoardAsyncXPC
 
-public protocol CloudBoardControllerAPIServerToClientProtocol: Actor {
-    func updateConfiguration(config: WorkloadConfig) async throws
+package protocol CloudBoardControllerAPIServerToClientProtocol: Actor {
     func shutdown() async throws
 }
 
-public protocol CloudBoardControllerAPIServerDelegateProtocol:
-AnyObject, Sendable, CloudBoardControllerAPIClientToServerProtocol {}
+/// Protocol for handling CloudBoard controller API server delegate methods.
+///
+/// The `connectionIdentifier` parameter is used throughout this protocol to uniquely identify
+/// and associate operations with specific client connections to the CloudBoard controller.
+/// This string-based identifier allows the server to:
+/// - Track multiple concurrent client connections
+/// - Associate workloads with their originating connections
+/// - Route status updates and control commands to the correct client context
+/// - Maintain isolation between different client sessions
+///
+/// The connection identifier is typically generated when a client establishes a connection
+/// and remains constant for the lifetime of that connection session.
+package protocol CloudBoardControllerAPIServerDelegateProtocol:
+AnyObject, Sendable {
+    /// Registers a new workload with the CloudBoard controller.
+    ///
+    /// - Parameters:
+    ///   - connectionIdentifier: Unique identifier for the client connection that owns this workload.
+    ///     Used to associate the workload with its originating client session and enable proper
+    ///     cleanup when the connection is terminated.
+    ///   - config: Metadata to be provided to ROPES/Service Discovery. May change over time.
+    ///   - properties: Static workload properties.
+    func registerWorkload(
+        connectionIdentifier: Int, config: InternalWorkloadConfig, properties: WorkloadProperties
+    ) async throws
+
+    /// Updates the health status for workloads associated with a specific connection.
+    ///
+    /// - Parameters:
+    ///   - connectionIdentifier: Unique identifier for the client connection whose workload
+    ///     status is being updated. This ensures status updates are properly attributed
+    ///     to the correct client and workload context.
+    ///   - status: The current health and operational status of the workload controller.
+    func updateHealthStatus(connectionIdentifier: Int, status: WorkloadControllerStatus) async throws
+
+    /// Restarts prewarmed instances for workloads associated with a specific connection.
+    ///
+    /// - Parameters:
+    ///   - connectionIdentifier: Unique identifier for the client connection whose prewarmed
+    ///     instances should be restarted. This ensures the restart operation only affects
+    ///     instances belonging to the specified client connection.
+    func restartPrewarmedInstances(connectionIdentifier: Int) async throws
+}
 
 package protocol CloudBoardControllerAPIServerProtocol:
 CloudBoardControllerAPIServerToClientProtocol {

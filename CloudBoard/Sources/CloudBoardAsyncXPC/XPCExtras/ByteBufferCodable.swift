@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import Foundation
 import XPC
 
@@ -376,6 +374,23 @@ extension Optional: ByteBufferCodable where Wrapped: ByteBufferCodable {
     }
 }
 
+extension UInt64: ByteBufferCodable {
+    @inlinable
+    public func encode(to buffer: inout ByteBuffer) throws {
+        buffer.writeInteger(self)
+    }
+
+    public init(from buffer: inout ByteBuffer) throws {
+        guard let integer: Self = buffer.readInteger() else {
+            throw DecodingError.valueNotFound(
+                Self.self,
+                .init(codingPath: [], debugDescription: "no expected value")
+            )
+        }
+        self = integer
+    }
+}
+
 extension UInt32: ByteBufferCodable {
     @inlinable
     public func encode(to buffer: inout ByteBuffer) throws {
@@ -390,5 +405,45 @@ extension UInt32: ByteBufferCodable {
             )
         }
         self = integer
+    }
+}
+
+// read and write where host endianess is assumed and lack of data is treated as an error
+extension ByteBuffer {
+    /// Write `integer` into this `ByteBuffer`, moving the writer index forward appropriately.
+    ///
+    /// - parameters:
+    ///     - integer: The integer to serialize.
+    ///     - as: the desired `FixedWidthInteger` type (optional parameter)
+    /// - returns: The number of bytes written.
+    @discardableResult
+    @inlinable
+    public mutating func writeHostInteger<T: FixedWidthInteger>(
+        _ integer: T,
+        as _: T.Type = T.self
+    ) -> Int {
+        return self.writeInteger(integer, endianness: .host, as: T.self)
+    }
+
+    /// Read an integer off this `ByteBuffer`, move the reader index forward by the integer's byte size and return the
+    /// result, throw if the value cannot be read.
+    ///
+    /// - parameters:
+    ///     - as: the desired `FixedWidthInteger` type (optional parameter)
+    ///     - description: a short description of what is being read for error messages
+    /// - returns: An integer value deserialized from this `ByteBuffer`
+    @inlinable
+    public mutating func readHostIntegerOrThrow<T: FixedWidthInteger>(
+        as _: T.Type = T.self,
+        file: String = #file,
+        line: UInt = #line,
+    ) throws -> T {
+        guard let result = self.readInteger(endianness: .host, as: T.self) else {
+            throw DecodingError.valueNotFound(
+                Self.self,
+                .init(codingPath: [], debugDescription: "no expected value at \(file):\(line)")
+            )
+        }
+        return result
     }
 }

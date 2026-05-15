@@ -21,7 +21,6 @@ import Foundation
 import Dispatch
 import os
 @_spi(Private) import SecureConfigDB
-import secureconfig
 
 private let log = Logger(subsystem: "com.apple.SecureConfig", category: "Daemon")
 

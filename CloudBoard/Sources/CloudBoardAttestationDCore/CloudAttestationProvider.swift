@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple. All rights reserved.
-
 @_spi(Private) import CloudAttestation
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
@@ -22,6 +20,7 @@ import CloudBoardMetrics
 @_spi(SEP_Curve25519) import CryptoKit
 @_spi(SEP_Curve25519) import CryptoKitPrivate
 import Foundation
+import InternalSwiftProtobuf
 import NIOCore
 import os
 import Security_Private.SecItemPriv
@@ -66,21 +65,29 @@ struct CloudAttestationProvider: AttestationProviderProtocol {
     private var keychain: SecKeychain?
     private var metrics: MetricsSystem
     private var releaseDigestExpiryGracePeriod: TimeAmount?
+    private var nodeInfo: NodeInfo
+    private var bootID: String?
 
     init(
         configuration: CloudBoardAttestationDConfiguration,
         keychain: SecKeychain? = nil,
         metrics: MetricsSystem,
-        releaseDigestExpiryGracePeriod: TimeAmount? = nil
+        releaseDigestExpiryGracePeriod: TimeAmount? = nil,
+        nodeInfo: NodeInfo,
+        bootID: String?
     ) {
         self.configuration = configuration
         self.keychain = keychain
         self.metrics = metrics
         self.releaseDigestExpiryGracePeriod = releaseDigestExpiryGracePeriod
+        self.nodeInfo = nodeInfo
+        self.bootID = bootID
     }
 
     func createAttestedKey(
-        attestationBundleExpiry: Date,
+        clock: any DateAwareClock,
+        attestationLifetime: Duration,
+        keyExpiryGracePeriod: TimeInterval,
         proxiedReleaseDigests: [ReleaseDigestEntry] = []
     ) async throws -> InternalAttestedKey {
         Self.logger.info("Creating attested SEP-backed X25519 key")
@@ -92,22 +99,6 @@ struct CloudAttestationProvider: AttestationProviderProtocol {
 
         let retryConfig = self.configuration.cloudAttestation.attestationRetryConfiguration
         let retryStrategy = self.createCloudAttestationRetryStrategy(retryConfig: retryConfig)
-        let releaseEntryExpirationWithGracePeriod = attestationBundleExpiry
-            .advanced(by: self.releaseDigestExpiryGracePeriod?.timeInterval ?? 0)
-        let filteredReleaseDigests = proxiedReleaseDigests.filter { releaseEntry in
-            releaseEntry.expiry > releaseEntryExpirationWithGracePeriod
-        }.map { $0.releaseDigestHexString }
-
-        // we should only fail on empty filteredReleaseDigests if proxiedReleaaseDigests was non empty
-        // since proxiedReleaaseDigests could be passed empty in test env like ephemeral
-        if !proxiedReleaseDigests.isEmpty, filteredReleaseDigests.isEmpty {
-            throw CloudAttestationProviderError.releaseDigestsExpirationCheckFailed
-        } else {
-            Self.logger
-                .log(
-                    "Filtered release digests: \(filteredReleaseDigests, privacy: .public). Provided release digests: \(proxiedReleaseDigests, privacy: .public)"
-                )
-        }
 
         return try await self.metrics.withStatusMetrics(
             total: Metrics.CloudAttestation.AttestationCounter(action: .increment(by: 1)),
@@ -117,6 +108,23 @@ struct CloudAttestationProvider: AttestationProviderProtocol {
                 retryStrategy: retryStrategy,
                 perRetryTimeout: retryConfig.perRetryTimeout
             ) {
+                let attestationBundleExpiry = clock.dateNow + attestationLifetime.seconds
+                let releaseEntryExpirationWithGracePeriod = attestationBundleExpiry
+                    .advanced(by: self.releaseDigestExpiryGracePeriod?.timeInterval ?? 0)
+                let filteredReleaseDigests = proxiedReleaseDigests.filter { releaseEntry in
+                    releaseEntry.expiry > releaseEntryExpirationWithGracePeriod
+                }.map { $0.releaseDigestHexString }
+
+                // we should only fail on empty filteredReleaseDigests if proxiedReleaseDigests was non empty
+                // since proxiedReleaseDigests could be passed empty in test env like ephemeral
+                if !proxiedReleaseDigests.isEmpty, filteredReleaseDigests.isEmpty {
+                    throw CloudAttestationProviderError.releaseDigestsExpirationCheckFailed
+                } else {
+                    Self.logger.log(
+                        "Filtered release digests: \(filteredReleaseDigests, privacy: .public). Provided release digests: \(proxiedReleaseDigests, privacy: .public)"
+                    )
+                }
+
                 let privateKey = try createSecureEnclaveKey()
                 let publicKey = try SecureEnclave.Curve25519.KeyAgreement.PrivateKey(from: privateKey).publicKey
                 let (attestationBundle, releaseDigest) = try await createAttestationBundleAndReleaseDigest(
@@ -129,11 +137,13 @@ struct CloudAttestationProvider: AttestationProviderProtocol {
                     "Created attested SEP-backed key with public key \(publicKey.rawRepresentation.base64EncodedString(), privacy: .public)"
                 )
 
-                return InternalAttestedKey(
+                return try InternalAttestedKey(
                     key: .sepKey(secKey: privateKey),
                     attestationBundle: attestationBundle,
                     releaseDigest: releaseDigest,
-                    proxiedReleaseDigests: filteredReleaseDigests
+                    proxiedReleaseDigests: filteredReleaseDigests,
+                    expiry: attestationBundleExpiry + keyExpiryGracePeriod,
+                    appData: self.parseAppData(attestationBundle: attestationBundle)
                 )
             }
         }
@@ -202,7 +212,8 @@ struct CloudAttestationProvider: AttestationProviderProtocol {
                 publicKey,
                 expiration: expiry,
                 releaseDigest: ourReleaseDigest,
-                proxiedReleaseDigests: self.configuration.isProxy ? releaseDigests : nil
+                proxiedReleaseDigests: self.configuration.isProxy ? releaseDigests : nil,
+                computeNodeAppData: [:]
             ), ourReleaseDigest)
         }
 
@@ -213,6 +224,7 @@ struct CloudAttestationProvider: AttestationProviderProtocol {
             Self.logger.warning("CloudAttestation transparency proof inclusion disabled")
         }
 
+        let attestationBundle: AttestationBundle
         let attestor: Attestor
         if self.configuration.isProxy {
             Self.logger.log(
@@ -227,6 +239,7 @@ struct CloudAttestationProvider: AttestationProviderProtocol {
                     transparencyProver: NopTransparencyLog()
                 )
             }
+            attestationBundle = try await attestor.attest(key: privateKey, expiration: expiry)
         } else {
             Self.logger.log("Using regular node attestor")
             if transparencyProofsEnabled {
@@ -234,9 +247,25 @@ struct CloudAttestationProvider: AttestationProviderProtocol {
             } else {
                 attestor = NodeAttestor(transparencyProver: NopTransparencyLog())
             }
+
+            // We use the empty appData slot on the compute node to stick node metadata. The appData slot on the proxy
+            // node contains the proxied release digests which is entirely controlled by the CloudAttestation code.
+            let appData = try Proto_AppData.with {
+                $0.domain = "com.apple.PrivateCloudCompute"
+                $0.name = "Compute Node"
+                $0.version = 1
+                $0.metadata = try .init(
+                    message: AttestationAppData.with {
+                        $0.rackID = self.nodeInfo.rackID?.data ?? Data()
+                        $0.ensembleID = self.nodeInfo.ensembleID?.data ?? Data()
+                        $0.bootID = self.bootID?.data ?? Data()
+                    }
+                )
+            }
+
+            attestationBundle = try await attestor.attest(key: privateKey, expiration: expiry, appData: appData)
         }
 
-        let attestationBundle = try await attestor.attest(key: privateKey, expiration: expiry)
         let releaseDigest = try Release(bundle: attestationBundle, evaluateTrust: false).sha256
         let attestationBundleJson = try attestationBundle.jsonString()
         Self.logger.debug("Generated key attestation bundle: \(attestationBundleJson, privacy: .public)")
@@ -249,25 +278,53 @@ struct CloudAttestationProvider: AttestationProviderProtocol {
     internal static func parseProxiedReleaseDigests(
         attestationBundle: Data
     ) throws -> [String] {
-        let protoBundle = try Proto_AttestationBundle(serializedBytes: attestationBundle)
-        let protoAppData = try Proto_AppData(serializedBytes: protoBundle.appData)
-        guard protoAppData.hasMetadata else {
-            return []
+        var proxiedReleaseDigests: [String] = []
+        do {
+            let protoBundle = try Proto_AttestationBundle(serializedBytes: attestationBundle)
+            let protoAppData = try Proto_AppData(serializedBytes: protoBundle.appData)
+            guard protoAppData.hasMetadata, protoAppData.name == "Proxy Node" else {
+                return []
+            }
+            proxiedReleaseDigests = try PrivateCloudCompute_ProxyNodeMetadata(unpackingAny: protoAppData.metadata)
+                .proxiedRelease.map { $0.digest.hexString }
+        } catch {
+            Self.logger.error("Failed to parse attestation proxied release digests: \(error)")
         }
-        return try PrivateCloudCompute_ProxyNodeMetadata(unpackingAny: protoAppData.metadata)
-            .proxiedRelease.map { $0.digest.hexString }
+        return proxiedReleaseDigests
+    }
+
+    /// Parses out the appData from the bundle
+    /// If not present this returns an empty dictionary
+    internal func parseAppData(
+        attestationBundle: Data
+    ) throws -> [String: Data] {
+        var appData: [String: Data] = [:]
+        do {
+            let protoBundle = try Proto_AttestationBundle(serializedBytes: attestationBundle)
+            let protoAppData = try Proto_AppData(serializedBytes: protoBundle.appData)
+            guard protoAppData.hasMetadata, protoAppData.name == "Compute Node" else {
+                return [:]
+            }
+            let appDataProto = try AttestationAppData(unpackingAny: protoAppData.metadata)
+            appData[ComputeNodeAppDataKeys.rackID] = appDataProto.rackID
+            appData[ComputeNodeAppDataKeys.ensembleID] = appDataProto.ensembleID
+            appData[ComputeNodeAppDataKeys.bootID] = appDataProto.bootID
+        } catch {
+            Self.logger.error("Failed to parse attestation appData: \(error)")
+        }
+        return appData
     }
 
     func restoreKeysFromDisk(
         attestationCache: AttestationBundleCache,
         keyExpiryGracePeriod: TimeInterval
-    ) async -> [AttestedKey] {
+    ) async -> [InternalAttestedKey] {
         var keyIdToBundleMap: [Data: Data] = [:]
         let _ = await attestationCache.read().entries.map { entry in
             Self.logger.info("Got entry from cache. KeyId: \(entry.key.base64EncodedString(), privacy: .public)")
             keyIdToBundleMap[entry.key] = entry.value
         }
-        var attestedKeys: [AttestedKey] = []
+        var attestedKeys: [InternalAttestedKey] = []
         do {
             let keys = try Keychain.findKeys(for: Keychain.baseNodeKeyQuery, keychain: self.keychain)
             Self.logger.log("Found \(keys.count, privacy: .public) existing key(s)")
@@ -287,17 +344,26 @@ struct CloudAttestationProvider: AttestationProviderProtocol {
                                 try PrivateCloudCompute_ProxyNodeMetadata(unpackingAny: protoAppData.metadata)
                                     .proxiedRelease.map { $0.digest.hexString }
                             } else { [] }
+                            var appData: [String: Data] = [:]
+                            if !self.configuration.isProxy {
+                                let metadata = try AttestationAppData(unpackingAny: protoAppData.metadata)
+                                appData[ComputeNodeAppDataKeys.rackID] = metadata.rackID
+                                appData[ComputeNodeAppDataKeys.bootID] = metadata.bootID
+                                appData[ComputeNodeAppDataKeys.ensembleID] = metadata.ensembleID
+                            }
+
                             try attestedKeys.append(.init(
-                                key: .keychain(persistentKeyReference: secKey.persistentRef()),
+                                key: .sepKey(secKey: secKey),
                                 attestationBundle: cachedAttestationBundle,
-                                expiry: keyExpiry + keyExpiryGracePeriod,
                                 releaseDigest: Release(
                                     bundle: .init(data: cachedAttestationBundle),
                                     evaluateTrust: false
                                 )
                                 .sha256,
-                                availableOnNodeOnly: false,
-                                proxiedReleaseDigests: proxiedReleaseDigests
+                                proxiedReleaseDigests: proxiedReleaseDigests,
+                                expiry: keyExpiry + keyExpiryGracePeriod,
+                                appData: appData,
+                                availableOnNodeOnly: false
                             ))
                         } else {
                             Self.logger.log("Removing expired key from cache. keyID: \(keyID, privacy: .public)")
@@ -413,6 +479,8 @@ extension CloudAttestation.TransparencyLogError: CloudBoardLogging.ReportableErr
         case .unknown(error: let error): "unknown(\(String(reportable: error)))"
         case .clientError(error: let error): "clientError(\(String(reportable: error)))"
         case .expired: "expired"
+        case .pendingExpiration: "pendingExpiration"
+        case .requestLimitExceeded: "requestLimitExceeded"
         @unknown default: "unknown"
         }
         return "cloudAttestation.transparencyLog.\(errorType)"
@@ -537,6 +605,7 @@ extension CloudAttestation.SEPAttestationPolicy.Error: CloudBoardLogging.Reporta
         case .missingSigningKey: "missingSigningKey"
         case .untrusted: "untrusted"
         case .unknown(underlying: let underlyingError): "unknown(\(String(reportable: underlyingError)))"
+        case .invalidIdentity: "invalidIdentity"
         @unknown default: "SEPAttestationPolicy unknown error"
         }
         return "cloudAttestation.\(errorType)"

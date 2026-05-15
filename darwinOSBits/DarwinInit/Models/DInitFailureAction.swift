@@ -26,19 +26,6 @@ enum DInitFailureAction: String, CaseIterable {
 	case exit
 }
 
-extension DInitFailureAction {
-	func execute() throws {
-		switch self {
-			case .reboot:
-				try Computer.reboot()
-			case .shutdown:
-				try Computer.shutdown()
-			case .exit:
-				throw ExitCode.failure
-		}
-	}
-}
-
 extension DInitFailureAction: Decodable { }
 
 extension DInitFailureAction: Encodable { }

@@ -164,9 +164,26 @@ class ServerConnection {
 								"""
 							)
 
-							self.delegate.incomingMessage(node: decodedData.rank, message: decodedData.data)
 
-							self.sendAck(messageData: decodedData.data)
+							let responseData = self.delegate.incomingMessage(node: decodedData.rank, message: decodedData.data)
+
+                            
+							// Send response data if provided, otherwise send acknowledgment
+							if let responseData = responseData {
+                                logger.info(
+                                    """
+                                    ServerConnection.setupReceiveMessage on rank \(self.node, privacy: .public): sending response to rank \(decodedData.rank, privacy: .public) of size \(responseData.count)
+                                    """
+                                )
+                                self.sendResponse(data: responseData)
+							} else {
+								self.sendAck(messageData: decodedData.data)
+                                logger.info(
+                                    """
+                                    ServerConnection.setupReceiveMessage on rank \(self.node, privacy: .public): sending Ack to rank \(decodedData.rank, privacy: .public)
+                                    """
+                                )
+							}
 						} catch {
 							logger.info(
 								"""
@@ -195,13 +212,22 @@ class ServerConnection {
 				}
 		}
 	}
-
+    
 	func sendAck(messageData _: Data) {
 		let ackMessage: EnsembleControlMessage = .acknowledge
 		let msgData: Data
 		do {
 			msgData = try JSONEncoder().encode(ackMessage)
-			self.send(data: msgData)
+            self.connection.send(content: msgData, completion: .contentProcessed { error in
+                if let error {
+                    self.connectionDidFail(error: error)
+                    return
+                }
+                logger
+                    .info(
+                        "ServerConnection.sendAck on rank \(self.node, privacy: .public):  server connection \(self.id, privacy: .public) did send, data: \(msgData as NSData, privacy: .private)"
+                    )
+            })
 		} catch {
 			EnsemblerTLS.logger.error(
 				"""
@@ -213,15 +239,27 @@ class ServerConnection {
 		}
 	}
 
-	func send(data: Data) {
-		self.connection.send(content: data, completion: .contentProcessed { error in
+	func sendResponse(data: Data) {
+		// Send with proper length prefix framing to match client expectations
+		var lengthPrefix = UInt32(data.count).bigEndian
+		let lengthData = Data(bytes: &lengthPrefix, count: 4)
+
+		var messageData = Data()
+		messageData.append(lengthData)
+		messageData.append(data)
+		
+		logger.info(
+			"ServerConnection.sendResponse on rank \(self.node, privacy: .public): sending \(data.count) bytes with 4-byte length prefix (total: \(messageData.count) bytes)"
+		)
+		
+		self.connection.send(content: messageData, completion: .contentProcessed { error in
 			if let error {
 				self.connectionDidFail(error: error)
 				return
 			}
 			logger
 				.info(
-					"ServerConnection.send on rank \(self.node, privacy: .public):  server connection \(self.id, privacy: .public) did send, data: \(data as NSData, privacy: .public)"
+					"ServerConnection.sendResponse on rank \(self.node, privacy: .public):  server connection \(self.id, privacy: .public) did send, data: \(data as NSData, privacy: .private)"
 				)
 		})
 	}
@@ -287,6 +325,9 @@ public class Server {
 		// override default keepaliveidle seconds, so we can detect any network disruptions.
 		tcpOptions.keepaliveIdle = 2
 
+
+        //Dont wait to buffer, send message when ever it is available.
+        tcpOptions.noDelay = true
 		// create parameters with custom TLS and TCP options.
 		let parameters = NWParameters(tls: tlsOptions, tcp: tcpOptions)
 		parameters.allowLocalEndpointReuse = true

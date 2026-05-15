@@ -21,6 +21,7 @@
 
 import os.log
 import AppleKeyStore
+import AppleKeyStore.aks_attestation_verify
 
 /// Umbrella namespace for Secure Enclave Processor structures.
 extension SEP {
@@ -120,9 +121,6 @@ extension SEP {
                 guard kAKSReturnSuccess == aks_attest_context_get(context, aks_attest_param_pka_seal_data, &bufPtr, &len), bufPtr != nil else {
                     return nil
                 }
-                guard bufPtr != nil else {
-                    return nil
-                }
 
                 let payload = Data(bytes: bufPtr, count: len)
                 return SEP.SealData(for: self.identity, data: payload)
@@ -136,6 +134,21 @@ extension SEP {
 
             return self.withContext { context in
                 guard kAKSReturnSuccess == aks_attest_context_get(context, aks_attest_param_seal_data_a, &bufPtr, &len), bufPtr != nil else {
+                    return nil
+                }
+
+                let payload = Data(bytes: bufPtr, count: len)
+                return SEP.SealData(for: self.identity, data: payload)
+            }
+        }
+
+        /// The seal data for the given slot.
+        public var sealDataB: SealData? {
+            var bufPtr: UnsafePointer<UInt8>!
+            var len: Int = 0
+
+            return self.withContext { context in
+                guard kAKSReturnSuccess == aks_attest_context_get(context, aks_attest_param_seal_data_b, &bufPtr, &len), bufPtr != nil else {
                     return nil
                 }
 
@@ -284,6 +297,20 @@ extension SEP {
                 return nil
             }
         }
+
+        /// The os type of the attestation.
+        public var osType: OSType? {
+            var bufPtr: UnsafePointer<UInt8>!
+            var len: Int = 0
+
+            return self.withContext { context in
+                guard kAKSReturnSuccess == aks_attest_context_get(context, aks_attest_param_os_type, &bufPtr, &len), bufPtr != nil, len == 1 else {
+                    return nil
+                }
+
+                return OSType(type: aks_attest_os_type_t(bufPtr.pointee))
+            }
+        }
     }
 }
 
@@ -294,5 +321,39 @@ extension SEP.Attestation {
         case invalidField
         case invalidSelfKey
         case invalidSignature
+    }
+}
+
+extension SEP.Attestation {
+    public enum OSType {
+        case none
+        case iOS
+        case watchOS
+        case macOS
+        case bridgeOS
+        case tvOS
+        case visionOS
+        case rtKit
+
+        init(type: aks_attest_os_type_t) {
+            switch type {
+            case aks_attest_os_type_ios:
+                self = .iOS
+            case aks_attest_os_type_macos:
+                self = .macOS
+            case aks_attest_os_type_watchos:
+                self = .watchOS
+            case aks_attest_os_type_bridgeos:
+                self = .bridgeOS
+            case aks_attest_os_type_tvos:
+                self = .tvOS
+            case aks_attest_os_type_visionos:
+                self = .visionOS
+            case aks_attest_os_type_rtkit:
+                self = .rtKit
+            default:
+                self = .none
+            }
+        }
     }
 }

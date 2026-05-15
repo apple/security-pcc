@@ -29,7 +29,16 @@ import Security_Private.SecIdentityPriv
 private let logger = Logger(subsystem: kEnsemblerPrefix, category: "TLSChannelClient")
 
 public enum ClientError: Error {
-	case ClientError(mesage: String)
+	case ClientError(message: String)
+}
+
+extension ClientError: LocalizedError {
+	public var errorDescription: String? {
+		switch self {
+		case .ClientError(let message):
+			return message
+		}
+	}
 }
 
 // Leader and follower node can boot up at different time
@@ -63,7 +72,7 @@ public class Client {
 		self.host = NWEndpoint.Host(host)
 		self.port = NWEndpoint.Port(rawValue: port)!
 		self.tlsOptions = tlsOptions
-		self.state = .setup
+        self.state = .setup
 		self.target = node
 		self.delegate = delegate
 	}
@@ -98,6 +107,10 @@ public class Client {
 			self.delegate.onClientConnectionChange(node: self.target, state: self.state)
 			self.retryConnection()
 		default:
+            logger
+                .info(
+                    "client connection to rank:\(self.target, privacy: .public) hostname:\(self.host.debugDescription, privacy: .public):\(self.port.rawValue, privacy: .public), state: \(String(describing: self.state), privacy: .public)  "
+                )
 			break
 		}
 	}
@@ -234,7 +247,7 @@ public class Client {
 		guard self.waitForConnectionReady() else {
 			let error = ClientError
 				.ClientError(
-					mesage: "Cannot send data, since connection to \(self.target) is not in ready state."
+					message: "Cannot send data, since connection to \(self.target) is not in ready state."
 				)
 			self.delegate.sendCallback(node: self.target, message: controlData, error: error)
 			return
@@ -243,7 +256,7 @@ public class Client {
 		if attempts >= maxRetries {
 			logger.error("Client.attemptSend: Reached max retry \(maxRetries, privacy: .public) attempts")
 			let error = ClientError
-				.ClientError(mesage: "Attempted maximum \(maxRetries) attempts to send message and failed.")
+				.ClientError(message: "Attempted maximum \(maxRetries) attempts to send message and failed.")
 			self.delegate.sendCallback(node: self.target, message: controlData, error: error)
 			return
 		}
@@ -268,43 +281,25 @@ public class Client {
 
 				return
 			} else {
-				logger.info("Client.attemptSend: Message sent, waiting for acknowledgment")
-				self.connection?.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, error in
-					if let data, !data.isEmpty {
-						let response = String(data: data, encoding: .utf8) ?? "Invalid response"
-						logger.info("Client.attemptSend: Received message from server: \(response, privacy: .public)")
-
-						let controlMsg: EnsembleControlMessage
-						do {
-							controlMsg = try JSONDecoder().decode(EnsembleControlMessage.self, from: data)
-							switch controlMsg {
-							case .acknowledge:
-								logger.info("Client.attemptSend: Recieved acknowledge")
-								self.delegate.sendCallback(node: self.target, message: controlData, error: nil)
-								return
-							default:
-								logger.warning("Client.attemptSend: Got a different message other than acknowledge")
-							}
-						} catch {
-							logger.warning(
-								"Client.attemptSend Control message decoding failed: \(error, privacy: .public)"
+				logger.info("Client.attemptSend: Message sent, waiting for acknowledgment using framed receive")
+				self.receiveAcknowledgment { success in
+					if success {
+						logger.info("Client.attemptSend: Received acknowledge")
+						self.delegate.sendCallback(node: self.target, message: controlData, error: nil)
+						return
+					} else {
+						logger.warning("Client.attemptSend: Did not receive proper acknowledgment")
+						// Retry logic
+						logger.debug("Client.attemptSend Retrying: \(attempts + 1, privacy: .public)...")
+						let timeDelay: DispatchTimeInterval = .milliseconds(10)
+						EnsemblerTLS.fromBackendQ.asyncAfter(deadline: .now() + timeDelay) { [weak self] in
+							self?.attemptSend(
+								messageData: messageData,
+								controlData: controlData,
+								attempts: attempts + 1,
+								maxRetries: maxRetries
 							)
 						}
-					} else if let error {
-						logger.warning("Client.attemptSend: Error receiving acknowledgment: \(error, privacy: .public)")
-					}
-					// we need to retry in matter of milliseconds, because we are involved in
-					// hot path when TIE calls for distributing data key,
-					// so for any failure in sending message,we need to retry in milliseconds.
-					logger.debug("Client.attemptSend Retrying: \(attempts + 1, privacy: .public)...")
-					let timeDelay: DispatchTimeInterval = .milliseconds(10)
-					EnsemblerTLS.fromBackendQ.asyncAfter(deadline: .now() + timeDelay) { [weak self] in
-						self?.attemptSend(
-							messageData: messageData,
-							controlData: controlData,
-							attempts: attempts + 1,
-							maxRetries: maxRetries
-						)
 					}
 				}
 			}
@@ -333,6 +328,212 @@ public class Client {
 			logger.error("sendAndWaitForAck: error sending message \(error, privacy: .public)")
 		}
 	}
+}
+
+extension Client {
+    // send message and wait for response data from the server
+    func sendAndWaitForResponse(
+        appID: String,
+        data: Data,
+        currentNode: Int,
+        timeout: TimeInterval = 2.0,
+        completion: @escaping (Result<Data, Error>) -> Void
+    ) {
+        do {
+            
+            let messageID = UUID()
+            let msg = EnsembleControlMessage.dataMessage(appID: appID, data: data, requestID: messageID)
+            let msgData = try JSONEncoder().encode(msg)
+            let controlData = EnsembleControlData(rank: currentNode, data: msgData)
+            
+            let encoder = JSONEncoder()
+            let data = try encoder.encode(controlData)
+            var lengthPrefix = UInt32(data.count).bigEndian
+            let lengthData = Data(bytes: &lengthPrefix, count: 4)
+
+            var messageData = Data()
+            messageData.append(lengthData)
+            messageData.append(data)
+            
+            self.attemptSendForResponse(
+                messageData: messageData,
+                controlData: msgData,
+                rank: currentNode,
+                timeout: timeout,
+                completion: completion
+            )
+        } catch {
+            logger.error("sendAndWaitForResponse: error sending message \(error, privacy: .public)")
+            completion(.failure(error))
+        }
+    }
+
+    private func attemptSendForResponse(
+        messageData: Data,
+        controlData: Data,
+        rank:Int,
+        timeout: TimeInterval,
+        completion: @escaping (Result<Data, Error>) -> Void
+    ) {
+        logger.debug("Client.attemptSendForResponse: Sending message and waiting for response")
+
+        guard self.waitForConnectionReady() else {
+            let error = ClientError
+                .ClientError(
+                    message: "Cannot send data, since connection to \(self.target) is not in ready state."
+                )
+            completion(.failure(error))
+            return
+        }
+        
+        var didComplete = false
+        let lockQueue = DispatchQueue(label: "completion.lock.queue")
+        var timeoutItem: DispatchWorkItem!
+
+        func complete(_ result: Result<Data, Error>) {
+            lockQueue.sync {
+                guard !didComplete else { return }
+                
+                if let timeoutItem = timeoutItem, !timeoutItem.isCancelled {
+                    timeoutItem.cancel()
+                }
+                
+                didComplete = true
+                completion(result)
+            }
+        }
+        
+        // Set up timeout
+        timeoutItem = DispatchWorkItem {
+            logger.error("Client.attemptSendForResponse: Timeout waiting for response")
+            complete(.failure(ClientError.ClientError(message: "Timeout waiting for response, after waiting \(timeout) seconds")))
+        }
+        
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutItem)
+        
+        self.connection?.send(content: messageData, completion: .contentProcessed { error in
+            if let error {
+                logger.error("Client.attemptSendForResponse: error sending message: \(error, privacy: .public)")
+                complete(.failure(error))
+                return
+            }
+
+            logger.info("Client.attemptSendForResponse: Message sent, waiting for response using framed receive")
+            self.receiveFramedResponse { result in
+                complete(result)
+            }
+         })
+    }
+    
+    private func receiveFramedResponse(completion: @escaping (Result<Data, Error>) -> Void) {
+        // First, read the 4-byte length prefix
+        self.connection?.receive(minimumIncompleteLength: 4, maximumLength: 4) { lengthData, _, _, lengthError in
+            DispatchQueue.global(qos: .userInitiated).async {
+                
+                if let lengthError {
+                    logger.error("Client.receiveFramedResponse: Error receiving length prefix: \(lengthError, privacy: .public)")
+                    completion(.failure(lengthError))
+                    return
+                }
+                
+                guard let lengthData = lengthData, lengthData.count == 4 else {
+                    logger.error("Client.receiveFramedResponse: Invalid length prefix received")
+                    completion(.failure(ClientError.ClientError(message: "Invalid length prefix received")))
+                    return
+                }
+                
+                let messageLength = lengthData.withUnsafeBytes { $0.load(as: UInt32.self) }.bigEndian
+                
+                guard messageLength > 0 && messageLength <= 65536 else {
+                    logger.error("Client.receiveFramedResponse: Invalid message length: \(messageLength)")
+                    completion(.failure(ClientError.ClientError(message: "Invalid message length: \(messageLength)")))
+                    return
+                }
+                
+                logger.info("Client.receiveFramedResponse: Expecting message of length \(messageLength)")
+                
+                // Now read the actual message data
+                self.connection?.receive(minimumIncompleteLength: Int(messageLength), maximumLength: Int(messageLength)) { messageData, _, _, messageError in
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        
+                        if let messageError {
+                            logger.error("Client.receiveFramedResponse: Error receiving message data: \(messageError, privacy: .public)")
+                            completion(.failure(messageError))
+                            return
+                        }
+                        
+                        guard let messageData = messageData, messageData.count == Int(messageLength) else {
+                            logger.error("Client.receiveFramedResponse: Received incomplete message data")
+                            completion(.failure(ClientError.ClientError(message: "Received incomplete message data")))
+                            return
+                        }
+                        
+                        logger.info("Client.receiveFramedResponse: Received complete message of \(messageData.count) bytes, now decoding")
+                        
+                        // Now decode the actual control message (server sends raw EnsembleControlMessage)
+                        let controlMsg: EnsembleControlMessage
+                        do {
+                            controlMsg = try JSONDecoder().decode(EnsembleControlMessage.self, from: messageData)
+                            switch controlMsg {
+                            case .dataMessage(let appID, let data, let requestID):
+                                logger.info("Client.receiveFramedResponse: Received data response for appID \(appID), and requestID: \(requestID)")
+                                completion(.success(data))
+                                return
+                            case .acknowledge:
+                                logger.info("Client.receiveFramedResponse: Received acknowledge - no registered handler")
+                                completion(.failure(ClientError.ClientError(message: "Data was sent successfully, but there was no registered handler and hence no response from \(self.target)")))
+                            default:
+                                logger.warning("Client.receiveFramedResponse: Got a different message other than response or acknowledge")
+                                completion(.failure(ClientError.ClientError(message: "Got a different message other than response or acknowledge")))
+                            }
+                        } catch {
+                            logger.warning("Client.receiveFramedResponse: Control message decoding failed: \(error, privacy: .public)")
+                            completion(.failure(ClientError.ClientError(message: "Control message decoding failed: \(error)")))
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func receiveAcknowledgment(completion: @escaping (Bool) -> Void) {
+        logger.info("Client.receiveAcknowledgment: Expecting acknowledgment")
+        
+        // Now read the actual message data
+        self.connection?.receive(minimumIncompleteLength: 0, maximumLength: 4096) { messageData, _, _, messageError in
+            DispatchQueue.global(qos: .userInitiated).async {
+                
+                if let messageError {
+                    logger.error("Client.receiveAcknowledgment: Error receiving message data: \(messageError, privacy: .public)")
+                    completion(false)
+                    return
+                }
+                
+                guard let messageData = messageData else {
+                    logger.error("Client.receiveFramedResponse: Received incomplete message data")
+                    completion(false)
+                    return
+                }
+                
+                // Now decode the actual control message
+                do {
+                    let controlMsg = try JSONDecoder().decode(EnsembleControlMessage.self, from: messageData)
+                    switch controlMsg {
+                    case .acknowledge:
+                        logger.info("Client.receiveAcknowledgment: Received proper acknowledge")
+                        completion(true)
+                        return
+                    default:
+                        logger.warning("Client.receiveAcknowledgment: Got a different message other than acknowledge: \(controlMsg)")
+                        completion(false)
+                    }
+                } catch {
+                    logger.warning("Client.receiveAcknowledgment: Control message decoding failed: \(error, privacy: .public)")
+                    completion(false)
+                }
+            }
+        }
+    }
 }
 
 public func getClient(

@@ -12,13 +12,15 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
-
+import _NIOBase64
 import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardJobHelperAPI
 import CloudBoardLogging
+import CloudBoardMetrics
 import Foundation
 import InternalGRPC
+import InternalSwiftProtobuf
 import os
 import ServiceContextModule
 import Tracing
@@ -40,6 +42,10 @@ enum InvokeProxyDialBackError: Swift.Error, GRPCStatusTransformable {
     case receivedEOFBeforeID
     case receivedEOFMoreThanOnce
     case failedToDecodeAttestationKeyID
+    /// A negotiation to select a worker was missing information such that it would just fail later
+    case negotiationMissingInformation(missingFields: [String])
+    /// A message from ROPES was not one we support anymore
+    case unsupportedProtocol
 
     func makeGRPCStatus() -> InternalGRPC.GRPCStatus {
         switch self {
@@ -67,6 +73,12 @@ enum InvokeProxyDialBackError: Swift.Error, GRPCStatusTransformable {
                 code: .invalidArgument,
                 message: "Unable to base64-decode attestation key ID"
             )
+        case .negotiationMissingInformation(let missingFields): .init(
+                code: .invalidArgument,
+                message: "negotiate proposed ensembles is missing needed data: \(missingFields)"
+            )
+        case .unsupportedProtocol:
+            .init(code: .invalidArgument, message: "Unsupported protocol")
         }
     }
 }
@@ -85,7 +97,10 @@ extension CloudBoardProvider {
         try await tracer.withSpan("invokeProxyDialback", context: serviceContext) { span in
             let requestSummary = InvokeProxyDialBackRequestSummaryProvisioner(rpcID: span.context.rpcID)
             return try await self.metrics.withStatusMetrics(
-                total: Metrics.CloudBoardProvider.TrustedProxyRequestsCounter(action: .increment(by: 1)),
+                total: Metrics.CloudBoardProvider.TrustedProxyRequestsCounter(
+                    action: .increment(by: 1),
+                    cloudApp: self.cloudAppName
+                ),
                 error: Metrics.CloudBoardProvider.TrustedProxyRequestsErrorCounter.Factory()
             ) {
                 return try await self._invokeProxyDialBack(requestStream, responseStream, requestSummary)
@@ -98,34 +113,35 @@ extension CloudBoardProvider {
         _ responseStream: GRPCAsyncResponseStreamWriter<Com_Apple_Cloudboard_Api_V1_InvokeProxyDialBackResponse>,
         _ requestSummary: InvokeProxyDialBackRequestSummaryProvisioner
     ) async throws {
-        var serviceContext = ServiceContext.current ?? .topLevel
+        let serviceContext = OSAllocatedUnfairLock(initialState: ServiceContext.current ?? .topLevel)
         guard self.isProxy else {
             throw InvokeProxyDialBackError.notProxy
         }
         let (jobHelperResponseStream, jobHelperResponseContinuation) = AsyncStream<JobHelperInvokeProxyDialBackResponse>
             .makeStream()
-        var invokeProxyStateMachine = InvokeProxyDialBackStateMachine()
         do {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 // Incoming messages
                 group.addTask {
+                    var invokeProxyStateMachine = InvokeProxyDialBackStateMachine()
                     for try await request in requestStream {
                         switch request.type {
-                        case .taskID(let workerIDString):
+                        case .taskID:
                             // Deprecated in favor of .initiate message, we do not expect this message. Do nothing
                             ()
                         case .initiate(let initiate):
-                            if initiate.hasTraceContext {
-                                serviceContext.requestID = initiate.traceContext.traceID
-                                serviceContext.spanID = TraceContextCache.singletonCache.generateNewSpanID()
-                                serviceContext.parentSpanID = initiate.traceContext.spanID
-                                serviceContext.workerID = UUID(uuidString: initiate.taskID)
+                            if case .traceContextV1(let traceContext) = initiate.traceContextVersion {
+                                serviceContext.withLock {
+                                    $0.requestID = traceContext.traceID
+                                    $0.spanID = TraceContextCache.singletonCache.generateNewSpanID()
+                                    $0.parentSpanID = UInt64(traceContext.spanID, radix: 16)
+                                    $0.workerID = UUID(uuidString: initiate.taskID)
+                                }
                             }
+
                             await requestSummary.populate(
                                 workerID: initiate.taskID,
-                                requestTrackingID: serviceContext.requestID,
-                                spanID: serviceContext.spanID,
-                                parentSpanID: serviceContext.parentSpanID
+                                serviceContext: serviceContext.withLock { $0 }
                             )
 
                             guard let workerID = UUID(uuidString: initiate.taskID) else {
@@ -134,14 +150,11 @@ extension CloudBoardProvider {
 
                             CloudBoardProviderCheckpoint(
                                 logMetadata: CloudBoardDaemonLogMetadata(
-                                    rpcID: ServiceContext.current?.rpcID,
-                                    requestTrackingID: serviceContext.requestID,
-                                    workerID: workerID,
-                                    spanID: serviceContext.spanID
+                                    serviceContext: serviceContext.withLock { $0 }
                                 ),
                                 operationName: "invoke_proxy_dial_back_initiate_message_received",
                                 message: "Received InvokeProxyDialBack Initiate message"
-                            ).log(workerID: workerID, to: Self.logger, level: .default)
+                            ).log(workerID: workerID, to: Self.tracingLogger, level: .default)
 
                             guard let delegates = self.pccWorkerToInitiatorMapping.getInitiator(workerID: workerID)
                             else {
@@ -163,56 +176,33 @@ extension CloudBoardProvider {
 
                             CloudBoardProviderCheckpoint(
                                 logMetadata: CloudBoardDaemonLogMetadata(
-                                    rpcID: ServiceContext.current?.rpcID,
-                                    requestTrackingID: serviceContext.requestID,
-                                    workerID: workerID,
-                                    spanID: serviceContext.spanID
+                                    serviceContext: serviceContext.withLock { $0 }
                                 ),
                                 operationName: "invoke_proxy_dial_back_compute_to_proxy_message_received",
                                 message: "Received InvokeProxyDialBack ComputeToProxyMessage"
-                            ).log(workerID: workerID, to: Self.logger, level: .debug)
+                            ).log(workerID: workerID, to: Self.tracingLogger, level: .debug)
 
                             switch response.type {
+                            case .selectedEnsemble(let ensemble):
+                                try await self.workerSelected(
+                                    workerID: workerID,
+                                    jobHelper: jobHelper,
+                                    attestation: ensemble.attestation,
+                                    workload: ensemble.computeEnsembleWorkload,
+                                    serviceContext: serviceContext
+                                )
                             case .attestation(let attestation):
+                                // Older versions of ROPES using protocol which don't understand negotiate
+                                // nor informing the proxy the workload in effect on the compute node
+                                // Attempting to keep going could lead to complicated errors so we fail fast
                                 CloudBoardProviderCheckpoint(
                                     logMetadata: CloudBoardDaemonLogMetadata(
-                                        rpcID: ServiceContext.current?.rpcID,
-                                        requestTrackingID: serviceContext.requestID,
-                                        workerID: workerID,
-                                        spanID: serviceContext.parentSpanID
+                                        serviceContext: serviceContext.withLock { $0 }
                                     ),
-                                    operationName: "invoke_proxy_dial_back_attestation_for_worker_received",
-                                    message: "Received InvokeProxyDialBack attestation for worker"
-                                ).log(workerID: workerID, to: Self.logger, level: .default)
-
-                                guard let keyIDDecoded = try? attestation.nodeIdentifier.base64Decoded() else {
-                                    throw InvokeProxyDialBackError.failedToDecodeAttestationKeyID
-                                }
-                                let keyID = Data(keyIDDecoded)
-                                let rawAttestationBundle = attestation.attestationBundle
-                                try await jobHelper.invokeWorkloadRequest(.workerAttestation(
-                                    WorkerAttestationInfo(
-                                        workerID: workerID,
-                                        keyID: keyID,
-                                        attestationBundle: rawAttestationBundle,
-                                        bypassContextID: attestation.hasOhttpContext ? attestation.ohttpContext : nil,
-                                        spanID: serviceContext.parentSpanID
-                                    )
-                                ))
-
-                                if let (_, _, findWorkerDurationMeasurement) = self.pccWorkerToInitiatorMapping
-                                    .getInitiator(workerID: workerID) {
-                                    let findWorkerDuration = findWorkerDurationMeasurement.withLock { $0.duration }
-
-                                    self.metrics
-                                        .emit(
-                                            Metrics.CloudBoardProvider
-                                                .FindWorkerDuration(
-                                                    duration: findWorkerDuration
-                                                )
-                                        )
-                                }
-
+                                    operationName: "invoke_proxy_dial_back_old_protocol_attestation_received",
+                                    message: "Received Attestation instead of SelectedWorker ComputeToProxyMessage"
+                                ).log(workerID: workerID, to: Self.tracingLogger, level: .error)
+                                throw InvokeProxyDialBackError.unsupportedProtocol
                             case .responseChunk(let responseChunk):
                                 Self.logger
                                     .log(
@@ -225,7 +215,16 @@ extension CloudBoardProvider {
                                         isFinal: responseChunk.isFinal
                                     )
                                 )
-
+                            case .negotiatePick(let ensembles):
+                                // we do *not* block for the response, the job helper has all the needed
+                                // locking to ensure a clean state transition. It will either terminate
+                                // everything if this was illegal, or send the needed response later
+                                try await self.workerNegotiatePick(
+                                    workerID: workerID,
+                                    jobHelper: jobHelper,
+                                    serviceContext: serviceContext,
+                                    ensembles: ensembles
+                                )
                             case .none:
                                 Self.logger.error("Received invokeProxyDialBack.response of unknown type")
                             }
@@ -234,20 +233,18 @@ extension CloudBoardProvider {
 
                             CloudBoardProviderCheckpoint(
                                 logMetadata: CloudBoardDaemonLogMetadata(
-                                    rpcID: ServiceContext.current?.rpcID,
-                                    requestTrackingID: serviceContext.requestID,
-                                    workerID: workerID,
-                                    spanID: serviceContext.spanID
+                                    serviceContext: serviceContext.withLock { $0 }
                                 ),
                                 operationName: "invoke_proxy_dial_back_close_message_received",
                                 message: "Received InvokeProxyDialBack Close message"
-                            ).log(workerID: workerID, to: Self.logger, level: .default)
+                            ).log(workerID: workerID, to: Self.tracingLogger, level: .default)
 
                             let grpcStatusCode = Int(close.grpcStatus)
                             if grpcStatusCode != 0 {
                                 self.metrics.emit(
                                     Metrics.CloudBoardProvider.TrustedProxyRequestsCloseErrorCounter(
                                         action: .increment,
+                                        cloudApp: self.cloudAppName,
                                         grpcStatus: grpcStatusCode,
                                         ropesErrorCode: Int(close.ropesErrorCode)
                                     )
@@ -264,25 +261,19 @@ extension CloudBoardProvider {
                         case .none:
                             CloudBoardProviderCheckpoint(
                                 logMetadata: CloudBoardDaemonLogMetadata(
-                                    rpcID: ServiceContext.current?.rpcID,
-                                    requestTrackingID: serviceContext.requestID,
-                                    spanID: serviceContext.spanID
+                                    serviceContext: serviceContext.withLock { $0 }
                                 ),
                                 operationName: "invoke_proxy_dial_back_unknown_message_received",
                                 message: "Received InvokeProxyDialBack message of unknown type"
-                            ).log(to: Self.logger, level: .error)
+                            ).log(to: Self.tracingLogger, level: .error)
                         }
                     }
 
                     CloudBoardProviderCheckpoint(
-                        logMetadata: CloudBoardDaemonLogMetadata(
-                            rpcID: ServiceContext.current?.rpcID,
-                            requestTrackingID: serviceContext.requestID,
-                            spanID: serviceContext.spanID
-                        ),
+                        logMetadata: CloudBoardDaemonLogMetadata(serviceContext: serviceContext.withLock { $0 }),
                         operationName: "invoke_proxy_dial_back_request_finished",
                         message: "InvokeProxyDialBack request stream finished"
-                    ).log(to: Self.logger, level: .default)
+                    ).log(to: Self.tracingLogger, level: .default)
 
                     let (workerID, (jobHelperClient, _, _)) = try invokeProxyStateMachine.receivedEOF()
                     try await jobHelperClient.invokeWorkloadRequest(.workerResponseEOF(workerID))
@@ -292,19 +283,16 @@ extension CloudBoardProvider {
                 // Outgoing messages
                 group.addTask {
                     for try await response in jobHelperResponseStream {
-                        let workerID = serviceContext.workerID
+                        let workerID = serviceContext.withLock { $0.workerID }
                         switch response {
                         case .decryptionKey(let keyID, let encapsulatedKey):
                             CloudBoardProviderCheckpoint(
                                 logMetadata: CloudBoardDaemonLogMetadata(
-                                    rpcID: ServiceContext.current?.rpcID,
-                                    requestTrackingID: serviceContext.requestID,
-                                    workerID: workerID,
-                                    spanID: serviceContext.spanID
+                                    serviceContext: serviceContext.withLock { $0 }
                                 ),
                                 operationName: "sending_invoke_proxy_dial_back_decryption_key_message",
                                 message: "Sending InvokeProxyDialBack decryption key message"
-                            ).log(workerID: workerID, to: Self.logger, level: .default)
+                            ).log(workerID: workerID, to: Self.tracingLogger, level: .default)
 
                             try await responseStream.send(.with {
                                 $0.proxyToComputeMessage = .with {
@@ -322,22 +310,34 @@ extension CloudBoardProvider {
                                     .emit(
                                         Metrics.CloudBoardProvider
                                             .TrustedProxyParametersToFirstRewrapDurationHistogram(
+                                                cloudApp: self.cloudAppName,
                                                 duration: trustedProxyParametersToFirstRewrapDuration
                                             )
                                     )
                             }
+                        case .negotiatePickResponse(let selectableEnsembles):
+                            CloudBoardProviderCheckpoint(
+                                logMetadata: CloudBoardDaemonLogMetadata(
+                                    serviceContext: serviceContext.withLock { $0 }
+                                ),
+                                operationName: "sending_invoke_proxy_dial_back_negotiate_pick_response_message",
+                                message: "Sending InvokeProxyDialBack NegotiatePick response message"
+                            ).log(workerID: workerID, to: Self.tracingLogger, level: .default)
 
+                            try await responseStream.send(.with {
+                                $0.proxyToComputeMessage = .with {
+                                    $0.selectableEnsembles = .init(selectableEnsembles)
+                                }
+                            })
                         case .workerRequestMessage(let payload, let isFinal):
                             CloudBoardProviderCheckpoint(
                                 logMetadata: CloudBoardDaemonLogMetadata(
-                                    rpcID: ServiceContext.current?.rpcID,
-                                    requestTrackingID: serviceContext.requestID,
-                                    workerID: workerID,
-                                    spanID: serviceContext.parentSpanID
+                                    serviceContext: serviceContext.withLock { $0 },
+                                    spanID: serviceContext.withLock { $0.parentSpanID }
                                 ),
                                 operationName: "sending_invoke_proxy_dial_back_worker_request_message",
                                 message: "Sending InvokeProxyDialBack worker request message"
-                            ).log(workerID: workerID, to: Self.logger, level: .default)
+                            ).log(workerID: workerID, to: Self.tracingLogger, level: .default)
 
                             try await responseStream.send(.with {
                                 $0.proxyToComputeMessage = .with {
@@ -347,18 +347,14 @@ extension CloudBoardProvider {
                                     }
                                 }
                             })
-
                         case .workerRequestEOF:
                             CloudBoardProviderCheckpoint(
                                 logMetadata: CloudBoardDaemonLogMetadata(
-                                    rpcID: ServiceContext.current?.rpcID,
-                                    requestTrackingID: serviceContext.requestID,
-                                    workerID: workerID,
-                                    spanID: serviceContext.spanID
+                                    serviceContext: serviceContext.withLock { $0 }
                                 ),
                                 operationName: "sending_invoke_proxy_dial_back_close_message",
                                 message: "Sending InvokeProxyDialBack close message"
-                            ).log(workerID: workerID, to: Self.logger, level: .default)
+                            ).log(workerID: workerID, to: Self.tracingLogger, level: .default)
 
                             try await responseStream.send(.with { $0.close = .init() })
                         }
@@ -375,11 +371,92 @@ extension CloudBoardProvider {
                     }
                 }
             }
-            await requestSummary.log(to: Self.logger)
+            await requestSummary.log(to: Self.tracingLogger)
         } catch {
             await requestSummary.populate(error: error)
-            await requestSummary.log(to: Self.logger)
+            await requestSummary.log(to: Self.tracingLogger)
             throw error
+        }
+    }
+
+    private func workerNegotiatePick(
+        workerID: UUID,
+        jobHelper: any CloudBoardJobHelperInstanceProtocol,
+        serviceContext: OSAllocatedUnfairLock<ServiceContext>,
+        ensembles: Com_Apple_Cloudboard_Api_V1_EnsembleNegotiation
+    ) async throws {
+        let serviceContext = serviceContext.withLock { $0 }
+        let spanID = serviceContext.parentSpanID
+        CloudBoardProviderCheckpoint(
+            logMetadata: CloudBoardDaemonLogMetadata(
+                serviceContext: serviceContext,
+                spanID: spanID
+            ),
+            operationName: "invoke_proxy_dial_back_negotiate_pick_for_worker",
+            message: "Received InvokeProxyDialBack NegotiatePick for worker"
+        ).log(workerID: workerID, to: Self.tracingLogger, level: .default)
+        try await jobHelper.invokeWorkloadRequest(.workerNegotiatePick(
+            providedByRopes: WorkerNegotiatePickInfo(
+                workerID: workerID,
+                spanID: spanID,
+                proposed: EnsembleNegotiation(ensembles)
+            )
+        ))
+        self.metrics.emit(
+            Metrics.CloudBoardProvider.NegotiatePickCounter(
+                action: .increment,
+                cloudApp: self.cloudAppName
+            )
+        )
+    }
+
+    private func workerSelected(
+        workerID: UUID,
+        jobHelper: any CloudBoardJobHelperInstanceProtocol,
+        attestation: Proto_Ropes_Common_Attestation,
+        workload: Proto_Ropes_Common_Workload,
+        serviceContext: OSAllocatedUnfairLock<ServiceContext>
+    ) async throws {
+        let serviceContext = serviceContext.withLock { $0 }
+        let spanID = serviceContext.parentSpanID
+        CloudBoardProviderCheckpoint(
+            logMetadata: CloudBoardDaemonLogMetadata(
+                serviceContext: serviceContext,
+                spanID: spanID
+            ),
+            // we keep this name for consistency whether this came from just an attestation or a SelectedWorker
+            // The important thing is getting the attestation so down stream can validate that
+            operationName: "invoke_proxy_dial_back_attestation_for_worker_received",
+            message: "Received InvokeProxyDialBack attestation for worker"
+        ).log(workerID: workerID, to: Self.tracingLogger, level: .default)
+        guard let keyIDDecoded = try? attestation.nodeIdentifier._base64Decoded() else {
+            throw InvokeProxyDialBackError.failedToDecodeAttestationKeyID
+        }
+        let keyID = Data(keyIDDecoded)
+        let rawAttestationBundle = attestation.attestationBundle
+        try await jobHelper.invokeWorkloadRequest(.workerAttestation(
+            attestation: WorkerAttestationInfo(
+                workerID: workerID,
+                keyID: keyID,
+                attestationBundle: rawAttestationBundle,
+                bypassContextID: attestation.hasOhttpContext ? attestation.ohttpContext : nil,
+                spanID: spanID
+            ),
+            workloadParameters: Dictionary(parameters: workload.param)
+        ))
+
+        if let (_, _, findWorkerDurationMeasurement) = self.pccWorkerToInitiatorMapping
+            .getInitiator(workerID: workerID) {
+            let findWorkerDuration = findWorkerDurationMeasurement.withLock { $0.duration }
+
+            self.metrics
+                .emit(
+                    Metrics.CloudBoardProvider
+                        .FindWorkerDuration(
+                            cloudApp: self.cloudAppName,
+                            duration: findWorkerDuration
+                        )
+                )
         }
     }
 }
@@ -461,12 +538,12 @@ private actor InvokeProxyDialBackRequestSummaryProvisioner {
         self.requestSummary.startTimeNanos = RequestSummaryClock.now
     }
 
-    func populate(workerID: String, requestTrackingID: String?, spanID: String?, parentSpanID: String?) {
+    func populate(workerID: String, serviceContext: ServiceContext) {
         self.requestSummary.populate(
             workerID: workerID,
-            requestTrackingID: requestTrackingID,
-            spanID: spanID,
-            parentSpanID: parentSpanID
+            requestTrackingID: serviceContext.requestID,
+            spanID: serviceContext.spanID,
+            parentSpanID: serviceContext.parentSpanID
         )
     }
 
@@ -486,8 +563,8 @@ private actor InvokeProxyDialBackRequestSummaryProvisioner {
 
 private struct InvokeProxyDialBackRequestSummary: RequestSummary {
     var requestID: String?
-    var spanID: String?
-    var parentSpanID: String?
+    var spanID: UInt64?
+    var parentSpanID: UInt64?
     let automatedDeviceGroup: String? = nil // No automated device group for InvokeProxyDialBack calls
 
     var workerID: String?
@@ -507,7 +584,7 @@ private struct InvokeProxyDialBackRequestSummary: RequestSummary {
         self.rpcID = rpcID
     }
 
-    mutating func populate(workerID: String, requestTrackingID: String?, spanID: String?, parentSpanID: String?) {
+    mutating func populate(workerID: String, requestTrackingID: String?, spanID: UInt64?, parentSpanID: UInt64?) {
         self.workerID = workerID
         self.requestID = requestTrackingID
         self.spanID = spanID
@@ -523,8 +600,8 @@ private struct InvokeProxyDialBackRequestSummary: RequestSummary {
         ttl=RequestSummary
         request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.spanID ?? "", privacy: .public)
-        tracing.parent_span_id=\(self.parentSpanID ?? "", privacy: .public)
+        tracing.span_id=\(self.spanID?.hexEncoded ?? "", privacy: .public)
+        tracing.parent_span_id=\(self.parentSpanID?.hexEncoded ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.start_time_unix_nano=\(self.startTimeNanos ?? 0, privacy: .public)
@@ -539,5 +616,25 @@ private struct InvokeProxyDialBackRequestSummary: RequestSummary {
         error.detailed=\(self.error.map { String(describing: $0) } ?? "", privacy: .private)
         worker.uuid=\(self.workerID.map { "\($0)" } ?? "")
         """)
+    }
+}
+
+extension CloudBoardDaemonLogMetadata {
+    init(serviceContext: ServiceContext) {
+        self.init(
+            rpcID: ServiceContext.current?.rpcID,
+            requestTrackingID: serviceContext.requestID,
+            workerID: serviceContext.workerID,
+            spanID: serviceContext.spanID
+        )
+    }
+
+    init(serviceContext: ServiceContext, spanID: UInt64?) {
+        self.init(
+            rpcID: ServiceContext.current?.rpcID,
+            requestTrackingID: serviceContext.requestID,
+            workerID: serviceContext.workerID,
+            spanID: spanID
+        )
     }
 }

@@ -87,6 +87,7 @@ class BaseStateMachine {
 			.initializingDarwinInitCheckInProgress: [.initializing],
 			.initializingActivationChecksOK: [.initializingDarwinInitCheckInProgress],
 			.coordinating: [.initializing, .initializingActivationChecksOK],
+            .initializing: [.uninitialized, .ready],
 		]
 		if let statesAllowed = allowedTransitions[targetState] {
 			return statesAllowed.contains(self.state)

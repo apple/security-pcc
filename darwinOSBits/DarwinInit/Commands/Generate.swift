@@ -17,6 +17,7 @@
 //  darwin-init
 //
 
+import Foundation
 import ArgumentParserInternal
 import System
 import libnarrativecert
@@ -192,7 +193,10 @@ be passed to the darwinOS through boot-args. This allows the command \
 
 extension Generate {
     struct CryptexOptions: ParsableArguments {
-        @Option(name: [.customShort("c"), .customLong("cryptex")], help: "URL of the cryptexes to install")
+        @Option(
+            name: [.customShort("c"), .customLong("cryptex")],
+            help: "URL of the cryptexes to install",
+            transform: { try URL($0, strategy: .url) })
         var cryptexUrl: [URL] = []
 
         @Option(name: [.customShort("V"), .customLong("cryptex-variant")], help: "Variant names for the cryptexes")
@@ -302,7 +306,11 @@ extension Generate {
     }
 
     struct PackageOptions: ParsableArguments {
-        @Option(name: [.customShort("p"), .customLong("package")], help: "URL of the packages to install")
+        @Option(
+            name: [.customShort("p"), .customLong("package")],
+            help: "URL of the packages to install",
+            transform: { try URL($0, strategy: .url) }
+        )
         var packageUrl: [URL] = []
 
         var config: [DInitPackageConfig]? {
@@ -392,7 +400,7 @@ specified it defaults to /bin/bash. All postflights run under a shell.
         var reboot: Bool?
 
         @Option(name: [.customShort("U"), .long], help: "Reboot userspace after preflight, root install, and postflight. Use \"rem\" for Restricted Execution Mode. Use \"rem-dev\" for Restricted Execution Mode without blowing the fuse that enforces trust cache REM policy. This fuse state is attested to, so \"rem-dev\" is not useful in production deployments. Use an empty string (\"\") to disable userspace reboots on systems where it is the default.")
-        var userspaceReboot: DInitUSRPurpose?
+        var userspaceReboot: DInitUSR?
 
         var config: DInitInstallConfig? {
             guard wait != nil || preflight != nil || root != nil || postflight != nil else {
@@ -539,7 +547,11 @@ specified it defaults to /bin/bash. All postflights run under a shell.
         @Flag(name: .shortAndLong, inversion: .prefixedNo, help: "Enable users of the admin group to be perform sudo operations without prompting for a password")
         var passwordlessSudo: Bool?
 
-        @Option(name: .shortAndLong, help: "A file pointer to the ssh authorized_keys file containing at least one public key")
+        @Option(
+            name: .shortAndLong,
+            help: "A file pointer to the ssh authorized_keys file containing at least one public key",
+            transform: FilePath.init(_:)
+        )
         var key: FilePath?
 
         @Option(name: .customLong("apple-connect-principal"), help: "AppleConnect principal that can be used to log into the account using SSH")

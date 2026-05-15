@@ -22,6 +22,7 @@ import KnoxClientPublic
 import System
 import CryptoKit
 import libnarrativecert
+import os
 
 enum KnoxClientWrapper {
     static let logger = Logger.knoxClient
@@ -38,31 +39,46 @@ enum KnoxClientWrapper {
         return nil
     }
     
-    private static func getKnoxServiceClient(dawToken: String?, wgUsername: String?, wgToken: String?, knoxServerURL: URL, altCDN: String?, retries: UInt?) -> KnoxServiceClient? {
-        let knoxClient:KnoxServiceClient
-        if let dawToken = dawToken {
-            logger.log("DAW token present, using daw token to authenticate to with Knox.")
-            // Initialize KnoxServiceClient using DAW token and server url
-            knoxClient = KnoxServiceClient(dawToken: dawToken, delegate: KnoxClientDelegate(), knoxHostURL: knoxServerURL)
-        }
-        else if let wgToken = wgToken, let wgUsername = wgUsername {
-            logger.log("Westgate token and username present, using Westgate token to authenticate with Knox.")
-            guard let westgateToken = getWestgateToken(wgUsername: wgUsername, wgToken: wgToken) else {
+    static func getKnoxServiceClient(authentication: DownloadAuthentication, knoxServerURL: URL, altCDN: String?, retries: UInt?) -> KnoxServiceClient? {
+        let knoxClient: KnoxServiceClient
+        switch authentication {
+            case .oidc(let token):
+                let oidc_token = OIDCToken(token: token)
+                logger.log("OIDC token present, using OIDC to authenticate with Knox.")
+                knoxClient = KnoxServiceClient(authToken: oidc_token, delegate: KnoxClientDelegate(), knoxHostURL: knoxServerURL)
+            case .daw(_):
+                logger.log("DAW tokens are deprecated. Cannot initialize KnoxServiceClient. Please use mTLS, Westgate, or OIDC.")
                 return nil
-            }
-            knoxClient = KnoxServiceClient(westgateToken: westgateToken, delegate: KnoxClientDelegate(), knoxHostURL: knoxServerURL)
-            
-        }
-        else {
-            logger.log("DAW token not present, using acdc actor cert to authenticate to knox.")
-            let cert = NarrativeCert(domain: .acdc, identityType: .actor)
-            guard let credential = cert.getCredential() else {
-                logger.error("Error getting URLCredentials from acdc actor cert.")
-                return nil
-            }
-            
-            let mtlsAuth = mTLSAuth(urlCredential: credential)
-            knoxClient = KnoxServiceClient(knoxMtlsAuth: mtlsAuth, SAKSmTLSAuth: mtlsAuth, delegate: KnoxClientDelegate() , knoxHostURL: knoxServerURL)
+                
+            case .westgate(let username, let token):
+                logger.log("Westgate token and username present, using Westgate token to authenticate with Knox.")
+                guard let westgateToken = getWestgateToken(wgUsername: username, wgToken: token) else {
+                    return nil
+                }
+                knoxClient = KnoxServiceClient(westgateToken: westgateToken, delegate: KnoxClientDelegate(), knoxHostURL: knoxServerURL)
+                
+            case .none:
+                logger.log("DAW token not present, using narrative cert to authenticate to knox.")
+                // First we check for an aquaria-host cert, then fall back to acdc-actor
+                var cert = NarrativeCert(domain: .aquaria, identityType: .host)
+                var credential = cert.getCredential()
+                if credential != nil {
+                    logger.log("Successfully created aquaria-host url credential for knox auth.")
+                } else {
+                    cert = NarrativeCert(domain: .acdc, identityType: .actor)
+                    credential = cert.getCredential()
+                    if credential != nil {
+                        logger.log("Successfully created acdc-actor url credential for knox auth.")
+                    }
+                }
+
+                guard let credential else {
+                    logger.error("Error getting URLCredential for narrative certificate.")
+                    return nil
+                }
+
+                let mtlsAuth = mTLSAuth(urlCredential: credential)
+                knoxClient = KnoxServiceClient(knoxMtlsAuth: mtlsAuth, SAKSmTLSAuth: mtlsAuth, delegate: KnoxClientDelegate() , knoxHostURL: knoxServerURL)
         }
         // Override CDN host url to specified alternative instead of knox.cdn-apple.com
         if let altCDN {
@@ -77,7 +93,11 @@ enum KnoxClientWrapper {
     }
     
     // Download a raw, encrypted asset from Knox to a specified directory path
-	static func downloadRaw(at url: URL, to destinationDirectory: FilePath? = nil, dawToken: String?, wgUsername: String?, wgToken: String?, altCDN: String?, background: Bool?, retries: UInt?) async -> FilePath? {
+    static func downloadRaw(from url: URL,
+                            to destinationDirectory: FilePath? = nil,
+                            configuration: DownloadConfiguration = DownloadConfiguration(),
+                            authentication: DownloadAuthentication,
+                            alternateCDNHost: String? = nil) async -> FilePath? {
 		guard let destinationDirectory = destinationDirectory ?? FilePath.createTemporaryDirectory() else {
 			return nil
 		}
@@ -92,7 +112,7 @@ enum KnoxClientWrapper {
             return nil
         }
         
-        guard let knoxClient = getKnoxServiceClient(dawToken: dawToken, wgUsername: wgUsername, wgToken: wgToken, knoxServerURL: knoxServerURL, altCDN: altCDN, retries: retries) else {
+        guard let knoxClient = getKnoxServiceClient(authentication: authentication, knoxServerURL: knoxServerURL, altCDN: alternateCDNHost, retries: configuration.downloadRetries) else {
             logger.error("Failed to initialize KnoxServiceClient to download \(url.absoluteString)")
             return nil
         }
@@ -122,7 +142,7 @@ enum KnoxClientWrapper {
         // Download the raw, encrypted knox asset
         logger.info("Downloading encrypted cryptex from \(url.absoluteString) to \(knoxDestinationPath.description)")
         
-        let enableBackground = background ?? false
+        let enableBackground = configuration.networkServiceType == .background
         logger.info("Using \(enableBackground ? "background" : "default") traffic class.")
         
         do {
@@ -151,7 +171,10 @@ enum KnoxClientWrapper {
     }
     
     // Fetch the decryption key for Knox asset
-    static func getDecryptionComponents(for url: URL, dawToken: String?, wgUsername: String?, wgToken: String?, altCDN: String?, retries: UInt?) async -> ImageDecryptionComponents? {
+    static func getDecryptionComponents(for url: URL,
+                                        configuration: DownloadConfiguration = DownloadConfiguration(),
+                                        authentication: DownloadAuthentication,
+                                        alternateCDNHost: String? = nil) async -> ImageDecryptionComponents? {
         // Parse Knox URL of the form: knox://$HOST/download/$SPACE/$DIGEST#name=$FILENAME
         let (gotURL, gotSpace, gotDigest, _) = parseDownloadURL(url.absoluteString, outputFile: nil) ?? (nil, nil, nil, nil)
         guard let digest = gotDigest,
@@ -161,7 +184,7 @@ enum KnoxClientWrapper {
             return nil
         }
         
-        guard let knoxClient = getKnoxServiceClient(dawToken: dawToken, wgUsername: wgUsername, wgToken: wgToken, knoxServerURL: knoxServerURL, altCDN: altCDN, retries: retries) else {
+        guard let knoxClient = getKnoxServiceClient(authentication: authentication, knoxServerURL: knoxServerURL, altCDN: alternateCDNHost, retries: configuration.downloadRetries) else {
             logger.error("Failed to initialize KnoxServiceClient to fetch decryption key for \(url.absoluteString)")
             return nil
         }
@@ -211,6 +234,35 @@ enum KnoxClientWrapper {
 		// convert array of bytes to SymmetricKey for use in a decryption context
 		return SymmetricKey(data: hexDecoded)
 	}
+    
+    
+    static func downloadAEADecryptionParameters(for url: URL,
+                                                configuration downloadConfiguration: DownloadConfiguration = DownloadConfiguration(),
+                                                authentication downloadAuthentication: DownloadAuthentication,
+                                                alternateCDNHost: String? = nil) async -> AEADecryptionParameters? {
+        guard let decryptionComponents = await KnoxClientWrapper.getDecryptionComponents(for: url,
+                                                                                         configuration: downloadConfiguration,
+                                                                                         authentication: downloadAuthentication,
+                                                                                         alternateCDNHost: alternateCDNHost),
+              let key = KnoxClientWrapper.getDecryptionKey(from: decryptionComponents) else {
+            return nil
+        }
+        
+        logger.debug("decryption-components.digest-algorithm: \(decryptionComponents.digestAlgorithm)")
+        
+        if !decryptionComponents.digestAlgorithm.starts(with: "APPLE-ARCHIVE-IDENTIFIER") {
+            logger.warning("Decryption components digest doesn't appear to be an Apple Archive identifier!")
+        }
+        
+        guard let archiveIdentifierBytes = decryptionComponents.digest.hexadecimalASCIIBytes, !archiveIdentifierBytes.isEmpty else {
+            logger.error("Failed to convert archive identifier from String to Data")
+            return nil
+        }
+        
+        return AEADecryptionParameters(
+            archiveID: Data(archiveIdentifierBytes),
+            decryptionKey: key)
+    }
     
     // put actual decryption code in FilePath+AppleArchive?
     

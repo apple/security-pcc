@@ -13,7 +13,7 @@
 // 10/02/2024
 
 //
-//  OTLPGRPCCLient.swift
+//  OTLPGRPCClient.swift
 //  CloudMetrics
 //
 //  Created by Oliver Chick (ORAC) on 23/12/2024.
@@ -40,7 +40,6 @@ private import os
 /// This client receives a stream of metric data for different destinations.
 /// Each time that stream is written to, this client will then send the data to an OTLP backend.
 package final class OTLPGRPCClient: Sendable {
-
     private typealias UnderlyingClient = Opentelemetry_Proto_Collector_Metrics_V1_MetricsServiceAsyncClient
     private typealias Response = Opentelemetry_Proto_Collector_Metrics_V1_ExportMetricsServiceResponse
 
@@ -50,7 +49,7 @@ package final class OTLPGRPCClient: Sendable {
     }
 
     /// Stream that we receive metric data on, that we will then send over gRPC to a collector
-    private let metricDataStream: AsyncStream<(Configuration.Destination, [OpenTelemetrySdk.StableMetricData])>
+    private let metricDataStream: AsyncStream<CollectedMetricsData>
     /// Provides us with updates when we need to reload certs
     private let tlsConfigStream: NICCertExpiryHandler
     private let configuration: Configuration
@@ -69,7 +68,7 @@ package final class OTLPGRPCClient: Sendable {
     /// How many sets of metric data we've tried to publish.
     ///
     /// - Note: This is not incremented on retries.
-    private let publishCount: OSAllocatedUnfairLock<Int> = .init(initialState: 0)
+    private let publishCount: OSAllocatedUnfairLock<[String: Int]> = .init(initialState: [:])
 
     /// Number of times we've failed to publish, even after retries.
     private let metricsPublishFailure: OSAllocatedUnfairLock<Int> = .init(initialState: 0)
@@ -82,16 +81,23 @@ package final class OTLPGRPCClient: Sendable {
 
     /// SPM-style logger, just for passing to grpc-swift.
     private let requestLogger = Logging.Logger(label: "OLTPGRPC")
+    
+    /// SPM-style logger, for passing to ClientConnection.
+    private let clientConnectionLogger = Logging.Logger(label: "ClientConnection")
 
     /// Number of times that we've rolled over our certs.
     package var numberCertRollovers: Int { self.certRolloverCount.withLock { $0 } }
+    
+    /// updates to process
+    private let updatesToProcess: OSAllocatedUnfairLock<[String: CollectedMetricsData]> = .init(initialState: [:])
 
-    package init(metricDataStream: AsyncStream<(Configuration.Destination, [OpenTelemetrySdk.StableMetricData])>,
-                 tlsConfigStream: NICCertExpiryHandler,
-                 configuration: Configuration,
-                 healthContinuation: AsyncStream<CloudMetricsHealthState>.Continuation,
-                 metricsFilter: MetricsFilter) {
-
+    package init(
+        metricDataStream: AsyncStream<CollectedMetricsData>,
+        tlsConfigStream: NICCertExpiryHandler,
+        configuration: Configuration,
+        healthContinuation: AsyncStream<CloudMetricsHealthState>.Continuation,
+        metricsFilter: MetricsFilter
+    ) {
         self.metricDataStream = metricDataStream
         self.tlsConfigStream = tlsConfigStream
         self.configuration = configuration
@@ -99,36 +105,52 @@ package final class OTLPGRPCClient: Sendable {
         self.metricsFilter = metricsFilter
 
         let tlsConfig: GRPCTLSConfiguration?
-        switch configuration.keySource {
-        case .keychain:
-            tlsConfig = try? .loadTLSCerts()
-        case .localCerts(let certs):
-            tlsConfig = .makeClientConfigurationBackedByNIOSSL(
-                certificateChain: certs.mtlsCertificateChain.map { .certificate($0) },
-                privateKey: .privateKey(certs.mtlsPrivateKey),
-                trustRoots: certs.mtlsTrustRoots
-            )
-        case .none:
+        if configuration.openTelemetryEndpoint.mtls {
+            switch configuration.keySource {
+            case .keychain:
+                tlsConfig = try? .loadTLSCerts()
+            case .localCerts(let certs):
+                tlsConfig = .makeClientConfigurationBackedByNIOSSL(
+                    certificateChain: certs.mtlsCertificateChain.map { .certificate($0) },
+                    privateKey: .privateKey(certs.mtlsPrivateKey),
+                    trustRoots: certs.mtlsTrustRoots
+                )
+            case .none:
+                tlsConfig = nil
+            }
+        } else {
+            self.logger.log("mtls disabled, not loading certificates.")
             tlsConfig = nil
         }
-        let client = Self.makeUnderlyingGRPCClient(configuration: configuration, tlsConfig: tlsConfig)
+
+        let client = Self.makeUnderlyingGRPCClient(
+            configuration: configuration,
+            tlsConfig: tlsConfig,
+            logger: self.clientConnectionLogger
+        )
+
         self.underlyingGRPCClient = .init(initialState: client)
     }
 
     private static func makeUnderlyingGRPCClient(
         configuration: Configuration,
-        tlsConfig: GRPCTLSConfiguration?) -> UnderlyingClient {
+        tlsConfig: GRPCTLSConfiguration?,
+        logger: Logging.Logger
+    ) -> UnderlyingClient {
         var clientConfiguration = ClientConnection.Configuration.default(
-            target: .hostAndPort(configuration.openTelemetryEndpoint.hostname,
-                                 configuration.openTelemetryEndpoint.port),
-            eventLoopGroup: .singletonNIOTSEventLoopGroup
+            target: .hostAndPort(
+                configuration.openTelemetryEndpoint.hostname,
+                configuration.openTelemetryEndpoint.port
+            ),
+            eventLoopGroup: .singletonNIOTSEventLoopGroup,
         )
         clientConfiguration.tlsConfiguration = tlsConfig
+        clientConfiguration.backgroundActivityLogger = logger
+        clientConfiguration.connectivityStateDelegate = GRPCConnectionMonitor()
 
         let channel = ClientConnection(configuration: clientConfiguration)
         return .init(channel: channel)
     }
-
 
     /// - Parameter testCertRollover: when true the client will reload certificates when narrative certs rollover
     /// even when not configured to source keys from the keychain.
@@ -136,7 +158,7 @@ package final class OTLPGRPCClient: Sendable {
         let promise = try self.state.withLock { state in
             switch state {
             case .running:
-                logger.error("OTLPGRPCClient already running")
+                self.logger.error("OTLPGRPCClient already running")
                 throw CloudMetricsInternalError.invalidStateTransition
             case .shutdown:
                 let promise: CloudMetricsUtils.Promise<Void, Error> = .init()
@@ -148,17 +170,22 @@ package final class OTLPGRPCClient: Sendable {
             self.state.withLock { $0 = .shutdown }
             logger.log("OTLPGRPCClient shutdown")
         }
-        logger.log("OTLPGRPCClient starting")
+        self.logger.log("OTLPGRPCClient starting")
         try await withThrowingTaskGroup(of: Void.self) { group in
-            if testCertRollover || (configuration.keySource == .keychain &&
-                                    configuration.openTelemetryEndpoint.mtls) {
+            if testCertRollover || (
+                self.configuration.keySource == .keychain &&
+                    self.configuration.openTelemetryEndpoint.mtls
+            ) {
                 // Cert rollover Task
                 group.addTask {
                     for await newTLSConfig in self.tlsConfigStream {
                         self.logger.log("RenewCertificate called")
 
-                        let newClient = Self.makeUnderlyingGRPCClient(configuration: self.configuration,
-                                                        tlsConfig: newTLSConfig)
+                        let newClient = Self.makeUnderlyingGRPCClient(
+                            configuration: self.configuration,
+                            tlsConfig: newTLSConfig,
+                            logger: self.clientConnectionLogger
+                        )
                         self.underlyingGRPCClient.withLock { oldClient in
                             let promise = NIOTSEventLoopGroup.singleton.next().makePromise(of: Void.self)
                             promise.futureResult.whenSuccess {
@@ -174,16 +201,19 @@ package final class OTLPGRPCClient: Sendable {
                             $0 += 1
                             return $0
                         }
-                        self.logger.log("Successfully renewed the certificate. certificate_number=\(newCount, privacy: .public)")
+                        self.logger
+                            .log(
+                                "Successfully renewed the certificate. certificate_number=\(newCount, privacy: .public)"
+                            )
                     }
                 }
             }
             // Task to listen to the stream of incoming metric data and then
             // create a gRPC request for each.
             group.addTask {
-                for try await (destination, metrics) in self.metricDataStream {
+                for try await update in self.metricDataStream {
                     do {
-                        try await self.export(destination: destination, metrics: metrics)
+                        try await self.export(metricStreamUpdate: update)
                         self.metricsPublishFailure.withLock { $0 = 0 }
                         self.healthContinuation.yield(.healthy)
                     } catch {
@@ -212,9 +242,9 @@ package final class OTLPGRPCClient: Sendable {
                         self.logger.log("gRPC channel shutdown")
                     } catch {
                         self.logger.log("""
-                            Error shutting down gRPC client. \
-                            error=\(String(reportable: error), privacy: .public)
-                            """)
+                        Error shutting down gRPC client. \
+                        error=\(String(reportable: error), privacy: .public)
+                        """)
                     }
                 } catch {
                     promise.fail(with: error)
@@ -232,18 +262,26 @@ package final class OTLPGRPCClient: Sendable {
     }
 
     /// Sends the metric data for a destination to an OTLP collector.
-    package func export(destination: Configuration.Destination,
-                        metrics: [OpenTelemetrySdk.StableMetricData]) async throws {
-        let publishCount = self.publishCount.withLock { count in
-            count += 1
-            return count
+    package func export(metricStreamUpdate: CollectedMetricsData) async throws {
+        let metrics = metricStreamUpdate.metrics
+        let destination = metricStreamUpdate.destination
+        let clientName = metricStreamUpdate.client
+
+        let publishCount = self.publishCount.withLock { counts in
+            var updatedCount = 1
+            if let count = counts[clientName] {
+                updatedCount = count + 1
+            }
+            counts[clientName] = updatedCount
+            return updatedCount
         }
+
         let metricsToPublish = metrics.filter { metric in
-            metricsFilter.shouldPublish(metricName: metric.name, destination: destination)
+            self.metricsFilter.shouldPublish(metricName: metric.name, destination: destination)
         }
         let filteredOutCount = metrics.count - metricsToPublish.count
         let exportRequest = Opentelemetry_Proto_Collector_Metrics_V1_ExportMetricsServiceRequest.with {
-            $0.resourceMetrics = MetricsAdapter.toProtoResourceMetrics(stableMetricData: metricsToPublish)
+            $0.resourceMetrics = MetricsAdapter.toProtoResourceMetrics(metricData: metricsToPublish)
         }
 
         let headers = HPACKHeaders([
@@ -265,19 +303,23 @@ package final class OTLPGRPCClient: Sendable {
         repeat {
             attemptCount += 1
             let requestID = UUID()
-            logger.log("""
-                Publish started. \
-                publish_count=\(publishCount, privacy: .public) \
-                attempt=\(attemptCount, privacy: .public) \
-                request_id=\(requestID, privacy: .public) \
-                num_metrics_to_publish=\(metricsToPublish.count) \
-                num_metrics_filtered_out=\(filteredOutCount, privacy: .public)
-                """)
+            let size = exportRequest.textFormatString().data(using: .utf8)?.count
+            self.logger.log("""
+            Publish started. \
+            client=\(clientName, privacy: .public) \
+            publish_count=\(publishCount, privacy: .public) \
+            attempt=\(attemptCount, privacy: .public) \
+            request_id=\(requestID, privacy: .public) \
+            num_metrics_to_publish=\(metricsToPublish.count) \
+            num_metrics_filtered_out=\(filteredOutCount, privacy: .public),
+            size_bytes=\(size.map({String(describing: $0)}) ?? "<unknown>", privacy: .public))
+            """)
             let callOptions = CallOptions(
                 customMetadata: headers,
                 timeLimit: .deadline(deadline),
                 requestIDHeader: requestID.uuidString,
-                logger: self.requestLogger)
+                logger: self.requestLogger
+            )
 
             let client = self.underlyingGRPCClient.withLock { $0 }
             let response: Response
@@ -286,13 +328,13 @@ package final class OTLPGRPCClient: Sendable {
             } catch let status as GRPCStatus {
                 let retryable = status.code.isOTLPRetryable
                 logger.error("""
-                    gRPC error. \
-                    grpc_error_code=\(status.code, privacy: .public) \
-                    grpc_status_message=\(status.message ?? "<none>") \
-                    error_retryable=\(retryable, privacy: .public) \
-                    publish_count=\(publishCount, privacy: .public) \
-                    required_id=\(requestID, privacy: .public)
-                    """)
+                gRPC error. \
+                grpc_error_code=\(status.code, privacy: .public) \
+                grpc_status_message=\(status.message ?? "<none>", privacy: .private) \
+                error_retryable=\(retryable, privacy: .public) \
+                publish_count=\(publishCount, privacy: .public) \
+                request_id=\(requestID, privacy: .public)
+                """)
                 guard retryable else {
                     throw status
                 }
@@ -300,8 +342,10 @@ package final class OTLPGRPCClient: Sendable {
                 // When retrying, the client SHOULD implement
                 // an exponential backoff strategy.
                 // """
-                let backoff = min(configuration.openTelemetry.maxBackoff,
-                                  configuration.openTelemetry.defaultBackoff * (2^attemptCount))
+                let backoff = min(
+                    configuration.openTelemetry.maxBackoff,
+                    configuration.openTelemetry.defaultBackoff * (2 ^ attemptCount)
+                )
                 guard deadline > .now() + .init(backoff) else {
                     logger.log("""
                     Request timed out. \
@@ -310,39 +354,39 @@ package final class OTLPGRPCClient: Sendable {
                     throw status
                 }
                 logger.log("""
-                    Waiting before reattempting request \
-                    backoff=\(backoff) \
-                    publish_count=\(publishCount, privacy: .public) \
-                    request_id=\(requestID, privacy: .public)
-                    """)
+                Waiting before reattempting request \
+                backoff=\(backoff) \
+                publish_count=\(publishCount, privacy: .public) \
+                request_id=\(requestID, privacy: .public)
+                """)
                 do {
                     try await Task.sleep(for: backoff)
                 } catch {
                     logger.error("""
-                        Error thrown whilst waiting to publish. \
-                        error=\(String(reportable: error), privacy: .public) \
-                        publish_count=\(publishCount, privacy: .public) \
-                        request_id=\(requestID, privacy: .public)
-                        """)
+                    Error thrown whilst waiting to publish. \
+                    error=\(String(reportable: error), privacy: .public) \
+                    publish_count=\(publishCount, privacy: .public) \
+                    request_id=\(requestID, privacy: .public)
+                    """)
                     throw status
                 }
                 continue
             } catch {
-                logger.error("""
-                    Publish failed. \
-                    publish_count=\(publishCount, privacy: .public)
-                    error=\(String(reportable: error), privacy: .public) \
-                    request_id=\(requestID, privacy: .public)
-                    """)
-                throw error
-            }
-            logger.log("""
-                Publish success. \
+                self.logger.error("""
+                Publish failed. \
                 publish_count=\(publishCount, privacy: .public)
-                attempt=\(attemptCount, privacy: .public) \
+                error=\(String(reportable: error), privacy: .public) \
                 request_id=\(requestID, privacy: .public)
                 """)
-            try handle(response: response)
+                throw error
+            }
+            self.logger.log("""
+            Publish success. \
+            publish_count=\(publishCount, privacy: .public)
+            attempt=\(attemptCount, privacy: .public) \
+            request_id=\(requestID, privacy: .public)
+            """)
+            try self.handle(response: response)
             return
         } while true
     }
@@ -357,7 +401,7 @@ package final class OTLPGRPCClient: Sendable {
         // metrics
         // """
         guard response.hasPartialSuccess else {
-            logger.log("Publish completed")
+            self.logger.log("Publish completed")
             return
         }
 
@@ -372,10 +416,10 @@ package final class OTLPGRPCClient: Sendable {
         // """
         let rejectedDataPoints = Int(response.partialSuccess.rejectedDataPoints)
         guard rejectedDataPoints > 0 else {
-            logger.warning("""
-                Publish accepted data but sent warning. \
-                warning=\(response.partialSuccess.errorMessage, privacy: .public)
-                """)
+            self.logger.warning("""
+            Publish accepted data but sent warning. \
+            warning=\(response.partialSuccess.errorMessage, privacy: .public)
+            """)
             return
         }
 
@@ -395,13 +439,12 @@ package final class OTLPGRPCClient: Sendable {
         // rejected.
         // """
 
-        logger.error("""
-            Publish rejected data points \
-            rejected_data_points=\(rejectedDataPoints) \
-            error=\(response.partialSuccess.errorMessage, privacy: .public)
-            """)
+        self.logger.error("""
+        Publish rejected data points \
+        rejected_data_points=\(rejectedDataPoints) \
+        error=\(response.partialSuccess.errorMessage, privacy: .public)
+        """)
         throw CloudMetricsInternalError.serverRejectedDataPoints(rejectedDataPoints)
-
     }
 
     internal func shutdown() async throws {
@@ -425,10 +468,10 @@ extension GRPCStatus.Code {
         // """
         switch self {
         case .cancelled, .deadlineExceeded, .aborted, .outOfRange,
-                .unavailable, .dataLoss: return true
-        case .unknown, . invalidArgument, .notFound, .alreadyExists,
-                .permissionDenied, .unauthenticated,  .failedPrecondition,
-                .unimplemented, .internalError: return false
+             .unavailable, .dataLoss: return true
+        case .unknown, .invalidArgument, .notFound, .alreadyExists,
+             .permissionDenied, .unauthenticated, .failedPrecondition,
+             .unimplemented, .internalError: return false
         // """
         // The client SHOULD interpret
         // RESOURCE_EXHAUSTED code as retryable only

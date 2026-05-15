@@ -20,7 +20,7 @@ import ServiceContextModule
 
 let rpcIDHeaderName = "apple-rpc-uuid"
 
-private var instrumentLogger: Logger = .init(subsystem: "com.apple.cloudos.cloudboard", category: "RequestIDInstrument")
+private let instrumentLogger: Logger = .init(subsystem: "com.apple.cloudos.cloudboard", category: "RequestIDInstrument")
 
 public protocol RequestIDInstrument: Instrument {}
 
@@ -63,6 +63,12 @@ struct RequestIDKey: ServiceContextKey {
     static var nameOverride: String? { "requestID" }
 }
 
+struct CloudAppKey: ServiceContextKey {
+    typealias Value = String
+
+    static var nameOverride: String? { "cloudApp" }
+}
+
 extension ServiceContext {
     public var rpcID: UUID {
         get { self[RPCID.self] ?? .zero }
@@ -72,6 +78,11 @@ extension ServiceContext {
     public var requestID: String? {
         get { self[RequestIDKey.self] }
         set { self[RequestIDKey.self] = newValue }
+    }
+
+    public var cloudApp: String? {
+        get { self[CloudAppKey.self] }
+        set { self[CloudAppKey.self] = newValue }
     }
 }
 

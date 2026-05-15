@@ -22,8 +22,8 @@
 import Foundation
 import CryptoKit
 import Security_Private.SecItemPriv
-import AppleKeyStore
-import AppleKeyStore.aks_attestation_verify
+@preconcurrency import AppleKeyStore
+@preconcurrency import AppleKeyStore.aks_attestation_verify
 import os.log
 
 // MARK: - SEP umbrella namespace

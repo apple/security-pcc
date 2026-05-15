@@ -202,7 +202,6 @@ struct Proto_Ropes_Common_Attestation: @unchecked Sendable {
   var attestationBundle: Data = Data()
 
   /// This is the base64-encoded key ID returned by CloudBoard.
-  /// Client must verify that is matches the attestation bundle bytes, and drop the attestation if mismatch.
   var nodeIdentifier: String = String()
 
   /// Not set if attestation is sent for caching purposes only.
@@ -288,6 +287,10 @@ struct Proto_Ropes_Common_Capabilities: Sendable {
   var compressionAlgorithm: [Proto_Ropes_Common_CompressionAlgorithm] = []
 
   var attestationStreaming: Bool = false
+
+  var trustedProxyRequestNack: Bool = false
+
+  var trustedProxyDuplicateFirstRequestChunk: Bool = false
 
   var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
@@ -395,6 +398,166 @@ struct Proto_Ropes_Common_ClientTerminate: Sendable {
   init() {}
 
   fileprivate var _reason: String? = nil
+}
+
+struct Proto_Ropes_Common_DiagnosticInformation: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var denyReason: Proto_Ropes_Common_DiagnosticInformation.DenyReason {
+    get {return _denyReason ?? .undefined}
+    set {_denyReason = newValue}
+  }
+  /// Returns true if `denyReason` has been explicitly set.
+  var hasDenyReason: Bool {return self._denyReason != nil}
+  /// Clears the value of `denyReason`. Subsequent reads from it will return its default value.
+  mutating func clearDenyReason() {self._denyReason = nil}
+
+  var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  enum DenyReason: InternalSwiftProtobuf.Enum, Swift.CaseIterable {
+    typealias RawValue = Int
+    case undefined // = 0
+    case tenantBlocked // = 1
+    case workloadBlocked // = 2
+    case featureidBlocked // = 3
+    case softwareBlocked // = 4
+    case clientRateLimitThrottled // = 5
+    case serverRateLimitThrottled // = 6
+    case UNRECOGNIZED(Int)
+
+    init() {
+      self = .undefined
+    }
+
+    init?(rawValue: Int) {
+      switch rawValue {
+      case 0: self = .undefined
+      case 1: self = .tenantBlocked
+      case 2: self = .workloadBlocked
+      case 3: self = .featureidBlocked
+      case 4: self = .softwareBlocked
+      case 5: self = .clientRateLimitThrottled
+      case 6: self = .serverRateLimitThrottled
+      default: self = .UNRECOGNIZED(rawValue)
+      }
+    }
+
+    var rawValue: Int {
+      switch self {
+      case .undefined: return 0
+      case .tenantBlocked: return 1
+      case .workloadBlocked: return 2
+      case .featureidBlocked: return 3
+      case .softwareBlocked: return 4
+      case .clientRateLimitThrottled: return 5
+      case .serverRateLimitThrottled: return 6
+      case .UNRECOGNIZED(let i): return i
+      }
+    }
+
+    // The compiler won't synthesize support with the UNRECOGNIZED case.
+    static let allCases: [Proto_Ropes_Common_DiagnosticInformation.DenyReason] = [
+      .undefined,
+      .tenantBlocked,
+      .workloadBlocked,
+      .featureidBlocked,
+      .softwareBlocked,
+      .clientRateLimitThrottled,
+      .serverRateLimitThrottled,
+    ]
+
+  }
+
+  init() {}
+
+  fileprivate var _denyReason: Proto_Ropes_Common_DiagnosticInformation.DenyReason? = nil
+}
+
+/// Identifies a specific reboot of an ensemble.
+/// Due to ephemeral data mode this changing for an ensemble means it can be
+/// considered a totally different instance for many situations.
+struct Proto_Ropes_Common_EnsembleInstanceId: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// this is not definitive, we could use hostname, or just not bother, 
+  /// it's boot_id that matters and that will likely be a uuid anyway
+  /// but having the actual ensemble_id or some other thing making it easy to track is very desirable
+  var ensembleID: String = String()
+
+  var bootID: String = String()
+
+  var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+/// This message is used to report Cloudboard and cloudApp errors to ROPES
+/// Currently it will share application level and PCC protocol layer errors with ROPES(which previously were only shared with device)
+/// ROPES will log these errors and emit metrics on them.
+struct Proto_Ropes_Common_RequestExecutionError: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var source: Proto_Ropes_Common_RequestExecutionError.Source = .undefined
+
+  var errorMessage: String = String()
+
+  var errorCode: UInt32 = 0
+
+  var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  enum Source: InternalSwiftProtobuf.Enum, Swift.CaseIterable {
+    typealias RawValue = Int
+    case undefined // = 0
+    case cloudApp // = 1
+    case cloudAppFramework // = 2
+    case jobHelper // = 3
+    case cloudboardd // = 4
+    case UNRECOGNIZED(Int)
+
+    init() {
+      self = .undefined
+    }
+
+    init?(rawValue: Int) {
+      switch rawValue {
+      case 0: self = .undefined
+      case 1: self = .cloudApp
+      case 2: self = .cloudAppFramework
+      case 3: self = .jobHelper
+      case 4: self = .cloudboardd
+      default: self = .UNRECOGNIZED(rawValue)
+      }
+    }
+
+    var rawValue: Int {
+      switch self {
+      case .undefined: return 0
+      case .cloudApp: return 1
+      case .cloudAppFramework: return 2
+      case .jobHelper: return 3
+      case .cloudboardd: return 4
+      case .UNRECOGNIZED(let i): return i
+      }
+    }
+
+    // The compiler won't synthesize support with the UNRECOGNIZED case.
+    static let allCases: [Proto_Ropes_Common_RequestExecutionError.Source] = [
+      .undefined,
+      .cloudApp,
+      .cloudAppFramework,
+      .jobHelper,
+      .cloudboardd,
+    ]
+
+  }
+
+  init() {}
 }
 
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
@@ -704,6 +867,8 @@ extension Proto_Ropes_Common_Capabilities: InternalSwiftProtobuf.Message, Intern
   static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
     1: .standard(proto: "compression_algorithm"),
     2: .standard(proto: "attestation_streaming"),
+    3: .standard(proto: "trusted_proxy_request_nack"),
+    4: .standard(proto: "trusted_proxy_duplicate_first_request_chunk"),
   ]
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -714,6 +879,8 @@ extension Proto_Ropes_Common_Capabilities: InternalSwiftProtobuf.Message, Intern
       switch fieldNumber {
       case 1: try { try decoder.decodeRepeatedEnumField(value: &self.compressionAlgorithm) }()
       case 2: try { try decoder.decodeSingularBoolField(value: &self.attestationStreaming) }()
+      case 3: try { try decoder.decodeSingularBoolField(value: &self.trustedProxyRequestNack) }()
+      case 4: try { try decoder.decodeSingularBoolField(value: &self.trustedProxyDuplicateFirstRequestChunk) }()
       default: break
       }
     }
@@ -726,12 +893,20 @@ extension Proto_Ropes_Common_Capabilities: InternalSwiftProtobuf.Message, Intern
     if self.attestationStreaming != false {
       try visitor.visitSingularBoolField(value: self.attestationStreaming, fieldNumber: 2)
     }
+    if self.trustedProxyRequestNack != false {
+      try visitor.visitSingularBoolField(value: self.trustedProxyRequestNack, fieldNumber: 3)
+    }
+    if self.trustedProxyDuplicateFirstRequestChunk != false {
+      try visitor.visitSingularBoolField(value: self.trustedProxyDuplicateFirstRequestChunk, fieldNumber: 4)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Proto_Ropes_Common_Capabilities, rhs: Proto_Ropes_Common_Capabilities) -> Bool {
     if lhs.compressionAlgorithm != rhs.compressionAlgorithm {return false}
     if lhs.attestationStreaming != rhs.attestationStreaming {return false}
+    if lhs.trustedProxyRequestNack != rhs.trustedProxyRequestNack {return false}
+    if lhs.trustedProxyDuplicateFirstRequestChunk != rhs.trustedProxyDuplicateFirstRequestChunk {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -860,5 +1035,145 @@ extension Proto_Ropes_Common_ClientTerminate.Code: InternalSwiftProtobuf._ProtoN
     0: .same(proto: "UNDEFINED"),
     1: .same(proto: "CRYPTO_ERROR"),
     2: .same(proto: "APPLICATION_ERROR"),
+  ]
+}
+
+extension Proto_Ropes_Common_DiagnosticInformation: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".DiagnosticInformation"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "deny_reason"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularEnumField(value: &self._denyReason) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._denyReason {
+      try visitor.visitSingularEnumField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_Ropes_Common_DiagnosticInformation, rhs: Proto_Ropes_Common_DiagnosticInformation) -> Bool {
+    if lhs._denyReason != rhs._denyReason {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_Ropes_Common_DiagnosticInformation.DenyReason: InternalSwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    0: .same(proto: "UNDEFINED"),
+    1: .same(proto: "TENANT_BLOCKED"),
+    2: .same(proto: "WORKLOAD_BLOCKED"),
+    3: .same(proto: "FEATUREID_BLOCKED"),
+    4: .same(proto: "SOFTWARE_BLOCKED"),
+    5: .same(proto: "CLIENT_RATE_LIMIT_THROTTLED"),
+    6: .same(proto: "SERVER_RATE_LIMIT_THROTTLED"),
+  ]
+}
+
+extension Proto_Ropes_Common_EnsembleInstanceId: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".EnsembleInstanceId"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "ensemble_id"),
+    2: .standard(proto: "boot_id"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.ensembleID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.bootID) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.ensembleID.isEmpty {
+      try visitor.visitSingularStringField(value: self.ensembleID, fieldNumber: 1)
+    }
+    if !self.bootID.isEmpty {
+      try visitor.visitSingularStringField(value: self.bootID, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_Ropes_Common_EnsembleInstanceId, rhs: Proto_Ropes_Common_EnsembleInstanceId) -> Bool {
+    if lhs.ensembleID != rhs.ensembleID {return false}
+    if lhs.bootID != rhs.bootID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_Ropes_Common_RequestExecutionError: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".RequestExecutionError"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .same(proto: "source"),
+    2: .standard(proto: "error_message"),
+    3: .standard(proto: "error_code"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularEnumField(value: &self.source) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.errorMessage) }()
+      case 3: try { try decoder.decodeSingularUInt32Field(value: &self.errorCode) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.source != .undefined {
+      try visitor.visitSingularEnumField(value: self.source, fieldNumber: 1)
+    }
+    if !self.errorMessage.isEmpty {
+      try visitor.visitSingularStringField(value: self.errorMessage, fieldNumber: 2)
+    }
+    if self.errorCode != 0 {
+      try visitor.visitSingularUInt32Field(value: self.errorCode, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_Ropes_Common_RequestExecutionError, rhs: Proto_Ropes_Common_RequestExecutionError) -> Bool {
+    if lhs.source != rhs.source {return false}
+    if lhs.errorMessage != rhs.errorMessage {return false}
+    if lhs.errorCode != rhs.errorCode {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_Ropes_Common_RequestExecutionError.Source: InternalSwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    0: .same(proto: "UNDEFINED"),
+    1: .same(proto: "CLOUD_APP"),
+    2: .same(proto: "CLOUD_APP_FRAMEWORK"),
+    3: .same(proto: "JOB_HELPER"),
+    4: .same(proto: "CLOUDBOARDD"),
   ]
 }

@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardLogging
 import XPC
 import XPCPrivate
@@ -107,6 +105,10 @@ public enum CloudBoardAsyncXPCError: ReportableError {
             return "CorruptedReply"
         case .remoteProcessError:
             return "RemoteProcessError"
+        case .noConnection:
+            return "NoConnection"
+        case .missingEntitlement:
+            return "MissingEntitlement"
         @unknown default:
             return "UndefinedError"
         }

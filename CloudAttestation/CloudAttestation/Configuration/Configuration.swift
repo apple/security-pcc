@@ -86,51 +86,105 @@ struct Configuration {
     var ensembleTopologyValidation: Bool {
         Self.CFPreferences.ensembleTopologyValidation ?? (environment >= .qa)
     }
+
+    var restrictSecurityPolicies: Bool {
+        Self.CFPreferences.restrictSecurityPolicies ?? true
+    }
 }
 
 // MARK: - Global CFPreferences
 extension Configuration {
-    enum CFPreferences {
+    struct CFPreferences: Sendable {
+        static let shared = CFPreferences()
+
         @CFPreference(key: "transparencyProofValidation")
-        static var transparencyProofValidation: Bool?
+        var transparencyProofValidation: Bool?
+        static var transparencyProofValidation: Bool? {
+            shared.transparencyProofValidation
+        }
 
         @CFPreference(key: "strictCertificateValidation")
-        static var strictCertificateValidation: Bool?
+        var strictCertificateValidation: Bool?
+        static var strictCertificateValidation: Bool? {
+            shared.strictCertificateValidation
+        }
 
         @CFPreference(key: "requireProdTrustAnchors")
-        static var requireProdTrustAnchors: Bool?
+        var requireProdTrustAnchors: Bool?
+        static var requireProdTrustAnchors: Bool? {
+            shared.requireProdTrustAnchors
+        }
 
         @CFPreference(key: "requireRestrictedExecutionMode")
-        static var requireRestrictedExecutionMode: Bool?
+        var requireRestrictedExecutionMode: Bool?
+        static var requireRestrictedExecutionMode: Bool? {
+            shared.requireRestrictedExecutionMode
+        }
 
         @CFPreference(key: "requireEphemeralDataMode")
-        static var requireEphemeralDataMode: Bool?
+        var requireEphemeralDataMode: Bool?
+        static var requireEphemeralDataMode: Bool? {
+            shared.requireEphemeralDataMode
+        }
 
         @CFPreference(key: "restrictDeveloperMode")
-        static var restrictDeveloperMode: Bool?
+        var restrictDeveloperMode: Bool?
+        static var restrictDeveloperMode: Bool? {
+            shared.restrictDeveloperMode
+        }
 
         @CFPreference(key: "requireProdFusing")
-        static var requireProdFusing: Bool?
+        var requireProdFusing: Bool?
+        static var requireProdFusing: Bool? {
+            shared.requireProdFusing
+        }
 
         @CFPreference(key: "requireLockedCryptexes")
-        static var requireLockedCryptexes: Bool?
+        var requireLockedCryptexes: Bool?
+        static var requireLockedCryptexes: Bool? {
+            shared.requireLockedCryptexes
+        }
 
         @CFPreference(key: "allowExpired")
-        static var allowExpired: Bool?
+        var allowExpired: Bool?
+        static var allowExpired: Bool? {
+            shared.allowExpired
+        }
 
         @CFPreference(key: "cacheProofs")
-        static var cacheProofs: Bool?
+        var cacheProofs: Bool?
+        static var cacheProofs: Bool? {
+            shared.cacheProofs
+        }
 
         @CFPreference(key: "requireSealedHashes")
-        static var requireSealedHashes: Bool?
+        var requireSealedHashes: Bool?
+        static var requireSealedHashes: Bool? {
+            shared.requireSealedHashes
+        }
 
         @CFPreference(key: "requireCertificateChain")
-        static var requireCertificateChain: Bool?
+        var requireCertificateChain: Bool?
+        static var requireCertificateChain: Bool? {
+            shared.requireCertificateChain
+        }
 
         @CFPreference(key: "requireCryptex1")
-        static var requireCryptex1: Bool?
+        var requireCryptex1: Bool?
+        static var requireCryptex1: Bool? {
+            shared.requireCryptex1
+        }
+
+        @CFPreference(key: "restrictSecurityPolicies")
+        var restrictSecurityPolicies: Bool?
+        static var restrictSecurityPolicies: Bool? {
+            shared.restrictSecurityPolicies
+        }
 
         @CFPreference(key: "ensembleTopologyValidation")
-        static var ensembleTopologyValidation: Bool?
+        var ensembleTopologyValidation: Bool?
+        static var ensembleTopologyValidation: Bool? {
+            shared.ensembleTopologyValidation
+        }
     }
 }

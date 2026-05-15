@@ -17,6 +17,7 @@
 //  DarwinInit
 //
 
+import unistd
 
 enum BackOff {
     case fixed(Duration)

@@ -23,8 +23,9 @@
 @_weakLinked private import cloudOSInfo
 #endif
 private import EnsembleWardenCommon
-private import EnsembleWardenServer
+package import EnsembleWardenServer
 private import EnsembleWardenXPCAPI
+private import Foundation
 private import os
 private import XPC
 
@@ -34,7 +35,7 @@ private import XPC
 ///
 /// This ensures that only legimitate stacks that have the required keys can
 /// decrypt the sensitive data.
-package final class EnsembleWardenDaemon<Provider: KeyProvider & Sendable>: Sendable {
+package final class EnsembleWardenDaemon<Factory: MetricsFactory>: Sendable {
 
     private enum State {
         case stopped
@@ -43,32 +44,42 @@ package final class EnsembleWardenDaemon<Provider: KeyProvider & Sendable>: Send
         case shuttingDown
     }
 
-    private let server: EnsembleWardenServer<DaemonHandler<Provider>>
+    private let server: EnsembleWardenServerImplementation<DaemonHandler, Factory>
     /// Stream that has requests for us to initiate a shutdown.
     private let shutdownRequestStream: AsyncStream<Void>
 
     private let logger = Logger(subsystem: "com.apple.cloudos.ensemblewardend", category: "Daemon")
     private let state: OSAllocatedUnfairLock<State> = .init(initialState: .stopped)
+    private let ensembleWardenMetrics: EnsembleWardenMetrics<Factory>
 
     package init(ensembleWardenServerXPCServiceName: String = kEnsembleWardenAPIXPCLocalServiceName,
                  downstreamXPCServiceName: String = kvCacheXPCServiceName,
-                 keyProvider: Provider) throws {
+                 metricsFactory: Factory) throws {
         let (stream, continuation) = AsyncStream<Void>.makeStream()
         self.shutdownRequestStream = stream
+        self.ensembleWardenMetrics = EnsembleWardenMetrics(metricsFactory: metricsFactory)
         self.server = .init(
             handler: DaemonHandler(
                 downstreamXPCService: downstreamXPCServiceName,
-                keyProvider: keyProvider,
                 shutdownInitiateContinuation: continuation),
             xpcServiceName: ensembleWardenServerXPCServiceName,
-            entitlement: kEnsembleWardenClientEntitlement)
+            entitlement: kEnsembleWardenClientEntitlement,
+            metricsFactory: metricsFactory)
     }
 
-    package static func withEnsembleDKeyProvider() throws -> EnsembleWardenDaemon<EnsembleDKeyProvider> {
-        return try .init(keyProvider: .init())
+    package static func withEnsembleDKeyProvider() throws -> EnsembleWardenDaemon<OSMetricsBridge> {
+        return try .init(metricsFactory: OSMetricsBridge())
+    }
+
+    /// Waits for the daemon's XPC server to be running (ready to accept connections).
+    ///
+    /// Used in tests since we don't have the launchd magic there.
+    package func waitForRunning() async {
+        await server.waitForRunning()
     }
 
     private var cloudOSBuildVersion: String {
+#if canImport(cloudOSInfo)
         let cloudOSBuildVersion: String
 
         if #_hasSymbol(CloudOSInfoProvider.self) {
@@ -76,18 +87,21 @@ package final class EnsembleWardenDaemon<Provider: KeyProvider & Sendable>: Send
         } else {
             cloudOSBuildVersion = "<UNKNOWN>"
         }
-
         return cloudOSBuildVersion
+#else
+        return "<UNKNOWN>"
+#endif
     }
 
     package func run(xpcServiceName: String = kEnsembleWardenAPIXPCLocalServiceName) async throws {
+        let start = Date()
         try self.state.withLock { state in
             switch state {
             case .stopped:
                 state = .starting
             default:
                 logger.error("Tried to run EnsembleWarden daemon when not stopped")
-                throw EnsembleWardenDError.invalidStateTransition
+                throw EnsembleWardenError.invalidStateTransition
             }
             state = .starting
         }
@@ -101,29 +115,12 @@ package final class EnsembleWardenDaemon<Provider: KeyProvider & Sendable>: Send
             cloudos_version=\(self.cloudOSBuildVersion, privacy: .public)
             """)
 
-        self.logger.log("Bootstrapping CloudMetrics")
-        try CloudMetricsWrapper.bootstrap()
+        self.ensembleWardenMetrics.daemonLaunchTotalCount.increment(by: 1)
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             // XPC Server
             group.addTask {
                 try await self.server.run()
-            }
-
-            // Metrics
-            group.addTask(priority: .utility) {
-                self.logger.log("Starting CloudMetrics")
-                defer {
-                    self.logger.log("Stopped CloudMetrics")
-                }
-                do {
-                    try await CloudMetricsWrapper.run()
-                } catch is CancellationError {
-                    self.logger.log("Cancelled CloudMetrics")
-                } catch {
-                    self.logger.error("Error running CloudMetrics. error=\(String(reportable: error), privacy: .public)")
-                    return
-                }
             }
 
             // Tasks that will trigger a shutdown if we request ourselves to go away
@@ -142,6 +139,16 @@ package final class EnsembleWardenDaemon<Provider: KeyProvider & Sendable>: Send
                     } catch {
                         self.logger.log("Error shutting down. error=\(String(reportable: error), privacy: .public)")
                     }
+                }
+            }
+
+            // Tasks that will trigger for current uptime to be calculated
+            group.addTask {
+                while !Task.isCancelled {
+                    let timeSince = Date().timeIntervalSince(start)
+                    self.ensembleWardenMetrics.daemonUptime.record(timeSince*1000)
+                    // Sleeping for 10 seconds between uptime recordings
+                    try await Task.sleep(for: .seconds(10))
                 }
             }
 
@@ -166,16 +173,17 @@ package final class EnsembleWardenDaemon<Provider: KeyProvider & Sendable>: Send
 
     package func shutdown() throws {
         logger.log("Shutting down")
-        try self.state.withLock { state in
+        let continuation: CheckedContinuation? = try self.state.withLock { state in
             switch state {
             case .running(let continuation):
                 state = .shuttingDown
-                continuation.resume()
+                return continuation
             case .shuttingDown, .stopped:
-                return
-            default: throw EnsembleWardenDError.invalidStateTransition
+                return nil
+            default: throw EnsembleWardenError.invalidStateTransition
             }
         }
+        continuation?.resume()
     }
 }
 

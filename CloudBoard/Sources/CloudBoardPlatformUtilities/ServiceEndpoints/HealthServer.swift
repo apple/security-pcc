@@ -12,16 +12,17 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright (c) 2023 Apple Inc. All rights reserved.
-
 package import CloudBoardAsyncXPC
 import CloudBoardHealth
+import CloudBoardLogging
 import os
 
 /// Local health server used by other on-node components to query CloudBoard health over XPC. This is called via the
 /// CloudBoardHealth.framework. This interface is used to monitor CloudBoard health during convergence
 public actor HealthServer {
     private var healthState: CloudBoardHealthState = .initializing
+    private var publisherStates: [String: ServiceHealthMonitor.Status] = [:]
+    private let healthReporter: (any HealthReporter)?
 
     private static let log: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
@@ -30,33 +31,114 @@ public actor HealthServer {
 
     private let apiServer: CloudBoardHealthAPIServerProtocol
 
-    package init(apiServer: CloudBoardHealthAPIServerProtocol = CloudBoardHealthAPIXPCServer.localListener()) {
+    package init(
+        apiServer: CloudBoardHealthAPIServerProtocol = CloudBoardHealthAPIXPCServer.localListener(),
+        healthReporter: (any HealthReporter)?
+    ) {
         self.apiServer = apiServer
+        self.healthReporter = healthReporter
     }
 
-    public func run(healthPublisher: ServiceHealthMonitor) async {
+    public func run(healthPublishers: [ServiceHealthMonitor]) async {
         Self.log.info("Starting HealthServer")
-        let healthStatusStream = healthPublisher.watch()
         await self.apiServer.connect(listenerDelegate: self, serverDelegate: self)
         Self.log.info("HealthServer started")
 
-        for await healthStatus in healthStatusStream {
-            Self.log.log(
-                "Received new status: \(healthStatus, privacy: .public)"
-            )
-            let newState = CloudBoardHealthState(from: healthStatus)
-            if self.healthState != newState {
-                self.healthState = newState
-                do {
-                    try await self.apiServer.healthStateChanged(to: newState)
-                } catch {
-                    Self.log.error("""
-                    HealthServer failed to update client of state change: \
-                    \(String(unredacted: error), privacy: .public)
-                    """)
+        guard !healthPublishers.isEmpty else {
+            fatalError("No health publishers provided, Exiting!!!")
+        }
+
+        // Initialize publisher states
+        self.publisherStates = healthPublishers.reduce(into: [:]) { result, publisher in
+            result[publisher.cloudApp] = .initializing
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            // Start monitoring each health publisher directly
+            for publisher in healthPublishers {
+                group.addTask {
+                    await self.monitorPublisher(publisher)
                 }
             }
         }
+
+        // This point is reached when all tasks complete (which shouldn't happen in normal operation)
+        Self.log.info("HealthServer monitoring completed")
+    }
+
+    private func monitorPublisher(_ publisher: ServiceHealthMonitor) async {
+        let healthStream = publisher.watch()
+        for await status in healthStream {
+            Self.log.log(
+                "Received new status from healthServer::\(publisher.cloudApp): \(status, privacy: .public)"
+            )
+
+            await self.updateHealthState(for: publisher.cloudApp, status: status)
+        }
+        Self.log.log("Health stream ended for \(publisher.cloudApp, privacy: .public)")
+    }
+
+    private func updateHealthState(for cloudApp: String, status: ServiceHealthMonitor.Status) async {
+        // Store the new status
+        self.publisherStates[cloudApp] = status
+
+        // Calculate the aggregated health state
+        let newState = self.aggregateHealthStates(self.publisherStates)
+
+        let oldState = self.healthState
+        if oldState != newState {
+            self.healthState = newState
+            do {
+                Self.log
+                    .log(
+                        "Changing health state to \(newState, privacy: .public) from \(oldState, privacy: .public)"
+                    )
+                if let healthReporter = self.healthReporter {
+                    await healthReporter.report(state: newState)
+                }
+
+                try await self.apiServer.healthStateChanged(to: newState)
+            } catch {
+                Self.log.error("""
+                HealthServer failed to update client of state change: \
+                \(String(unredacted: error), privacy: .public)
+                """)
+            }
+        }
+    }
+
+    /// Aggregates multiple service health states into a single CloudBoard health state.
+    ///
+    /// This method implements a conservative aggregation strategy that prioritizes system reliability:
+    /// - If any service is still initializing, the overall state is considered initializing
+    /// - If all services are unhealthy, the overall state is unhealthy
+    /// - Otherwise (at least one service is healthy and none are initializing), the overall state is healthy
+    ///
+    /// - Parameter states: A dictionary mapping service names to their current health status
+    /// - Returns: The aggregated `CloudBoardHealthState` representing the overall system health
+    ///
+    /// - Note: This aggregation strategy ensures that CloudBoard doesn't report as healthy until all
+    ///   services have completed initialization, and only reports as unhealthy when all services have failed.
+    private func aggregateHealthStates(_ states: [String: ServiceHealthMonitor.Status]) -> CloudBoardHealthState {
+        // If any is initializing, return initializing
+        if states.values.contains(where: {
+            if case .initializing = $0 { return true }
+            return false
+        }) {
+            return .initializing
+        }
+
+        // If all are unhealthy, return unhealthy
+        let allUnhealthy = states.values.allSatisfy {
+            if case .unhealthy = $0 { return true }
+            return false
+        }
+        if allUnhealthy {
+            return .unhealthy
+        }
+
+        // Otherwise, return healthy
+        return .healthy
     }
 }
 

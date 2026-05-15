@@ -25,11 +25,36 @@ import XPC
 import XPCPrivate
 import os.log
 
-package final class TC2Client: Sendable {
+protocol TC2ClientProtocol: Sendable {
+    associatedtype XPCWrapper: XPCWrapperProtocol
+
+    var xpc: XPCWrapper { get }
+
+    func prewarm(
+        request: Prefetch,
+        bundleIdentifier: String?,
+        featureIdentifier: String,
+        runOnEventStream: Bool
+    ) async
+    func prefetch(request: Prefetch) async throws -> [Prefetch.Response]
+    func prefetchParametersCache() async -> [String]
+    func prefetchParametersCacheSavedState() async -> [String]
+    func prefetchCacheReset() async -> Bool
+    func prefetchCache() async -> [String]
+    func knownRateLimits(
+        bundleIdentifier: String?,
+        featureIdentifier: String?,
+        skipFetch: Bool
+    ) async -> [TrustedCloudComputeRateLimit]
+}
+
+package final class TC2Client<
+    XPCWrapper: XPCWrapperProtocol
+>: TC2ClientProtocol {
     let xpc: XPCWrapper
 
-    package init(userID: uid_t? = nil) {
-        self.xpc = XPCWrapper(userID: userID)
+    package init(xpc: XPCWrapper = PrivateCloudCompute.XPCWrapper(userID: nil)) {
+        self.xpc = xpc
     }
 
     deinit {
@@ -38,14 +63,6 @@ package final class TC2Client: Sendable {
 
     func currentEnvironment() async -> String {
         (try? await xpc.currentEnvironment()) ?? String()
-    }
-
-    package func requestMetadata() async -> TC2TrustedRequestFactoriesMetadata? {
-        guard let json = try? await xpc.requestMetadata() else {
-            return nil
-        }
-
-        return TC2TrustedRequestFactoriesMetadata(json: json)
     }
 
     package func prefetch(request: Prefetch) async throws -> [Prefetch.Response] {

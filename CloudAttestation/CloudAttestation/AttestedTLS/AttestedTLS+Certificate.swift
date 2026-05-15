@@ -26,6 +26,7 @@ import Security.SecCertificate
 import Security_Private.SecCertificateRequest
 import Security_Private.SecCertificatePriv
 import os.log
+import InternalSwiftProtobuf
 
 extension AttestedTLS {
     struct Certificate: Sendable {

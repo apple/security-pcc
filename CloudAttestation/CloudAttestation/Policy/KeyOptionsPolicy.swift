@@ -18,7 +18,7 @@
 //
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
-import AppleKeyStore
+@preconcurrency import AppleKeyStore
 import os.log
 
 public struct KeyOptionsPolicy: AttestationPolicy {

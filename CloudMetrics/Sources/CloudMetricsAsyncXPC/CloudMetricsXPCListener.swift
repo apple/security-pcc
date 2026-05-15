@@ -19,7 +19,8 @@ import OSLog
 import XPC
 
 package protocol CloudMetricsAsyncXPCListenerDelegate: Actor {
-    func invalidatedConnection(_ connection: CloudMetricsAsyncXPCConnection) async
+    func clientConnected(_ connection: CloudMetricsAsyncXPCConnection) async
+    func clientDisconnected(_ connection: CloudMetricsAsyncXPCConnection) async
 }
 
 package actor CloudMetricsAsyncXPCListener {
@@ -98,7 +99,7 @@ package actor CloudMetricsAsyncXPCListener {
 
     private func invalidateConnection(_ connection: CloudMetricsAsyncXPCConnection) async {
         self.connections.removeValue(forKey: connection.id)
-        await self.delegate?.invalidatedConnection(connection)
+        await self.delegate?.clientDisconnected(connection)
     }
 
     private func handleNewConnection(connection: XPCConnection) async {
@@ -108,7 +109,9 @@ package actor CloudMetricsAsyncXPCListener {
         }
 
         let authorizedConnection = CloudMetricsAsyncXPCConnection(connection)
+        await self.delegate?.clientConnected(authorizedConnection)
 
+        /// Here we now have created a connection to the client
         await authorizedConnection.handleConnectionInvalidated { [weak self] conn in
             guard let self else { return }
             await self.invalidateConnection(conn)
@@ -139,29 +142,29 @@ package actor CloudMetricsAsyncXPCListener {
             await self.handleNewConnection(connection: connection)
         } catch CloudMetricsAsyncXPCError.terminationImminent {
             self.logger.log("""
-                Listener termination is imminent. \
-                connection_name=\(self.name, privacy: .public)
-                """)
+            Listener termination is imminent. \
+            connection_name=\(self.name, privacy: .public)
+            """)
             self.listener.cancel()
         } catch CloudMetricsAsyncXPCError.connectionInterrupted {
             self.logger.log("""
-                Listener has been interrupted. \
-                connection_name=\(self.name, privacy: .public)
-                """)
+            Listener has been interrupted. \
+            connection_name=\(self.name, privacy: .public)
+            """)
             self.listener.cancel()
         } catch CloudMetricsAsyncXPCError.connectionInvalid(let reason) {
             self.logger.log("""
-                Listener has been invalidated. \
-                connection_name=\(self.name, privacy: .public) \
-                reason=\(reason ?? "", privacy: .public)
-                """)
+            Listener has been invalidated. \
+            connection_name=\(self.name, privacy: .public) \
+            reason=\(reason ?? "", privacy: .public)
+            """)
             return true
         } catch {
             self.logger.error("""
-                Listener error. \
-                connection_name=\(self.name, privacy: .public) \
-                error=\(error, privacy: .public)
-                """)
+            Listener error. \
+            connection_name=\(self.name, privacy: .public) \
+            error=\(error, privacy: .public)
+            """)
             self.listener.cancel()
         }
 
@@ -223,7 +226,10 @@ package actor CloudMetricsAsyncXPCListener {
     }
 
     /// Send a message with no reply to all open connections
-    package func broadcast(_ message: some CloudMetricsAsyncXPCMessage, requiringEntitlement: String? = nil) async throws {
+    package func broadcast(
+        _ message: some CloudMetricsAsyncXPCMessage,
+        requiringEntitlement: String? = nil
+    ) async throws {
         await withThrowingTaskGroup(of: Void.self) { group in
             for (_, connection) in self.connections {
                 if let requiringEntitlement,

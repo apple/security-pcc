@@ -12,7 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
 @_spi(CTypeConversion) import Network
 import Network_Private
 import NIOCore

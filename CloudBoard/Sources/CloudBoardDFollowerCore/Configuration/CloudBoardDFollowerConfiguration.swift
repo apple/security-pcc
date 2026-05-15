@@ -12,10 +12,11 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 import CFPreferenceCoder
+import CloudBoardCommon
+import CloudBoardLogging
 import Foundation
+import os
 
 extension CFPreferences {
     static var cloudboardfollowerPreferencesDomain: String {
@@ -23,7 +24,21 @@ extension CFPreferences {
     }
 }
 
+/// Currently there is no specific configuration for the follow daemon (becase it doesn't do anything but
+/// sit there). We keep the idioms of the config for consistency though - secure config might be used
+/// and it is convention to have it on the daemon specific configuration type.
 struct CloudBoardDFollowerConfiguration: Codable, Hashable {
+    /// nothing to decode
+    enum CodingKeys: CodingKey {}
+
+    private var _secureConfig: SecureConfig? = nil
+    public var secureConfig: SecureConfig {
+        /// Attempting to do this in a real run means we didn't apply security checks,
+        /// this should be instantly terminal
+        precondition(self._secureConfig != nil, "Attempt to access secureconfig when it has not been hooked up")
+        return self._secureConfig!
+    }
+
     static func fromPreferences() throws -> CloudBoardDFollowerConfiguration {
         CloudBoardFollowerDaemon.logger
             .info(
@@ -39,9 +54,33 @@ struct CloudBoardDFollowerConfiguration: Codable, Hashable {
         }
     }
 
-    static func fromPreferences(_ preferences: CFPreferences) throws -> CloudBoardDFollowerConfiguration {
+    static func fromPreferences(
+        secureConfigLoader: SecureConfigLoader = .real,
+        _ preferences: CFPreferences
+    ) throws -> CloudBoardDFollowerConfiguration {
         let decoder = CFPreferenceDecoder()
-        let configuration = try decoder.decode(CloudBoardDFollowerConfiguration.self, from: preferences)
+        var configuration = try decoder.decode(CloudBoardDFollowerConfiguration.self, from: preferences)
+        let secureConfig: SecureConfig
+        do {
+            CloudBoardFollowerDaemon.logger.info("Loading secure config from SecureConfigDB")
+            secureConfig = try secureConfigLoader.load()
+        } catch {
+            CloudBoardFollowerDaemon.logger
+                .error("Error loading secure config: \(String(unredacted: error), privacy: .public)")
+            throw error
+        }
+        try configuration.applySecureConfig(secureConfig)
         return configuration
+    }
+
+    private mutating func applySecureConfig(_ secureConfig: SecureConfig) throws {
+        self._secureConfig = secureConfig
+        if secureConfig.shouldEnforceAppleInfrastructureSecurityConfig {
+            self.enforceSecurityConfig()
+        }
+    }
+
+    mutating func enforceSecurityConfig() {
+        // nothing to enforce - follower never sees requests
     }
 }

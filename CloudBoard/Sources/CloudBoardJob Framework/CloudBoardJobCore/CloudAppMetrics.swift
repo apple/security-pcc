@@ -12,10 +12,9 @@
 // EA1937
 // 10/02/2024
 
+import CloudBoardDomain
 import CloudBoardJobAPI
 import Foundation
-
-//  Copyright © 2023 Apple Inc. All rights reserved.
 import os
 
 public struct CloudAppMetrics: Sendable {
@@ -23,8 +22,6 @@ public struct CloudAppMetrics: Sendable {
         subsystem: "com.apple.cloudos.cloudboard",
         category: "CloudAppMetrics"
     )
-
-    private var initialCBMetrics: WarmupDetails
 
     /// Time from receiving the initial request parameters in cloudboard to invoking `run` on the cloud app.
     public var timeToCloudAppInvoke: ContinuousClock.Duration
@@ -36,13 +33,6 @@ public struct CloudAppMetrics: Sendable {
     public var timeToReceiveParameters: ContinuousClock.Duration
 
     internal init(_ builder: Builder, buildTime: Date) {
-        if let value = builder.initialMetrics {
-            self.initialCBMetrics = value
-        } else {
-            Self.log.error("Building metrics without receiving initial metrics, setting to default values")
-            self.initialCBMetrics = .init()
-        }
-
         if let parameters = builder.parameters, let parametersReceivedTime = builder.parametersReceivedTime {
             self.timeToCloudAppInvoke = .seconds(buildTime.timeIntervalSince(parameters.parametersReceived))
             self
@@ -65,24 +55,11 @@ extension CloudAppMetrics {
             CloudAppMetrics.log
         }
 
-        fileprivate var initialMetrics: WarmupDetails?
-
         fileprivate var parameters: ParametersData?
 
         fileprivate var parametersReceivedTime: Date?
 
         package init() {}
-
-        mutating func receivedJobHelperMetricDelivery(
-            initialMetrics: WarmupDetails
-        ) {
-            if let oldValue = self.initialMetrics {
-                Self.log.fault(
-                    "Duplicate CB job helper metric delivery, discarding old result \(String(describing: oldValue))"
-                )
-            }
-            self.initialMetrics = initialMetrics
-        }
 
         mutating func receivedParameters(_ parameters: ParametersData) {
             if let oldValue = self.parameters {

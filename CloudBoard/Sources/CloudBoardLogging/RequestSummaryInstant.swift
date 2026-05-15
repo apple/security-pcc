@@ -12,7 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
 import os
 
 public enum RequestSummaryClock {

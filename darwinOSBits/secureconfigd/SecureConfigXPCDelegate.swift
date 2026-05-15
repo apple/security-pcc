@@ -19,7 +19,7 @@
 
 import Foundation
 import os
-import secureconfig
+import SecureConfigDB
 
 class SecureConfigXPCDelegate: NSObject, NSXPCListenerDelegate {
 	private let log = Logger(subsystem: "com.apple.SecureConfig", category: "Delegate")

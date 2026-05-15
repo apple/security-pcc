@@ -12,9 +12,8 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 package import CloudBoardAsyncXPC
+package import CloudBoardDomain
 internal import CloudBoardOSActivity
 import Foundation
 import os
@@ -24,9 +23,9 @@ package actor CloudAppXPCClient {
         subsystem: "com.apple.cloudos.cloudboard",
         category: "CloudAppXPCClient"
     )
+
     private var connection: CloudBoardAsyncXPCConnection?
     private let enforceCloudAppEntitlements: Bool
-
     private var responseHandler: CloudBoardJobAPICloudAppResponseHandlerProtocol
 
     package init(
@@ -85,23 +84,51 @@ extension CloudAppXPCClient {
 
 /// Implements the outbound (calling the CloudApp) XPC interface.
 extension CloudAppXPCClient: CloudBoardJobAPIClientToServerProtocol {
-    package func warmup(details: WarmupDetails) async throws {
+    package func warmup(info: ManagedWarmupInfo) async throws {
         /// We always require a warmup
         await self.connection?.activate(buildMessageHandlerStore: self.configureHandlers)
-        _ = try await self.connection?.send(details)
+        _ = try await self.connection?.send(JobHelperToManagedAppXPCMessages.Warmup(info: info))
     }
 
     package func receiveParameters(parametersData: ParametersData) async throws {
-        try await self.connection?
-            .send(parametersData)
+        try await self.connection?.send(parametersData)
     }
 
-    package func provideInput(_ data: Data?, isFinal: Bool) async throws {
+    package func provideInput(_ data: Data) async throws {
         let requestChunk = CloudBoardJobAPIXPCClientToServerMessage.RequestChunk(
-            data: data,
-            isFinal: isFinal
+            data: data
         )
         try await self.sendWorkloadRequestMessage(.requestChunk(requestChunk))
+    }
+
+    package func openClientSubrequest(
+        subrequestID: UInt32,
+        cryptoMaterialHandles: [CloudBoardDomain.CryptoMaterialHandle],
+        isDiscardable: Bool
+    ) async throws {
+        try await self.sendWorkloadRequestMessage(
+            .openClientSubrequest(
+                .init(
+                    clientSubrequestID: subrequestID,
+                    cryptoMaterialHandles: cryptoMaterialHandles,
+                    isDiscardable: isDiscardable
+                )
+            )
+        )
+    }
+
+    package func receiveSubrequestPayload(subrequestID: UInt32, payload: Data) async throws {
+        try await self.sendWorkloadRequestMessage(
+            .subrequestPayloadChunk(.init(clientSubrequestID: subrequestID, chunk: payload))
+        )
+    }
+
+    package func closeClientSubrequest(subrequestID: UInt32) async throws {
+        try await self.sendWorkloadRequestMessage(.closeClientSubrequest(.init(clientSubrequestID: subrequestID)))
+    }
+
+    package func cancelClientSubrequest(subrequestID: UInt32) async throws {
+        try await self.sendWorkloadRequestMessage(.cancelClientSubrequest(.init(clientSubrequestID: subrequestID)))
     }
 
     private func sendWorkloadRequestMessage(
@@ -110,11 +137,9 @@ extension CloudAppXPCClient: CloudBoardJobAPIClientToServerProtocol {
         try await self.connection?.send(request)
     }
 
-    package func receiveWorkerFoundEvent(workerID: UUID, releaseDigest: String) async throws {
+    package func receiveWorkerFoundEvent(workerID: UUID, info: WorkerFoundInfo) async throws {
         try await self.sendWorkloadRequestMessage(
-            .receiveWorkerFoundEvent(
-                .init(workerID: workerID, releaseDigest: releaseDigest)
-            )
+            .receiveWorkerFoundEvent(.init(workerID: workerID, info: info))
         )
     }
 
@@ -126,10 +151,10 @@ extension CloudAppXPCClient: CloudBoardJobAPIClientToServerProtocol {
         try await self.sendWorkloadRequestMessage(.receiveWorkerMessage(workerResponseMessage))
     }
 
-    package func receiveWorkerResponseSummary(workerID: UUID, succeeded: Bool) async throws {
+    package func receiveWorkerResponseSummary(workerID: UUID, status: WorkerResponseStatus) async throws {
         let workerResponseSummary = CloudBoardJobAPIXPCClientToServerMessage.WorkerResponseSummary(
             workerID: workerID,
-            succeeded: succeeded
+            status: status
         )
         try await self.sendWorkloadRequestMessage(.receiveWorkerResponseSummary(workerResponseSummary))
     }
@@ -144,6 +169,14 @@ extension CloudAppXPCClient: CloudBoardJobAPIClientToServerProtocol {
     package func teardown() async throws {
         try await self.connection?.send(CloudBoardJobAPIXPCClientToServerMessage.Teardown())
     }
+
+    package func endOfInput() async throws {
+        try await self.sendWorkloadRequestMessage(.endOfInput)
+    }
+
+    package func configureApplicationDataChunking(config: ApplicationDataChunkingConfiguration) async throws {
+        try await self.sendWorkloadRequestMessage(.configureApplicationDataChunking(config))
+    }
 }
 
 extension CloudAppXPCClient {
@@ -156,18 +189,24 @@ extension CloudAppXPCClient {
         return ExplicitSuccess()
     }
 
-    func handleInternalError(message _: InternalErrorMessage) async throws
+    func handleRequestExecutionError(error: CloudAppToJobHelperRequestExecutionError) async throws
+    -> ExplicitSuccess {
+        try await self.responseHandler.handleRequestExecutionError(error)
+        return ExplicitSuccess()
+    }
+
+    func handleInternalError(message _: ManagedAppToJobHelperXPCMessages.InternalError) async throws
     -> ExplicitSuccess {
         try await self.responseHandler.handleInternalError()
         return ExplicitSuccess()
     }
 
-    func handleEndJob(_: EndJob) async throws -> ExplicitSuccess {
+    func handleEndJob(_: ManagedAppToJobHelperXPCMessages.EndJob) async throws -> ExplicitSuccess {
         try await self.responseHandler.handleEndJob()
         return ExplicitSuccess()
     }
 
-    func handleFindWorker(_ workerConstraints: WorkerConstraints) async throws -> ExplicitSuccess {
+    func handleFindWorker(_ findWorkerMessage: FindWorkerMessage) async throws -> ExplicitSuccess {
         guard let xpcConnection = CloudBoardAsyncXPCContext.context?.peerConnection else {
             // This is a programming error, there is no condition where we would get a message but not have
             // a `peerConnection` available.
@@ -178,8 +217,7 @@ extension CloudAppXPCClient {
         let hasEntitlement = await xpcConnection.hasEntitlement(kCloudBoardJobAPIOutboundPCCRequestEntitlement)
         if self.enforceCloudAppEntitlements {
             if !hasEntitlement {
-                Self.logger
-                    .error("CloudApp not entitled to make outbound pcc requests but this check is disabled")
+                Self.logger.error("CloudApp not entitled to make outbound pcc requests but this check is disabled")
             }
 
         } else {
@@ -188,7 +226,7 @@ extension CloudAppXPCClient {
                 fatalError("CloudApp not entitled to make outbound pcc requests")
             }
         }
-        try await self.responseHandler.handleFindWorker(workerConstraints)
+        try await self.responseHandler.handleFindWorker(findWorkerMessage)
         return ExplicitSuccess()
     }
 
@@ -224,10 +262,11 @@ extension CloudAppXPCClient {
         _ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore
     ) {
         handlers.register(DataMessage.self, handler: self.handleResponseChunk)
-        handlers.register(InternalErrorMessage.self, handler: self.handleInternalError)
+        handlers.register(ManagedAppToJobHelperXPCMessages.InternalError.self, handler: self.handleInternalError)
+        handlers.register(CloudAppToJobHelperRequestExecutionError.self, handler: self.handleRequestExecutionError)
         handlers.register(EndOfResponse.self, handler: self.handleEndOfResponse)
-        handlers.register(EndJob.self, handler: self.handleEndJob)
-        handlers.register(WorkerConstraints.self, handler: self.handleFindWorker)
+        handlers.register(ManagedAppToJobHelperXPCMessages.EndJob.self, handler: self.handleEndJob)
+        handlers.register(FindWorkerMessage.self, handler: self.handleFindWorker)
         handlers.register(WorkerRequestMessage.self, handler: self.handleWorkerRequestMessage)
         handlers.register(WorkerEOF.self, handler: self.handleWorkerEOF)
         handlers.register(FinalizeRequestExecutionLog.self, handler: self.handleFinaliseRequestExecutionLog)

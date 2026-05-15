@@ -36,7 +36,10 @@ the generate or apply subcommands, it will not be printed.
 
     @Flag(name: .shortAndLong, help: "Print the unredacted configuration")
     var unredacted: Bool = false
-    
+
+    @Flag(name: .shortAndLong, help: "Print the original configuration without darwin-init processing it")
+    var original: Bool = false
+
     func validate() throws {
         if source == nil && !system {
             throw ValidationError("Must specify either source or --system")
@@ -44,8 +47,19 @@ the generate or apply subcommands, it will not be printed.
     }
 
     func run() async throws {
-        let loadedConfig = try await DInitConfigLoader.load(from: source)
-        let json = try loadedConfig.config.jsonString(redactCredentialStrings: !unredacted)
+        let computer = RealComputer.shared
+        try await run(on: computer)
+    }
+
+    func run(on computer: Computer) async throws {
+        let loader = ConfigLoader(computer: computer)
+        let configs = try await loader.load(from: source)
+        let json: String
+        if let config = configs.first, config.origin?.isSimple == true {
+            json = try config.jsonString(redacted: !unredacted, origin: original)
+        } else {
+            json = try configs.jsonString(redacted: !unredacted, origin: original)
+        }
         print(json)
     }
 }

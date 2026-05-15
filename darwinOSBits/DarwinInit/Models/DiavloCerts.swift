@@ -42,15 +42,15 @@ struct DiavloCertAudience {
 extension DiavloCertAudience {
     static var shared: Self {
         get throws {
-            guard let bord = Computer.boardID() else {
+            guard let bord = RealComputer.shared.boardID else {
                 throw DiavloClientError.invalidBORD
             }
 
-            guard let chip = Computer.chipID() else {
+            guard let chip = RealComputer.shared.chipID else {
                 throw DiavloClientError.invalidCHIP
             }
 
-            guard let sdom = Computer.securityDomain() else {
+            guard let sdom = RealComputer.shared.securityDomain else {
                 throw DiavloClientError.invalidSDOM
             }
 

@@ -12,13 +12,12 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 package import CloudBoardAsyncXPC
+package import CloudBoardDomain
 import Foundation
 
 package enum CloudBoardJobAPIXPCClientToServerMessage {
-    case warmup(WarmupDetails)
+    case warmup(ManagedWarmupInfo)
     case parameters(ParametersData)
     case invokeWorkload(InvokeWorkloadRequest)
     case teardown
@@ -29,6 +28,12 @@ package enum CloudBoardJobAPIXPCClientToServerMessage {
         case receiveWorkerMessage(WorkerResponse)
         case receiveWorkerEOF(WorkerEOF)
         case receiveWorkerResponseSummary(WorkerResponseSummary)
+        case openClientSubrequest(OpenClientSubrequest)
+        case subrequestPayloadChunk(SubrequestPayloadChunk)
+        case closeClientSubrequest(CloseClientSubrequest)
+        case cancelClientSubrequest(CancelClientSubrequest)
+        case endOfInput
+        case configureApplicationDataChunking(ApplicationDataChunkingConfiguration)
 
         package func encode(to buffer: inout ByteBuffer) throws {
             switch self {
@@ -40,15 +45,30 @@ package enum CloudBoardJobAPIXPCClientToServerMessage {
                 try summary.encode(to: &buffer)
             case .receiveWorkerMessage(let message):
                 buffer.writeInteger(2)
-                try message.workerID.encode(to: &buffer)
-                try message.message.encode(to: &buffer)
+                try message.encode(to: &buffer)
             case .receiveWorkerFoundEvent(let event):
                 buffer.writeInteger(3)
-                try event.workerID.encode(to: &buffer)
-                try event.releaseDigest.encode(to: &buffer)
+                try event.encode(to: &buffer)
             case .receiveWorkerEOF(let eof):
                 buffer.writeInteger(4)
-                try eof.workerID.encode(to: &buffer)
+                try eof.encode(to: &buffer)
+            case .openClientSubrequest(let subrequest):
+                buffer.writeInteger(5)
+                try subrequest.encode(to: &buffer)
+            case .subrequestPayloadChunk(let subrequest):
+                buffer.writeInteger(6)
+                try subrequest.encode(to: &buffer)
+            case .closeClientSubrequest(let subrequest):
+                buffer.writeInteger(7)
+                try subrequest.encode(to: &buffer)
+            case .cancelClientSubrequest(let subrequest):
+                buffer.writeInteger(8)
+                try subrequest.encode(to: &buffer)
+            case .endOfInput:
+                buffer.writeInteger(9)
+            case .configureApplicationDataChunking(let config):
+                buffer.writeInteger(10)
+                try config.encode(to: &buffer)
             }
         }
 
@@ -61,21 +81,27 @@ package enum CloudBoardJobAPIXPCClientToServerMessage {
             }
             switch enumCase {
             case 0:
-                let chunk = try CloudBoardJobAPIXPCClientToServerMessage.RequestChunk(from: &buffer)
-                self = .requestChunk(chunk)
+                self = try .requestChunk(.init(from: &buffer))
             case 1:
-                let summary = try CloudBoardJobAPIXPCClientToServerMessage.WorkerResponseSummary(from: &buffer)
-                self = .receiveWorkerResponseSummary(summary)
+                self = try .receiveWorkerResponseSummary(.init(from: &buffer))
             case 2:
-                let workerID = try UUID(from: &buffer)
-                let message = try WorkerResponseMessage(from: &buffer)
-                self = .receiveWorkerMessage(.init(workerID: workerID, message: message))
+                self = try .receiveWorkerMessage(.init(from: &buffer))
             case 3:
-                let workerID = try UUID(from: &buffer)
-                let releaseDigest = try String(from: &buffer)
-                self = .receiveWorkerFoundEvent(.init(workerID: workerID, releaseDigest: releaseDigest))
+                self = try .receiveWorkerFoundEvent(.init(from: &buffer))
             case 4:
-                self = try .receiveWorkerEOF(.init(workerID: .init(from: &buffer)))
+                self = try .receiveWorkerEOF(.init(from: &buffer))
+            case 5:
+                self = try .openClientSubrequest(.init(from: &buffer))
+            case 6:
+                self = try .subrequestPayloadChunk(.init(from: &buffer))
+            case 7:
+                self = try .closeClientSubrequest(.init(from: &buffer))
+            case 8:
+                self = try .cancelClientSubrequest(.init(from: &buffer))
+            case 9:
+                self = .endOfInput
+            case 10:
+                self = try .configureApplicationDataChunking(.init(from: &buffer))
             case let value:
                 throw DecodingError.dataCorrupted(.init(
                     codingPath: [ByteBufferCodingKey(Self.self)],
@@ -86,46 +112,122 @@ package enum CloudBoardJobAPIXPCClientToServerMessage {
     }
 
     package typealias InvokeWorkload = InvokeWorkloadRequest
-    package typealias Warmup = WarmupDetails
+    package typealias Warmup = ManagedWarmupInfo
     package typealias Parameters = ParametersData
 
     package struct RequestChunk: ByteBufferCodable, Sendable, Equatable {
-        package var data: Data?
-        package var isFinal: Bool
+        package var data: Data
 
-        internal init(data: Data? = nil, isFinal: Bool) {
+        package init(data: Data) {
             self.data = data
-            self.isFinal = isFinal
         }
 
         package func encode(to buffer: inout ByteBuffer) throws {
             try self.data.encode(to: &buffer)
-            try self.isFinal.encode(to: &buffer)
         }
 
         package init(from buffer: inout ByteBuffer) throws {
             self.data = try .init(from: &buffer)
-            self.isFinal = try .init(from: &buffer)
+        }
+    }
+
+    package struct OpenClientSubrequest: ByteBufferCodable, Sendable, Equatable {
+        package var clientSubrequestID: UInt32
+        package var cryptoMaterialHandles: [CryptoMaterialHandle]
+        package var isDiscardable: Bool
+
+        package init(
+            clientSubrequestID: UInt32,
+            cryptoMaterialHandles: [CryptoMaterialHandle],
+            isDiscardable: Bool
+        ) {
+            self.clientSubrequestID = clientSubrequestID
+            self.cryptoMaterialHandles = cryptoMaterialHandles
+            self.isDiscardable = isDiscardable
+        }
+
+        package func encode(to buffer: inout ByteBuffer) throws {
+            try self.clientSubrequestID.encode(to: &buffer)
+            try self.cryptoMaterialHandles.encode(to: &buffer)
+            try self.isDiscardable.encode(to: &buffer)
+        }
+
+        package init(from buffer: inout ByteBuffer) throws {
+            self.clientSubrequestID = try .init(from: &buffer)
+            self.cryptoMaterialHandles = try .init(from: &buffer)
+            self.isDiscardable = try .init(from: &buffer)
+        }
+    }
+
+    package struct SubrequestPayloadChunk: ByteBufferCodable, Sendable, Equatable {
+        package var clientSubrequestID: UInt32
+        package var chunk: Data
+
+        package init(clientSubrequestID: UInt32, chunk: Data) {
+            self.clientSubrequestID = clientSubrequestID
+            self.chunk = chunk
+        }
+
+        package func encode(to buffer: inout ByteBuffer) throws {
+            try self.clientSubrequestID.encode(to: &buffer)
+            try self.chunk.encode(to: &buffer)
+        }
+
+        package init(from buffer: inout ByteBuffer) throws {
+            self.clientSubrequestID = try .init(from: &buffer)
+            self.chunk = try .init(from: &buffer)
+        }
+    }
+
+    package struct CloseClientSubrequest: ByteBufferCodable, Sendable, Equatable {
+        package var clientSubrequestID: UInt32
+
+        package init(clientSubrequestID: UInt32) {
+            self.clientSubrequestID = clientSubrequestID
+        }
+
+        package func encode(to buffer: inout ByteBuffer) throws {
+            try self.clientSubrequestID.encode(to: &buffer)
+        }
+
+        package init(from buffer: inout ByteBuffer) throws {
+            self.clientSubrequestID = try .init(from: &buffer)
+        }
+    }
+
+    package struct CancelClientSubrequest: ByteBufferCodable, Sendable, Equatable {
+        package var clientSubrequestID: UInt32
+
+        package init(clientSubrequestID: UInt32) {
+            self.clientSubrequestID = clientSubrequestID
+        }
+
+        package func encode(to buffer: inout ByteBuffer) throws {
+            try self.clientSubrequestID.encode(to: &buffer)
+        }
+
+        package init(from buffer: inout ByteBuffer) throws {
+            self.clientSubrequestID = try .init(from: &buffer)
         }
     }
 
     package struct WorkerFound: ByteBufferCodable, Sendable, Equatable {
         package var workerID: UUID
-        package var releaseDigest: String
+        package var info: WorkerFoundInfo
 
-        internal init(workerID: UUID, releaseDigest: String) {
+        package init(workerID: UUID, info: WorkerFoundInfo) {
             self.workerID = workerID
-            self.releaseDigest = releaseDigest
+            self.info = info
         }
 
         package func encode(to buffer: inout ByteBuffer) throws {
             try self.workerID.encode(to: &buffer)
-            try self.releaseDigest.encode(to: &buffer)
+            try self.info.encode(to: &buffer)
         }
 
         package init(from buffer: inout ByteBuffer) throws {
             self.workerID = try UUID(from: &buffer)
-            self.releaseDigest = try .init(from: &buffer)
+            self.info = try .init(from: &buffer)
         }
     }
 
@@ -133,7 +235,7 @@ package enum CloudBoardJobAPIXPCClientToServerMessage {
         package var workerID: UUID
         package var message: WorkerResponseMessage
 
-        internal init(workerID: UUID, message: WorkerResponseMessage) {
+        package init(workerID: UUID, message: WorkerResponseMessage) {
             self.workerID = workerID
             self.message = message
         }
@@ -151,20 +253,20 @@ package enum CloudBoardJobAPIXPCClientToServerMessage {
 
     package struct WorkerResponseSummary: ByteBufferCodable, Sendable, Equatable {
         package var workerID: UUID
-        package var succeeded: Bool
+        package var status: WorkerResponseStatus
 
-        internal init(workerID: UUID, succeeded: Bool) {
+        package init(workerID: UUID, status: WorkerResponseStatus) {
             self.workerID = workerID
-            self.succeeded = succeeded
+            self.status = status
         }
 
         package func encode(to buffer: inout ByteBuffer) throws {
-            try self.succeeded.encode(to: &buffer)
+            try self.status.encode(to: &buffer)
             try self.workerID.encode(to: &buffer)
         }
 
         package init(from buffer: inout ByteBuffer) throws {
-            self.succeeded = try .init(from: &buffer)
+            self.status = try .init(from: &buffer)
             self.workerID = try UUID(from: &buffer)
         }
     }
@@ -172,7 +274,7 @@ package enum CloudBoardJobAPIXPCClientToServerMessage {
     package struct WorkerEOF: ByteBufferCodable, Sendable, Equatable {
         package var workerID: UUID
 
-        internal init(workerID: UUID) {
+        package init(workerID: UUID) {
             self.workerID = workerID
         }
 
@@ -188,7 +290,7 @@ package enum CloudBoardJobAPIXPCClientToServerMessage {
 
     internal struct Teardown: CloudBoardAsyncXPCByteBufferMessage, Equatable {
         internal typealias Success = ExplicitSuccess
-        internal typealias Failure = CloudBoardJobAPIError
+        internal typealias Failure = CloudBoardXPCAPIError
 
         init() {}
 
@@ -200,44 +302,15 @@ package enum CloudBoardJobAPIXPCClientToServerMessage {
 
 extension CloudBoardJobAPIXPCClientToServerMessage.InvokeWorkload: CloudBoardAsyncXPCByteBufferMessage {
     package typealias Success = ExplicitSuccess
-    package typealias Failure = CloudBoardJobAPIError
+    package typealias Failure = CloudBoardXPCAPIError
 }
 
 extension CloudBoardJobAPIXPCClientToServerMessage.Warmup: CloudBoardAsyncXPCByteBufferMessage {
     package typealias Success = ExplicitSuccess
-    package typealias Failure = CloudBoardJobAPIError
+    package typealias Failure = CloudBoardXPCAPIError
 }
 
 extension CloudBoardJobAPIXPCClientToServerMessage.Parameters: CloudBoardAsyncXPCByteBufferMessage {
     package typealias Success = ExplicitSuccess
-    package typealias Failure = CloudBoardJobAPIError
-}
-
-extension CloudBoardJobAPIError: ByteBufferCodable {
-    public func encode(to buffer: inout ByteBuffer) throws {
-        switch self {
-        case .internalError: buffer.writeInteger(0)
-        case .noDelegateSet: buffer.writeInteger(1)
-        }
-    }
-
-    public init(from buffer: inout ByteBuffer) throws {
-        guard let enumCase: Int = buffer.readInteger() else {
-            throw DecodingError.valueNotFound(
-                Self.self,
-                .init(codingPath: [], debugDescription: "no expected enum case")
-            )
-        }
-        switch enumCase {
-        case 0:
-            self = .internalError
-        case 1:
-            self = .noDelegateSet
-        case let value:
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: [ByteBufferCodingKey(Self.self)],
-                debugDescription: "bad result enum case \(value)"
-            ))
-        }
-    }
+    package typealias Failure = CloudBoardXPCAPIError
 }

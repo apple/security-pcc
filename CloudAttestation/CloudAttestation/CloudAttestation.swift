@@ -35,14 +35,12 @@ private let logger = Logger(subsystem: "com.apple.CloudAttestation", category: "
 ///
 /// Attestors also implement ``Validator`` and must be thread safe.
 public protocol Attestor: Sendable {
-    @available(*, deprecated, renamed: "defaultKeyDuration", message: "prefer Duration over TimeInterval")
-    var defaultKeyLifetime: TimeInterval { get }
     var defaultKeyDuration: Swift.Duration { get }
     var attestingKey: SecKey { get throws }
     var sepProtocol: any SEP.AttestationProtocol { get }
     var assetProvider: any AttestationAssetProvider { get }
     var enforcementOptions: EnforcementOptions { get }
-    var sealedHashSlots: Set<UUID> { get }
+    var sealedHashes: SealedHashSelector { get }
 
     /// Attest that a key is resident on the current device's Secure Enclave, along with all relevant attestable data.
     ///
@@ -56,13 +54,27 @@ public protocol Attestor: Sendable {
     func attest(key: SecKey, using: SecKey, expiration: Date, nonce: Data?) async throws -> AttestationBundle
     func attest(key: SecKey, using: SecKey, expiration: Date, appData: AttestationBundle.AppData) async throws -> AttestationBundle
     func attest(key: SecKey, expiration: Date, nonce: Data?) async throws -> AttestationBundle
+
+    // Deprecated items
+    @available(*, deprecated, renamed: "defaultKeyDuration", message: "prefer Duration over TimeInterval")
+    var defaultKeyLifetime: TimeInterval { get }
+    @available(*, deprecated, renamed: "sealedHashes")
+    var sealedHashSlots: Set<UUID> { get }
 }
 
 public struct EnforcementOptions: Sendable {
+    @available(*, deprecated)
     public var requireCertificateChain: Bool = true
+    public var requireAllAssets: Bool = false
+}
+
+public enum SealedHashSelector: Sendable {
+    case all
+    case some(Set<UUID>)
 }
 
 extension Attestor {
+    @available(*, deprecated, renamed: "defaultKeyDuration")
     public var defaultKeyLifetime: TimeInterval {
         defaultKeyDuration.timeInterval
     }
@@ -84,8 +96,14 @@ extension Attestor {
         EnforcementOptions()
     }
 
+    public var sealedHashes: SealedHashSelector {
+        .all
+    }
+
+    @available(*, deprecated, renamed: "sealedHashes")
     public var sealedHashSlots: Set<UUID> {
-        [cryptexSlotUUID, secureConfigSlotUUID]
+        logger.error("property sealedHashSlots is unused")
+        return []
     }
 
     public func defaultAttest(key: SecKey, using attestingKey: SecKey, expiration: Date, nonce: Data?) async throws -> AttestationBundle {
@@ -110,46 +128,75 @@ extension Attestor {
                     builder.apTicket = try self.assetProvider.apTicket
                 } catch {
                     logger.error("Unable to fetch ap ticket: \(error, privacy: .public)")
-                    throw error
+                    if self.enforcementOptions.requireAllAssets {
+                        throw error
+                    }
                 }
+
+                #if os(macOS)
+                do {
+                    builder.localPolicy = try .with { builder in
+                        builder.implementation = .ec384Sha384
+                        builder.policy = try self.assetProvider.localBootPolicy
+                    }
+
+                    builder.sfrManifest = try self.assetProvider.sfrManifest
+                } catch {
+                    logger.error("Unable to fetch secure boot metadata: \(error, privacy: .public)")
+                    if self.enforcementOptions.requireAllAssets {
+                        throw error
+                    }
+                }
+                #endif
 
                 // Only populate if not empty, so we don't have a wasteful empty proto field
                 if !provisioningCertificateChain.isEmpty {
                     builder.provisioningCertificateChain = provisioningCertificateChain
                 } else {
                     logger.warning("Empty provisioning certificate chain")
-                    if self.enforcementOptions.requireCertificateChain {
+                    if self.enforcementOptions.requireAllAssets {
                         throw CloudAttestationError.emptyCertificateChain
                     }
                 }
 
-                var sealedHashes = try self.assetProvider.sealedHashEntries
-                synchronizeLockStates(attestation: parsedAttestation, sealedHashes: &sealedHashes)
+                var currentSealedHashes = try self.assetProvider.sealedHashEntries
+                guard !currentSealedHashes.isEmpty else {
+                    return
+                }
 
-                for desiredSlotUUID in self.sealedHashSlots.sorted() {
-                    switch desiredSlotUUID {
-                    case cryptexSlotUUID:
-                        guard let cryptexSlot = sealedHashes[cryptexSlotUUID] else {
-                            logger.error("Failed to read cryptex sealed hashes from \(cryptexSlotUUID, privacy: .public)")
-                            throw CloudAttestationError.missingSealedHash(slot: cryptexSlotUUID)
-                        }
-                        populateCryptex(&builder, cryptexSlot, cryptexSlotUUID)
+                synchronizeLockStates(attestation: parsedAttestation, sealedHashes: &currentSealedHashes)
 
-                    case secureConfigSlotUUID:
-                        guard let secureConfigSlot = sealedHashes[secureConfigSlotUUID] else {
-                            logger.error("Failed to read secure config from \(secureConfigSlotUUID, privacy: .public)")
-                            throw CloudAttestationError.missingSealedHash(slot: secureConfigSlotUUID)
-                        }
-                        try populateSecureConfig(&builder, secureConfigSlot)
+                let desiredSlotUUIDs: Set<UUID> =
+                    switch self.sealedHashes {
+                    case .all:
+                        .init(currentSealedHashes.keys)
+                    case .some(let udids):
+                        udids
+                    }
 
-                    default:
-                        guard let genericSlot = sealedHashes[desiredSlotUUID] else {
-                            logger.error("Failed to read seled hashes from \(desiredSlotUUID, privacy: .public)")
+                for desiredSlotUUID in desiredSlotUUIDs.sorted() {
+                    // switch on known sealed hashes for better logging
+                    guard let slot = currentSealedHashes[desiredSlotUUID] else {
+                        logger.error("Failed to read seled hashes from \(desiredSlotUUID, privacy: .public)")
+                        if self.enforcementOptions.requireAllAssets {
                             throw CloudAttestationError.missingSealedHash(slot: desiredSlotUUID)
                         }
-                        populateGenericSealedHash(&builder, genericSlot, desiredSlotUUID)
+                        continue
+                    }
+                    // peek the record type from the top entry, since we replicate the slot data to each entry
+                    let recordType: String? = slot.first?.type?.lowercased()
+                    switch recordType {
+                    case "cryptex":
+                        populateCryptex(&builder, slot, desiredSlotUUID)
+
+                    case "config":
+                        try populateSecureConfig(&builder, slot, desiredSlotUUID)
+
+                    default:
+                        populateGenericSealedHash(&builder, slot, desiredSlotUUID)
                     }
                 }
+                return
             }
 
             let bundle = AttestationBundle(proto: proto)
@@ -299,11 +346,7 @@ extension Validator {
                 attestation = try SEP.Attestation(from: bundle.proto.sepAttestation)
             }
 
-            if let nonce {
-                guard attestation.nonce == nonce else {
-                    throw CloudAttestationError.invalidNonce
-                }
-            }
+            try validateNonce(desiredNonce: nonce, observedNonce: attestation.nonce, bundle: bundle, logger: logger)
 
             guard let keyData: PublicKeyData = attestation.publicKeyData else {
                 throw CloudAttestationError.unexpected(reason: "Unknown public key type")
@@ -350,9 +393,9 @@ extension Validator {
 public struct AttestationBundle: Equatable, Sendable {
     static let logger = Logger(subsystem: "com.apple.CloudAttestation", category: "AttestationBundle")
 
-    var proto: Proto_AttestationBundle
+    public internal(set) var proto: Proto_AttestationBundle
 
-    init(proto: Proto_AttestationBundle) {
+    public init(proto: Proto_AttestationBundle) {
         self.proto = proto
     }
 
@@ -465,6 +508,16 @@ public enum Validated {
             self.routingHint = routingHint
             self.releaseDigest = releaseDigest
         }
+
+        public init(bundle: CloudAttestation.AttestationBundle, sepAttestation: SEP.Attestation? = nil) {
+            let sepAttestation = sepAttestation ?? (try? SEP.Attestation(from: bundle.proto.sepAttestation))
+            let release = try? Release(bundle: bundle, evaluateTrust: false).digest()
+
+            self.bundle = bundle
+            self._udid = sepAttestation?.identity?.udid
+            self.routingHint = nil
+            self.releaseDigest = release.map { Data($0) }
+        }
     }
 }
 
@@ -557,7 +610,7 @@ public enum CloudAttestationError: Error {
 }
 
 extension CloudAttestationError: CustomNSError {
-    public static var errorDomain: String = "com.apple.CloudAttestation.CloudAttestationError"
+    public static let errorDomain: String = "com.apple.CloudAttestation.CloudAttestationError"
 
     public var errorCode: Int {
         return switch self {
@@ -628,7 +681,7 @@ private func populateCryptex(_ builder: inout Proto_AttestationBundle, _ entries
     }
 }
 
-private func populateSecureConfig(_ builder: inout Proto_AttestationBundle, _ entries: [SEP.SealedHash.Entry]) throws {
+private func populateSecureConfig(_ builder: inout Proto_AttestationBundle, _ entries: [SEP.SealedHash.Entry], _ slot: UUID = secureConfigSlotUUID) throws {
     guard !entries.isEmpty else {
         return
     }
@@ -666,7 +719,54 @@ private func populateGenericSealedHash(_ builder: inout Proto_AttestationBundle,
                 if let data = sepEntry.data {
                     entry.generic = data
                 }
+                if let metadata = sepEntry.metadata {
+                    entry.metadata = metadata
+                }
             }
         }
+    }
+}
+
+internal func validateNonce(desiredNonce: Data?, observedNonce: Data?, bundle: AttestationBundle, logger: Logger) throws {
+
+    // if attestation.nonce & !attestation.appData: validate must be called with nonce
+    // if attestation.nonce & attestation.appData: validate appData from nonce
+    // if !attestation.nonce & attestation.appData: reject
+    // if !attestation.nonce & !attestation.appData: continue
+
+    switch (observedNonce, bundle.proto.appData.isEmpty ? nil : bundle.proto.appData) {
+    case (.some(let observedNonce), .none):
+        guard let nonce = desiredNonce else {
+            logger.error("Attestation contains nonce, but no nonce provided to validate")
+            throw CloudAttestationError.invalidNonce
+        }
+
+        guard observedNonce == nonce else {
+            logger.error("Observed nonce \(observedNonce.hexString, privacy: .public) does not match \(nonce.hexString, privacy: .public)")
+            throw CloudAttestationError.invalidNonce
+        }
+
+    case (.some(let observedNonce), .some(let appData)):
+        let digest = appData.digest()
+        if let desiredNonce {
+            // if we have appData, the attestation itself has a nonce, and a desiredNonce was passed in,
+            // check that the desiredNonce matches anyway.
+            guard desiredNonce == observedNonce else {
+                logger.error("Observed nonce \(observedNonce.hexString, privacy: .public) does not match \(desiredNonce.hexString, privacy: .public)")
+                throw CloudAttestationError.invalidNonce
+            }
+        }
+
+        guard digest.elementsEqual(observedNonce) else {
+            logger.error("app data integrity check failed: (nonce:\(observedNonce.hexString, privacy: .public) != digest:\(digest.hexString, privacy: .public)")
+            throw CloudAttestationError.untrustedAppData
+        }
+
+    case (.none, .some(_)):
+        logger.error("app data integrity check failed: no nonce observed")
+        throw CloudAttestationError.untrustedAppData
+
+    case (.none, .none):
+        break
     }
 }

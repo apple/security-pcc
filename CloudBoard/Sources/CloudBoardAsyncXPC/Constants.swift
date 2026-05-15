@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal let kMessageTypeKey = "cloudboard-async-xpc-msg-type"
 internal let kMessageBodyKey = "cloudboard-async-xpc-msg-body"
 internal let kMessageRemoteProcessErrorKey = "cloudboard-async-xpc-msg-remote-process-error"

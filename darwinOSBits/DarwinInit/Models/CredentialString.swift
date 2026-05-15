@@ -17,11 +17,24 @@
 //  DarwinInit
 //
 
+/// Wrapper around `String` that will be redacted when encoded via an `Encoder`.
+///
+/// Will replace the string with `Self.redactionString` when encoded via an `Encoder`.
+/// This can be overriden by setting the `redactionOverrideKey` to `true` in `Encoder.userInfo`,
+/// like so:
+/// ```swift
+/// let encoder = JSONEncoder()
+/// let str = CredentialString("secret")
+/// encoder.userInfo[CredentialString.redactionOverrideKey] = true
+/// let data = try encoder.encode(json)
+/// ```
+///
 public struct CredentialString {
     let string: String
     
     static let redactionOverrideKey = CodingUserInfoKey(rawValue: "CredentialString.redactionOverrideKey")!
-    
+    static let redactionString = "<redacted>"
+
     init(_ string: String) {
         self.string = string
     }
@@ -42,8 +55,8 @@ extension CredentialString: Encodable {
         case let value as Bool where value == true:
             try container.encode(self.string)
         default:
-            try container.encode("<redacted>")
-        }        
+            try container.encode(Self.redactionString)
+        }
     }
 }
 

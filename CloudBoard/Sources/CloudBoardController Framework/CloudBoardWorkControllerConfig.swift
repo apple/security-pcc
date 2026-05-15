@@ -12,9 +12,8 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 internal import CloudBoardCommon
+internal import CloudBoardLogging
 import os
 @_weakLinked import SecureConfigDB
 
@@ -29,8 +28,7 @@ public struct CloudBoardWorkControllerConfig: Sendable {
     public static func readRoutingGroupAliases() throws -> [String]? {
         if #_hasSymbol(SecureConfigParameters.self) {
             do {
-                let aliases = try SecureConfigLoader.real.load().routingGroupAliases
-                return aliases.isEmpty ? nil : aliases
+                return try SecureConfigLoader.real.load().routingGroupAliases
             } catch {
                 Self.logger.error("Failed to load SecureConfig: \(String(reportable: error))")
                 throw error

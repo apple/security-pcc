@@ -16,7 +16,9 @@
 //  CorporateRoot.swift
 //  DarwinInit
 //
+
 import Foundation
+import Security_Private
 
 struct Certificate {
     var cert: SecCertificate

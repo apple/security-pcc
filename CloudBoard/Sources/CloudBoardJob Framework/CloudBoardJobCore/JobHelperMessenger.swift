@@ -12,10 +12,10 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardJobAPI
+internal import CloudBoardLogging
 import Foundation
 import os
 internal import Synchronization
@@ -40,7 +40,40 @@ enum WarmupStateError: Error {
     case foundIdleAfterWarmupFinished
 }
 
-enum JobHelperMessengerError: Error {
+extension WarmupStateError: RequestExecutionErrorProtocol {
+    var errorSource: RequestExecutionErrorSource {
+        return RequestExecutionErrorSource.cloudAppFramework
+    }
+
+    var staticStringRepresentation: StaticString {
+        switch self {
+        case .waitInvokedWhileAlreadyWaiting: "waitInvokedWhileAlreadyWaiting"
+        case .waitInvokedWhileInProgressWithContinuationSet: "waitInvokedWhileInProgressWithContinuationSet"
+        case .warmupInvokedMoreThanOnce: "warmupInvokedMoreThanOnce"
+        case .warmupInvokedAfterComplete: "warmupInvokedAfterComplete"
+        case .warmupNeverCalled: "warmupNeverCalled"
+        case .foundWaitingAfterWarmupFinished: "foundWaitingAfterWarmupFinished"
+        case .foundCompleteAfterWarmupFinished: "foundCompleteAfterWarmupFinished"
+        case .foundIdleAfterWarmupFinished: "foundIdleAfterWarmupFinished"
+        }
+    }
+
+    var errorCode: UInt32 {
+        switch self {
+        case .waitInvokedWhileAlreadyWaiting: CloudAppFrameworkErrorCodes.waitInvokedWhileAlreadyWaiting.rawValue
+        case .waitInvokedWhileInProgressWithContinuationSet: CloudAppFrameworkErrorCodes
+            .waitInvokedWhileInProgressWithContinuationSet.rawValue
+        case .warmupInvokedMoreThanOnce: CloudAppFrameworkErrorCodes.warmupInvokedMoreThanOnce.rawValue
+        case .warmupInvokedAfterComplete: CloudAppFrameworkErrorCodes.warmupInvokedAfterComplete.rawValue
+        case .warmupNeverCalled: CloudAppFrameworkErrorCodes.warmupNeverCalled.rawValue
+        case .foundWaitingAfterWarmupFinished: CloudAppFrameworkErrorCodes.foundWaitingAfterWarmupFinished.rawValue
+        case .foundCompleteAfterWarmupFinished: CloudAppFrameworkErrorCodes.foundCompleteAfterWarmupFinished.rawValue
+        case .foundIdleAfterWarmupFinished: CloudAppFrameworkErrorCodes.foundIdleAfterWarmupFinished.rawValue
+        }
+    }
+}
+
+enum JobHelperMessengerError: Error, Equatable {
     case waitForWarmupCalledAfterEndJob
     case parametersReceivedTwice
     case waitForParametersCalledAfterEndJob
@@ -52,25 +85,98 @@ enum JobHelperMessengerError: Error {
     case unknownPCCWorkerID
     case workerFoundResultReceivedTwice
     case workerFoundResultNotReceived
+    case unknownSubrequestID(UInt32)
+    case openSubreqeustCalledBeforeParametersReceived
+    case subrequestAlreadyClosed(UInt32)
+    case subrequestAlreadyOpened(UInt32)
+    case workerRequestDiscardedForSingleModeRequest
+    case missingApplicationDataChunkingConfig
+    case receivedDuplicateApplicationDataChunkingConfig
+    case unknownError
+}
+
+extension JobHelperMessengerError: RequestExecutionErrorProtocol {
+    var errorSource: RequestExecutionErrorSource {
+        return RequestExecutionErrorSource.cloudAppFramework
+    }
+
+    var staticStringRepresentation: StaticString {
+        switch self {
+        case .waitForWarmupCalledAfterEndJob: "waitForWarmupCalledAfterEndJob"
+        case .parametersReceivedTwice: "parametersReceivedTwice"
+        case .waitForParametersCalledAfterEndJob: "waitForParametersCalledAfterEndJob"
+        case .provideOutputCalledAfterEndJob: "provideOutputCalledAfterEndJob"
+        case .endOfResponseCalledAfterEndJob: "endOfResponseCalledAfterEndJob"
+        case .endJobCalledMoreThanOnce: "endJobCalledMoreThanOnce"
+        case .tornDownBeforeParametersReceived: "tornDownBeforeParametersReceived"
+        case .pccRequestCalledAfterEndJob: "pccRequestCalledAfterEndJob"
+        case .unknownPCCWorkerID: "unknownPCCWorkerID"
+        case .workerFoundResultReceivedTwice: "workerFoundResultReceivedTwice"
+        case .workerFoundResultNotReceived: "workerFoundResultNotReceived"
+        case .unknownSubrequestID: "unknownSubrequestID"
+        case .openSubreqeustCalledBeforeParametersReceived: "openSubreqeustCalledBeforeParametersReceived"
+        case .subrequestAlreadyClosed: "subrequestAlreadyClosed"
+        case .subrequestAlreadyOpened: "subrequestAlreadyOpened"
+        case .workerRequestDiscardedForSingleModeRequest: "workerRequestDiscardedForSingleModeRequest"
+        case .missingApplicationDataChunkingConfig: "missingApplicationDataChunkingConfig"
+        case .receivedDuplicateApplicationDataChunkingConfig: "receivedDuplicateApplicationDataChunkingConfig"
+        case .unknownError: "unknownError"
+        }
+    }
+
+    var errorCode: UInt32 {
+        switch self {
+        case .waitForWarmupCalledAfterEndJob: CloudAppFrameworkErrorCodes.waitForWarmupCalledAfterEndJob.rawValue
+        case .parametersReceivedTwice: CloudAppFrameworkErrorCodes.parametersReceivedTwice.rawValue
+        case .waitForParametersCalledAfterEndJob: CloudAppFrameworkErrorCodes.waitForParametersCalledAfterEndJob
+            .rawValue
+        case .provideOutputCalledAfterEndJob: CloudAppFrameworkErrorCodes.provideOutputCalledAfterEndJob.rawValue
+        case .endOfResponseCalledAfterEndJob: CloudAppFrameworkErrorCodes.endOfResponseCalledAfterEndJob.rawValue
+        case .endJobCalledMoreThanOnce: CloudAppFrameworkErrorCodes.endJobCalledMoreThanOnce.rawValue
+        case .tornDownBeforeParametersReceived: CloudAppFrameworkErrorCodes.tornDownBeforeParametersReceived.rawValue
+        case .pccRequestCalledAfterEndJob: CloudAppFrameworkErrorCodes.pccRequestCalledAfterEndJob.rawValue
+        case .unknownPCCWorkerID: CloudAppFrameworkErrorCodes.unknownPCCWorkerID.rawValue
+        case .workerFoundResultReceivedTwice: CloudAppFrameworkErrorCodes.workerFoundResultReceivedTwice.rawValue
+        case .workerFoundResultNotReceived: CloudAppFrameworkErrorCodes.workerFoundResultNotReceived.rawValue
+        case .unknownSubrequestID: CloudAppFrameworkErrorCodes.unknownSubrequestID.rawValue
+        case .openSubreqeustCalledBeforeParametersReceived: CloudAppFrameworkErrorCodes
+            .openSubreqeustCalledBeforeParametersReceived.rawValue
+        case .subrequestAlreadyClosed: CloudAppFrameworkErrorCodes.subrequestAlreadyClosed.rawValue
+        case .subrequestAlreadyOpened: CloudAppFrameworkErrorCodes.subrequestAlreadyOpened.rawValue
+        case .workerRequestDiscardedForSingleModeRequest: CloudAppFrameworkErrorCodes
+            .workerRequestDiscardedForSingleModeRequest.rawValue
+        case .missingApplicationDataChunkingConfig: CloudAppFrameworkErrorCodes.missingApplicationDataChunkingConfig
+            .rawValue
+        case .receivedDuplicateApplicationDataChunkingConfig: CloudAppFrameworkErrorCodes
+            .receivedDuplicateApplicationDataChunkingConfig.rawValue
+        case .unknownError: CloudAppFrameworkErrorCodes.unknownError.rawValue
+        }
+    }
 }
 
 protocol JobHelperMessengerProtocol: Sendable {
     // General
-    func provideOutput(_ data: Data) async throws
     func waitForWarmupComplete() async throws
     func waitForParameters() async throws -> ParametersData
-    func warmup(details: WarmupDetails) async throws
+    func warmup(info: ManagedWarmupInfo) async throws
     func receiveParameters(parametersData: ParametersData) async throws
-    func provideInput(_ data: Data?, isFinal: Bool) async throws
+    func provideInput(_ data: Data) async throws
     func teardown() async
     func cancel() async
+    func sendSubrequestResponse(subrequestID: UInt32, data: Data) async throws
+    func subresponseEOF(subrequestID: UInt32, status: SubresponseStatus) async throws
 
     // Proxy
-    func findWorker(query: FindWorkerQuery, requestSummary: FindWorkerRequestSummaryProvisioner) async throws
+    func findWorker(
+        query: FindWorkerQuery,
+        subrequestID: UInt32?,
+        cryptoMaterialHandles: [CryptoMaterialHandle],
+        requestSummary: FindWorkerRequestSummaryProvisioner
+    ) async throws
         -> (PCCWorkerInfo, AsyncStream<WorkerResponseMessage>)
     func sendWorkerRequestMessage(workerID: UUID, _ data: Data) async throws
     func sendWorkerEOF(workerID: UUID, isError: Bool) async throws
-    func receiveWorkerFoundEvent(workerID: UUID, releaseDigest: String) async throws
+    func receiveWorkerFoundEvent(workerID: UUID, info: WorkerFoundInfo) async throws
     func receiveWorkerMessage(workerID: UUID, _ response: WorkerResponseMessage) async throws
     func receiveWorkerEOF(workerID: UUID) async throws
     func finalizeRequestExecutionLog() async throws
@@ -81,18 +187,29 @@ protocol JobHelperMessengerProtocol: Sendable {
         info: String,
         distributionType: EnsembleKeyDistributionType
     ) async throws -> EnsembleKeyInfo
+
+    // Private Information Retrieval (PIR)
+    func makePIRRequest(
+        _ request: PrivateInformationRetrievalRequest,
+        purpose: String,
+        traceContext: PIRRequestTraceContext
+    ) async throws -> PrivateInformationRetrievalResponse
+
+    func configureApplicationDataChunking(config: ApplicationDataChunkingConfiguration) async throws
+    func getApplicationDataChunkingConfiguration() async throws -> ApplicationDataChunkingConfiguration
+    func getMaxApplicationLayerMessageSize() async throws -> Int
 }
 
 actor JobHelperMessenger: JobHelperMessengerProtocol {
-    typealias JobHelperInputContinuation = AsyncStream<Data>.Continuation
+    typealias JobHelperSubrequestContinuation = AsyncStream<SubrequestExecution>.Continuation
     typealias JobHelperTeardownContinuation = AsyncStream<Void>.Continuation
 
-    private static let log = Logger(
+    fileprivate static let log = Logger(
         subsystem: "com.apple.cloudos.cloudboard",
         category: "JobHelperMessenger"
     )
 
-    private let inputContinuation: JobHelperInputContinuation
+    private let subrequestContinuation: JobHelperSubrequestContinuation
     private let teardownContinuation: JobHelperTeardownContinuation
     private let appInstance: CloudBoardApp
     private let log: Logger
@@ -102,27 +219,52 @@ actor JobHelperMessenger: JobHelperMessengerProtocol {
     private var metricsBuilder: CloudAppMetrics.Builder
     private var parametersReceived: Bool
     private var parametersPromise:
-        Promise<ParametersData, JobHelperMessengerError> = Promise()
+        Promise<ParametersData, JobHelperMessengerError> = Promise(
+            autoFailureIfUnfulfilled: JobHelperMessengerError
+                .tornDownBeforeParametersReceived
+        )
+    private var parametersData: ParametersData?
 
     private let server: CloudBoardJobAPIServerProtocol
 
     private var pccWorkerRequests: [UUID: PCCWorkerResponseSession] = [:]
 
+    // Subrequest management
+    private enum SubrequestSessionState {
+        case open(SubrequestSession)
+        case closed
+    }
+
+    private enum ApplicationDataChunkingConfigState {
+        case waitingForConfig
+        case configReceived(ApplicationDataChunkingConfiguration)
+    }
+
+    private var applicationDataChunkingConfigState: ApplicationDataChunkingConfigState
+
+    private var activeSubrequests: [UInt32: SubrequestSessionState] = [:]
+
+    package static let defaultSubrequestID: UInt32 = 0
+    private var singleRequestMode: Bool = false
+    private var maxApplicationLayerMessageSize: Int = 0
+    private var lengthPrefixMessageChunker: LengthPrefixMessageChunker?
+
     init(
         server: CloudBoardJobAPIServerProtocol,
-        inputContinuation: JobHelperInputContinuation,
+        subrequestContinuation: JobHelperSubrequestContinuation,
         teardownContinuation: JobHelperTeardownContinuation,
         log: os.Logger,
         appInstance: CloudBoardApp,
         metricsBuilder: CloudAppMetrics.Builder
     ) async {
-        self.inputContinuation = inputContinuation
+        self.subrequestContinuation = subrequestContinuation
         self.teardownContinuation = teardownContinuation
         self.log = log
         self.server = server
         self.appInstance = appInstance
         self.metricsBuilder = metricsBuilder
         self.parametersReceived = false
+        self.applicationDataChunkingConfigState = .waitingForConfig
         await self.server.set(delegate: self)
         await self.server.connect()
     }
@@ -145,7 +287,10 @@ actor JobHelperMessenger: JobHelperMessengerProtocol {
         guard self.endCalled == false else {
             throw JobHelperMessengerError.provideOutputCalledAfterEndJob
         }
-        await self.server.provideResponseChunk(data)
+
+        for chunk in try self.getLengthPrefixMessageChunker().chunkData(data: data) {
+            await self.server.provideResponseChunk(chunk)
+        }
     }
 
     func waitForWarmupComplete() async throws {
@@ -195,6 +340,14 @@ actor JobHelperMessenger: JobHelperMessengerProtocol {
         await self.server.endOfResponse()
     }
 
+    func reportCloudAppRequestExecutionError(error: CloudAppRequestExecutionError) async {
+        await self.server.reportRequestExecutionError(RequestExecutionError(from: error))
+    }
+
+    func reportRequestExecutionError(error: RequestExecutionErrorProtocol) async {
+        await self.server.reportRequestExecutionError(RequestExecutionError(from: error))
+    }
+
     func internalError() async {
         await self.server.internalError()
     }
@@ -208,12 +361,73 @@ actor JobHelperMessenger: JobHelperMessengerProtocol {
 
         await self.server.endJob()
     }
+
+    // MARK: - Subrequest Management
+
+    /// Send a subrequest response chunk to the server
+    func sendSubrequestResponse(subrequestID: UInt32, data: Data) async throws {
+        guard self.endCalled == false else {
+            throw JobHelperMessengerError.provideOutputCalledAfterEndJob
+        }
+        if self.singleRequestMode {
+            try await self.provideOutput(data)
+        } else {
+            for chunk in try self.getLengthPrefixMessageChunker().chunkData(data: data) {
+                await self.server.sendSubresponsePayload(subrequestID: subrequestID, payload: chunk)
+            }
+        }
+    }
+
+    /// Send subresponse EOF to the client
+    func subresponseEOF(subrequestID: UInt32, status: SubresponseStatus) async throws {
+        guard self.endCalled == false else {
+            throw JobHelperMessengerError.endOfResponseCalledAfterEndJob
+        }
+
+        switch status {
+        case .error(let error):
+            self.log.error(
+                "Sub request \(subrequestID, privacy: .public) failed with error: \(String(reportable: error), privacy: .public)"
+            )
+        case .discarded:
+            self.log.error("Sub request \(subrequestID, privacy: .public) discarded")
+        case .ok:
+            self.log.log("Sub request \(subrequestID, privacy: .public) finished")
+        }
+
+        if self.singleRequestMode {
+            switch status {
+            case .ok:
+                try await self.endOfResponse()
+            case .discarded:
+                self.log
+                    .error("Unexpectedly received discarded sub response status for cloud app in single request mode")
+                throw JobHelperMessengerError.workerRequestDiscardedForSingleModeRequest
+            case .error(let error):
+                await self.reportErrorForSingleRequestMode(error: error)
+            }
+        } else {
+            let internalSubresponseStatus = InternalSubresponseStatus(status)
+            await self.server.sendSubresponseEOF(subrequestID: subrequestID, status: internalSubresponseStatus)
+        }
+    }
+
+    private func reportErrorForSingleRequestMode(error: Error) async {
+        switch error {
+        case let requestExecutionError as RequestExecutionErrorProtocol:
+            await self.reportRequestExecutionError(error: requestExecutionError)
+            await self.internalError()
+        case let cloudAppRequestExecutionError as CloudAppRequestExecutionError:
+            await self.reportCloudAppRequestExecutionError(error: cloudAppRequestExecutionError)
+        default: await self.internalError()
+        }
+    }
 }
 
 extension JobHelperMessenger: CloudBoardJobAPIServerDelegateProtocol {}
 
 extension JobHelperMessenger: CloudBoardJobAPIClientToServerProtocol {
-    func warmup(details: WarmupDetails) async throws {
+    func warmup(info: ManagedWarmupInfo) async throws {
         switch self.warmupState {
         case .idle:
             self.warmupState = .warmupInProgress(nil)
@@ -225,12 +439,15 @@ extension JobHelperMessenger: CloudBoardJobAPIClientToServerProtocol {
             throw WarmupStateError.warmupInvokedAfterComplete
         }
 
-        self.metricsBuilder.receivedJobHelperMetricDelivery(
-            initialMetrics: details
-        )
-
         do {
-            try await self.appInstance.warmup()
+            try await self.appInstance.warmup(
+                environment: WarmupEnvironment(
+                    cloudAppName: info.cloudAppName,
+                    launchdJobInstanceUUID: info.launchdJobInstanceUUID,
+                    assetsMetadata: info.cloudAppAssetsMetadata
+                )
+            )
+            self.maxApplicationLayerMessageSize = info.maxApplicationLayerMessageSize
         } catch {
             switch self.warmupState {
             case .idle, .waiting:
@@ -264,24 +481,161 @@ extension JobHelperMessenger: CloudBoardJobAPIClientToServerProtocol {
         self.metricsBuilder.receivedParameters(parametersData)
         self.parametersReceived = true
         self.parametersPromise.succeed(with: parametersData)
+        self.parametersData = parametersData
     }
 
-    func provideInput(_ data: Data?, isFinal: Bool) async throws {
-        if let data {
-            self.inputContinuation.yield(data)
+    func provideInput(_ data: Data) async throws {
+        // If this method is called this means we are running
+        // in a mode where there are no sub requests,
+        // hence we just use a run request with id kDefaultSubrequestID.
+        // Or we have received notification of end of input on the connection
+        if !self.activeSubrequests.keys.contains(Self.defaultSubrequestID) {
+            try await self.fabricateClientSubrequest()
         }
-        if isFinal {
-            self.log.debug("Received final request chunk")
-            self.inputContinuation.finish()
+        try await self.receiveSubrequestPayload(subrequestID: Self.defaultSubrequestID, payload: data)
+    }
+
+    func openClientSubrequest(
+        subrequestID: UInt32,
+        cryptoMaterialHandles: [CryptoMaterialHandle],
+        isDiscardable: Bool
+    ) async throws {
+        self.log.debug("Opening client subrequest \(subrequestID, privacy: .public)")
+
+        guard let parametersData else {
+            throw JobHelperMessengerError.openSubreqeustCalledBeforeParametersReceived
+        }
+
+        guard !self.activeSubrequests.keys.contains(subrequestID) else {
+            throw JobHelperMessengerError.subrequestAlreadyOpened(subrequestID)
+        }
+
+        // Create and store the subrequest session
+        let session = SubrequestSession(
+            subrequestID: subrequestID,
+            messenger: self,
+            maxApplicationLayerMessageSize: self.maxApplicationLayerMessageSize
+        )
+
+        self.activeSubrequests[subrequestID] = .open(session)
+        self.subrequestContinuation.yield(.init(
+            subrequestID: subrequestID,
+            cryptoMaterialHandles: cryptoMaterialHandles.map { $0.uuid },
+            events: session.events,
+            responseWriter: session.responseWriter,
+            pccClient: .init(
+                jobHelperMessenger: self,
+                clientRequestID: parametersData.plaintextMetadata.requestID,
+                requestBypassed: parametersData.requestBypassed,
+                clientSubrequestCapabilites: .init(
+                    clientSubrequestID: subrequestID,
+                    cryptoMaterialHandles: .init(cryptoMaterialHandles.map { $0.uuid })
+                )
+            ),
+            isDiscardable: isDiscardable
+        ))
+    }
+
+    func receiveSubrequestPayload(subrequestID: UInt32, payload: Data) async throws {
+        self.log.debug("Received subrequest payload for \(subrequestID, privacy: .public)")
+
+        guard let sessionState = self.activeSubrequests[subrequestID] else {
+            self.log.error("Received payload for unknown subrequest ID: \(subrequestID, privacy: .public)")
+            throw JobHelperMessengerError.unknownSubrequestID(subrequestID)
+        }
+        switch sessionState {
+        case .closed:
+            self.log.error("Received payload for closed subrequest ID: \(subrequestID, privacy: .public)")
+            throw JobHelperMessengerError.subrequestAlreadyClosed(subrequestID)
+        case .open(let session):
+            let chunkingConfig = try await self.getApplicationDataChunkingConfiguration()
+            try session.receivePayload(payload, chunkingConfig: chunkingConfig)
         }
     }
 
-    func teardown() {
+    func closeClientSubrequest(subrequestID: UInt32) async throws {
+        self.log.debug("Closing client subrequest \(subrequestID)")
+
+        guard let sessionState = self.activeSubrequests[subrequestID] else {
+            self.log.error("Closing unknown subrequest ID: \(subrequestID, privacy: .public)")
+            throw JobHelperMessengerError.unknownSubrequestID(subrequestID)
+        }
+        switch sessionState {
+        case .closed:
+            self.log.error("Already closed subrequest ID: \(subrequestID, privacy: .public)")
+            throw JobHelperMessengerError.subrequestAlreadyClosed(subrequestID)
+        case .open(let session):
+            // We retain the subrequest ID in the map in order to be able to distinguish between unknown and previously
+            // closed subrequests
+            self.activeSubrequests[subrequestID] = .closed
+            // endOfInput can throw error, cleaning states before calling it.
+            try session.endOfInput()
+        }
+    }
+
+    func cancelClientSubrequest(subrequestID: UInt32) async throws {
+        self.log.debug("Cancelling client subrequest \(subrequestID)")
+
+        guard let sessionState = self.activeSubrequests[subrequestID] else {
+            self.log.error("Cancelling unknown subrequest ID: \(subrequestID, privacy: .public)")
+            throw JobHelperMessengerError.unknownSubrequestID(subrequestID)
+        }
+        switch sessionState {
+        case .closed:
+            self.log.log("Cancelling already closed subrequest ID: \(subrequestID, privacy: .public). Ignoring.")
+        case .open(let session):
+            // It is up to the cloud app to react to cancellation events
+            session.cancel()
+        }
+    }
+
+    func teardown() async {
         self.log.debug("Received teardown request")
         self.teardownContinuation.finish()
     }
 
-    func cancel() {
+    private func closeActiveSubrequestsExceptDefault() {
+        for (subrequestID, sessionState) in self.activeSubrequests {
+            if subrequestID == Self.defaultSubrequestID {
+                continue
+            }
+            self.log.debug("Closing subrequest \(subrequestID, privacy: .public) due to final message")
+            if case .open(let session) = sessionState {
+                do {
+                    try session.endOfInput()
+                } catch {
+                    if let requestExecutionError = error as? RequestExecutionErrorProtocol {
+                        self.log.error(
+                            """
+                            Closing subrequest \(subrequestID, privacy: .public)
+                            error: \(String(reportable: requestExecutionError), privacy: .public)
+                            """
+                        )
+                    } else {
+                        self.log.error("Error Closing subrequest \(subrequestID, privacy: .public)")
+                    }
+                }
+            }
+        }
+    }
+
+    func endOfInput() async throws {
+        do {
+            // Skipping closing the default subrequest here as it is getting closed in the next step
+            self.closeActiveSubrequestsExceptDefault()
+
+            if self.activeSubrequests.keys.contains(Self.defaultSubrequestID) {
+                try await self.closeClientSubrequest(subrequestID: Self.defaultSubrequestID)
+            }
+
+            self.subrequestContinuation.finish()
+        } catch {
+            self.subrequestContinuation.finish()
+            throw error
+        }
+    }
+
+    func cancel() async {
         if self.parametersReceived == false {
             self.parametersPromise.fail(
                 with:
@@ -292,6 +646,8 @@ extension JobHelperMessenger: CloudBoardJobAPIClientToServerProtocol {
 
     func findWorker(
         query: FindWorkerQuery,
+        subrequestID: UInt32?,
+        cryptoMaterialHandles: [CryptoMaterialHandle],
         requestSummary: FindWorkerRequestSummaryProvisioner
     ) async throws
     -> (PCCWorkerInfo, AsyncStream<WorkerResponseMessage>) {
@@ -304,13 +660,9 @@ extension JobHelperMessenger: CloudBoardJobAPIClientToServerProtocol {
         self.pccWorkerRequests[query.workerID] = workerSession
         do {
             try await self.server.findWorker(
-                workerID: query.workerID,
-                serviceName: query.serviceName,
-                routingParameters: query.routingParameters,
-                responseBypass: query.responseBypass,
-                forwardRequestChunks: query.forwardRequestChunks,
-                isFinal: query.isFinal,
-                spanID: requestSummary.requestSummary.spanID ?? ""
+                query: query,
+                subrequestID: subrequestID,
+                cryptoMaterialHandles: cryptoMaterialHandles
             )
         } catch {
             try workerSession.onWorkerNotFound(error)
@@ -333,7 +685,9 @@ extension JobHelperMessenger: CloudBoardJobAPIClientToServerProtocol {
             throw JobHelperMessengerError.unknownPCCWorkerID
         }
 
-        await self.server.sendWorkerRequestMessage(workerID: workerID, data)
+        for chunk in try self.getLengthPrefixMessageChunker().chunkData(data: data) {
+            await self.server.sendWorkerRequestMessage(workerID: workerID, chunk)
+        }
     }
 
     func sendWorkerEOF(workerID: UUID, isError: Bool) async throws {
@@ -349,7 +703,10 @@ extension JobHelperMessenger: CloudBoardJobAPIClientToServerProtocol {
         await self.server.sendWorkerEOF(workerID: workerID, isError: isError)
     }
 
-    func receiveWorkerFoundEvent(workerID: UUID, releaseDigest: String) async throws {
+    func receiveWorkerFoundEvent(
+        workerID: UUID,
+        info: WorkerFoundInfo
+    ) async throws {
         guard self.endCalled == false else {
             throw JobHelperMessengerError.pccRequestCalledAfterEndJob
         }
@@ -359,7 +716,14 @@ extension JobHelperMessenger: CloudBoardJobAPIClientToServerProtocol {
             throw JobHelperMessengerError.unknownPCCWorkerID
         }
 
-        try session.onWorkerFound(PCCWorkerInfo(releaseDigest: releaseDigest))
+        try session.onWorkerFound(
+            PCCWorkerInfo(
+                releaseDigest: info.releaseDigest,
+                ensemble: info.ensemble,
+                rack: info.rack,
+                workload: info.workload
+            )
+        )
     }
 
     func receiveWorkerMessage(workerID: UUID, _ response: WorkerResponseMessage) async throws {
@@ -368,10 +732,11 @@ extension JobHelperMessenger: CloudBoardJobAPIClientToServerProtocol {
             self.log.error("Received worker response for an unknown worker ID: \(workerID, privacy: .public)")
             throw JobHelperMessengerError.unknownPCCWorkerID
         }
+
         workerSession.responseStreamContinuation.yield(response)
     }
 
-    func receiveWorkerResponseSummary(workerID: UUID, succeeded: Bool) async throws {
+    func receiveWorkerResponseSummary(workerID: UUID, status: WorkerResponseStatus) async throws {
         self.log.info("Received worker response summary for worker ID: \(workerID, privacy: .public)")
         guard let workerSession = self.pccWorkerRequests[workerID] else {
             self.log.error(
@@ -379,7 +744,12 @@ extension JobHelperMessenger: CloudBoardJobAPIClientToServerProtocol {
             )
             throw JobHelperMessengerError.unknownPCCWorkerID
         }
-        workerSession.responseStreamContinuation.yield(.result(succeeded ? .ok : .failure))
+
+        if status == .discarded {
+            try workerSession.onWorkerNotFound(PCCRequestError.requestDiscarded)
+        } else {
+            workerSession.responseStreamContinuation.yield(.result(.init(from: status)))
+        }
     }
 
     func receiveWorkerEOF(workerID: UUID) async throws {
@@ -414,6 +784,95 @@ extension JobHelperMessenger: CloudBoardJobAPIClientToServerProtocol {
             distributionType: .init(distributionType)
         )
         return .init(keyID: keyInfo.keyID, keyEncryptionKey: SymmetricKey(data: keyInfo.keyEncryptionKey))
+    }
+
+    func makePIRRequest(
+        _ request: PrivateInformationRetrievalRequest,
+        purpose: String,
+        traceContext: PIRRequestTraceContext
+    ) async throws -> PrivateInformationRetrievalResponse {
+        self.log.info("Received Private Information Retrieval request")
+        let response = try await self.server.makePrivateInformationRetrievalRequest(
+            .init(payload: request.payload, purpose: purpose, traceContext: traceContext)
+        )
+        return .init(from: response)
+    }
+
+    func configureApplicationDataChunking(config: ApplicationDataChunkingConfiguration) async throws {
+        switch self.applicationDataChunkingConfigState {
+        case .waitingForConfig:
+            self.applicationDataChunkingConfigState = .configReceived(config)
+            self.lengthPrefixMessageChunker = LengthPrefixMessageChunker(
+                config: config,
+                maxApplicationLayerMessageSize: self.maxApplicationLayerMessageSize
+            )
+        case .configReceived(let existingConfig):
+            // Ideally we should only receive this message once
+            self.log.error("Received unexpected duplicate configureApplicationDataChunking message")
+            if config != existingConfig {
+                // throwing error only when the new config is different
+                throw JobHelperMessengerError.receivedDuplicateApplicationDataChunkingConfig
+            }
+        }
+    }
+
+    func getApplicationDataChunkingConfiguration() async throws -> ApplicationDataChunkingConfiguration {
+        switch self.applicationDataChunkingConfigState {
+        case .waitingForConfig:
+            // Ideally when this method is called we should have received ApplicationDataChunkingConfig
+            throw JobHelperMessengerError.missingApplicationDataChunkingConfig
+        case .configReceived(let config):
+            return config
+        }
+    }
+
+    private func getLengthPrefixMessageChunker() throws -> LengthPrefixMessageChunker {
+        guard let messageChunker = self.lengthPrefixMessageChunker else {
+            // LengthPrefixMessageChunker is initialised after we receive ApplicationDataChunkingConfig
+            // Ideally when this method is called we should have received the chunking config
+            throw JobHelperMessengerError.missingApplicationDataChunkingConfig
+        }
+        return messageChunker
+    }
+
+    func getMaxApplicationLayerMessageSize() async throws -> Int {
+        return self.maxApplicationLayerMessageSize
+    }
+}
+
+extension JobHelperMessenger {
+    package func fabricateClientSubrequest() async throws {
+        self.log.debug("Fabricating client subrequest")
+
+        guard let parametersData else {
+            throw JobHelperMessengerError.openSubreqeustCalledBeforeParametersReceived
+        }
+
+        self.singleRequestMode = true
+        guard !self.activeSubrequests.keys.contains(Self.defaultSubrequestID) else {
+            self.log.debug("Default session already exists. Skipping.")
+            return
+        }
+
+        // Create and store the subrequest session
+        let session = SubrequestSession(
+            subrequestID: Self.defaultSubrequestID,
+            messenger: self,
+            maxApplicationLayerMessageSize: self.maxApplicationLayerMessageSize
+        )
+        self.activeSubrequests[Self.defaultSubrequestID] = .open(session)
+        self.subrequestContinuation.yield(.init(
+            subrequestID: Self.defaultSubrequestID,
+            cryptoMaterialHandles: [],
+            events: session.events,
+            responseWriter: session.responseWriter,
+            pccClient: .init(
+                jobHelperMessenger: self,
+                clientRequestID: parametersData.plaintextMetadata.requestID,
+                requestBypassed: parametersData.requestBypassed
+            ),
+            isDiscardable: false
+        ))
     }
 }
 
@@ -486,11 +945,167 @@ final class PCCWorkerResponseSession: Sendable {
     }
 }
 
+/// Manages the lifecycle and I/O for a single client subrequest
+public final class SubrequestSession: Sendable {
+    let subrequestID: UInt32
+    let eventContinuation: AsyncStream<SubrequestEvent>.Continuation
+    let events: SubrequestEventSequence
+    let responseWriter: SubresponseWriter
+    let buffer: Mutex<LengthPrefixBuffer>
+
+    init(
+        subrequestID: UInt32,
+        messenger: JobHelperMessenger,
+        maxApplicationLayerMessageSize: Int
+    ) {
+        self.subrequestID = subrequestID
+        let (eventStream, eventContinuation) = AsyncStream<SubrequestEvent>.makeStream()
+        self.eventContinuation = eventContinuation
+        self.events = SubrequestEventSequence(eventStream: eventStream)
+        self.responseWriter = SubresponseWriter(messenger: messenger, subrequestID: subrequestID)
+
+        self.eventContinuation.yield(.subrequestStart(.init()))
+        self.buffer = .init(LengthPrefixBuffer(maxMessageSize: maxApplicationLayerMessageSize))
+    }
+
+    func receivePayload(
+        _ payload: Data,
+        chunkingConfig: ApplicationDataChunkingConfiguration
+    ) throws {
+        switch chunkingConfig {
+        case .disabled:
+            self.eventContinuation.yield(.subrequestPayload(.init(data: payload)))
+        case .enabled:
+            for chunk in try self.buffer.withLock({ try $0.append(.init(chunk: payload)) }) {
+                self.eventContinuation.yield(.subrequestPayload(.init(data: chunk.chunk)))
+            }
+        }
+    }
+
+    func cancel() {
+        self.eventContinuation.yield(.subrequestCancellation(.init()))
+    }
+
+    func endOfInput() throws {
+        self.eventContinuation.yield(.subrequestEnd(.init()))
+        self.eventContinuation.finish()
+
+        try self.buffer.withLock { assembler in
+            try assembler.validateCompleteDataChunksReceived()
+        }
+    }
+}
+
 extension CloudBoardJobAPIEnsembleKeyDistributionType {
     init(_ distributionType: EnsembleKeyDistributionType) {
         self = switch distributionType {
         case .local: .local
         case .distributed: .distributed
         }
+    }
+}
+
+extension PrivateInformationRetrievalResponse {
+    init(from response: CloudBoardJobAPIPIRResponse) {
+        self = PrivateInformationRetrievalResponse(
+            payload: response.payload
+        )
+    }
+}
+
+extension RequestExecutionError {
+    init(from error: RequestExecutionErrorProtocol) {
+        self = RequestExecutionError(
+            errorSource: error.errorSource,
+            errorMessage: error.staticStringRepresentation,
+            errorCode: error.errorCode,
+        )
+    }
+}
+
+extension RequestExecutionErrorSource {
+    init(from source: CloudAppRequestExecutionErrorSource) {
+        switch source {
+        case .cloudApp:
+            self = .cloudApp
+        case .cloudAppFramework:
+            self = .cloudAppFramework
+        }
+    }
+}
+
+extension RequestExecutionError {
+    init(from error: CloudAppRequestExecutionError) {
+        self = RequestExecutionError(
+            errorSource: .init(from: error.errorSource),
+            errorMessage: error.errorMessage,
+            errorCode: error.errorCode
+        )
+    }
+}
+
+extension WorkerResponseMessage.Result {
+    init(from responseStatus: WorkerResponseStatus) {
+        switch responseStatus {
+        case .succeeded:
+            self = .ok
+        case .failed:
+            self = .failure
+        case .discarded:
+            self = .discarded
+        }
+    }
+}
+
+extension InternalSubresponseStatus {
+    fileprivate init(_ status: SubresponseStatus) {
+        switch status {
+        case .ok:
+            self = .ok
+        case .discarded:
+            self = .discarded
+        case .error(let error):
+            self = .error(.init(error))
+        }
+    }
+}
+
+extension RequestExecutionError {
+    fileprivate init(_ error: Error) {
+        switch error {
+        case let requestExecutionError as RequestExecutionErrorProtocol:
+            self = .init(from: requestExecutionError)
+        case let cloudAppRequestExecutionError as CloudAppRequestExecutionError:
+            self = .init(from: cloudAppRequestExecutionError)
+        default:
+            JobHelperMessenger.log.error(
+                "Failed to convert error \(String(reportable: error), privacy: .public) to RequestExecutionError"
+            )
+            self = .init(from: JobHelperMessengerError.unknownError)
+        }
+    }
+}
+
+extension LengthPrefixBufferError: RequestExecutionErrorProtocol {
+    package var staticStringRepresentation: StaticString {
+        switch self {
+        case .exceedingMaxMessageSize: "exceedingMaxMessageSize"
+        case .receivedAdditionalChunkAfterFinalChunk: "receivedAdditionalChunkAfterFinalChunk"
+        case .finalChunkContainsIncompleteMessage: "finalChunkContainsIncompleteMessage"
+        }
+    }
+
+    package var errorCode: UInt32 {
+        switch self {
+        case .exceedingMaxMessageSize: CloudAppFrameworkErrorCodes.exceedingMaxMessageSize.rawValue
+        case .receivedAdditionalChunkAfterFinalChunk: CloudAppFrameworkErrorCodes.receivedAdditionalChunkAfterFinalChunk
+            .rawValue
+        case .finalChunkContainsIncompleteMessage: CloudAppFrameworkErrorCodes.finalChunkContainsIncompleteMessage
+            .rawValue
+        }
+    }
+
+    package var errorSource: RequestExecutionErrorSource {
+        return RequestExecutionErrorSource.cloudAppFramework
     }
 }

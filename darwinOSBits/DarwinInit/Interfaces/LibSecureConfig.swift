@@ -17,6 +17,9 @@
 //  DarwinInit
 //
 
+import Foundation
+internal import DarwinInitBridging
+
 enum LibSecureConfigError: Error {
 	case configCommitFailed(code: Int32)
 }
@@ -31,46 +34,106 @@ extension LibSecureConfigError: CustomStringConvertible {
 }
 	
 enum LibSecureConfig {
-	static func commitConfig(_ config: DInitConfig) throws {
-		let parameters = config.secureConfigParameters ?? .dictionary([:])
-		let securityPolicy = config.configSecurityPolicy
-		try commitSecureConfigParameters(parameters: parameters,
-										 securityPolicy: securityPolicy)
 
+    static func commit(config: Config, to computer: Computer) throws {
+
+        if let origin = config.origin, origin.loadingPath.version == .v1 {
+            // TODO: manually construct a V1 from a V2 and commit it
+            let v1 = try JSEnumDecoder.decode(DInitConfig.self, from: origin.source)
+            try commitConfig(v1, to: computer)
+            return
+        }
+
+        let attested = attested(config: config)
+        let json = try attested.jsonString(prettyPrinted: false,
+                                           redacted: false)
+        let data = json.data(using: .utf8)
+        let error = computer.registerSecureconfig(config: data)
+
+        guard error == 0 else {
+            logger.error("Failed to register config data: \(error)")
+            throw LibSecureConfigError.configCommitFailed(code: error)
+        }
+    }
+
+    static func commitConfig(_ config: DInitConfig, to computer: any Computer) throws {
 		let attestedConfig = attestedConfig(config)
         let attestedConfigJson = try attestedConfig.jsonString(prettyPrinted: false, redactCredentialStrings: false)
 		let attestedConfigData = attestedConfigJson.data(using: .utf8)
-		let secureConfigError = shim_register_config(attestedConfigData)
+        let secureConfigError = computer.registerSecureconfig(config: attestedConfigData)
 		guard secureConfigError == 0 else {
 			logger.error("Failed to register config data: \(secureConfigError)")
 			throw LibSecureConfigError.configCommitFailed(code: secureConfigError)
 		}
 	}
 
-	static func commitSecureConfigParameters(parameters: JSON,
-											 securityPolicy: String?) throws {
+    static func commitSecureConfigParameters(parameters: [String: JSON],
+											 securityPolicy: String?,
+                                             to computer: any Computer) throws {
 		let data = try JSONEncoder().encode(parameters)
-		let error = shim_register_secureconfig_parameters(data, securityPolicy)
+        let error = computer.registerSecureconfig(parameters: data, securityPolicy: securityPolicy)
 		guard error == 0 else {
 			logger.error("Failed to register secure config parameters: \(error)")
 			throw LibSecureConfigError.configCommitFailed(code: error)
 		}
 	}
 
-	static func attestedConfig(_ config: DInitConfig) -> DInitConfig {
+    static func attested(config: Config) -> Config {
 #if os(macOS)
-		return config
+        return config
 #else
-		var result = DInitConfig()
-		result.configSecurityPolicy = config.configSecurityPolicy
-		result.configSecurityPolicyVersion = config.configSecurityPolicyVersion
-		if case .dictionary(let parameters) = config.secureConfigParameters {
-			let attestedParameters = parameters.filter {
-				$0.key == "com.apple.CloudAttestation.routingHint" || $0.key == "com.apple.CloudAttestation.ensembleMembers"
-			}
-			result.secureConfigParameters = .dictionary(attestedParameters)
-		}
-		return result
+        var result = Config()
+        var security = Config.SecurityPolicy()
+
+        security.policy = config.configSecurityPolicy?.policy
+        security.version = config.configSecurityPolicy?.version
+        result.configSecurityPolicy = security
+
+        if let parameters = config.secureConfig {
+            let attestedParameters = parameters.filter {
+                switch $0.key {
+                    // all com.apple.CloudAttestation.* keys are incldued to allow CloudAttestation
+                    // to provide a generic API to query attested configuration values.
+                case let key where key.hasPrefix("com.apple.CloudAttestation."):
+                    return true
+                case "com.apple.libcryptex.appIdentifiers":
+                    return true
+                default:
+                    return false
+                }
+            }
+            result.secureConfig = attestedParameters
+        }
+
+        return result
+        #endif
+    }
+
+    static func attestedConfig(_ config: DInitConfig) -> DInitConfig {
+#if os(macOS)
+        return config
+#else
+        var result = DInitConfig()
+        result.configSecurityPolicy = config.configSecurityPolicy
+        result.configSecurityPolicyVersion = config.configSecurityPolicyVersion
+        if case .dictionary(let parameters) = config.secureConfigParameters {
+            let attestedParameters = parameters.filter {
+                switch $0.key {
+                // all com.apple.CloudAttestation.* keys are incldued to allow CloudAttestation
+                // to provide a generic API to query attested configuration values.
+                case let key as String where key.hasPrefix("com.apple.CloudAttestation."):
+                    return true
+                case "com.apple.libcryptex.appIdentifiers":
+                    return true
+                default:
+                    return false
+                }
+            }
+            result.secureConfigParameters = .dictionary(attestedParameters)
+        }
+        return result
 #endif
-	}
+    }
+
+
 }

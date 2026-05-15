@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 package import CloudBoardAsyncXPC
 
 public actor CloudBoardHealthAPIXPCServer {
@@ -46,7 +44,7 @@ extension CloudBoardHealthAPIXPCServer: CloudBoardHealthAPIServerToClientProtoco
     public func healthStateChanged(
         to healthState: CloudBoardHealthState
     ) async throws {
-        try await self.listener.broadcast(
+        await self.listener.broadcast(
             CloudBoardHealthAPIXPCServerToClientMessage.HealthStateChanged(
                 healthState: healthState
             )

@@ -20,7 +20,7 @@ import PackageDescription
 let package = Package(
     name: "HeartbeatClient",
     platforms: [
-        .macOS("14.0.internal"), .iOS("17.0.internal"),
+        .macOS("15.0.internal"), .iOS("18.0.internal"),
     ],
     products: [
         .library(name: "HeartbeatClient", targets: ["HeartbeatClient"]),

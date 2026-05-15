@@ -30,61 +30,18 @@ extension CLI.TransparencyLogCmd {
 
         @OptionGroup var transparencyLogOptions: CLI.TransparencyLogCmd.options
 
+        @OptionGroup var attestOptions: CLI.AttestationFormatOptions
+
         @Argument(help: "Path to input file. Use '-' to read from stdin.",
                   completion: .file())
         var file: String
 
-        @Option(name: .shortAndLong,
-                help: "Input format. Can be any of [attestation-bundle:json, attestation-bundle:proto, apple-intelligence-report]")
-        var format: Format = .appleIntelligenceReport
-
-        @Option(name: [.customLong("request-index"), .customShort("r")],
-                help: "Index of the request to use when parsing an apple intelligence report.")
-        var requestIndex: Int?
-
-        @Option(name: [.customLong("attestation-index"), .customShort("a")],
-                help: "Index of the attestation to use when parsing an apple intelligence report. Must be used in combination with --request.")
-        var attestationIndex: Int?
-
         func run() async throws {
-            var fileData: Data
-            if file == "-" {
-                fileData = try FileHandle.standardInput.readToEnd() ?? Data()
-            } else {
-                fileData = try Data(contentsOf: URL(filePath: file))
-            }
-
             let attestationBundle: AttestationBundle
-
-            switch format {
-            case .attestationBundle(.json):
-                attestationBundle = try AttestationBundle(jsonString: String(decoding: fileData, as: UTF8.self))
-
-            case .attestationBundle(.proto):
-                attestationBundle = try AttestationBundle(data: fileData)
-
-            case .appleIntelligenceReport:
-                guard let attestationIndex else {
-                    throw CLIError("--attestation-index must be specified when parsing an apple intelligence report")
-                }
-
-                guard let requestIndex else {
-                    throw CLIError("--request-index must be specified when parsing an apple intelligence report")
-                }
-
-                let decoder = JSONDecoder()
-                let report = try decoder.decode(AppleIntelligenceReport.self, from: fileData)
-
-                guard report.privateCloudComputeRequests.indices.contains(requestIndex) else {
-                    throw CLIError("request index \(requestIndex) out of bounds")
-                }
-                let request = report.privateCloudComputeRequests[requestIndex]
-
-                guard request.nodes.indices.contains(attestationIndex) else {
-                    throw CLIError("attestation index \(attestationIndex) out of bounds")
-                }
-
-                attestationBundle = try AttestationBundle(jsonString: request.nodes[attestationIndex].attestationBundle)
+            do {
+                attestationBundle = try .init(from: file, format: attestOptions.format, requestIndex: attestOptions.requestIndex, attestationIndex: attestOptions.attestationIndex)
+            } catch {
+                throw CLIError("read attestation bundle: \(error)")
             }
 
             let storageURL = FileManager.fileURL(transparencyLogOptions.storage)
@@ -122,68 +79,6 @@ extension CLI.TransparencyLogCmd {
 
             print("Successfully verified inclusion proof ✅ (revision: \(logHead.revision), index: \(inclusionProof.nodePosition), logSize: \(logHead.logSize), rootDigest: \(applicationTree.rootDigest.hexString))")
         }
-    }
-}
-
-extension CLI.TransparencyLogCmd.VerifyInclusionCmd {
-    enum Format: ExpressibleByArgument {
-        init?(argument: String) {
-            switch argument {
-            case "attestation-bundle:json":
-                self = .attestationBundle(.json)
-
-            case "attestation-bundle:proto":
-                self = .attestationBundle(.proto)
-
-            case "apple-intelligence-report":
-                self = .appleIntelligenceReport
-
-            default:
-                return nil
-            }
-        }
-
-        case attestationBundle(AttestationBundleEncoding)
-        case appleIntelligenceReport
-
-        enum AttestationBundleEncoding {
-            case proto
-            case json
-        }
-    }
-}
-
-// MARK: - Apple Intelligence Report
-
-struct AppleIntelligenceReport: Codable {
-    var modelRequests: [ModelRequest]
-    var privateCloudComputeRequests: [PrivateCloudComputeRequest]
-}
-
-extension AppleIntelligenceReport {
-    struct ModelRequest: Codable {
-        var timestamp: Double
-        var identifier: String
-        var prompt: String
-        var response: String
-        var model: String
-        var modelVersion: String
-        var clientIdentifier: String
-        var executionEnvironment: String
-    }
-
-    struct PrivateCloudComputeRequest: Codable {
-        var timestamp: Double
-        var requestId: String
-        var pipelineKind: String
-        var pipelineParameters: String
-        var nodes: [Node]
-    }
-
-    struct Node: Codable {
-        var node: String
-        var nodeState: String
-        var attestationBundle: String
     }
 }
 

@@ -20,9 +20,10 @@
 import Foundation
 
 enum DInitError: Error {
-    case unableToSerializeConfig(DInitConfig, Error)
-	case userspaceRebootFailed(Error, description: String? = nil)
-	case rebootFailed(Error)
+    case unableToSerializeConfig([Config], Error)
+    case userspaceRebootFailed(Error, description: String? = nil)
+    case userspaceRebootInvalidInput
+    case rebootFailed(Error)
     case shutdownFailed
 }
 
@@ -41,6 +42,8 @@ extension DInitError: CustomStringConvertible {
 			return "Reboot failed: \(error)"
 		case .shutdownFailed:
 			return "Shutdown failed"
+        case .userspaceRebootInvalidInput:
+            return "Userspace reboot input is invalid"
 		}
 	}
 }

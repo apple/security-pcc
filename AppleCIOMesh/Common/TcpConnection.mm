@@ -20,6 +20,7 @@
 #include <os/log.h>
 #include <unistd.h>
 
+#include "ScopeGuard.h"
 #include "TcpConnection.h"
 
 namespace AppleCIOMeshNet
@@ -133,6 +134,8 @@ TcpConnection::connect(os_log_t logger, const char * hostname, uint16_t port)
 		return AppleCIOMeshUtils::nullopt;
 	}
 
+	AppleCIOMeshUtils::ScopeGuard cleanup_socket = [sockfd] { ::close(sockfd); };
+
 	int flag = 1;
 	if (setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int)) < 0) {
 		os_log_error(logger, "TcpConnection - Failed to set TCP_NODELAY: %s", strerror(errno));
@@ -152,6 +155,7 @@ TcpConnection::connect(os_log_t logger, const char * hostname, uint16_t port)
 		return AppleCIOMeshUtils::nullopt;
 	}
 
+	cleanup_socket.dismiss();
 	os_log_info(logger, "TcpConnection - Connected to %s on socket %d", hostname, sockfd);
 	return AppleCIOMeshNet::TcpConnection{sockfd};
 }
@@ -192,6 +196,8 @@ TcpConnectionListener::listen(os_log_t logger, uint16_t port)
 		return AppleCIOMeshUtils::nullopt;
 	}
 
+	AppleCIOMeshUtils::ScopeGuard cleanup_socket = [sockfd] { ::close(sockfd); };
+
 	int flag = 1;
 	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag)) < 0) {
 		os_log_error(logger, "TcpConnectionListener - Failed to set SO_REUSEADDR: %s", strerror(errno));
@@ -212,6 +218,8 @@ TcpConnectionListener::listen(os_log_t logger, uint16_t port)
 		os_log_error(logger, "TcpConnectionListener - Failed to listen on socket: %s", strerror(errno));
 		return AppleCIOMeshUtils::nullopt;
 	}
+
+	cleanup_socket.dismiss();
 
 	os_log_info(logger, "TcpConnectionListener - Listening on port %d", port);
 	return AppleCIOMeshNet::TcpConnectionListener{sockfd, logger};

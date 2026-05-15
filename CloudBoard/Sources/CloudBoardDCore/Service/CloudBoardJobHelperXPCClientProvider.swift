@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple. All rights reserved.
-
 internal import CloudBoardAsyncXPC
 import CloudBoardCommon
 import CloudBoardJobHelperAPI
@@ -32,10 +30,14 @@ actor CloudBoardJobHelperXPCClientProvider: CloudBoardJobHelperClientProvider {
         self.instanceProvider = instanceProvider
     }
 
-    func withClient<ReturnValue>(
+    func withClient<ReturnValue: Sendable>(
         delegate: CloudBoardJobHelperAPIClientDelegateProtocol,
-        _ body: (CloudBoardJobHelperInstanceProtocol) async throws -> ReturnValue
+        _ body: @Sendable (CloudBoardJobHelperInstanceProtocol) async throws -> ReturnValue
     ) async throws -> ReturnValue {
         return try await self.instanceProvider.withJobHelperInstance(delegate: delegate, body)
+    }
+
+    func laContextUsedByClient() async {
+        await self.instanceProvider.laContextUsedByClient()
     }
 }

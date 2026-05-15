@@ -1,0 +1,8 @@
+*.pbxuser
+.DS_Store
+project.xcworkspace/
+xcuserdata/
+*.cxbd
+*.cxbd.tar.gz
+.ABI_DerivedData
+.idea/

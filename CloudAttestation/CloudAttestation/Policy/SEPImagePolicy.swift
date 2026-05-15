@@ -41,7 +41,7 @@ public struct SEPImagePolicy: AttestationPolicy {
             throw Error.missingAttestation
         }
 
-        let apTicket = bundle.proto.apTicket
+        let apTicket = attestation.osType == .macOS ? bundle.proto.sfrManifest : bundle.proto.apTicket
 
         guard !apTicket.isEmpty else {
             throw Error.missingAPTicket

@@ -45,11 +45,14 @@
 		<string>com.apple.cloudos.cloudboardd.watchdog</string>
 		<string>com.apple.jobquiescence</string>
 		<string>com.apple.cloudos.AppleComputeEnsembler.service</string>
-		<string>com.apple.cloudos.cb_configurationd</string>
+		<string>com.apple.cloudos.cloudconfigurationd</string>
 		<string>com.apple.cloudos.cb_attestationd</string>
 		<string>com.apple.cloudos.cb_jobhelper</string>
 		<string>com.apple.acdc.cloudmetricsd</string>
 		<string>com.apple.dnssd.service</string>
+        <string>com.apple.systemservicemonitor.report.xpc</string>
+		<string>com.apple.systemservicemonitor.request.xpc</string>
+		<string>com.apple.cloudos.cloudassetdownloaderd</string>
 	</array>
 	<key>com.apple.private.sandbox.profile:embedded</key>
 	<string>apple-cloud</string>
@@ -89,11 +92,17 @@
 	<array>
 		<string>/private/var/db/secureconfig/</string>
 	</array>
-    <key>com.apple.security.exception.files.home-relative-path.read-write</key>
-    <array>
-        <string>Library/Caches/com.apple.cloudos.cloudboardd/</string>
-    </array>
-    <key>com.apple.security.ts.tmpdir</key>
-    <string>com.apple.cloudos.cloudboardd</string>
+	<key>com.apple.security.exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>Library/Caches/com.apple.cloudos.cloudboardd/</string>
+	</array>
+	<key>com.apple.security.ts.tmpdir</key>
+	<string>com.apple.cloudos.cloudboardd</string>
+    <key>com.apple.ssm.monitored-service-identifier</key>
+    <string>com.apple.cloudos.cloudboarddhealth</string>
+    <key>com.apple.ssm.client.allow-request</key>
+    <true/>
+    <key>com.apple.private.systemservicemonitord.remote</key>
+    <true/>
 </dict>
 </plist>

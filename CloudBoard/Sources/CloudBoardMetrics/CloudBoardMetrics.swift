@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardLogging
 import os
 
@@ -577,7 +575,7 @@ extension MetricsSystem where Self == NoOpMetricsSystem {
 }
 
 // This is a sufficiently common operation and it's easy to think seconds() is precise
-package extension Duration {
+extension Duration {
     package var milliseconds: Double {
         let (seconds, attoseconds) = components
         return Double(seconds) * 1000 + Double(attoseconds) * 1e-15

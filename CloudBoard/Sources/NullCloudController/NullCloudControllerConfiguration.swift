@@ -12,10 +12,9 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CFPreferenceCoder
 import Foundation
+import os
 
 extension CFPreferences {
     static var cbJobHelperPreferencesDomain: String {
@@ -26,9 +25,11 @@ extension CFPreferences {
 struct NullCloudControllerConfiguration: Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case cloudAppName = "CloudAppName"
+        case reregisterMinutes = "ReregisterMinutes"
     }
 
     internal var cloudAppName: String?
+    internal var reregisterMinutes: Double?
 
     static func fromPreferences() throws -> NullCloudControllerConfiguration {
         // For now just need the CloudAppName which is set in the

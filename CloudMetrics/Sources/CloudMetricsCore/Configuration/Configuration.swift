@@ -175,7 +175,7 @@ extension Configuration: Decodable {
         }
         self.configuredLabels = try container.decodeIfPresent([String: String].self, forKey: .globalLabels) ?? [:]
 
-        try self.validateDestinations()
+        try self.updateDefaultDestination()
     }
 }
 
@@ -310,13 +310,14 @@ extension Configuration {
         }
     }
 
-    internal func validateDestinations() throws {
+    internal mutating func updateDefaultDestination() throws {
         var defaultDestinationFound = false
         var dedupDestinations: Set<String> = []
         for destination in destinations {
 
             if destination.namespace == defaultDestination.namespace,
                destination.workspace == defaultDestination.workspace {
+                defaultDestination.publishInterval = destination.publishInterval
                 defaultDestinationFound = true
             }
 
@@ -329,18 +330,6 @@ extension Configuration {
         if defaultDestinationFound == false {
             throw ConfigurationError.defaultDestinationNotFound
         }
-    }
-
-    private static func getDarwinHostName() -> String? {
-        var buffer = [CChar](repeating: 0, count: 256)
-        let retVal = buffer.withUnsafeMutableBufferPointer { ptr -> CInt in
-            return Darwin.gethostname(ptr.baseAddress, ptr.count)
-        }
-
-        if retVal == 0 {
-            return String(cString: buffer)
-        }
-        return nil
     }
 
     static func makeSystemLabels() -> [String: String] {
@@ -384,8 +373,21 @@ extension Configuration {
             Self.logger.error("Can't get the project ID from CFPrefs. error=\(error, privacy: .public)")
         }
 
+        let acecDomain = "com.apple.acec"
+        if let acecAccountID = try? preferencesStringValue("AccountID", domain: acecDomain) {
+            labels["_acecAccountID"] = acecAccountID
+        }
+
     #if os(macOS)
-        labels["_type"] = "node"
+        #if canImport(MobileGestalt, _version: 1444)
+            if MobileGestalt.current.isComputePacketBridge {
+                labels["_type"] = "apb"
+            } else {
+                labels["_type"] = "node"
+            }
+        #else
+            labels["_type"] = "node"
+        #endif
     #elseif os(iOS)
         if MobileGestalt.current.isComputeController {
             labels["_type"] = "bmc"
@@ -394,7 +396,7 @@ extension Configuration {
         }
     #endif
 
-        labels["_hostname"] = getDarwinHostName()
+        self.logger.log("Loaded system labels. labels=\(labels, privacy: .public)")
         return labels
     }
 

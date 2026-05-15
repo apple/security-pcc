@@ -12,7 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
 import CloudBoardController
 import os
 
@@ -22,16 +21,17 @@ public final class ServiceHealthMonitor: Sendable {
         category: "ServiceHealthMonitor"
     )
 
+    package let cloudApp: String
     private let currentState: OSAllocatedUnfairLock<State>
 
-    public init() {
+    public init(cloudApp: String) {
+        self.cloudApp = cloudApp
         self.currentState = OSAllocatedUnfairLock(initialState: State(
             nextID: 0,
             watchers: [],
             lastUpdate: .initializing,
             currentBatchSizeOverride: nil,
-            draining: false,
-            attestationExpired: false
+            maintenanceConditions: []
         ))
     }
 
@@ -48,8 +48,8 @@ public final class ServiceHealthMonitor: Sendable {
             let status = status.withCurrentBatchCountOverride(state.currentBatchSizeOverride)
             state.lastUpdate = status
 
-            // do not update watchers during drain or when attestations are expired
-            if state.draining || state.attestationExpired {
+            // do not notify watchers when under maintenance
+            if state.isUnderMaintenance {
                 return ([], status)
             }
             return (state.watchers, status)
@@ -61,59 +61,19 @@ public final class ServiceHealthMonitor: Sendable {
     }
 
     public func drain() {
-        let watchers: [Watcher] = self.currentState.withLock { state in
-            state.draining = true
-
-            if state.lastUpdate == .unhealthy || state.attestationExpired {
-                return []
-            }
-            return state.watchers
-        }
-
-        for watcher in watchers {
-            watcher.continuation.yield(.unhealthy)
-        }
+        self.enterMaintenance(.draining)
     }
 
-    public func setAttestationExpired() {
-        let watchers: [Watcher] = self.currentState.withLock { state in
-            if state.attestationExpired {
-                return []
-            }
-            state.attestationExpired = true
-
-            if state.draining || state.lastUpdate == .unhealthy {
-                return []
-            }
-            return state.watchers
-        }
-
-        for watcher in watchers {
-            watcher.continuation.yield(.unhealthy)
-        }
+    public func setAttestationInvalid() {
+        self.enterMaintenance(.attestationInvalid)
     }
 
     public func setAttestationValid() {
-        let (watchers, status): ([Watcher], Status) = self.currentState.withLock { state in
-            if !state.attestationExpired {
-                return ([], state.lastUpdate)
-            }
-
-            // do not update watchers during drain
-            if state.draining {
-                return ([], state.lastUpdate)
-            }
-            state.attestationExpired = false
-            return (state.watchers, state.lastUpdate)
-        }
-
-        for watcher in watchers {
-            watcher.continuation.yield(status)
-        }
+        self.exitMaintenance(.attestationInvalid)
     }
 
     public func terminate() {
-        Self.logger.debug("ServiceHealthMonitor terminate called")
+        Self.logger.debug("ServiceHealthMonitor::\(self.cloudApp, privacy: .public) terminate called")
         // We _must_ call `finish` from outside the lock, otherwise we'll
         // deadlock.
         let watchers = self.currentState.withLock { state in
@@ -135,7 +95,10 @@ public final class ServiceHealthMonitor: Sendable {
 
             state.watchers.append(watcher)
             let count = state.watchers.count
-            Self.logger.debug("ServiceHealthMonitor watch called \(count, privacy: .public)")
+            Self.logger
+                .debug(
+                    "ServiceHealthMonitor::\(self.cloudApp, privacy: .public) watch called \(count, privacy: .public)"
+                )
 
             continuation.onTermination = { _ in
                 self.watcherTerminated(id: id)
@@ -149,6 +112,49 @@ public final class ServiceHealthMonitor: Sendable {
         return stream
     }
 
+    public func enterMaintenance(_ maintenance: Maintenance) {
+        let watchers: [Watcher] = self.currentState.withLock { state in
+            // already in this maintenance condition
+            if state.maintenanceConditions.contains(maintenance) {
+                return []
+            }
+            state.maintenanceConditions.insert(maintenance)
+
+            // already unhealthy due to last update or OTHER maintenance conditions
+            if state.lastUpdate == .unhealthy || state.maintenanceConditions.count > 1 {
+                return []
+            }
+            return state.watchers
+        }
+
+        for watcher in watchers {
+            watcher.continuation.yield(.unhealthy)
+        }
+    }
+
+    public func exitMaintenance(_ maintenance: Maintenance) {
+        let (watchers, status): ([Watcher], Status) = self.currentState.withLock { state in
+            // not under this maintenance condition - don't notify watchers
+            if !state.maintenanceConditions.contains(maintenance) {
+                return ([], state.lastUpdate)
+            }
+
+            state.maintenanceConditions.remove(maintenance)
+
+            // still under other maintenance conditions - don't notify watchers
+            if !state.maintenanceConditions.isEmpty {
+                return ([], state.lastUpdate)
+            }
+
+            // not under any maintenance - notify watchers about last update
+            return (state.watchers, state.lastUpdate)
+        }
+
+        for watcher in watchers {
+            watcher.continuation.yield(status)
+        }
+    }
+
     private func watcherTerminated(id: Int) {
         self.currentState.withLock { state in
             if let index = state.watchers.firstIndex(where: { $0.id == id }) {
@@ -159,6 +165,13 @@ public final class ServiceHealthMonitor: Sendable {
 }
 
 extension ServiceHealthMonitor {
+    // Conditions where service is unhealthy due to CloudBoard internal reasons.
+    public enum Maintenance: Sendable {
+        case draining
+        case attestationInvalid
+        case restartingJobHelpers
+    }
+
     private struct State {
         var nextID: Int
 
@@ -168,9 +181,11 @@ extension ServiceHealthMonitor {
 
         var currentBatchSizeOverride: Int?
 
-        var draining: Bool
+        var maintenanceConditions: Set<Maintenance>
 
-        var attestationExpired: Bool
+        var isUnderMaintenance: Bool {
+            !self.maintenanceConditions.isEmpty
+        }
 
         mutating func generateID() -> Int {
             defer { self.nextID &+= 1 }
@@ -195,7 +210,7 @@ extension ServiceHealthMonitor {
             case .unhealthy:
                 return "unhealthy"
             case .healthy(let healthy):
-                return "healthy (\(healthy))"
+                return "healthy\(healthy.map { " (\($0))" } ?? "")"
             }
         }
 
@@ -230,7 +245,7 @@ extension ServiceHealthMonitor.Status {
     public struct Healthy: Sendable, Hashable {
         public var workloadType: String
 
-        public var tags: [String: WorkloadConfig.RoutingTagValue]
+        public var tags: [String: RoutingTagValue]
 
         public var maxBatchSize: Int
 
@@ -240,7 +255,7 @@ extension ServiceHealthMonitor.Status {
 
         public init(
             workloadType: String,
-            tags: [String: WorkloadConfig.RoutingTagValue],
+            tags: [String: RoutingTagValue],
             maxBatchSize: Int,
             currentBatchSize: Int,
             optimalBatchSize: Int

@@ -12,8 +12,7 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
+import CloudBoardLogging
 import CloudBoardMetrics
 import DarwinPrivate.libproc
 import os

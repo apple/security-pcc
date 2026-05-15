@@ -29,6 +29,8 @@ message AttestationBundle {
     bytes app_data = 5; // Use-case specific data. sha256 digest of this is included in the nonce
     google.protobuf.Timestamp key_expiration = 6; // Unix timestamp of the key's expiration, as hinted by the attested device
     TransparencyProofs transparency_proofs = 8;
+    LocalPolicy local_policy = 9; // Local boot policy used on macOS
+    bytes sfr_manifest = 10; // System, firmware & restore manifest used on macOS
 }
 
 message AppData {
@@ -36,6 +38,16 @@ message AppData {
     string domain = 2; // com.apple.PrivateCloudCompute
     string name = 3; // Proxy Node vs Compute Node
     google.protobuf.Any metadata = 4; // Empty for Compute Node, PrivateCloudCompute_ProxyNodeMetadata for Proxy Node
+}
+
+message LocalPolicy {
+    bytes policy = 1;
+    Implementation implementation = 2;
+
+    enum Implementation {
+        IMPLEMENTATION_UNKNOWN = 0;
+        IMPLEMENTATION_EC384SHA384 = 1;
+    }
 }
 
 message SealedHashLedger {

@@ -20,7 +20,7 @@
 //
 
 import CryptoKit
-import AppleKeyStore
+@preconcurrency import AppleKeyStore
 
 extension SEP {
 
@@ -182,6 +182,8 @@ extension SEP.SealedHash {
         public let algorithm: any HashFunction.Type
         /// Arbitrary metadata that is not sealed
         public var metadata: [String: Data]? = nil
+        /// The type of entry.
+        public var type: String? = nil
 
         init(digest: Data, data: Data?, flags: Flags, algorithm: any HashFunction.Type) {
             self.digest = digest
@@ -195,6 +197,7 @@ extension SEP.SealedHash {
         ///   - data: The data to seal.
         ///   - flags: The flags assosciated with the entry when it was ratcheted.
         ///   - algorithm: The algorithm used to generate the digest.
+        @_disfavoredOverload
         public init(data: Data, flags: Flags, algorithm: (some HashFunction).Type = SHA384.self) {
             self.digest = Data(algorithm.hash(data: data))
             self.data = data
@@ -204,9 +207,26 @@ extension SEP.SealedHash {
 
         /// Creates a new entry.
         /// - Parameters:
+        ///   - data: The data to seal.
+        ///   - flags: The flags assosciated with the entry when it was ratcheted.
+        ///   - algorithm: The algorithm used to generate the digest.
+        ///   - metadata: The arbitrary metadata that is not sealed...
+        ///   - type: The type of entry.
+        public init(data: Data, flags: Flags, algorithm: (some HashFunction).Type = SHA384.self, metadata: [String: Data]? = nil, type: String? = nil) {
+            self.digest = Data(algorithm.hash(data: data))
+            self.data = data
+            self.flags = flags
+            self.algorithm = algorithm
+            self.metadata = metadata
+            self.type = type
+        }
+
+        /// Creates a new entry.
+        /// - Parameters:
         ///   - digest: The digest to seal.
         ///   - flags: The flags assosciated with the entry when it was ratcheted.
         ///   - algorithm: The algorithm used to generate the digest.
+        @_disfavoredOverload
         public init<Hash: HashFunction>(digest: Hash.Digest, flags: Flags, algorithm: Hash.Type = SHA384.self) {
             self.digest = Data(digest)
             self.data = nil
@@ -219,11 +239,28 @@ extension SEP.SealedHash {
         ///   - digest: The digest to seal.
         ///   - flags: The flags assosciated with the entry when it was ratcheted.
         ///   - algorithm: The algorithm used to generate the digest.
+        @_disfavoredOverload
         public init(digest: Data, flags: Flags, algorithm: (some HashFunction).Type = SHA384.self) {
             self.digest = digest
             self.data = nil
             self.flags = flags
             self.algorithm = algorithm
+        }
+
+        /// Creates a new entry.
+        /// - Parameters:
+        ///   - data: The digeset to seal.
+        ///   - flags: The flags assosciated with the entry when it was ratcheted.
+        ///   - algorithm: The algorithm used to generate the digest.
+        ///   - metadata: The arbitrary metadata that is not sealed...
+        ///   - type: The type of entry.
+        public init(digest: Data, flags: Flags, algorithm: (some HashFunction).Type = SHA384.self, metadata: [String: Data]? = nil, type: String? = nil) {
+            self.digest = digest
+            self.data = nil
+            self.flags = flags
+            self.algorithm = algorithm
+            self.metadata = metadata
+            self.type = type
         }
     }
 }

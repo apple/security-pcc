@@ -29,26 +29,39 @@ internal import os
 /// Usually the other end of this continuation is connected to an exporter, who is responsible for
 /// sending all of the metrics (for all destinations) via gRPC.
 package final class OpenTelemetryPeriodicMetricReader: Sendable {
-
+    /// States the reader can be in
     private enum State {
         case stopped
         case running
         case shuttingDown
     }
 
+    private let logger = Logger(subsystem: kCloudMetricsLoggingSubsystem, category: "OTLPReader")
     private let metricProducer: OSAllocatedUnfairLock<MetricProducer?> = .init(initialState: nil)
     internal let store: OSAllocatedUnfairLock<OpenTelemetryStore?> = .init(initialState: nil)
     private let destination: Configuration.Destination
-    private let metricContinuation: AsyncStream<(Configuration.Destination, [OpenTelemetrySdk.StableMetricData])>.Continuation
+
+    /// The remote metrics client process name
+    private let clientName: String
+
+    /// Continuation on to which we push metric updates to
+    private let metricContinuation: AsyncStream<CollectedMetricsData>
+        .Continuation
 
     private let state: OSAllocatedUnfairLock<State> = .init(initialState: .stopped)
-    private let logger = Logger(subsystem: kCloudMetricsLoggingSubsystem, category: "OTLPReader")
+    private let metricStoreProvider: MetricsStoreProvider
 
-
-    init(destination: Configuration.Destination,
-         metricContinuation: AsyncStream<(Configuration.Destination, [OpenTelemetrySdk.StableMetricData])>.Continuation) {
+    init(
+        destination: Configuration.Destination,
+        clientName: String,
+        metricStoreProvider: MetricsStoreProvider,
+        metricContinuation: AsyncStream<CollectedMetricsData>
+            .Continuation
+    ) {
         self.destination = destination
+        self.clientName = clientName
         self.metricContinuation = metricContinuation
+        self.metricStoreProvider = metricStoreProvider
     }
 
     internal func run() async throws {
@@ -63,45 +76,73 @@ package final class OpenTelemetryPeriodicMetricReader: Sendable {
                 state = .stopped
             }
         }
+
+        guard let store = self.store.withLock({ $0 }) else {
+            self.logger.fault("Reader does not have a store")
+            return
+        }
+
+        self.logger.log("Starting OTEL periodic metric reader. client=\(store.clientName, privacy: .public)")
         while (self.state.withLock { $0 == .running }) {
             try Task.checkCancellation()
+
             self.readMetrics()
+
+            self.logger
+                .debug(
+                    "Connected clients. client=\(store.clientName, privacy: .public), clients=\(store.connectedClients, privacy: .public)"
+                )
+            if !store.remoteEndIsAlive {
+                self.metricStoreProvider.dropStore(store)
+                self.logger
+                    .log("Reader stopping as remote end disconnected. client=\(store.clientName, privacy: .public)")
+                return
+            }
+
             try await Task.sleep(for: self.destination.publishInterval)
         }
     }
 
     private func readMetrics() {
         guard let metricProducer = (self.metricProducer.withLock { $0 }) else {
-            logger.error("No metric producer for destination. destination=\(self.destination, privacy: .public)")
+            self.logger.error("No metric producer for destination. destination=\(self.destination, privacy: .public)")
             return
         }
-        let store = self.store.withLock { $0 }
-        guard let metricData = store?.collectAllMetrics(producer: metricProducer) else {
-            logger.error("No metric data for destination. destination=\(self.destination, privacy: .public)")
+        guard let store = self.store.withLock({ $0 }) else {
+            self.logger.error("No metric store for reader. destination=\(self.destination, privacy: .public)")
             return
         }
+
+        let metricData = store.collectAllMetrics(producer: metricProducer)
+
         guard !metricData.isEmpty else {
             // Only log where we're running with an exportInterval that resembles prod.
             // If exportInterval is low, we're probably running tests and don't want to
             // completely flood our logger.
             if self.destination.publishInterval > .seconds(10) {
-                logger.log("Metric data are empty. destination=\(self.destination, privacy: .public)")
+                self.logger.log("Metric data are empty. client=\(self.clientName, privacy: .public) destination=\(self.destination, privacy: .public)")
             }
             return
         }
-        metricContinuation.yield((destination, metricData))
+        self.logger.debug("Collected metrics. client=\(self.clientName, privacy: .public), metrics_count=\(metricData.count, privacy: .public)")
+        let update = CollectedMetricsData(
+            destination: self.destination,
+            metrics: metricData,
+            client: store.clientName
+        )
+        self.metricContinuation.yieldAndLogOnFailure(update)
     }
 }
 
-extension OpenTelemetryPeriodicMetricReader: StableMetricReader {
-    package func getAggregationTemporality(for instrument: OpenTelemetrySdk.InstrumentType) -> OpenTelemetrySdk.AggregationTemporality {
+extension OpenTelemetryPeriodicMetricReader: MetricReader {
+    package func getAggregationTemporality(for _: OpenTelemetrySdk.InstrumentType) -> OpenTelemetrySdk
+    .AggregationTemporality {
         .delta
     }
 
-    package func getDefaultAggregation(for instrument: OpenTelemetrySdk.InstrumentType) -> any OpenTelemetrySdk.Aggregation {
+    package func getDefaultAggregation(for _: OpenTelemetrySdk.InstrumentType) -> any OpenTelemetrySdk.Aggregation {
         Aggregations.defaultAggregation()
     }
-
 
     package func shutdown() -> OpenTelemetrySdk.ExportResult {
         do {
@@ -113,22 +154,21 @@ extension OpenTelemetryPeriodicMetricReader: StableMetricReader {
             }
         } catch {
             // Can't throw here
-            logger.error("invalid OpenTelemetryPeriodMetricReader state transition to begin shutdown")
+            self.logger.error("invalid OpenTelemetryPeriodMetricReader state transition to begin shutdown")
         }
         return self.forceFlush()
     }
 
     package func forceFlush() -> ExportResult {
-        readMetrics()
+        self.readMetrics()
         return .success
     }
 
     package func register(registration: CollectionRegistration) {
         if let newProducer = registration as? MetricProducer {
-            metricProducer.withLock { $0 = newProducer }
+            self.metricProducer.withLock { $0 = newProducer }
         } else {
-            logger.error("Unrecognized CollectionRegistration")
+            self.logger.error("Unrecognized CollectionRegistration")
         }
     }
-
 }

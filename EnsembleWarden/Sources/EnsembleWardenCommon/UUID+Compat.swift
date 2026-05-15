@@ -38,6 +38,18 @@ extension UUID {
         }
         self = .init(uuid: uuid)
     }
+
+    /// Initialize UUID from 16-byte Data
+    package init(data: Data) throws {
+        guard data.count == 16 else {
+            struct InvalidDataLength: Error {}
+            throw InvalidDataLength()
+        }
+        let uuid = data.withUnsafeBytes { bytes in
+            bytes.load(as: uuid_t.self)
+        }
+        self.init(uuid: uuid)
+    }
 }
 
 extension UInt64 {

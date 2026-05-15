@@ -20,5 +20,6 @@
 //
 
 private import EnsembleWardenDCore
+private import EnsembleWardenServer
 
-try await EnsembleWardenDaemon<EnsembleDKeyProvider>.withEnsembleDKeyProvider().run()
+try await EnsembleWardenDaemon<OSMetricsBridge>.withEnsembleDKeyProvider().run()

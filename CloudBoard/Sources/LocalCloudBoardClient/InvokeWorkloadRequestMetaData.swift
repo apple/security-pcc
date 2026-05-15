@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 /// This represents the information on the InvokeWorkloadRequest which is visible to ROPES
 /// Some of this is driven by the client itself, some would be populated by ropes.
 /// The analogous type for this at the CloudApp API is `PlainTextMetaData`

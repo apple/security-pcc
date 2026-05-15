@@ -12,13 +12,13 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 import CFPreferenceCoder
 import CloudBoardCommon
+import CloudBoardLogging
 import Foundation
 import GRPCClientConfiguration
 import NIOCore
+import os
 
 extension CFPreferences {
     static var cbJobAuthPreferencesDomain: String {

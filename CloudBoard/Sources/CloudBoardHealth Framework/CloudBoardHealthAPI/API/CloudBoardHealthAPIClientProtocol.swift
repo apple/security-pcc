@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 public enum CloudBoardHealthState: Codable, CustomStringConvertible, Sendable {
     public var description: String {
         switch self {

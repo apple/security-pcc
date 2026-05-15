@@ -12,11 +12,9 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal import CloudBoardAsyncXPC
 
-public actor CloudBoardControllerAPIXPCClient {
+package actor CloudBoardControllerAPIXPCClient {
     private var connection: CloudBoardAsyncXPCConnection?
     private weak var delegate: CloudBoardControllerAPIClientDelegateProtocol?
 
@@ -29,7 +27,7 @@ public actor CloudBoardControllerAPIXPCClient {
         }
     }
 
-    public static func localConnection(
+    package static func localConnection(
     ) async -> CloudBoardControllerAPIXPCClient {
         await self.init(
             connection: .connect(to: kCloudBoardControllerAPIXPCServiceName)
@@ -55,21 +53,21 @@ public actor CloudBoardControllerAPIXPCClient {
 
 extension CloudBoardControllerAPIXPCClient:
 CloudBoardControllerAPIClientToServerProtocol {
-    public func registerWorkload(config: WorkloadConfig, properties: WorkloadProperties) async throws {
+    package func registerWorkload(config: InternalWorkloadConfig, properties: WorkloadProperties) async throws {
         try await self.connection?
             .send(CloudBoardControllerAPIXPCClientToServerMessage.RegisterWorkload(
                 config: config, properties: properties
             ))
     }
 
-    public func updateHealthStatus(status: WorkloadControllerStatus) async throws {
+    package func updateHealthStatus(status: WorkloadControllerStatus) async throws {
         try await self.connection?
             .send(CloudBoardControllerAPIXPCClientToServerMessage.UpdateHealthStatus(
                 status: status
             ))
     }
 
-    public func restartPrewarmedInstances() async throws {
+    package func restartPrewarmedInstances() async throws {
         try await self.connection?
             .send(CloudBoardControllerAPIXPCClientToServerMessage.RestartPrewarmedInstances())
     }
@@ -77,7 +75,7 @@ CloudBoardControllerAPIClientToServerProtocol {
 
 extension CloudBoardControllerAPIXPCClient:
 CloudBoardControllerAPIClientProtocol {
-    public func connect(
+    package func connect(
         delegate: CloudBoardControllerAPIClientDelegateProtocol
     ) async {
         self.delegate = delegate
@@ -89,14 +87,6 @@ CloudBoardControllerAPIClientProtocol {
     internal func configureHandlers(
         _ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore
     ) {
-        handlers.register(CloudBoardControllerAPIXPCServerToClientMessage.UpdateConfiguration.self) { message in
-            guard let delegate = await self.delegate else {
-                preconditionFailure("Received UpdateConfiguration message with no delegate set")
-            }
-            try await delegate.updateConfiguration(config: message.config)
-            return ExplicitSuccess()
-        }
-
         handlers.register(CloudBoardControllerAPIXPCServerToClientMessage.Shutdown.self) { _ in
             guard let delegate = await self.delegate else {
                 preconditionFailure("Received Shutdown message with no delegate set")

@@ -177,4 +177,7 @@ typedef void (^MeshSynchronizedBlock)();
 // Prints buffer assignment state.
 - (BOOL)printAssignmentStateFor:(uint64_t)bufferId;
 
+// Resets a buffer to an initialized state.
+- (BOOL)resetBuffer:(uint64_t)bufferId;
+
 @end

@@ -74,9 +74,19 @@ class LogMonitor {
     }
 
     // MARK: Activate
-    public func activate(_ eventHandler: @escaping (OSLogEventProxy) -> Void) {
+
+    /// Activate the log event stream with the given handler attached.
+    ///
+    /// - warning: The `OSLogEventProxy` value in the event handler is only
+    ///   valid for the duration of the handler block. Attempting to store
+    ///   the proxy value or capture it in a closure will result in a runtime
+    ///   crash on use.
+    ///
+    /// - Parameter eventHandler: A handler that is called whenever a logging
+    ///   event is received.
+    public func activate(_ eventHandler: @Sendable @escaping (OSLogEventProxy) -> Void) {
         stream.setEventHandler(eventHandler)
-        stream.setDroppedEventHandler { _ in
+        stream.setDroppedEventHandler { @Sendable _ in
             self.statistics.droppedEvents += 1
         }
         stream.activate()

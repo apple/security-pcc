@@ -25,7 +25,7 @@ import MobileActivationMacOS
 import MobileActivation
 #endif
 import os.log
-import Security
+@preconcurrency import Security
 import Security_Private
 
 public struct GenericAttestor: Attestor {
@@ -34,15 +34,28 @@ public struct GenericAttestor: Attestor {
     public internal(set) var sepProtocol: any SEP.AttestationProtocol = SEP.PhysicalDevice()
     public internal(set) var assetProvider: any AttestationAssetProvider = AssetProvider()
 
-    public init() {}
+    public init() {
+        self.init(attestingKey: SecKeyCopySystemKey(.dakCommitted, nil)?.takeRetainedValue())
+    }
 
-    static let dak = SecKeyCopySystemKey(.dakCommitted, nil)?.takeRetainedValue()
+    internal init(attestingKey: SecKey?) {
+        self.defaultKeyDuration = .days(1)
+        self.enforcementOptions = .init()
+        self.sealedHashes = .all
+        self._attestingKey = attestingKey
+    }
+
+    public var defaultKeyDuration: Duration
+    public var enforcementOptions: EnforcementOptions
+    public var sealedHashes: SealedHashSelector
+
+    private var _attestingKey: SecKey?
     public var attestingKey: SecKey {
         get throws {
-            guard let dak = Self.dak else {
+            guard let _attestingKey else {
                 throw CloudAttestationError.missingAttestingKey
             }
-            guard let copy = SecKeyCreateDuplicate(dak)?.takeRetainedValue() else {
+            guard let copy = SecKeyCreateDuplicate(_attestingKey)?.takeRetainedValue() else {
                 throw CloudAttestationError.missingAttestingKey
             }
             return copy
@@ -82,6 +95,7 @@ extension GenericAttestor.AssetProvider {
                 if let error {
                     GenericAttestor.logger.error("failed to issue DCRT: \(error)")
                     continuation.resume(throwing: error)
+                    return
                 }
                 guard let certs = certs as? [SecCertificate] else {
                     GenericAttestor.logger.error("dcrt chain not castable to [SecCertificate]")

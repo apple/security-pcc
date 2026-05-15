@@ -12,15 +12,12 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
-package import CloudBoardAsyncXPC
 import CloudBoardCommon
 import CloudBoardController
 import CloudBoardMetrics
 import os
 
-public enum WorkloadControllerError: Error, Equatable, CustomStringConvertible {
+package enum WorkloadControllerError: Error, Equatable, CustomStringConvertible {
     case controllerError(message: String)
     case controllerUnknownState
     case controllerDisconnected
@@ -37,32 +34,81 @@ public enum WorkloadControllerError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-public actor WorkloadController {
+/// A thread-safe actor that manages workload lifecycle and health status reporting for CloudBoard services.
+///
+/// `WorkloadController` serves as the primary interface between a workload and the CloudBoard infrastructure,
+/// handling service registration, health monitoring, state transitions, and service discovery announcements.
+/// It operates in two modes: leader mode (full functionality) and follower mode (minimal operation).
+///
+/// ## Key Responsibilities
+///
+/// - **State Management**: Tracks and manages workload states (initializing, ready, busy, error)
+/// - **Service Discovery**: Announces services when ready and manages service visibility
+/// - **Health Monitoring**: Reports health status to monitoring systems with debouncing
+/// - **Concurrent Request Tracking**: Monitors and reports current request load
+/// - **Prewarmed Instance Management**: Handles restarting of prewarmed instances
+/// - **Leadership**: Operates differently in leader vs follower modes
+///
+/// ## State Transitions
+///
+/// The controller manages the following state flow:
+/// ```
+/// initializing -> ready <-> busy <-> busyTransitioning
+///      |                              |
+///      v                              v
+///    error <------------------------error
+/// ```
+package actor WorkloadController {
+    /// Duration to wait before publishing status updates to prevent rapid-fire announcements.
+    /// Used when transitioning to states that benefit from debouncing (currently `.ready`).
     internal static let debounceDuration: Duration = .seconds(5)
 
+    private var isLeader: Bool = true
+    /// The name of the cloud application this controller manages.
+    package let cloudAppName: String
     private var state: ControllerState
     private let healthPublisher: ServiceHealthMonitor
-    private var server: CloudBoardControllerAPIXPCServer?
-    private var serviceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol?
-    private var providerPause: ((String?) async throws -> Void)?
-    private var restartPrewarmedInstances: (() async throws -> Void)?
+    private var providerPause: (@Sendable (String?) async throws -> Void)?
+    private var restartPrewarmedInstances: (@Sendable () async throws -> Void)?
     private var restartingPrewarmedInstances: Bool = false
     private var concurrentRequestCount: Int
     private var announcedService: Bool = false
+    private var serviceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol?
     private var metrics: MetricsSystem
-    private var isLeader: Bool = true
 
     private var workloadProperties: WorkloadProperties?
-    private var workloadConfig: WorkloadConfig?
+    private var workloadConfig: InternalWorkloadConfig?
 
     private var scheduledPublishing: Task<Void, Never>?
     private var lastDebouncedPublishingTime: ContinuousClock.Instant?
 
-    public enum ControllerState: Sendable, Equatable, CustomStringConvertible {
+    /// Represents the current operational state of the workload controller.
+    ///
+    /// States control service visibility, health reporting, and allowed operations:
+    /// - Only `.ready` state allows service discovery announcements
+    /// - Transitions to `.busy` require provider pause capability
+    /// - Error states halt normal operations and report unhealthy status
+    package enum ControllerState: Sendable, Equatable, CustomStringConvertible {
+        /// Initial state when the controller is starting up but not yet ready to serve requests.
+        /// Service discovery announcements are suppressed in this state.
         case initializing
+
+        /// Fully operational state where the service can accept new requests.
+        /// Service discovery announcements are active and health status reports optimal capacity.
         case ready
+
+        /// Intermediate state during transition to busy. Provider pause is called during this state.
+        /// - Parameter reason: Optional description of why the transition is occurring
         case busyTransitioning(reason: String?)
+
+        /// Service is operational but should not receive new requests.
+        /// Existing requests continue to be processed, but capacity is reported as zero.
+        /// - Parameter reason: Optional description of why the service is busy
         case busy(reason: String?)
+
+        /// Error state indicating the service is not operational.
+        /// Health status reports as unhealthy and service discovery announcements are suppressed.
+        /// - Parameter error: The specific error that caused this state, if available
         case error(WorkloadControllerError?)
 
         public var description: String {
@@ -83,39 +129,87 @@ public actor WorkloadController {
             }
         }
 
+        /// Indicates whether this state requires debounced publishing to prevent rapid status updates.
+        /// Currently only `.ready` state uses debouncing to avoid announcement spam.
         var needDebouncing: Bool {
             self == .ready
         }
     }
 
+    /// Shared logger instance for all WorkloadController operations.
+    /// Uses the CloudBoard subsystem for consistent log categorization.
     public static let log: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
         category: "WorkloadController"
     )
 
-    public init(
+    /// Creates a new WorkloadController instance.
+    ///
+    /// - Parameters:
+    ///   - cloudAppName: The name of the cloud application this controller manages
+    ///   - healthPublisher: Service health monitor for reporting health status
+    ///   - inMemoryControllerConfig: Optional in memory controller configuration tuple bypassing normal controller
+    /// setup.
+    ///                 When provided, immediately sets the controller to `.ready` state with the given config.
+    ///   - metrics: Metrics system for emitting operational metrics
+    ///
+    /// ## In Memory Controller Mode
+    ///
+    /// When `inMemoryControllerConfig` is provided, the controller:
+    /// - Skips the normal initialization flow
+    /// - Immediately transitions to `.ready` state
+    /// - Uses the provided configuration for service announcements
+    package init(
+        cloudAppName: String,
         healthPublisher: ServiceHealthMonitor,
-        testConfig: (WorkloadProperties, WorkloadConfig)? = nil,
+        inMemoryControllerConfig: (WorkloadProperties, InternalWorkloadConfig)? = nil,
         metrics: MetricsSystem
     ) {
+        self.cloudAppName = cloudAppName
         self.metrics = metrics
         self.state = .initializing
         self.healthPublisher = healthPublisher
         self.concurrentRequestCount = 0
 
-        if let (testWorkloadProperties, testWorkloadConfig) = testConfig {
-            self.workloadProperties = testWorkloadProperties
-            self.workloadConfig = testWorkloadConfig
+        if let (workloadProperties, workloadConfig) = inMemoryControllerConfig {
+            self.workloadProperties = workloadProperties
+            self.workloadConfig = workloadConfig
             self.state = .ready
         }
         self.metrics.emit(Metrics.WorkloadStatus.HealthStatus(value: 1, healthStatus: self.state))
     }
 
-    public func run(
+    /// Runs the controller in leader mode with full functionality.
+    ///
+    /// This is the main execution method for primary instances that handle service discovery,
+    /// health reporting, and workload management. The method runs indefinitely until cancelled
+    /// or an error occurs.
+    ///
+    /// - Parameters:
+    ///   - serviceDiscoveryPublisher: Publisher for announcing services to service discovery.
+    ///                                Can be `nil` if service discovery is not needed.
+    ///   - concurrentRequestCountStream: Async stream providing real-time concurrent request counts
+    ///   - providerPause: Async closure called when transitioning to busy state.
+    ///                    Should pause request acceptance. Receives optional reason string.
+    ///   - restartPrewarmedInstances: Optional async closure for restarting prewarmed instances.
+    ///                                If `nil`, restart functionality will be unavailable.
+    ///
+    /// ## Behavior
+    ///
+    /// - Sets the controller to leader mode
+    /// - Monitors concurrent request count and updates health status accordingly
+    /// - Handles service discovery announcements when in `.ready` state
+    /// - Manages state transitions and provider pause coordination
+    /// - Automatically cancels any scheduled publishing tasks on exit
+    ///
+    /// ## Throws
+    ///
+    /// Propagates errors from the concurrent request count stream monitoring.
+    package func run(
         serviceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol?,
         concurrentRequestCountStream: AsyncStream<Int>,
-        providerPause: @escaping (String?) async throws -> Void,
-        restartPrewarmedInstances: (() async throws -> Void)?
+        providerPause: @escaping @Sendable (String?) async throws -> Void,
+        restartPrewarmedInstances: (@Sendable () async throws -> Void)?
     ) async throws {
         defer {
             self.scheduledPublishing?.cancel()
@@ -124,18 +218,12 @@ public actor WorkloadController {
         self.serviceDiscoveryPublisher = serviceDiscoveryPublisher
         self.providerPause = providerPause
         self.restartPrewarmedInstances = restartPrewarmedInstances
-        self.server = CloudBoardControllerAPIXPCServer.localListener()
-        Self.log.info("Starting WorkloadController server")
-        await self.server?.connect(listenerDelegate: self, serverDelegate: self)
-        Self.log.info("WorkloadController server started")
 
-        // For testing only -- if initialized with a test config instead of
-        // using real controller then announce the config immediately.
         if case .ready = self.state,
            let properties = self.workloadProperties,
            self.workloadConfig != nil {
             Self.log.info("""
-            Announcing test service \(properties.workloadName, privacy: .public)
+            Announcing inMemoryController based service \(properties.workloadName, privacy: .public)
             """)
             self.sendStatusUpdate()
         }
@@ -145,13 +233,26 @@ public actor WorkloadController {
         )
     }
 
+    /// Runs the controller in follower mode with minimal functionality.
+    ///
+    /// Follower mode is designed for secondary instances that don't need to handle
+    /// service discovery or full workload management. This method runs indefinitely
+    /// with minimal resource usage.
+    ///
+    /// ## Behavior
+    ///
+    /// - Sets `isLeader` to `false`, disabling service discovery operations
+    /// - Enters an infinite sleep loop with 1-hour intervals
+    /// - Provides a lightweight presence for non-primary instances
+    /// - Does not monitor concurrent requests or manage service announcements
+    ///
+    /// ## Usage
+    ///
+    /// Typically used in multi-instance deployments where only one instance
+    /// needs to handle service discovery and coordination duties.
     // on follower nodes we dont need service discovery
-    public func runInFollowerMode() async throws {
+    package func runInFollowerMode() async throws {
         self.isLeader = false
-        Self.log.info("Starting WorkloadController server")
-        self.server = CloudBoardControllerAPIXPCServer.localListener()
-        await self.server?.connect(listenerDelegate: self, serverDelegate: self)
-        Self.log.info("WorkloadController server started")
 
         while true {
             // Sleep for an hour. This is the longest reasonable interval to approximate
@@ -160,105 +261,34 @@ public actor WorkloadController {
         }
     }
 
-    private func sendServiceDiscoveryUpdate() {
-        guard let properties = self.workloadProperties,
-              let config = self.workloadConfig else {
-            return
-        }
-
-        switch self.state {
-        case .ready:
-            if self.announcedService == false {
-                self.serviceDiscoveryPublisher?.announceService(
-                    name: properties.workloadName,
-                    workloadConfig: .init(from: config)
-                )
-                self.announcedService = true
-            }
-        case .initializing, .busy, .busyTransitioning, .error:
-            return
-        }
-    }
-
-    private func sendHealthPublisherUpdate() {
-        if self.isLeader {
-            self.sendHealthPublisherUpdateLeader()
-        } else {
-            self.sendHealthPublisherUpdateFollower()
-        }
-    }
-
-    private func sendHealthPublisherUpdateLeader() {
-        if case .error = self.state {
-            self.healthPublisher.updateStatus(.unhealthy)
-            return
-        }
-
-        guard let properties = self.workloadProperties else {
-            Self.log.warning("""
-            Skipping health publisher update because workload properties \
-            have not been received
-            """)
-            return
-        }
-        guard let config = self.workloadConfig else {
-            Self.log.warning("""
-            Skipping health publisher update because workload config \
-            has not been received
-            """)
-            return
-        }
-
-        let maxBatchSize: Int
-        let optimalBatchSize: Int
-        if case .ready = self.state {
-            maxBatchSize = config.maxBatchSize
-            optimalBatchSize = config.optimalBatchSize
-        } else {
-            maxBatchSize = 0
-            optimalBatchSize = 0
-        }
-        self.healthPublisher.updateStatus(.healthy(.init(
-            workloadType: properties.workloadName,
-            tags: config.workloadTags,
-            maxBatchSize: maxBatchSize,
-            currentBatchSize: config.currentBatchSize,
-            optimalBatchSize: optimalBatchSize
-        )))
-    }
-
-    private func sendHealthPublisherUpdateFollower() {
-        switch self.state {
-        case .initializing:
-            return
-        case .ready, .busy, .busyTransitioning:
-            self.healthPublisher.updateStatus(.healthy(nil))
-        case .error:
-            self.healthPublisher.updateStatus(.unhealthy)
-        }
-    }
-
-    public func shutdown() async throws {
-        try await self.server?.shutdown()
-    }
-
-    private func concurrentRequestCountMonitor(
-        concurrentRequestCountStream: AsyncStream<Int>
-    ) async throws {
-        for try await concurrentRequestCount in concurrentRequestCountStream {
-            self.concurrentRequestCount = concurrentRequestCount
-            self.sendHealthPublisherUpdate()
-        }
-    }
-}
-
-extension WorkloadController: CloudBoardControllerAPIServerDelegateProtocol {
+    /// Registers workload configuration and properties with the controller.
+    ///
+    /// This method is typically called by the CloudBoard infrastructure to provide
+    /// the controller with necessary configuration for service announcements and
+    /// health reporting.
+    ///
+    /// - Parameters:
+    ///   - config: Workload configuration containing batch sizes, tags, and operational parameters
+    ///   - properties: Workload properties including the service name and metadata
+    ///
+    /// ## Behavior
+    ///
+    /// - Validates that optimal batch size doesn't exceed max batch size (logs warning if it does)
+    /// - Stores configuration for future health reporting and service discovery
+    /// - Resets service announcement state to ensure fresh announcements
+    /// - Triggers immediate status update to reflect new configuration
+    ///
+    /// ## Side Effects
+    ///
+    /// - May trigger service discovery announcements if controller is in `.ready` state
+    /// - Updates health publisher with new capacity information
+    /// - Logs the received configuration for debugging purposes
     public func registerWorkload(
-        config: WorkloadConfig,
+        config: InternalWorkloadConfig,
         properties: WorkloadProperties
     ) async throws {
         Self.log.log("""
-        Received 'RegisterWorkload' from CloudBoardController: \
+        Received 'RegisterWorkload' from CloudBoardController::\(self.cloudAppName, privacy: .public): \
         config=\(config.description, privacy: .public), \
         properties=\(properties.description, privacy: .public)
         """)
@@ -276,11 +306,46 @@ extension WorkloadController: CloudBoardControllerAPIServerDelegateProtocol {
         self.sendStatusUpdate()
     }
 
-    public func updateHealthStatus(
+    /// Updates the controller's health status based on external health checks.
+    ///
+    /// This method handles state transitions initiated by the CloudBoard infrastructure,
+    /// managing the complex workflow of transitioning between operational states.
+    ///
+    /// - Parameter status: New health status containing the desired state and metadata
+    ///
+    /// ## State Transition Logic
+    ///
+    /// - **To Ready**: Requires no prewarmed restart in progress
+    /// - **To Busy**: Cannot transition if already in `busyTransitioning`
+    /// - **To BusyTransitioning**: Intermediate state that calls provider pause
+    /// - **To Error**: Immediately transitions to error state
+    ///
+    /// ## Provider Pause Integration
+    ///
+    /// When transitioning to busy states in leader mode:
+    /// 1. Validates provider pause handler is available
+    /// 2. Transitions to `busyTransitioning`
+    /// 3. Calls the provider pause handler
+    /// 4. Finally transitions to `busy` state
+    ///
+    /// ## Error Handling
+    ///
+    /// Throws `CloudBoardControllerAPIError` for:
+    /// - Attempting transitions during prewarmed restart
+    /// - Missing provider pause handler when required
+    /// - Already transitioning to busy state
+    /// - Provider pause handler failures
+    ///
+    /// ## Metrics and Debouncing
+    ///
+    /// - Emits metrics for state changes
+    /// - Uses debounced publishing for `.ready` state to prevent announcement spam
+    /// - Immediate publishing for other states
+    package func updateHealthStatus(
         status: WorkloadControllerStatus
     ) async throws {
         Self.log.log("""
-        Received 'UpdateHealthStatus' from CloudBoardController: \
+        Received 'UpdateHealthStatus' from CloudBoardController::\(self.cloudAppName, privacy: .public): \
         status=\(status.description, privacy: .public)
         """)
 
@@ -345,47 +410,39 @@ extension WorkloadController: CloudBoardControllerAPIServerDelegateProtocol {
         }
     }
 
-    private func sendOrDebounceStatusUpdate() {
-        if self.state.needDebouncing {
-            if self.scheduledPublishing != nil {
-                return
-            }
-            let delay = if let lastDebouncedPublishingTime = self.lastDebouncedPublishingTime {
-                Self.debounceDuration - lastDebouncedPublishingTime.duration(to: .now)
-            } else {
-                Duration.zero
-            }
-            if delay <= Duration.zero {
-                self.sendStatusUpdate()
-                return
-            }
-            self.scheduledPublishing = Task {
-                do {
-                    try await Task.sleep(for: delay)
-                } catch {
-                    Self.log.debug("Scheduled status update publishing cancelled")
-                    return
-                }
-                self.sendStatusUpdate()
-            }
-        } else {
-            self.sendStatusUpdate()
-        }
-    }
-
-    private func sendStatusUpdate() {
-        self.scheduledPublishing?.cancel()
-        self.scheduledPublishing = nil
-        self.sendServiceDiscoveryUpdate()
-        self.sendHealthPublisherUpdate()
-        if self.state.needDebouncing {
-            self.lastDebouncedPublishingTime = .now
-        }
-    }
-
-    public func restartPrewarmedInstances() async throws {
+    /// Restarts prewarmed instances using the configured handler.
+    ///
+    /// This method provides a controlled way to restart prewarmed instances while
+    /// ensuring proper state management and preventing concurrent restart operations.
+    ///
+    /// ## Preconditions
+    ///
+    /// - Must have a restart handler configured (set during `run()`)
+    /// - Controller must be in `.busy` state
+    /// - No other restart operation can be in progress
+    ///
+    /// ## Behavior
+    ///
+    /// - Sets restart-in-progress flag to prevent concurrent operations
+    /// - Calls the configured restart handler
+    /// - Automatically clears the in-progress flag on completion or error
+    /// - Logs the operation start and any errors
+    ///
+    /// ## Error Handling
+    ///
+    /// Throws `CloudBoardControllerAPIError` for:
+    /// - `.unavailable`: No restart handler configured
+    /// - `.restartPrewarmedInProgress`: Another restart already in progress
+    /// - `.restartPrewarmedInvalidState`: Controller not in `.busy` state
+    /// - `.restartPrewarmedFailed`: Handler execution failed
+    ///
+    /// ## Thread Safety
+    ///
+    /// The restart-in-progress flag ensures only one restart operation can
+    /// execute at a time, even with concurrent calls to this method.
+    package func restartPrewarmedInstances() async throws {
         Self.log.log("""
-        Received 'RestartPrewarmedInstances' from CloudBoardController
+        Received 'RestartPrewarmedInstances' from CloudBoardController::\(self.cloudAppName, privacy: .public)
         """)
 
         guard let handler = self.restartPrewarmedInstances else {
@@ -421,16 +478,25 @@ extension WorkloadController: CloudBoardControllerAPIServerDelegateProtocol {
             throw CloudBoardControllerAPIError.restartPrewarmedFailed
         }
     }
-}
 
-extension WorkloadController: CloudBoardAsyncXPCListenerDelegate {
-    package func invalidatedConnection(_ connection: CloudBoardAsyncXPCConnection) async {
-        Self.log.log("""
-        Received 'InvalidatedConnection' from CloudBoardController: \
-        id=\(String(describing: connection.id), privacy: .public)
-        """)
-
-        // Ignoring ID since we only support one controller connection.
+    /// Handles disconnection from the CloudBoard infrastructure.
+    ///
+    /// This method should be called when the connection to CloudBoard is lost,
+    /// ensuring the controller transitions to an appropriate error state and
+    /// updates all dependent systems.
+    ///
+    /// ## Behavior
+    ///
+    /// - Immediately transitions to `.error` state with disconnection reason
+    /// - Updates service discovery to reflect unavailable status
+    /// - Reports unhealthy status to health publisher
+    /// - Does not throw errors - handles disconnection gracefully
+    ///
+    /// ## Usage
+    ///
+    /// Typically called by connection management code when detecting
+    /// infrastructure connectivity issues.
+    public func disconnected() {
         self.state = .error(
             WorkloadControllerError.controllerDisconnected
         )
@@ -438,10 +504,159 @@ extension WorkloadController: CloudBoardAsyncXPCListenerDelegate {
         self.sendServiceDiscoveryUpdate()
         self.sendHealthPublisherUpdate()
     }
+
+    /// Updates service discovery publisher with current service status.
+    /// Only announces services when in `.ready` state and configuration is available.
+    private func sendServiceDiscoveryUpdate() {
+        guard let properties = self.workloadProperties,
+              let config = self.workloadConfig else {
+            return
+        }
+
+        switch self.state {
+        case .ready:
+            if self.announcedService == false {
+                self.serviceDiscoveryPublisher?.announceService(
+                    name: properties.workloadName,
+                    workloadConfig: .init(from: config)
+                )
+                self.announcedService = true
+            }
+        case .initializing, .busy, .busyTransitioning, .error:
+            return
+        }
+    }
+
+    /// Updates health publisher with current status, routing to leader or follower logic.
+    private func sendHealthPublisherUpdate() {
+        if self.isLeader {
+            self.sendHealthPublisherUpdateLeader()
+        } else {
+            self.sendHealthPublisherUpdateFollower()
+        }
+    }
+
+    /// Handles health publisher updates for leader instances with full capacity reporting.
+    private func sendHealthPublisherUpdateLeader() {
+        if case .error = self.state {
+            self.healthPublisher.updateStatus(.unhealthy)
+            return
+        }
+
+        guard let properties = self.workloadProperties else {
+            Self.log.warning("""
+            Skipping health publisher update because workload properties \
+            have not been received
+            """)
+            return
+        }
+        guard let config = self.workloadConfig else {
+            Self.log.warning("""
+            Skipping health publisher update because workload config \
+            has not been received
+            """)
+            return
+        }
+
+        let maxBatchSize: Int
+        let optimalBatchSize: Int
+        if case .ready = self.state {
+            maxBatchSize = config.maxBatchSize
+            optimalBatchSize = config.optimalBatchSize
+        } else {
+            maxBatchSize = 0
+            optimalBatchSize = 0
+        }
+
+        let tags = switch config {
+        case .compute(let config): config.workloadTags
+        case .proxy(let config): config.workloadTags
+        }
+
+        self.healthPublisher.updateStatus(.healthy(.init(
+            workloadType: properties.workloadName,
+            tags: tags,
+            maxBatchSize: maxBatchSize,
+            currentBatchSize: config.currentBatchSize,
+            optimalBatchSize: optimalBatchSize
+        )))
+    }
+
+    /// Handles health publisher updates for follower instances with minimal status reporting.
+    private func sendHealthPublisherUpdateFollower() {
+        switch self.state {
+        case .initializing:
+            return
+        case .ready, .busy, .busyTransitioning:
+            self.healthPublisher.updateStatus(.healthy(nil))
+        case .error:
+            self.healthPublisher.updateStatus(.unhealthy)
+        }
+    }
+
+    /// Monitors concurrent request count stream and updates health status accordingly.
+    /// Runs continuously until the stream ends or an error occurs.
+    private func concurrentRequestCountMonitor(
+        concurrentRequestCountStream: AsyncStream<Int>
+    ) async throws {
+        for try await concurrentRequestCount in concurrentRequestCountStream {
+            self.concurrentRequestCount = concurrentRequestCount
+            self.sendHealthPublisherUpdate()
+        }
+    }
+
+    /// Immediately sends status updates to all publishers and resets debouncing state.
+    private func sendStatusUpdate() {
+        self.scheduledPublishing?.cancel()
+        self.scheduledPublishing = nil
+        self.sendServiceDiscoveryUpdate()
+        self.sendHealthPublisherUpdate()
+        if self.state.needDebouncing {
+            self.lastDebouncedPublishingTime = .now
+        }
+    }
+
+    /// Sends status updates with debouncing for states that benefit from it.
+    /// Uses scheduled tasks to prevent rapid-fire announcements during frequent state changes.
+    private func sendOrDebounceStatusUpdate() {
+        if self.state.needDebouncing {
+            if self.scheduledPublishing != nil {
+                return
+            }
+            let delay = if let lastDebouncedPublishingTime = self.lastDebouncedPublishingTime {
+                Self.debounceDuration - lastDebouncedPublishingTime.duration(to: .now)
+            } else {
+                Duration.zero
+            }
+            if delay <= Duration.zero {
+                self.sendStatusUpdate()
+                return
+            }
+            self.scheduledPublishing = Task {
+                do {
+                    try await Task.sleep(for: delay)
+                } catch {
+                    Self.log.debug("Scheduled status update publishing cancelled")
+                    return
+                }
+                self.sendStatusUpdate()
+            }
+        } else {
+            self.sendStatusUpdate()
+        }
+    }
 }
 
+/// Extension providing conversion from internal `ControllerState` to external `WorkloadControllerState`.
+/// This allows the internal actor state to be safely exposed through the CloudBoard API.
 extension WorkloadControllerState {
-    public init(from controllerState: WorkloadController.ControllerState) {
+    /// Creates a `WorkloadControllerState` from the internal `ControllerState`.
+    ///
+    /// This conversion handles the mapping between internal state representation
+    /// and the external API state format, including error message extraction.
+    ///
+    /// - Parameter controllerState: The internal controller state to convert
+    package init(from controllerState: WorkloadController.ControllerState) {
         switch controllerState {
         case .initializing:
             self = .initializing

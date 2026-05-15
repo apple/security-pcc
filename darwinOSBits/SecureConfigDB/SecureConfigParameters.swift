@@ -72,6 +72,9 @@ public class SecureConfigParameters: NSObject, Codable {
 		case internalRequestOptionsAllowed = "com.apple.tie.internalRequestOptionsAllowed"
 		case tie_allowNonProdExceptionOptions = "com.apple.tie.allowNonProdExceptionOptions"
 		case cloudboard_isProxy = "com.apple.cloudboard.isProxy"
+		case cryptexAppIdentifiers = "com.apple.libcryptex.appIdentifiers"
+		case cloudAttestationRoutingHint = "com.apple.CloudAttestation.routingHint"
+		case cloudAttestationRackId = "com.apple.CloudAttestation.rackId"
 
 		//Research keys
 		case research_disableAppleInfrastrucutureEnforcement = "com.apple.pcc.research.disableAppleInfrastrucutureEnforcement"
@@ -107,8 +110,18 @@ public class SecureConfigParameters: NSObject, Codable {
 	/// Parameter for ``Keys.cloudboard_isProxy`` key.
 	public let cloudboard_isProxy: Bool?
 
+	/// Parameter for ``Keys.cloudAttestationRoutingHint`` key.
+	public let cloudAttestationRoutingHint: String?
+
+	/// Parameter for ``Keys.cloudAttestationRackId`` key.
+	public let cloudAttestationRackId: String?
+
 	/// Parameter for ``Keys.research_disableAppleInfrastrucutureEnforcement`` key.
 	public let research_disableAppleInfrastrucutureEnforcement: Bool?
+
+	/// Parameter for ``Keys.cryptexAppIdentifiers`` key.
+	@objc
+	public let cryptexAppIdentifiers: [String]?
 
 	@objc(research_disableAppleInfrastructureEnforcement)
 	public var cf_research_disableAppleInfrastructureEnforcement: CFBoolean? {
@@ -179,8 +192,10 @@ public class SecureConfigParameters: NSObject, Codable {
 		self.internalRequestOptionsAllowed = try parameters.get(Keys.internalRequestOptionsAllowed.rawValue)
 		self.tie_allowNonProdExceptionOptions = try parameters.get(Keys.tie_allowNonProdExceptionOptions.rawValue)
 		self.cloudboard_isProxy = try parameters.get(Keys.cloudboard_isProxy.rawValue)
-
+		self.cloudAttestationRoutingHint = try parameters.get(Keys.cloudAttestationRoutingHint.rawValue)
+		self.cloudAttestationRackId = try parameters.get(Keys.cloudAttestationRackId.rawValue)
 		self.research_disableAppleInfrastrucutureEnforcement = try parameters.get(Keys.research_disableAppleInfrastrucutureEnforcement.rawValue)
+		self.cryptexAppIdentifiers = try parameters.get(Keys.cryptexAppIdentifiers.rawValue)
 	}
 
 	public required convenience init(from decoder: any Decoder) throws {
@@ -264,7 +279,7 @@ extension SecureConfigParameters {
 	}
 
 	static func datavaultURL() throws -> URL {
-		let bootsessionuuid = try Self.bootsessionuuid()
+		let bootsessionuuid = try readBootSessionUUID()
 		let dbURL = URL(fileURLWithPath: "/var/db/secureconfig")
 		return dbURL.appending(components: bootsessionuuid, "datavault")
 	}
@@ -272,18 +287,6 @@ extension SecureConfigParameters {
 	static func paramsURL() throws -> URL {
 		let dvURL = try Self.datavaultURL()
 		return dvURL.appending(component: "parameters.json")
-	}
-
-	static func bootsessionuuid() throws -> String {
-		var size = 0
-		guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0 else {
-			throw RuntimeError("sysctlbyname(kern.bootsessionuuid) failed with errno \(Darwin.errno)")
-		}
-		var buf = [CChar](repeating: 0, count: size)
-		guard sysctlbyname("kern.bootsessionuuid", &buf, &size, nil, 0) == 0 else {
-			throw RuntimeError("sysctlbyname(kern.bootsessionuuid) failed with errno \(Darwin.errno)")
-		}
-		return String(cString: buf)
 	}
 }
 

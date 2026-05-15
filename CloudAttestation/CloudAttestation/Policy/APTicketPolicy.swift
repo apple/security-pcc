@@ -35,7 +35,7 @@ public struct APTicketPolicy: AttestationPolicy {
 
     /// Evaluates the APTicket within the ``AttestationBundle``
     ///
-    /// Calculates the actual APTicket SHA384 digest and compares it against the expected value provided from ``init(digest:)``.
+    /// Calculates the actual APTicket SHA384 digest and compares it against the expected value provided from the SEP attestation.
     ///
     /// - Parameters:
     ///     - bundle: the ``AttestationBundle`` to evaluate.
@@ -47,13 +47,15 @@ public struct APTicketPolicy: AttestationPolicy {
             throw Error.missingAttestation
         }
 
+        let apTicket = attestation.osType == .macOS ? bundle.proto.sfrManifest : bundle.proto.apTicket
+
         guard let apDigest = attestation.sealDataA?.digest else {
             throw Error.missingDigest
         }
 
-        let actuaAPDigest = SHA384.hash(data: bundle.proto.apTicket)
+        let actualAPDigest = SHA384.hash(data: apTicket)
 
-        guard apDigest.elementsEqual(actuaAPDigest) else {
+        guard apDigest.elementsEqual(actualAPDigest) else {
             throw Error.untrusted
         }
 

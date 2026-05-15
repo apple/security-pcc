@@ -12,8 +12,7 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple. All rights reserved.
-
+import CloudBoardDomain
 import CloudBoardJobHelperAPI
 import CloudBoardLogging
 import CloudBoardMetrics

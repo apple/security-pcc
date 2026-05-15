@@ -23,6 +23,7 @@ import PackageKit_Private
 import Security
 import System
 import os
+internal import DarwinInitBridging
 
 struct PackageInstaller {
     let url: URL

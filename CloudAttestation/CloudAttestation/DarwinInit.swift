@@ -88,7 +88,7 @@ public struct DarwinInit: Sendable {
         }
 
         let jsonObject = try JSONSerialization.jsonObject(with: config.entry)
-        guard let parameters = jsonObject as? [String: Any] else {
+        guard let parameters = jsonObject as? [String: any Sendable] else {
             throw Error.malformedSecureConfig
         }
         self.parameters = parameters
@@ -117,7 +117,7 @@ public struct DarwinInit: Sendable {
 // MARK: - Known keys
 extension DarwinInit {
     /// Enumerates the known set of values `config-security-policy` can have in darwin-init.
-    public enum SecureConfigSecurityPolicy: String, Sendable, Codable {
+    public enum SecureConfigSecurityPolicy: String, CaseIterable, Sendable, Codable {
         case none
         case carry
         case customer

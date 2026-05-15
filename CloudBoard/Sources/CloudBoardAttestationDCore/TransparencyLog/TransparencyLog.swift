@@ -12,13 +12,13 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
 import CloudAttestation
 import CloudBoardCommon
 import CloudBoardIdentity
 import CloudBoardLogging
 import CloudBoardMetrics
 import Foundation
+import InternalSwiftProtobuf
 import os
 
 public protocol TransparencyLog: Sendable {
@@ -71,13 +71,14 @@ final class SWTransparencyLog: TransparencyLog {
     }
 
     func getReleaseSet() async throws -> [ReleaseDigestEntry] {
-        return try await self.metrics.withStatusMetrics(
-            total: Metrics.TransparencyLog.TransparencyLogCounter(action: .increment(by: 1)),
-            error: Metrics.TransparencyLog.TransparencyLogErrorCounter.Factory()
+        return try await executeWithRetries(
+            retryStrategy: self.createTransparencyLogRetryStrategy(retryConfig: self.retryConfig),
+            perRetryTimeout: self.retryConfig.perRetryTimeout
+
         ) {
-            return try await executeWithRetries(
-                retryStrategy: self.createTransparencyLogRetryStrategy(retryConfig: self.retryConfig),
-                perRetryTimeout: self.retryConfig.perRetryTimeout
+            return try await self.metrics.withStatusMetrics(
+                total: Metrics.TransparencyLog.TransparencyLogCounter(action: .increment(by: 1)),
+                error: Metrics.TransparencyLog.TransparencyLogErrorCounter.Factory()
             ) {
                 return try await withErrorLogging(
                     operation: "get_active_release_set",
@@ -87,7 +88,7 @@ final class SWTransparencyLog: TransparencyLog {
                     let url: URL
                     let urlSessionDelegate: URLSessionDelegate?
 
-                    if let identity = self.identityManager.identityCallback() {
+                    if let identity = try self.identityManager.identityCallback() {
                         final class Delegate: NSObject, URLSessionDelegate {
                             let credential: URLCredential
 
@@ -117,12 +118,12 @@ final class SWTransparencyLog: TransparencyLog {
                     var req = URLRequest(url: url.appending(path: "/at/atl_active_records"))
                     req.httpMethod = "POST"
                     req.setValue("application/protobuf", forHTTPHeaderField: "Content-Type")
-                    let activeRecordsReq = ATActiveRecordsRequest.with { builder in
+                    let activeRecordsReq = PrivateCloudCompute_TransparencyLog_ATActiveRecordsRequest.with { builder in
                         builder.version = .v3
                         builder.application = self.environment
                             .transparencyPrimaryTree ? .privateCloudCompute : .privateCloudComputeInternal
                         builder.type = .release
-                        builder.releaseType = [.prodction, .seed]
+                        builder.releaseType = [.production, .seed]
                     }
                     req.httpBody = try activeRecordsReq.serializedData()
 
@@ -157,7 +158,7 @@ final class SWTransparencyLog: TransparencyLog {
                     ).log(to: Self.logger, level: .info)
 
                     var releaseSets: [ReleaseDigestEntry] = []
-                    let resp = try ATActiveRecordsResponse(serializedBytes: data)
+                    let resp = try PrivateCloudCompute_TransparencyLog_ATActiveRecordsResponse(serializedBytes: data)
                     switch resp.status {
                     case .ok:
                         for leaf in resp.leaves {
@@ -215,7 +216,6 @@ final class SWTransparencyLog: TransparencyLog {
             backoffStrategy: ExponentialBackoffStrategy(from: retryConfig),
             deadline: retryConfig.timeout.map { .instant(.now + $0) } ?? .noDeadline,
             retryFilter: { error in
-                self.metrics.emit(Metrics.TransparencyLog.TransparencyLogErrorCounter.Factory().make(error))
                 if let tlError = error as? TransparencyLogError {
                     switch tlError {
                     case .httpError, .internalError:

@@ -40,6 +40,7 @@ public let kEnsemblerTimeout =
 public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
 	let ensembleConfig: EnsembleConfiguration
 	public let ensembleID: String?
+    public let rackID: String?
 	let currentNodeConfig: NodeConfiguration
 	let UDID: String
 	let isLeader: Bool
@@ -77,6 +78,12 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
 	let drainingQ = DispatchSerialQueue(label: "\(kEnsemblerPrefix).draining.queue")
 
 	let dataKeyQ = DispatchSerialQueue(label: "\(kEnsemblerPrefix).datakey.queue")
+	
+	// Reader-writer lock to ensure mutual exclusion between key rotation and data operations
+    private let keyRotationLock = DispatchSerialQueue(label: "\(kEnsemblerPrefix).keyrotation.queue", qos: .userInitiated)
+    
+    // active data request group
+    private let activeDataRequests = DispatchGroup()
 
 	private let attestationAsyncQueue = AsyncQueue()
 	private var plainTextUUID = UUID().uuidString
@@ -119,6 +126,9 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
     internal var linkSpanID: String?
     internal var linkTraceID: String?
     internal var spanID: String?
+    
+    // Callback for handling data messages
+    private var dataMessageCallbackRegistry: [String: EnsembleDataMessageReceived] = [:]
 
     internal func updateTraceCheckpoint(state: EnsemblerStatus,error: Error? = nil) {
         
@@ -221,6 +231,22 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
 	) throws {
 		self.ensembleConfig = ensembleConfig
 		self.ensembleID = ensembleConfig.ensembleID
+        
+        EnsemblerTLS.logger.info(
+            """
+            Initalizing ensembler: ensembleID: 
+            \(self.ensembleID, privacy: .public)
+            """
+        )
+        self.rackID = ensembleConfig.rackID
+        
+        EnsemblerTLS.logger.info(
+            """
+            Initalizing ensembler: rackID: 
+            \(self.rackID, privacy: .public)
+            """
+        )
+        
 		self.skipWaitingForDenali = skipWaitingForDenali
 		self.useStubAttestation = useStubAttestation
 		self.debugMsg = DebugMessage()
@@ -820,19 +846,26 @@ extension EnsemblerTLS: BackendDelegate {
 	func networkConnectionChange(node: Int, connected: Bool) {
 		self.router?.networkConnectionChange(node: node, connected: connected)
 	}
+
+	func incomingMessage(node: Int, message: Data) {
+		// Handle incoming messages from the backend
+		_ = incomingMessageInternal(node: node, message: message)
+	}
 }
 
 extension EnsemblerTLS: ServerConnectionDelegate, ClientConnectionDelegate {
-	public func incomingMessage(node: Int, message: Data) {
+	public func incomingMessage(node: Int, message: Data) -> Data? {
 		let dispatchGroup = DispatchGroup()
+		var responseData: Data?
 		dispatchGroup.enter()
 		EnsemblerTLS.fromBackendQ.async {
 			defer {
 				dispatchGroup.leave()
 			}
-			self.incomingMessageInternal(node: node, message: message)
+			responseData = self.incomingMessageInternal(node: node, message: message)
 		}
 		dispatchGroup.wait()
+		return responseData
 	}
 
 	public func sendCallback(node: Int, message: Data, error: Error?) {
@@ -1038,6 +1071,21 @@ extension EnsemblerTLS {
 		case .followerDataKeyObtained:
 			try self.handleDataKeyObtained(udid: sender.key)
 		case .ensembleFailed:
+            
+            // if leader was rebooted and its in new session's coordinating,
+            // the followers will fail because of disconnection event
+            // from CIOMesh due to leaders reboot and will try to send ensembleFailed
+            // notification from their old session, in such case we should just ignore it.
+            guard status != .coordinating else {
+                EnsemblerTLS.logger.info(
+                    """
+                    EnsemblerTLS.ensembleFailed(): \
+                    Handling extraneous message.
+                    """
+                )
+                return
+            }
+            
             ensembleFailed(failMsg: "EnsemblerTLS.incomingMessageForLeader():  Received ensembleFailed from \(sender.value.rank)")
 		default:
 			Self.logger.error(
@@ -1100,6 +1148,20 @@ extension EnsemblerTLS {
 			setDataKey(singleUseKeyToken: singleUseToken, key: keyData)
 			self.sendDataKeyObtainedToLeader()
 		case .ensembleFailed:
+            // if follower was rebooted and its in new session's coordinating,
+            // the other nodes and leader will fail because of disconnection event
+            // from CIOMesh due to the follower reboot
+            // The leader will still keep sending ensembleFailed, so ignore it.
+            guard status != .coordinating else {
+                EnsemblerTLS.logger.info(
+                    """
+                    EnsemblerTLS.ensembleFailed(): \
+                    Handling extraneous message.
+                    """
+                )
+                return
+            }
+            
 			// If we get a failure message as a follower, then leader is already broadcasting the
 			// failure to the rest of the ensemble.
 			self.goToFailed(failMsg: "Follower node got ensembleFailed from Leader node")
@@ -1114,7 +1176,23 @@ extension EnsemblerTLS {
 		}
 	}
 
-	private func incomingMessageInternal(node: Int, message: Data) {
+    private func controlMessageToData(message: EnsembleControlMessage) -> Data {
+        do {
+            let responseMessageData = try JSONEncoder().encode(message)
+            return responseMessageData
+    
+        } catch {
+            EnsemblerTLS.logger.error(
+                """
+                EnsemblerTLS.incomingMessageInternal(): Failed to encode response to data message: \(error, privacy: .public)
+                Sending default acknowledge
+                """
+            )
+            return controlMessageToData(message: EnsembleControlMessage.acknowledge)
+        }
+    }
+    
+	private func incomingMessageInternal(node: Int, message: Data) -> Data? {
 		let controlMsg: EnsembleControlMessage
 		do {
 			controlMsg = try JSONDecoder().decode(EnsembleControlMessage.self, from: message)
@@ -1122,14 +1200,14 @@ extension EnsemblerTLS {
 			Self.logger.warning(
 				"EnsemblerTLS.incomingMessageInternal() on rank \(self.currentNodeConfig.rank, privacy: .public): Control message decoding failed: \(error, privacy: .public)"
 			)
-			return
+			return nil
 		}
 
 		guard let sender = self.ensembleConfig.nodes.first(where: { $0.value.rank == node }) else {
 			Self.logger.warning(
 				"EnsemblerTLS.incomingMessageInternal() on rank \(self.currentNodeConfig.rank, privacy: .public): Cannot find node \(node, privacy: .public) in configuration"
 			)
-			return
+			return nil
 		}
 
 		Self.logger.info(
@@ -1155,6 +1233,30 @@ extension EnsemblerTLS {
 			)
 		case .ensembleDraining:
 			self.draining = true
+        case .dataMessage(let appID, let data,let requestID):
+            // Handle data message
+            EnsemblerTLS.logger.info(
+                """
+                EnsemblerTLS.incomingMessageInternal(): Received data message \
+                from node \(sender.key, privacy: .public) with rank \(node, privacy: .public)
+                """
+            )
+            
+            // Call the callback if it's set and send the response back
+            if let callback = self.dataMessageCallbackRegistry[appID] {
+                let responseData = callback(node, data)
+                let responseMessage = EnsembleControlMessage.dataMessage(appID: appID,data: responseData, requestID: requestID)
+                return controlMessageToData(message: responseMessage)
+               
+            } else {
+                EnsemblerTLS.logger.warning(
+                    """
+                    EnsemblerTLS.incomingMessageInternal(): Received data message but no callback is registered
+                    """
+                )
+                let responseMessage = EnsembleControlMessage.acknowledge
+                return controlMessageToData(message: responseMessage)
+            }
 		default:
 			// Non-generic operations
 			do {
@@ -1184,6 +1286,8 @@ extension EnsemblerTLS {
 			from node \(sender.key, privacy: .public) with rank \(node, privacy: .public)
 			"""
 		)
+		
+		return nil
 	}
 }
 
@@ -1289,9 +1393,23 @@ extension EnsemblerTLS {
 		}
 	}
 
+    // Check for any failures that prevents ensemble from going to ready state
+    private func handleEnsemblerTimeoutFollower() {
+        EnsemblerTLS.logger.info(
+            "EnsemblerTLS.handleEnsemblerTimeout(): Timeout occured while forming ensemble."
+        )
+        if self.status != .ready {
+            ensembleFailed(failMsg: "Timeout occured on follower while forming ensemble.")
+        }
+    }
+    
 	// Check for any failures that prevents ensemble from going to ready state
 	// update the debugMsg which will be propogated to AirDarwin
-	private func handleEnsemblerTimeout() {
+	private func handleEnsemblerTimeoutLeader() {
+        EnsemblerTLS.logger.info(
+            "EnsemblerTLS.handleEnsemblerTimeout(): Timeout occured while forming ensemble."
+        )
+        
 		if self.status == .coordinating, self.checkAllNodesFoundStatus() == false {
 			EnsemblerTLS.logger.error(
 				"EnsemblerTLS.handleEnsemblerTimeout(): Atleast one follower did not check in with leader."
@@ -1400,11 +1518,17 @@ extension EnsemblerTLS {
 			// Trigger handleEnsmblerTimout, and check for any failures that prevents the
 			// ensemble to goto ready state.
 			DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(self.ensemblerTimeout)) {
-				self.handleEnsemblerTimeout()
+				self.handleEnsemblerTimeoutLeader()
 			}
 			return
 		}
 
+        // Trigger handleEnsmblerTimout, and check for any failures that prevents the
+        // ensemble to goto ready state.
+        DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(self.ensemblerTimeout)) {
+            self.handleEnsemblerTimeoutFollower()
+        }
+        
 		DispatchQueue.global().async {
 			repeat {
 				// wait for leader to come up. we have already initiated attempts to open connection to leader.
@@ -1416,22 +1540,41 @@ extension EnsemblerTLS {
 			EnsemblerTLS.logger.info(
 				"EnsemblerTLS.coordinateEnsemble(): Leader came up, lets checkin with leader."
 			)
-			self.sendAnnounceToLeader()
+            
+            // we need to keep retrying because, in case of follower node rebooted with new config
+            // the connection to leader will succeed and start sending announce message
+            // but the leader will ignore it because it already found this UDID checked in.
+            // when the leader node is also rebooted, then leader will respond to announce message
+            // and proceed.
+            repeat {
+                if self.clientConnections[0] == .ready {
+                    self.sendAnnounceToLeader()
+                }
+                
+                Thread.sleep(forTimeInterval: 30)
+            } while self.status == .coordinating
 		}
 	}
 
 	internal func setCryptoKey() {
 		do {
+            EnsemblerTLS.logger.info(
+                """
+                EnsemblerTLS.setCryptoKey(): \
+                Getting the derived key to set in CIOMesh
+                """
+            )
+            
 			// use the HKDF-SHA384 derived key
 			guard let derivedKey = try sharedKey?.getDerivedKey(type: .MeshEncryption) else {
 				EnsemblerTLS.logger.error(
 					"""
-					Oops: setCryptoKey() Error getting shared key.
+					Oops: setCryptoKey() Getting derivedKey failed. Error getting shared key.
 					"""
 				)
 				throw InitializationError.unexpectedBehavior(
 					"""
-					Oops: setCryptoKey() Error getting shared key.
+					Oops: setCryptoKey() Getting derivedKey failed. Error getting shared key.
 					"""
 				)
 			}
@@ -1575,6 +1718,12 @@ extension EnsemblerTLS {
 
 	/// Triggers the workflow to rotate the keys
 	public func rotateKey() throws {
+        try keyRotationLock.sync {
+			try rotateKeyInternal()
+		}
+	}
+	
+	private func rotateKeyInternal() throws {
 		guard self.status == .ready else {
 			EnsemblerTLS.logger.error(
 				"""
@@ -1602,7 +1751,7 @@ extension EnsemblerTLS {
 
 		self.resetEnsembleKeyDistributionStatus()
 		self.resetNodeReadyStatus()
-
+        
 		try self.resetFollowerConnections()
 
 		self.sharedKey = SecureSymmetricKey()
@@ -1610,6 +1759,17 @@ extension EnsemblerTLS {
 		if !self.setStatus(.reDistributingCIOKey) {
 			throw EnsembleError.illegalStateTransition
 		}
+        
+        // Wait for any active data requests to complete with a maximum timeout of 3 seconds
+        // Any new data requests would fail because we had already set the state to reDistributingCIOKey
+        let result = activeDataRequests.wait(timeout: .now() + 1)
+        
+        switch result {
+        case .success:
+            EnsemblerTLS.logger.info("All active data requests completed before key rotation")
+        case .timedOut:
+            EnsemblerTLS.logger.warning("Some data requests are still active after 1 second timeout, proceeding with key rotation")
+        }
 
 		self.distributeKey()
 	}
@@ -1739,8 +1899,14 @@ extension EnsemblerTLS {
 	}
 
 	public func getEnsembleID() -> String? {
+        EnsemblerTLS.logger.info("EnsemblerTLS: getEnsembleID, ensemble_id = \(self.ensembleID, privacy: .public)")
 		return self.ensembleID
 	}
+    
+    public func getRackID() -> String? {
+        EnsemblerTLS.logger.info("EnsemblerTLS: getRackID, rack_id = \(self.rackID, privacy: .public)")
+        return self.rackID
+    }
 
 	public func getNodeMap() -> [String: EnsembleNodeInfo] {
 		return self.nodeMap
@@ -1820,6 +1986,81 @@ extension EnsemblerTLS {
 			return keyData
 		}
 	}
+	
+    public func registerDataCallback(appID: String, callback: @escaping EnsembleDataMessageReceived) {
+		self.dataMessageCallbackRegistry[appID] = callback
+	}
+    
+    public func unregisterDataCallback(appID: String) {
+        guard dataMessageCallbackRegistry[appID] != nil else {
+            EnsemblerTLS.logger.error("No callback registered for appID: \(appID, privacy: .public)")
+            return
+        }
+        
+        dataMessageCallbackRegistry.removeValue(forKey: appID)
+        EnsemblerTLS.logger.info("Successfully unregistered callback for appID: \(appID, privacy: .public)")
+    }
+	
+	/// Send data to a specific node and wait for a response
+	/// - Parameters:
+	///   - data: The data to send
+	///   - destination: The rank of the destination node
+	///   - timeout: Timeout for waiting for a response (default: 2.0 seconds)
+	///   - completion: Completion handler that receives the result
+	public func sendDataAndGetResponse(
+        appID: String,
+		data: Data,
+		destination: Int,
+		timeout: TimeInterval = 2.0,
+		completion: @escaping (Result<Data, Error>) -> Void
+	) {
+        
+		keyRotationLock.async {
+            guard self.status == .ready else {
+                EnsemblerTLS.logger.error("Error sending data to appID: \(appID, privacy: .public), destination:\(destination, privacy: .public)")
+                completion(.failure(ClientError.ClientError(message: "sendDataAndGetResponse Error: cannot send data to appID: \(appID), destination:\(destination) when status is \(self.status)")))
+                return
+            }
+            
+            self.activeDataRequests.enter()
+            self.tlsChannel?.sendDataAndGetResponse(
+                appID: appID,
+                data: data,
+                rank: destination,
+                timeout: timeout,
+                completion: { result in
+                    self.activeDataRequests.leave()
+                    completion(result)
+                }
+            )
+		}
+	}
+    
+    public func sendDataToAllFollowers(
+        appID: String,
+        data: Data,
+        timeout: TimeInterval = 2.0,
+        completion: @escaping (Result<[NodeResponse], Error>) -> Void
+    ) {
+		keyRotationLock.async {
+            guard self.status == .ready else {
+                EnsemblerTLS.logger.error("sendDataToAllFollowers: Error sending data to all followers for appID: \(appID, privacy: .public)")
+                completion(.failure(ClientError.ClientError(message: "sendDataToAllFollowers Error: cannot send data to all followers for appID: \(appID) when status is \(self.status)")))
+                return
+            }
+            
+            self.activeDataRequests.enter()
+            self.tlsChannel?.sendDataToAllFollowers(
+                appID: appID,
+                data: data,
+                timeout: timeout,
+                completion:  { result in
+                    self.activeDataRequests.leave()
+                    completion(result)
+                }
+            )
+		}
+    }
 }
 
 // Router delegates
@@ -1866,6 +2107,7 @@ extension EnsemblerTLS: RouterDelegate {
 	// called when there is any failure during activation and readying process.
     func ensembleFailed(failMsg: String, helpMsg: String? = nil) {
 		let status = self.status
+        
 		guard !status.inFailedState() else {
 			EnsemblerTLS.logger.info(
 				"""

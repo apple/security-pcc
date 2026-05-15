@@ -12,9 +12,8 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardJobHelperAPI
 import CloudBoardLogging
 import CloudBoardMetrics
@@ -37,6 +36,16 @@ enum JobHelperInstanceError: ReportableError {
     case monitoringCompletedMoreThanOnce
     case jobNeverRan
     case setDelegateCalledOnTerminatingInstance
+    case assignedLAContextWhenNotConnected
+    case assignedLAContextTwice
+    case reclaimedLAContextWhenNotAssigned
+    case reclaimedLAContextWhenNotConnected
+    case reclaimedLAContextAfterInstanceUsed
+    case usedLAContextWhenNotInUse
+    case usedLAContextWhenAlreadyUsed
+    case usedLAContextWhenNotAssigned
+    case invokeWorkloadBeforeClientConnected
+    case invokeWorkloadWhenNoLAContextAssigned
 
     var publicDescription: String {
         return switch self {
@@ -55,6 +64,16 @@ enum JobHelperInstanceError: ReportableError {
         case .monitoringCompletedMoreThanOnce: "monitoringCompletedMoreThanOnce"
         case .jobNeverRan: "jobNeverRan"
         case .setDelegateCalledOnTerminatingInstance: "setDelegateCalledOnTerminatingInstance"
+        case .assignedLAContextWhenNotConnected: "assignedLAContextWhenNotConnected"
+        case .assignedLAContextTwice: "assignedLAContextTwice"
+        case .reclaimedLAContextWhenNotAssigned: "reclaimedLAContextWhenNotAssigned"
+        case .reclaimedLAContextWhenNotConnected: "reclaimedLAContextWhenNotConnected"
+        case .reclaimedLAContextAfterInstanceUsed: "reclaimedLAContextAfterInstanceUsed"
+        case .usedLAContextWhenNotInUse: "usedLAContextWhenNotInUse"
+        case .usedLAContextWhenAlreadyUsed: "usedLAContextWhenAlreadyUsed"
+        case .usedLAContextWhenNotAssigned: "usedLAContextWhenNotAssigned"
+        case .invokeWorkloadBeforeClientConnected: "invokeWorkloadBeforeClientConnected"
+        case .invokeWorkloadWhenNoLAContextAssigned: "invokeWorkloadWhenNoLAContextAssigned"
         }
     }
 }
@@ -72,15 +91,21 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
 
     private var stateMachine: JobHelperInstanceStateMachine
 
-    public enum Condition {
-        case waiting
-        case used
-        case abandoned
+    public var canBeReturnedToPool: Bool {
+        get async {
+            await !self.stateMachine.usedForClientRequest
+        }
     }
 
-    public var condition: Condition = .waiting
+    public var laContextAssigned: Bool {
+        get async {
+            await self.stateMachine.laContextAssigned
+        }
+    }
 
     private nonisolated let job: any LaunchdJobInstanceInitiatorProtocol
+    public nonisolated let cloudAppName: String
+    public nonisolated let supportAppNames: [String]
     private nonisolated let jobHelperXPCClientFactory: any CloudBoardJobHelperAPIClientFactoryProtocol
 
     public nonisolated var id: UUID {
@@ -95,19 +120,32 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
     ///
     /// Subscribed to by `JobHelperInstanceProvider` to tear the `JobHelperInstance` instance down
     private let teardownTrigger: Promise<Void, Error> = Promise()
+    private var teardownTriggered: Bool = false
 
     init(
         _ jobHelperLaunchdJob: any LaunchdJobDefinitionProtocol,
+        cloudAppName: String,
+        supportAppNames: [String],
+        withLAContext: Bool,
+        assetsMetadata: [AssetConsumer: [AssetMetadata]],
+        maxApplicationLayerMessageSize: Int,
         jobHelperXPCClientFactory: any CloudBoardJobHelperAPIClientFactoryProtocol,
         delegate: CloudBoardJobHelperAPIClientDelegateProtocol,
         metrics: MetricsSystem,
         tracer: any Tracer
     ) {
         self.job = jobHelperLaunchdJob.createInstance(uuid: UUID())
+        self.cloudAppName = cloudAppName
+        self.supportAppNames = supportAppNames
         self.jobHelperXPCClientFactory = jobHelperXPCClientFactory
         self.tracer = tracer
         self.stateMachine = JobHelperInstanceStateMachine(
-            jobHelperJob: self.job,
+            cloudAppName: self.cloudAppName,
+            supportAppNames: self.supportAppNames,
+            withLAContext: withLAContext,
+            assetsMetadata: assetsMetadata,
+            maxApplicationLayerMessageSize: maxApplicationLayerMessageSize,
+            jobHelperJobInstance: self.job,
             jobHelperXPCClientFactory: self.jobHelperXPCClientFactory,
             delegate: delegate,
             metrics: metrics,
@@ -130,15 +168,18 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
                     // Nothing to do
                     break
                 case .running(let pid):
-                    try await self.stateMachine.clientIsRunning(pid: pid)
-                case .terminating:
-                    if self.condition == .waiting {
-                        self.condition = .abandoned
+                    do {
+                        try await self.stateMachine.clientIsRunning(pid: pid)
+                        self.markWarmupComplete()
+                    } catch {
+                        /// We swallow the error here, since we want to let the
+                        /// threads waiting on the promise to perform the clean ups
+                        /// and trigger the teardown on the instance.
+                        /// We should not enter the monitor complete state here, otherwise
+                        /// the we would fail sending the teardown to the cloud app.
+                        self.markWarmupComplete(error: error)
                     }
                 case .terminated(let terminationCondition):
-                    if self.condition == .waiting {
-                        self.condition = .abandoned
-                    }
                     terminationCondition.emitMetrics(
                         metricsSystem: self.metrics,
                         counterFactory: Metrics.CloudBoardDaemon
@@ -152,25 +193,8 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
                     break
                 }
             }
-        } catch {
-            Self.log.error("""
-            Error while monitoring job \(self.job.uuid, privacy: .public), \
-            no longer monitoring: \
-            \(String(unredacted: error), privacy: .public)
-            """)
-            try await self.stateMachine.monitoringCompleted(error: error)
-            throw error
         }
         try await self.stateMachine.monitoringCompleted()
-    }
-
-    public func warmup() async throws {
-        do {
-            try await self.invokeWorkloadRequest(.warmup(.init()))
-            self.markWarmupComplete()
-        } catch {
-            self.markWarmupComplete(error: error)
-        }
     }
 
     private func markWarmupComplete(error: Error? = nil) {
@@ -188,7 +212,7 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
     }
 
     public func waitForExit(returnIfNotUsed: Bool) async throws {
-        if !returnIfNotUsed || self.condition == .used {
+        if await self.stateMachine.usedForClientRequest || !returnIfNotUsed {
             try await self.stateMachine.waitForTermination()
         }
     }
@@ -214,23 +238,28 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
     }
 
     package func invokeWorkloadRequest(_ request: CloudBoardDaemonToJobHelperMessage) async throws {
-        // Mark the JobHelperInstance as used once we pass on any request-specific message
-        switch request {
-        case .warmup:
-            ()
-        case .parameters, .requestChunk, .workerAttestation, .workerResponseChunk, .workerResponseClose,
-             .workerResponseEOF:
-            self.condition = .used
-        }
         try await self.stateMachine.invokeWorkloadRequest(request)
     }
 
     public func triggerTeardown(error: Error? = nil) {
+        guard !self.teardownTriggered else {
+            Self.log.log("Teardown already triggered. Ignoring new trigger.")
+            return
+        }
+        self.teardownTriggered = true
         if let error {
             self.teardownTrigger.fail(with: error)
         } else {
             self.teardownTrigger.succeed()
         }
+    }
+
+    public func assignLAContext() async throws {
+        try await self.stateMachine.assignLAContext()
+    }
+
+    public func laContextUsed() async throws {
+        try await self.stateMachine.laContextUsed()
     }
 
     /// Tears down the JobHelperInstance, awaiting on trigger first
@@ -248,9 +277,6 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
         }
 
         do {
-            if self.condition == .waiting {
-                self.condition = .abandoned
-            }
             try await self.stateMachine.teardown()
         } catch {
             Self.log.error("""
@@ -265,23 +291,21 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
 
 extension JobHelperInstance {
     nonisolated func logMetadata() -> CloudBoardDaemonLogMetadata {
-        return CloudBoardDaemonLogMetadata(jobID: self.id)
+        return CloudBoardDaemonLogMetadata(jobID: self.id, cloudApp: self.cloudAppName)
     }
 
     public func abandon() async throws {
-        self.condition = .abandoned
         try await self.stateMachine.abandon()
     }
 }
 
 internal actor JobHelperInstanceStateMachine {
     enum State: CustomStringConvertible {
-        case awaitingJobHelperConnection([CloudBoardDaemonToJobHelperMessage])
+        case awaitingJobHelperConnection
         case connecting(
-            [CloudBoardDaemonToJobHelperMessage],
             CloudBoardJobHelperAPIClientDelegateProtocol
         )
-        case connected(any CloudBoardJobHelperAPIClientProtocol, [CloudBoardDaemonToJobHelperMessage])
+        case connected(any CloudBoardJobHelperAPIClientProtocol, usedForClientRequest: Bool)
         case abandoning(any CloudBoardJobHelperAPIClientProtocol)
         case terminating
         case terminated
@@ -300,16 +324,33 @@ internal actor JobHelperInstanceStateMachine {
         }
     }
 
-    private let jobHelperJob: any LaunchdJobInstanceInitiatorProtocol
+    private let cloudAppName: String
+    private let supportAppNames: [String]
+    private let assetsMetadata: [AssetConsumer: [AssetMetadata]]
+    private let jobHelperJobInstance: any LaunchdJobInstanceInitiatorProtocol
     private let jobHelperXPCClientFactory: any CloudBoardJobHelperAPIClientFactoryProtocol
     internal var remotePID: Int?
     private var delegate: CloudBoardJobHelperAPIClientDelegateProtocol
-    private var state: State = .awaitingJobHelperConnection([]) {
+    private var state: State {
         didSet(oldState) {
             JobHelperInstance.log.trace("""
             JobHelperInstanceStateMachine state changed: \
             \(oldState, privacy: .public) -> \(self.state, privacy: .public)
             """)
+        }
+    }
+
+    var laContextAssigned: Bool
+    private let maxApplicationLayerMessageSize: Int
+
+    var usedForClientRequest: Bool {
+        switch self.state {
+        case .awaitingJobHelperConnection, .connecting:
+            return false
+        case .connected(_, let usedForClientRequest):
+            return usedForClientRequest
+        case .abandoning, .terminating, .terminated, .monitoringCompleted:
+            return true
         }
     }
 
@@ -320,13 +361,24 @@ internal actor JobHelperInstanceStateMachine {
     private var terminationRequested: Bool = false
 
     init(
-        jobHelperJob: any LaunchdJobInstanceInitiatorProtocol,
+        cloudAppName: String,
+        supportAppNames: [String],
+        withLAContext: Bool,
+        assetsMetadata: [AssetConsumer: [AssetMetadata]],
+        maxApplicationLayerMessageSize: Int,
+        jobHelperJobInstance: any LaunchdJobInstanceInitiatorProtocol,
         jobHelperXPCClientFactory: any CloudBoardJobHelperAPIClientFactoryProtocol,
         delegate: CloudBoardJobHelperAPIClientDelegateProtocol,
         metrics: any MetricsSystem,
         tracer: any Tracer
     ) {
-        self.jobHelperJob = jobHelperJob
+        self.cloudAppName = cloudAppName
+        self.supportAppNames = supportAppNames
+        self.assetsMetadata = assetsMetadata
+        self.maxApplicationLayerMessageSize = maxApplicationLayerMessageSize
+        self.state = .awaitingJobHelperConnection
+        self.laContextAssigned = withLAContext
+        self.jobHelperJobInstance = jobHelperJobInstance
         self.jobHelperXPCClientFactory = jobHelperXPCClientFactory
         self.delegate = delegate
         self.tracer = tracer
@@ -381,47 +433,28 @@ internal actor JobHelperInstanceStateMachine {
             span.attributes.requestSummary.clientRequestAttributes.jobHelperPID
                 = self.remotePID
             span.attributes.requestSummary.clientRequestAttributes.jobID
-                = self.jobHelperJob.uuid.uuidString
+                = self.jobHelperJobInstance.uuid.uuidString
 
             switch self.state {
-            case .awaitingJobHelperConnection(let bufferedWorkloadRequests):
-                JobHelperInstance.log.debug("""
+            case .awaitingJobHelperConnection, .connecting:
+                JobHelperInstance.log.error("""
                 \(self.logMetadata(), privacy: .public) \
-                Buffering workload request while waiting for connection \
-                to cb_jobhelper"
+                Cannot forward workload request chunks to cb_jobhelper \
+                currently waiting for it to come up"
                 """)
-                self.state = .awaitingJobHelperConnection(
-                    bufferedWorkloadRequests + [request]
-                )
-            case .connecting(let bufferedWorkloadRequests, let setDelegate):
-                JobHelperInstance.log.debug("""
-                \(self.logMetadata(), privacy: .public) \
-                Buffering workload request while waiting for connection \
-                to cb_jobhelper
-                """)
-                self.state = .connecting(
-                    bufferedWorkloadRequests + [request], setDelegate
-                )
-            case .connected(let client, let bufferedWorkloadRequests):
-                if bufferedWorkloadRequests.isEmpty {
-                    // No buffered requests, we can go ahead and forward
-                    // the request directly
-                    JobHelperInstance.log.debug("""
-                    \(self.logMetadata(), privacy: .public) \
-                    Sending workload request to cb_jobhelper
-                    """)
-                    try await client.invokeWorkloadRequest(request)
-                } else {
-                    JobHelperInstance.log.debug("""
-                    \(self.logMetadata(), privacy: .public) \
-                    Buffering workload request while there are previously \
-                    buffered requests to be forwarded to connected \
-                    cb_jobhelper
-                    """)
-                    self.state = .connected(
-                        client, bufferedWorkloadRequests + [request]
-                    )
+                throw JobHelperInstanceError.invokeWorkloadBeforeClientConnected
+            case .connected(let client, let usedForClientRequest):
+                if !usedForClientRequest {
+                    guard self.laContextAssigned else {
+                        throw JobHelperInstanceError.invokeWorkloadWhenNoLAContextAssigned
+                    }
+                    self.state = .connected(client, usedForClientRequest: true)
                 }
+                JobHelperInstance.log.debug("""
+                \(self.logMetadata(), privacy: .public) \
+                Sending workload request to cb_jobhelper
+                """)
+                try await client.invokeWorkloadRequest(request)
             case .terminating, .abandoning, .terminated, .monitoringCompleted:
                 JobHelperInstance.log.error("""
                 \(self.logMetadata(), privacy: .public) \
@@ -445,9 +478,9 @@ internal actor JobHelperInstanceStateMachine {
         cb_jobhelper is running
         """)
         switch self.state {
-        case .awaitingJobHelperConnection(let bufferedWorkloadRequests):
+        case .awaitingJobHelperConnection:
             let setDelegate = self.delegate
-            self.state = .connecting(bufferedWorkloadRequests, setDelegate)
+            self.state = .connecting(setDelegate)
             // Pass the stashed delegate as it may change across
             // await calls
             let client = await self.connect(delegate: setDelegate)
@@ -474,7 +507,7 @@ internal actor JobHelperInstanceStateMachine {
         \(self.logMetadata(), privacy: .public) \
         Connecting to cb_jobhelper
         """)
-        let client = await self.jobHelperXPCClientFactory.localConnection(self.jobHelperJob.uuid)
+        let client = await self.jobHelperXPCClientFactory.localConnection(self.jobHelperJobInstance.uuid)
         await client.set(delegate: delegate)
         await client.connect()
         JobHelperInstance.log.debug("""
@@ -490,72 +523,30 @@ internal actor JobHelperInstanceStateMachine {
         // Our locally stashed delegate could have changed while we were
         // connecting. Make sure the one we have set on the XPC client is up
         // to date before moving forward.
-        while case .connecting(let bufferedWorkloadRequests, let setDelegate)
+        while case .connecting(let setDelegate)
             = self.state, !(setDelegate === delegate) {
-            self.state = .connecting(bufferedWorkloadRequests, self.delegate)
+            self.state = .connecting(self.delegate)
             await client.set(delegate: self.delegate)
         }
 
         switch self.state {
-        case .connecting(let bufferedWorkloadRequests, _):
-            self.state = .connected(client, bufferedWorkloadRequests)
+        case .connecting:
+            self.state = .connected(client, usedForClientRequest: false)
             if self.terminationRequested {
                 // cb_jobhelper was requested to terminate
                 await self.teardownConnectedClient(
-                    client: client,
-                    bufferedWorkloadRequests: bufferedWorkloadRequests
+                    client: client
                 )
             } else {
-                do {
-                    while case .connected(_, let bufferedWorkloadRequests)
-                        = self.state, let nextBufferedWorkloadRequest
-                        = bufferedWorkloadRequests.first {
-                        // We can only remove the request from the state after
-                        // we have executed the request as we otherwise risk a
-                        // race where newly arriving request chunks are sent to
-                        // cb_jobhelper ahead of buffered ones.
-                        JobHelperInstance.log.debug("""
-                        \(self.logMetadata(), privacy: .public) \
-                        Forwarding buffered workload request to cb_jobhelper
-                        """)
-                        try await client.invokeWorkloadRequest(
-                            nextBufferedWorkloadRequest
-                        )
-                        if case .connected(_, var bufferedWorkloadRequests)
-                            = self.state {
-                            // Since we have successfully forwarded the request
-                            // we can now remove it from the list of buffered
-                            // requests
-                            bufferedWorkloadRequests.removeFirst()
-                            self.state = .connected(
-                                client, bufferedWorkloadRequests
-                            )
-                        }
-                    }
-                } catch {
-                    let outstandingRequests: [CloudBoardDaemonToJobHelperMessage]
-                        = switch self.state {
-                    case .awaitingJobHelperConnection(
-                        let bufferedWorkloadRequests
-                    ),
-                    .connecting(let bufferedWorkloadRequests, _),
-                    .connected(_, let bufferedWorkloadRequests):
-                        bufferedWorkloadRequests
-                    default:
-                        []
-                    }
-                    JobHelperInstance.log.error("""
-                    \(self.logMetadata(), privacy: .public) \
-                    Failed to forward buffered workload \
-                    request to cb_jobhelper: \
-                    \(String(unredacted: error), privacy: .public), \
-                    tearing down cloud app and cb_jobhelper
-                    """)
-                    await self.teardownConnectedClient(
-                        client: client,
-                        bufferedWorkloadRequests: outstandingRequests
+                try await client.warmup(
+                    .init(
+                        cloudAppName: self.cloudAppName,
+                        supportAppNames: self.supportAppNames,
+                        assignLAContext: self.laContextAssigned,
+                        assetsMetadata: self.assetsMetadata,
+                        maxApplicationLayerMessageSize: self.maxApplicationLayerMessageSize
                     )
-                }
+                )
             }
         case .terminated:
             // We have terminated in the meantime, nothing we can do
@@ -608,23 +599,24 @@ internal actor JobHelperInstanceStateMachine {
 
         self.terminationRequested = true
 
-        defer {
-            try? self.removeJobs()
-        }
-
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { try await self.teardownTask() }
-            group.addTask { try await self.teardownTimeoutTask() }
-            JobHelperInstance.log.info("""
-            \(self.logMetadata(), privacy: .public) \
-            Waiting for job termination to complete
-            """)
-            try await group.next()
-            group.cancelAll()
-            JobHelperInstance.log.info("""
-            \(self.logMetadata(), privacy: .public) \
-            Teardown complete
-            """)
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { try await self.teardownTask() }
+                group.addTask { try await self.teardownTimeoutTask() }
+                JobHelperInstance.log.info("""
+                \(self.logMetadata(), privacy: .public) \
+                Waiting for job termination to complete
+                """)
+                try await group.next()
+                group.cancelAll()
+                JobHelperInstance.log.info("""
+                \(self.logMetadata(), privacy: .public) \
+                Teardown complete
+                """)
+            }
+            try? await self.removeJobs()
+        } catch {
+            try? await self.removeJobs()
         }
     }
 
@@ -637,11 +629,8 @@ internal actor JobHelperInstanceStateMachine {
             waiting for connection
             """)
             try await self.waitForTermination()
-        case .connected(let client, let bufferedWorkloadRequests):
-            await self.teardownConnectedClient(
-                client: client,
-                bufferedWorkloadRequests: bufferedWorkloadRequests
-            )
+        case .connected(let client, _):
+            await self.teardownConnectedClient(client: client)
             try await self.waitForTermination()
         case .abandoning(let client):
             await self.abandonConnectedClient(client: client)
@@ -672,38 +661,58 @@ internal actor JobHelperInstanceStateMachine {
         \(self.logMetadata(), privacy: .public) \
         Termination of job timed out
         """)
-        try self.removeJobs()
+        try await self.removeJobs()
     }
 
-    private func removeJobs() throws {
+    private func removeJobs() async throws {
         func handleTermination(_ jobHandle: any LaunchdJobInstanceHandleProtocol) throws {
             let metric: any Counter
-            let name: StaticString
+            let name: String
             switch jobHandle.attributes.cloudBoardJobType {
             case .cloudBoardApp:
-                metric = Metrics.JobHelperInstance.CloudAppTerminateFailureCounter(action: .increment)
-                name = "Cloud app"
+                metric = Metrics.JobHelperInstance.CloudAppTerminateFailureCounter(
+                    action: .increment,
+                    cloudApp: self.cloudAppName
+                )
+                name = jobHandle.attributes.cloudBoardJobName
+            case .cloudBoardSupportApp:
+                metric = Metrics.JobHelperInstance.SupportAppTerminateFailureCounter(
+                    action: .increment,
+                    cloudApp: self.cloudAppName,
+                    supportApp: jobHandle.attributes.cloudBoardJobName
+                )
+                name = jobHandle.attributes.cloudBoardJobName
             case .cbJobHelper:
-                metric = Metrics.JobHelperInstance.CBJobHelperTerminateFailureCounter(action: .increment)
+                metric = Metrics.JobHelperInstance.CBJobHelperTerminateFailureCounter(
+                    action: .increment,
+                    cloudApp: self.cloudAppName
+                )
                 name = "cb_jobhelper"
             }
             JobHelperInstance.log.error("""
             \(self.logMetadata(), privacy: .public) \
-            \(name) still running, removing
+            \(name, privacy: .public) still running, removing
             """)
             self.metrics.emit(metric)
             try jobHandle.remove(logger: JobHelperInstance.log)
         }
 
-        if let cloudAppHandle = self.jobHelperJob.findRunningLinkedInstance(
+        if let cloudAppHandle = self.jobHelperJobInstance.findRunningLinkedInstances(
             type: .cloudBoardApp,
             logger: JobHelperInstance.log
-        ) {
+        ).first {
             try handleTermination(cloudAppHandle)
         }
 
-        if self.jobHelperJob.handle.isRunning() {
-            try handleTermination(self.jobHelperJob.handle)
+        for supportAppHandle in self.jobHelperJobInstance.findRunningLinkedInstances(
+            type: .cloudBoardSupportApp,
+            logger: JobHelperInstance.log
+        ) {
+            try handleTermination(supportAppHandle)
+        }
+
+        if let jobHelperInstanceHandle = await jobHelperJobInstance.instanceHandleIfCreated {
+            try handleTermination(jobHelperInstanceHandle)
         }
     }
 
@@ -724,17 +733,8 @@ internal actor JobHelperInstanceStateMachine {
     }
 
     private func teardownConnectedClient(
-        client: CloudBoardJobHelperAPIClientToServerProtocol,
-        bufferedWorkloadRequests: [CloudBoardDaemonToJobHelperMessage]? = nil
+        client: CloudBoardJobHelperAPIClientToServerProtocol
     ) async {
-        if let bufferedWorkloadRequests, bufferedWorkloadRequests.count > 0 {
-            JobHelperInstance.log.warning("""
-            \(self.logMetadata(), privacy: .public) \
-            cb_jobhelper requested to terminate with \
-            \(bufferedWorkloadRequests.count, privacy: .public) \
-            buffered workload requests
-            """)
-        }
         self.state = .terminating
         JobHelperInstance.log.info("Sending teardown request to cb_jobhelper")
         do {
@@ -765,18 +765,7 @@ internal actor JobHelperInstanceStateMachine {
 
     func clientTerminated() async {
         switch self.state {
-        case .awaitingJobHelperConnection(let bufferedWorkloadRequests),
-             .connecting(let bufferedWorkloadRequests, _):
-            if bufferedWorkloadRequests.count > 0 {
-                JobHelperInstance.log.warning("""
-                \(self.logMetadata(), privacy: .public) \
-                cb_jobhelper has terminated with \
-                \(bufferedWorkloadRequests.count, privacy: .public) \
-                buffered workload requests
-                """)
-            }
-            self.terminationPromise.succeed()
-        case .connected, .terminating, .abandoning:
+        case .awaitingJobHelperConnection, .connecting, .connected, .terminating, .abandoning:
             self.terminationPromise.succeed()
         case .terminated:
             JobHelperInstance.log.warning("""
@@ -822,12 +811,14 @@ internal actor JobHelperInstanceStateMachine {
                 with: JobHelperInstanceError.monitoringCompletedEarly(error)
             )
             throw JobHelperInstanceError.monitoringCompletedEarly(error)
-        case .connected:
+        case .connected(let client, _):
             JobHelperInstance.log.error("""
             \(self.logMetadata(), privacy: .public) \
             cb_jobhelper monitoring stopped before receiving termination \
-            notification (while connected)
+            notification (while connected). Will try to send a teardown to the
+            client anyway oppotunitiscally.
             """)
+            await self.teardownConnectedClient(client: client)
             self.terminationPromise.fail(
                 with: JobHelperInstanceError.monitoringCompletedFromConnected(
                     error
@@ -845,12 +836,55 @@ internal actor JobHelperInstanceStateMachine {
             throw JobHelperInstanceError.monitoringCompletedMoreThanOnce
         }
     }
+
+    func assignLAContext() async throws {
+        switch self.state {
+        case .connected(let client, let usedForClientRequest):
+            guard !self.laContextAssigned, !usedForClientRequest else {
+                JobHelperInstance.log.error("""
+                \(self.logMetadata(), privacy: .public) \
+                Assigned LAContext twice.
+                """)
+                throw JobHelperInstanceError.assignedLAContextTwice
+            }
+            self.state = .connected(client, usedForClientRequest: false)
+            try await client.assignLAContext()
+            self.laContextAssigned = true
+        case .abandoning, .awaitingJobHelperConnection, .connecting, .monitoringCompleted, .terminated, .terminating:
+            JobHelperInstance.log.error("""
+            \(self.logMetadata(), privacy: .public) \
+            Assigned LAContext when not connected to cb_jobhelper.
+            """)
+            throw JobHelperInstanceError.assignedLAContextWhenNotConnected
+        }
+    }
+
+    func laContextUsed() async throws {
+        switch self.state {
+        case .connected(let client, let usedForClientRequest):
+            guard self.laContextAssigned else {
+                throw JobHelperInstanceError.usedLAContextWhenNotAssigned
+            }
+            guard usedForClientRequest else {
+                throw JobHelperInstanceError.usedLAContextWhenNotInUse
+            }
+            self.laContextAssigned = false
+            self.state = .connected(client, usedForClientRequest: true)
+        case .awaitingJobHelperConnection, .connecting, .monitoringCompleted, .terminated:
+            throw JobHelperInstanceError.usedLAContextWhenNotInUse
+        case .abandoning, .terminating:
+            guard self.laContextAssigned else {
+                throw JobHelperInstanceError.usedLAContextWhenNotAssigned
+            }
+            self.laContextAssigned = false
+        }
+    }
 }
 
 extension JobHelperInstanceStateMachine {
     private func logMetadata() -> CloudBoardDaemonLogMetadata {
         return CloudBoardDaemonLogMetadata(
-            jobID: self.jobHelperJob.uuid,
+            jobID: self.jobHelperJobInstance.uuid,
             rpcID: ServiceContext.current?.rpcID,
             requestTrackingID: ServiceContext.current?.requestID,
             remotePID: self.remotePID

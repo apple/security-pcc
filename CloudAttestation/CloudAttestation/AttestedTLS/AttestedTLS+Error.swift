@@ -20,7 +20,7 @@
 //
 
 extension AttestedTLS {
-    enum Error: Swift.Error {
+    public enum Error: Swift.Error {
         case missingPublicKey
         case certificateGenerationFailure
         case privateKeyGenerationFailure

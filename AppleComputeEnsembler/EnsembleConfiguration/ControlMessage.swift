@@ -50,6 +50,7 @@ enum EnsembleControlMessage: Codable, CustomStringConvertible {
 	case acknowledge // message to acknowledge that a server got the message
 	case ensembleShareDataKey(key: Data, singleUseToken: UUID)
 	case followerDataKeyObtained
+    case dataMessage(appID: String, data:Data, requestID: UUID) // wrapper message to send/receive data beween nodes.
 
 	// EnsembleControlMessage.description does not expose any private data.
 	var description: String {
@@ -70,6 +71,7 @@ enum EnsembleControlMessage: Codable, CustomStringConvertible {
 		case .acknowledge: return ".acknowledge"
 		case .ensembleShareDataKey: return "ensembleShareDataKey"
 		case .followerDataKeyObtained: return "followerDataKeyObtained"
+        case .dataMessage: return "dataMessage"
 		}
 	}
 

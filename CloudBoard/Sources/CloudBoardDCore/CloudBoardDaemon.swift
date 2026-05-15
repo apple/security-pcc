@@ -12,9 +12,10 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CFPreferenceCoder
+#if canImport(CloudAssetDownloaderFramework)
+import CloudAssetDownloaderFramework
+#endif
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
 import CloudBoardIdentity
@@ -24,15 +25,18 @@ import CloudBoardLogging
 import CloudBoardMetrics
 import CloudBoardPlatformUtilities
 import Foundation
-import GRPCClientConfiguration
 import InternalGRPC
 import Logging
 import NIOCore
-import NIOHTTP2
 import NIOTLS
 import NIOTransportServices
 import os
 import Security
+import Synchronization
+#if canImport(SystemServiceMonitor)
+@_weakLinked import SystemServiceMonitor
+#endif
+import GRPCClientConfiguration
 import Tracing
 
 /// Central coordinator daemon interacting with PCC Gateway to provide node attestations and load status as well as
@@ -46,24 +50,29 @@ public actor CloudBoardDaemon {
     )
 
     static let metricsClientName = "cloudboardd"
+    static let maxInstanceCount = 1000
+
+    /// cb_jobhelpers create non disposable LAContexts, which have a limit around 170
+    /// per SoC. We set the limit of the total number of cb_jobhelpers which can hold
+    /// an LAContext just under this. The jobhelpers release the LAContext once they
+    /// have completed the SEP operation and notify cloudboardd
+    static let maxAuthContextCount = 150
+
     private static let watchdogProcessName = "cloudboardd"
     private let metricsSystem: MetricsSystem
     private let tracer: RequestSummaryTracer
 
-    private let healthMonitor: ServiceHealthMonitor
+    private let workloadManagers: [WorkloadManager]
     private let heartbeatPublisher: HeartbeatPublisher?
     private let launchdJobFinder: LaunchdJobFinderProtocol
-    private let jobHelperInstanceProvider: JobHelperInstanceProvider?
-    private let jobHelperClientProvider: CloudBoardJobHelperClientProvider
-    private let jobHelperResponseDelegateProvider: CloudBoardJobHelperResponseDelegateProvider
     private let serviceDiscoverySetup: ServiceDiscoverySetup
-    private let healthServer: HealthServer?
     private let attestationProvider: AttestationProvider?
     private let config: CloudBoardDConfiguration
     private let hotProperties: HotPropertiesController?
+    private let healthServer: HealthServer?
     private let nodeInfo: NodeInfo?
     private let group: NIOTSEventLoopGroup
-    private let workloadController: WorkloadController?
+    private let workloadControllerServer: WorkloadControllerServer?
     private let insecureListener: Bool
     private let lifecycleManager: LifecycleManager
     private let watchdogService: CloudBoardWatchdogService?
@@ -71,18 +80,12 @@ public actor CloudBoardDaemon {
     private let jobAuthClient: CloudBoardJobAuthAPIClientProtocol?
     private var exitContinuation: CheckedContinuation<Void, Never>?
     private let convergenceTracing: ConvergenceTracing?
+    private var serviceDiscoveryComms: ServiceDiscoveryCommsProtocol?
+    private let healthReporter: (any RunnableHealthReporter)?
+    private let statusProvider: StatusProvider?
+    private let dependencyHealthChecker: ServiceDependencyHealthChecker?
 
     public init(configPath: String?, metricsSystem: MetricsSystem? = nil) throws {
-        let nodeInfo = NodeInfo.load()
-        if let isLeader = nodeInfo.isLeader {
-            if !isLeader {
-                CloudBoardDaemon.logger.log("Not a leader node, exiting..")
-                Foundation.exit(0)
-            }
-        } else {
-            CloudBoardDaemon.logger.error("Unable to check if node is a leader")
-        }
-
         let config: CloudBoardDConfiguration
         if let configPath {
             Self.logger.info("Loading configuration from \(configPath, privacy: .public)")
@@ -95,40 +98,72 @@ public actor CloudBoardDaemon {
         }
         let configJSON = try String(decoding: JSONEncoder().encode(config), as: UTF8.self)
         Self.logger.log("Loaded configuration: \(configJSON, privacy: .public)")
+        let nodeInfo = NodeInfo.load(secureConfig: config.secureConfig)
+        if let isLeader = nodeInfo.isLeader {
+            if !isLeader {
+                CloudBoardDaemon.logger.log("Not a leader node, exiting..")
+                Foundation.exit(0)
+            }
+        } else {
+            CloudBoardDaemon.logger.error("Unable to check if node is a leader")
+        }
         try self.init(config: config, nodeInfo: nodeInfo, metricsSystem: metricsSystem)
     }
 
-    internal init(config: CloudBoardDConfiguration, metricsSystem: MetricsSystem? = nil) throws {
-        try self.init(config: config, nodeInfo: NodeInfo.load(), metricsSystem: metricsSystem)
-    }
-
     internal init(config: CloudBoardDConfiguration, nodeInfo: NodeInfo?, metricsSystem: MetricsSystem? = nil) throws {
-        self.group = NIOTSEventLoopGroup(loopCount: 1)
+        self.group = NIOTSEventLoopGroup.singleton
         let metricsSystem = metricsSystem ?? CloudMetricsSystem(clientName: CloudBoardDaemon.metricsClientName)
-        self.metricsSystem = metricsSystem
         self.statusMonitor = .init(metrics: metricsSystem)
-        self.tracer = RequestSummaryTracer(metrics: metricsSystem)
+        let tracer = RequestSummaryTracer(metrics: metricsSystem)
+        let launchdJobFinder = LaunchdJobFinder(metrics: metricsSystem)
+        guard !config.secureConfig.cloudAppNames.isEmpty else {
+            throw CloudBoardDaemonError.noCloudAppSet
+        }
+
+        let assetsMetadataClient: any AssetsMetadataClientProtocol
+        #if canImport(CloudAssetDownloaderFramework)
+        assetsMetadataClient = CloudAssetsMetadataClient()
+        #else
+        throw CloudBoardDaemonError.noCloudAssetDownloaderFramework
+        #endif
+
+        var totalMaxAuthContexts = 0
+        var totalMaxCloudAppInstanceCount = 0
+        self.workloadManagers = try config.secureConfig.cloudAppNames.compactMap { cloudAppName in
+            let cloudAppConfig = try config.secureConfig.cloudAppConfig(cloudApp: cloudAppName)
+            if !config.secureConfig.shouldEnforceAppleInfrastructureSecurityConfig,
+               cloudAppConfig.disabled {
+                return nil
+            }
+            totalMaxAuthContexts += cloudAppConfig.maxAuthContextCount
+            totalMaxCloudAppInstanceCount += cloudAppConfig.maxInstanceCount
+
+            return try WorkloadManager(
+                isProxy: config.secureConfig.isProxy,
+                cloudAppName: cloudAppName,
+                config: cloudAppConfig,
+                assetsMetadataClient: assetsMetadataClient,
+                launchdJobFinder: launchdJobFinder,
+                tracer: tracer,
+                metrics: metricsSystem,
+                inMemoryControllerConfig: cloudAppConfig.inMemoryController
+            )
+        }
+        guard totalMaxAuthContexts <= Self.maxAuthContextCount else {
+            throw CloudBoardDaemonError.maxAuthContextCountExceedsLimit(totalMaxAuthContexts)
+        }
+        guard totalMaxCloudAppInstanceCount <= Self.maxInstanceCount else {
+            throw CloudBoardDaemonError.maxInstanceCountExceedsLimit(totalMaxCloudAppInstanceCount)
+        }
+        self.metricsSystem = metricsSystem
+        self.tracer = tracer
+        self.launchdJobFinder = launchdJobFinder
         self.convergenceTracing = ConvergenceTracing(
             linkSpanID: config.secureConfig.convergenceSpanID,
             linkTraceID: config.secureConfig.convergenceTraceID,
             tracer: self.tracer
         )
         self.convergenceTracing?.startSummary()
-        self.healthMonitor = ServiceHealthMonitor()
-        self.healthServer = HealthServer()
-        self.launchdJobFinder = LaunchdJobFinder(metrics: self.metricsSystem)
-        self.jobHelperInstanceProvider = try JobHelperInstanceProvider(
-            prewarmedPoolSize: config.prewarming.prewarmedPoolSize ?? (config.secureConfig.isProxy ? 55 : 3),
-            maxProcessCount: config.prewarming.maxProcessCount ?? (config.secureConfig.isProxy ? 55 : 3),
-            metrics: self.metricsSystem,
-            tracer: self.tracer,
-            launchdJobFinder: self.launchdJobFinder,
-            jobHelperXPCClientFactory: CloudBoardJobHelperAPIXPCClientFactory()
-        )
-        self.jobHelperClientProvider = try CloudBoardJobHelperXPCClientProvider(
-            instanceProvider: self.jobHelperInstanceProvider!
-        )
-        self.jobHelperResponseDelegateProvider = JobHelperResponseDelegateProvider()
         self.config = config
         let hotProperties = HotPropertiesController()
         self.hotProperties = hotProperties
@@ -136,13 +171,13 @@ public actor CloudBoardDaemon {
         self.insecureListener = false
         self.serviceDiscoverySetup = ServiceDiscoverySetup.standard
         self.jobAuthClient = nil
-
+        self.statusProvider = StatusProvider(statusMonitor: self.statusMonitor)
         self.attestationProvider = nil
-
-        self.workloadController = WorkloadController(
-            healthPublisher: self.healthMonitor,
+        self.workloadControllerServer = WorkloadControllerServer(
             metrics: self.metricsSystem
         )
+        self.healthReporter = Self.initializeHealthReporter(config: config)
+        self.healthServer = HealthServer(healthReporter: self.healthReporter)
         if let heartbeat = config.heartbeat {
             CloudBoardDaemon.logger.info("Heartbeat configured")
             self.heartbeatPublisher = try .init(
@@ -166,6 +201,7 @@ public actor CloudBoardDaemon {
             )
         )
         self.watchdogService = CloudBoardWatchdogService(processName: Self.watchdogProcessName, logger: Self.logger)
+        self.dependencyHealthChecker = Self.initializeServiceDependencyHealthChecker(config: config)
     }
 
     // Test entry point to allow dependency injection.
@@ -174,70 +210,40 @@ public actor CloudBoardDaemon {
     // typically that won't be working properly in unit test scenarios unless it has
     // been deliberately set up.
     internal init(
-        group: NIOTSEventLoopGroup = NIOTSEventLoopGroup(),
-        healthMonitor: ServiceHealthMonitor = ServiceHealthMonitor(),
+        group: NIOTSEventLoopGroup = NIOTSEventLoopGroup.singleton,
         heartbeatPublisher: HeartbeatPublisher? = nil,
         serviceDiscoverySetup: ServiceDiscoverySetup = .notPresent,
-        jobHelperClientProvider: CloudBoardJobHelperClientProvider? = nil,
-        jobHelperResponseDelegateProvider: CloudBoardJobHelperResponseDelegateProvider? = nil,
+        workloadManagers: [WorkloadManager] = [],
         healthServer: HealthServer? = nil,
+        healthReporter: (any RunnableHealthReporter)? = nil,
         lifecycleManager: LifecycleManager? = nil,
         attestationProvider: AttestationProvider? = nil,
         config: CloudBoardDConfiguration,
         hotProperties: HotPropertiesController? = nil,
         nodeInfo: NodeInfo? = nil,
-        workloadController: WorkloadController?,
+        workloadControllerServer: WorkloadControllerServer?,
         insecureListener: Bool,
         metricsSystem: MetricsSystem? = nil,
         statusMonitor: StatusMonitor? = nil,
         tracer: RequestSummaryTracer? = nil,
         jobAuthClient: CloudBoardJobAuthAPIClientProtocol?,
         launchdJobFinder: LaunchdJobFinderProtocol? = nil,
-        jobHelperXPCClientFactory: (any CloudBoardJobHelperAPIClientFactoryProtocol)? = nil
+        statusProvider: StatusProvider? = nil,
+        dependencyHealthChecker: ServiceDependencyHealthChecker? = nil
     ) throws {
         let metricsSystem = metricsSystem ?? CloudMetricsSystem(clientName: CloudBoardDaemon.metricsClientName)
-        self.metricsSystem = metricsSystem
         let statusMonitor = statusMonitor ?? StatusMonitor(metrics: metricsSystem)
         self.statusMonitor = statusMonitor
-        self.tracer = tracer ?? RequestSummaryTracer(metrics: metricsSystem)
+        let tracer = tracer ?? RequestSummaryTracer(metrics: metricsSystem)
         self.convergenceTracing = nil
         self.group = group
-        self.healthMonitor = healthMonitor
         self.heartbeatPublisher = heartbeatPublisher
         self.serviceDiscoverySetup = serviceDiscoverySetup
-        self.launchdJobFinder = launchdJobFinder ?? LaunchdJobFinder(metrics: self.metricsSystem)
-        // This is a legacy of there being two different approaches to mocking the jobhelpers out.
-        // One is high level, directly replacing the jobHelperClientProvider,
-        // the other allows for mocking out the launchd and local XPC parts but still
-        // using the normal code paths around them.
-        // The former is simpler, but doesn't exercise as much code
-        if let jobHelperClientProvider {
-            // providing both would indicate a flawed understanding of the mocking
-            precondition(
-                jobHelperXPCClientFactory == nil,
-                "provided jobHelperClientProvider but jobHelperXPCClientFactory was also provided"
-            )
-            self.jobHelperClientProvider = jobHelperClientProvider
-            self.jobHelperInstanceProvider = nil
-        } else {
-            let jobHelperXPCClientFactory = jobHelperXPCClientFactory ?? CloudBoardJobHelperAPIXPCClientFactory()
-            self.jobHelperInstanceProvider = try JobHelperInstanceProvider(
-                prewarmedPoolSize: config.prewarming.prewarmedPoolSize ?? 0,
-                maxProcessCount: config.prewarming.maxProcessCount ?? 0,
-                metrics: self.metricsSystem,
-                tracer: self.tracer,
-                launchdJobFinder: self.launchdJobFinder,
-                jobHelperXPCClientFactory: jobHelperXPCClientFactory
-            )
-            self.jobHelperClientProvider = try CloudBoardJobHelperXPCClientProvider(
-                instanceProvider: self.jobHelperInstanceProvider!
-            )
-        }
-        if let jobHelperResponseDelegateProvider {
-            self.jobHelperResponseDelegateProvider = jobHelperResponseDelegateProvider
-        } else {
-            self.jobHelperResponseDelegateProvider = JobHelperResponseDelegateProvider()
-        }
+        let launchdJobFinder = launchdJobFinder ?? LaunchdJobFinder(metrics: metricsSystem)
+        self.workloadManagers = workloadManagers
+        self.metricsSystem = metricsSystem
+        self.tracer = tracer
+        self.launchdJobFinder = launchdJobFinder
         if let lifecycleManager {
             self.lifecycleManager = lifecycleManager
         } else {
@@ -249,21 +255,63 @@ public actor CloudBoardDaemon {
                 )
             )
         }
-        self.healthServer = healthServer
         self.attestationProvider = attestationProvider
         self.config = config
         self.hotProperties = hotProperties
         self.nodeInfo = nodeInfo
         self.insecureListener = insecureListener
-        self.workloadController = workloadController
+        self.workloadControllerServer = workloadControllerServer
         self.watchdogService = nil
         self.jobAuthClient = jobAuthClient
+        self.healthServer = healthServer
+        self.healthReporter = healthReporter
+        self.statusProvider = statusProvider
+        self.dependencyHealthChecker = dependencyHealthChecker
+    }
+
+    nonisolated static func initializeHealthReporter(config: CloudBoardDConfiguration) -> RunnableHealthReporter? {
+        #if canImport(SystemServiceMonitor)
+        if #available(iOS 26.0, macOS 15.6, *), #_hasSymbol(ReportClient.self) {
+            let enableSSMStatusReportingFlag = config.systemServiceMonitor?
+                .enableSSMStatusReporting ?? CloudBoardDConfiguration.SystemServiceMonitorConfiguration()
+                .enableSSMStatusReporting
+            guard enableSSMStatusReportingFlag else {
+                CloudBoardDaemon.logger.info("SystemServiceMonitor disabled")
+                return nil
+            }
+
+            return SystemServiceMonitorHealthReporter()
+        }
+        #endif
+
+        CloudBoardDaemon.logger.debug("SystemServiceMonitor is not available")
+        return nil
+    }
+
+    nonisolated static func initializeServiceDependencyHealthChecker(config: CloudBoardDConfiguration)
+    -> ServiceDependencyHealthChecker? {
+        #if canImport(SystemServiceMonitor)
+        if #available(iOS 26.0, macOS 15.6, *), #_hasSymbol(ReportClient.self) {
+            let enableSSMStatusReportingFlag = config.systemServiceMonitor?
+                .enableSSMStatusReporting ?? CloudBoardDConfiguration.SystemServiceMonitorConfiguration()
+                .enableSSMStatusReporting
+            guard enableSSMStatusReportingFlag else {
+                CloudBoardDaemon.logger.info("SystemServiceMonitor disabled")
+                return nil
+            }
+
+            return ControlPlaneHealthDHealthChecker()
+        }
+        #endif
+
+        CloudBoardDaemon.logger.debug("SystemServiceMonitor is not available")
+        return nil
     }
 
     public func start() async throws {
         do {
             try await self.start(
-                portPromise: nil,
+                portPromisePerCloudApp: nil,
                 allowExit: false,
                 customSearchPath: .fromPreferences
             )
@@ -278,7 +326,25 @@ public actor CloudBoardDaemon {
     /// - a way to allow CloudBoardDaemon to exit
     /// - a way of configuring the search paths
     func start(
-        portPromise: Promise<Int, Error>?,
+        portPromisePerCloudApp: [String: Promise<Int, Error>]?,
+        allowExit: Bool,
+        // any test using this should be isolated by default
+        customSearchPath: CustomSearchPathDirectory = .explictCompleteIsolation()
+    ) async throws {
+        try await CloudBoardMetrics.Uptime.withStandardMetrics(
+            processInfo: Metrics.ProcessInfo.self,
+            metrics: self.metricsSystem
+        ) {
+            try await self._start(
+                portPromisePerCloudApp: portPromisePerCloudApp,
+                allowExit: allowExit,
+                customSearchPath: customSearchPath
+            )
+        }
+    }
+
+    private func _start(
+        portPromisePerCloudApp: [String: Promise<Int, Error>]?,
         allowExit: Bool,
         // any test using this should be isolated by default
         customSearchPath: CustomSearchPathDirectory = .explictCompleteIsolation()
@@ -298,10 +364,7 @@ public actor CloudBoardDaemon {
         self._allowExit = allowExit
 
         let hotProperties = self.hotProperties
-        let nodeInfo = self.nodeInfo
         let drainTimeMeasurement: OSAllocatedUnfairLock<ContinuousTimeMeasurement?> =
-            OSAllocatedUnfairLock(initialState: nil)
-        let cloudBoardProvider: OSAllocatedUnfairLock<CloudBoardProvider?> =
             OSAllocatedUnfairLock(initialState: nil)
 
         self.statusMonitor.initializing()
@@ -309,7 +372,7 @@ public actor CloudBoardDaemon {
         await self.launchdJobFinder.cleanupManagedLaunchdJobs(logger: CloudBoardDaemon.logger)
         do {
             jobQuiescenceMonitor = JobQuiescenceMonitor(lifecycleManager: self.lifecycleManager)
-            try await jobQuiescenceMonitor.startQuiescenceMonitor()
+            try jobQuiescenceMonitor.startQuiescenceMonitor()
 
             try await self.lifecycleManager.managed {
                 let identityManager = IdentityManager(
@@ -338,9 +401,6 @@ public actor CloudBoardDaemon {
                     identityManager.identity?.credential
                 }
 
-                let serviceAddress = try await self.resolveServiceAddress()
-                let healthProvider = HealthProvider(monitor: self.healthMonitor)
-                let healthServer = self.healthServer
                 let attestationProvider: AttestationProvider
                 if let injectedAttestationProvider = self.attestationProvider {
                     CloudBoardDaemon.logger.info("using attestation provider injected for testing")
@@ -349,7 +409,10 @@ public actor CloudBoardDaemon {
                     attestationProvider = await AttestationProvider(
                         attestationClient: CloudBoardAttestationAPIXPCClient.localConnection(),
                         metricsSystem: self.metricsSystem,
-                        healthMonitor: self.healthMonitor
+                        healthMonitors: self.workloadManagers.map {
+                            $0.healthMonitor
+                        },
+                        isProxy: self.config.secureConfig.isProxy
                     )
                 }
 
@@ -362,21 +425,6 @@ public actor CloudBoardDaemon {
                     sessionStorage: OnDiskSessionStorage(fileDirectory: sessionsFileDirectory)
                 )
 
-                let cloudboardProvider = CloudBoardProvider(
-                    isProxy: self.config.secureConfig.isProxy,
-                    enforceRequestBypass: self.config.secureConfig.enforceRequestBypass,
-                    jobHelperClientProvider: self.jobHelperClientProvider,
-                    jobHelperResponseDelegateProvider: self.jobHelperResponseDelegateProvider,
-                    healthMonitor: self.healthMonitor,
-                    metrics: self.metricsSystem,
-                    tracer: self.tracer,
-                    attestationProvider: attestationProvider,
-                    loadConfiguration: self.config.load,
-                    hotProperties: hotProperties,
-                    sessionStore: sessionStore
-                )
-                cloudBoardProvider.withLock { $0 = cloudboardProvider }
-
                 let keepalive = self.config.grpc?.keepalive
                 let identityCallback = if !self.insecureListener {
                     identityManager.identityCallback
@@ -386,11 +434,12 @@ public actor CloudBoardDaemon {
 
                 try await withErrorLogging(operation: "cloudboardDaemon task group", sensitiveError: false) {
                     try await withThrowingTaskGroup(of: String.self) { group in
-                        if let jobHelperInstanceProvider = self.jobHelperInstanceProvider {
-                            group.addTask {
-                                try await jobHelperInstanceProvider.run()
-                                return "jobHelperInstanceProvider"
-                            }
+
+                        // Starting the IdentityManager early is important in permitting services using TLS
+                        // to become available early in the daemon's lifecycle - e.g. statusServer
+                        group.addTaskWithLogging(operation: "certificate refresh", sensitiveError: false) {
+                            await identityManager.identityUpdateLoop()
+                            return "certificate refresh"
                         }
 
                         group.addTask {
@@ -418,19 +467,28 @@ public actor CloudBoardDaemon {
                             try await self.hotProperties?.waitForFirstUpdate()
                         }
 
-                        group.addTaskWithLogging(operation: "healthMonitor", sensitiveError: false) {
-                            await withLifecycleManagementHandlers(label: "healthMonitor") {
-                                await healthProvider.run()
-                            } onDrain: {
-                                self.healthMonitor.drain()
+                        if let healthServer = self.healthServer {
+                            if let healthReporter = self.healthReporter {
+                                await healthReporter.run()
                             }
-                            return "healthMonitor"
+                            group.addTaskWithLogging(operation: "healthServer", sensitiveError: false) {
+                                await healthServer.run(healthPublishers: self.workloadManagers.map { $0.healthMonitor })
+                                return "healthServer"
+                            }
                         }
 
-                        if let healthServer {
-                            group.addTaskWithLogging(operation: "healthServer", sensitiveError: false) {
-                                await healthServer.run(healthPublisher: self.healthMonitor)
-                                return "healthServer"
+                        if let statusProvider = self.statusProvider {
+                            group.addTaskWithLogging(operation: "statusServer", sensitiveError: false) {
+                                let statusPort = self.config.statusServer.port
+                                let statusServiceAddress = try await self
+                                    .resolveServiceAddress(cloudAppPort: statusPort)
+                                try await self.runStatusServer(
+                                    statusProvider: statusProvider,
+                                    identityCallback: identityCallback,
+                                    keepalive: keepalive,
+                                    serviceAddress: statusServiceAddress
+                                )
+                                return "statusServer"
                             }
                         }
 
@@ -465,39 +523,7 @@ public actor CloudBoardDaemon {
                             CloudBoardDaemon.logger.log("Signing key verification passed")
                         }
 
-                        group.addTask {
-                            await cloudboardProvider.run()
-                            return "cloudboardProvider"
-                        }
-
-                        group.addTaskWithLogging(operation: "certificate refresh", sensitiveError: false) {
-                            await identityManager.identityUpdateLoop()
-                            return "certificate refresh"
-                        }
-
-                        let serviceDiscovery = try await self.setupServiceDiscovery(
-                            attestationProvider: attestationProvider,
-                            identityManager: identityManager,
-                            serviceAddress: serviceAddress
-                        )
-
-                        if let serviceDiscovery {
-                            group.addTaskWithLogging(operation: "serviceDiscovery", sensitiveError: false) {
-                                self.statusMonitor.waitingForWorkloadRegistration()
-                                do {
-                                    self.convergenceTracing?.stopSummary()
-                                    try await serviceDiscovery.run()
-                                } catch let error as CancellationError {
-                                    throw error
-                                } catch {
-                                    self.statusMonitor.serviceDiscoveryRunningFailed()
-                                    throw error
-                                }
-                                return "serviceDiscovery"
-                            }
-                        }
-
-                        group.addTaskWithLogging(operation: "gRPC server", sensitiveError: false) {
+                        group.addTaskWithLogging(operation: "workload managers", sensitiveError: false) {
                             do {
                                 let expectedPeerAPRNs: [APRN]? = if let aprns = self.config.grpc?.expectedPeerAPRNs {
                                     try aprns.map { try APRN(string: $0) }
@@ -510,52 +536,94 @@ public actor CloudBoardDaemon {
                                     "Configured expected peer APRNs: \(expectedPeerAPRNs.map { "\($0)" } ?? "nil", privacy: .public)"
                                 )
 
-                                try await Self.runServer(
-                                    cloudBoardProvider: cloudboardProvider,
-                                    providers: [healthProvider],
-                                    identityCallback: identityCallback,
-                                    serviceAddress: serviceAddress,
-                                    expectedPeerAPRNs: expectedPeerAPRNs,
-                                    keepalive: keepalive.map { .init($0) },
-                                    watchdogService: self.watchdogService,
-                                    portPromise: portPromise,
-                                    metricsSystem: self.metricsSystem
-                                )
-                                return "gRPC server"
-                            } catch {
-                                self.statusMonitor.grpcServerRunningFailed()
-                                throw error
-                            }
-                        }
-
-                        if let workloadController = self.workloadController {
-                            group.addTaskWithLogging(operation: "workloadController", sensitiveError: false) {
-                                try await withLifecycleManagementHandlers(label: "workloadController") {
+                                // register watchdog work processor to monitor global concurrency thread pool.
+                                // Disabled in unit tests
+                                if let watchdogService = self.watchdogService {
+                                    await watchdogService.activate()
+                                }
+                                try await withLifecycleManagementHandlers(label: "workloadControllerServer") {
+                                    self.statusMonitor.waitingForWorkloadRegistration()
                                     do {
-                                        try await workloadController.run(
-                                            serviceDiscoveryPublisher: serviceDiscovery,
-                                            concurrentRequestCountStream: cloudboardProvider
-                                                .concurrentRequestCountStream,
-                                            providerPause: cloudboardProvider.pause,
-                                            restartPrewarmedInstances: self.jobHelperInstanceProvider?
-                                                .restartPrewarmedInstances
-                                        )
+                                        try await withThrowingTaskGroup { grpcGroup in
+                                            if let portPromisePerCloudApp {
+                                                guard portPromisePerCloudApp.count == self.workloadManagers.count else {
+                                                    fatalError("port promise not set for all cloud apps")
+                                                }
+                                            }
+                                            for workloadManager in self.workloadManagers {
+                                                if let portPromisePerCloudApp {
+                                                    guard portPromisePerCloudApp[workloadManager.cloudAppName] != nil
+                                                    else {
+                                                        fatalError(
+                                                            "port promise not set for \(workloadManager.cloudAppName)"
+                                                        )
+                                                    }
+                                                }
 
+                                                let serviceAddress = try await self
+                                                    .resolveServiceAddress(
+                                                        cloudAppPort: self.config.secureConfig
+                                                            .cloudAppPort(cloudApp: workloadManager.cloudAppName)
+                                                    )
+                                                let serviceDiscovery = try await self.setupServiceDiscovery(
+                                                    attestationProvider: attestationProvider,
+                                                    identityManager: identityManager,
+                                                    serviceAddress: serviceAddress
+                                                )
+                                                grpcGroup.addTask {
+                                                    try await workloadManager.run(
+                                                        enforceRequestBypass: self.config.secureConfig
+                                                            .enforceRequestBypass(
+                                                                cloudApp: workloadManager
+                                                                    .cloudAppName
+                                                            ),
+                                                        identityCallback: identityCallback,
+                                                        serviceAddress: serviceAddress,
+                                                        expectedPeerAPRNs: expectedPeerAPRNs,
+                                                        keepalive: keepalive,
+                                                        portPromise: portPromisePerCloudApp?[
+                                                            workloadManager
+                                                                .cloudAppName
+                                                        ],
+                                                        attestationProvider: attestationProvider,
+                                                        serviceDiscovery: serviceDiscovery,
+                                                        loadConfiguration: self.config.load,
+                                                        hotProperties: hotProperties,
+                                                        sessionStore: sessionStore,
+                                                        workloadControllerServer: self.workloadControllerServer
+                                                    )
+                                                }
+                                            }
+                                            await self.workloadControllerServer?.start()
+                                            self.convergenceTracing?.stopSummary()
+                                            do {
+                                                try await grpcGroup.waitForAll()
+                                            } catch {
+                                                Self.logger
+                                                    .error(
+                                                        "workload controller failed with error: \(String(unredacted: error), privacy: .public)"
+                                                    )
+                                                throw error
+                                            }
+                                        }
                                     } catch {
                                         self.statusMonitor.workloadControllerRunningFailed()
                                         throw error
                                     }
                                 } onDrain: {
                                     do {
-                                        try await workloadController.shutdown()
+                                        try await self.workloadControllerServer?.shutdown()
                                     } catch {
                                         Self.logger
                                             .error(
-                                                "workload controller failed to notify listeners of shutdown: \(String(reportable: error), privacy: .public)"
+                                                "workload controller server failed to notify listeners of shutdown: \(String(reportable: error), privacy: .public)"
                                             )
                                     }
                                 }
-                                return "workloadController"
+                                return "workload managers"
+                            } catch {
+                                self.statusMonitor.grpcServerRunningFailed()
+                                throw error
                             }
                         }
 
@@ -605,25 +673,29 @@ public actor CloudBoardDaemon {
                 }
             } onDrain: {
                 drainTimeMeasurement.withLock { $0 = ContinuousTimeMeasurement.start() }
-                let activeRequestsBeforeDrain = cloudBoardProvider.withLock { $0?.activeRequestsBeforeDrain }
-                if let activeRequestsBeforeDrain {
+                for workloadManager in self.workloadManagers {
                     self.metricsSystem.emit(
                         Metrics.CloudBoardDaemon.DrainStartCounter(
                             action: .increment,
-                            dimensions: [.activeRequests: "\(activeRequestsBeforeDrain)"]
+                            dimensions: [
+                                .activeRequests: "\(workloadManager.activeRequestsBeforeDrain)",
+                                .cloudApp: workloadManager.cloudAppName,
+                            ]
                         )
                     )
                 }
             } onDrainCompleted: {
-                let activeRequests = cloudBoardProvider.withLock { $0?.activeRequestsBeforeDrain }
                 let drainDuration = drainTimeMeasurement.withLock { $0?.duration }
-                if let activeRequests, let drainDuration {
-                    self.metricsSystem.emit(
-                        Metrics.CloudBoardDaemon.DrainCompletionTimeHistogram(
-                            duration: drainDuration,
-                            activeRequests: activeRequests
+                if let drainDuration {
+                    for workloadManager in self.workloadManagers {
+                        self.metricsSystem.emit(
+                            Metrics.CloudBoardDaemon.DrainCompletionTimeHistogram(
+                                duration: drainDuration,
+                                activeRequests: workloadManager.activeRequestsBeforeDrain,
+                                cloudApp: workloadManager.cloudAppName
+                            )
                         )
-                    )
+                    }
                     Self.logger.log("Drain Completed in: \(drainDuration.seconds)s")
                 }
             }
@@ -634,7 +706,7 @@ public actor CloudBoardDaemon {
         }
 
         self.statusMonitor.daemonDrained()
-        await jobQuiescenceMonitor.quiesceCompleted()
+        jobQuiescenceMonitor.quiesceCompleted()
         self.convergenceTracing?.stopSummary()
 
         // once drained do not exit, JobQuiescence Framework will take care of exiting
@@ -644,6 +716,58 @@ public actor CloudBoardDaemon {
             if self._allowExit {
                 exitContinuation.resume()
             }
+        }
+    }
+
+    private func runStatusServer(
+        statusProvider: StatusProvider,
+        identityCallback: GRPCTLSConfiguration.IdentityCallback?,
+        keepalive: CloudBoardDConfiguration.Keepalive?,
+        serviceAddress: SocketAddress
+    ) async throws {
+        guard let host = serviceAddress.ipAddress, let port = serviceAddress.port else {
+            CloudBoardDaemon.logger.error(
+                "Unable to bind status server: invalid service address \(serviceAddress, privacy: .public)"
+            )
+            throw CloudBoardDaemonError.invalidServiceAddress(serviceAddress)
+        }
+
+        let loggingLogger = Logging.Logger(
+            osLogSubsystem: "com.apple.cloudos.cloudboard",
+            osLogCategory: "cloudboardd",
+            domain: "StatusServer"
+        )
+
+        let server: Server
+
+        if let identityCallback {
+            let config = try GRPCTLSConfiguration.cloudboardProviderConfiguration(
+                identityCallback: identityCallback,
+                expectedPeerAPRNs: nil,
+                metricsSystem: self.metricsSystem
+            )
+            var builder = Server.usingTLS(with: config, on: self.group)
+                .withServiceProviders([statusProvider])
+                .withLogger(loggingLogger)
+
+            if let keepalive {
+                builder = builder.withKeepalive(.init(keepalive))
+            }
+
+            server = try await builder.bind(host: host, port: port).get()
+        } else {
+            server = try await Server.insecure(group: self.group)
+                .withServiceProviders([statusProvider])
+                .withLogger(loggingLogger)
+                .bind(host: host, port: port).get()
+        }
+
+        CloudBoardDaemon.logger.info("Status server listening on \(host):\(port)")
+
+        try await withTaskCancellationHandler {
+            try await server.onClose.get()
+        } onCancel: {
+            server.close(promise: nil)
         }
     }
 
@@ -666,7 +790,9 @@ public actor CloudBoardDaemon {
             if let sdConfig = self.config.serviceDiscovery {
                 CloudBoardDaemon.logger.info("Enabling service discovery")
                 let serviceDiscoveryComms: any ServiceDiscoveryCommsProtocol
-                if let comms {
+                if self.serviceDiscoveryComms != nil {
+                    serviceDiscoveryComms = self.serviceDiscoveryComms!
+                } else if let comms {
                     CloudBoardDaemon.logger.info("Using service discovery comms injected for testing")
                     serviceDiscoveryComms = comms
                 } else {
@@ -674,9 +800,10 @@ public actor CloudBoardDaemon {
                         group: self.group,
                         configuration: sdConfig,
                         localIdentityCallback: identityManager.identityCallback,
-                        metrics: self.metricsSystem,
+                        metrics: self.metricsSystem
                     )
                 }
+                self.serviceDiscoveryComms = serviceDiscoveryComms
                 let attestationSet = try await attestationProvider.currentAttestationSet()
                 serviceDiscovery = try ServiceDiscoveryPublisher(
                     serviceDiscoveryComms: serviceDiscoveryComms,
@@ -687,7 +814,10 @@ public actor CloudBoardDaemon {
                     cellID: self.config.serviceDiscovery?.cellID,
                     statusMonitor: self.statusMonitor,
                     metrics: self.metricsSystem,
-                    nodeReleaseDigest: attestationSet.currentAttestation.releaseDigest
+                    nodeReleaseDigest: attestationSet.currentAttestation.releaseDigest,
+                    routingGroupAliases: self.config.secureConfig.routingGroupAliases,
+                    bootID: self.getAdvertisedBootID(appData: attestationSet.currentAttestation.appData),
+                    dependencyHealthChecker: self.dependencyHealthChecker
                 )
             } else {
                 CloudBoardDaemon.logger.warning("Service discovery not enabled due to config")
@@ -695,6 +825,24 @@ public actor CloudBoardDaemon {
             }
         }
         return serviceDiscovery
+    }
+
+    /// On proxies we cannot advertise the bootID in the attestation for annoying, and hopefully
+    /// temporary reasons. This isn't a problem for the current use cases, but if we aren't a proxy failing
+    /// to advertise it will fail in much more complex ways down stream so it is terminal
+    private func getAdvertisedBootID(appData: [String: Data]) -> String? {
+        guard let bootID = appData[ComputeNodeAppDataKeys.bootID] else {
+            if self.config.secureConfig.isProxy {
+                return nil
+            }
+            fatalError(
+                "We have no bootID in the attestation app data - this compute node will fail to function correctly in pick scenarios"
+            )
+        }
+        guard let bootIDString = bootID.utf8String else {
+            fatalError("The bootID '\(bootID.base64EncodedString())' was not a legal utf8 string!")
+        }
+        return bootIDString
     }
 
     private func checkAuthTokenSigningKeysPresence() async throws {
@@ -716,109 +864,8 @@ public actor CloudBoardDaemon {
         await jobAuthClient.disconnect()
     }
 
-    private static func runServer(
-        cloudBoardProvider: CloudBoardProvider,
-        providers: [CallHandlerProvider],
-        identityCallback: GRPCTLSConfiguration.IdentityCallback?,
-        serviceAddress: SocketAddress,
-        expectedPeerAPRNs: [APRN]?,
-        keepalive: ServerConnectionKeepalive?,
-        watchdogService: CloudBoardWatchdogService?,
-        portPromise: Promise<Int, Error>? = nil,
-        metricsSystem: MetricsSystem
-    ) async throws {
-        // register watchdog work processor to monitor global concurrency thread pool.
-        // Disabled in unit tests
-        if let watchdogService {
-            await watchdogService.activate()
-        }
-
-        let group = NIOTSEventLoopGroup(loopCount: 1)
-        defer {
-            try? group.syncShutdownGracefully()
-        }
-
-        let server = try await self.runGRPCServer(
-            group: group,
-            providers: [cloudBoardProvider] + providers,
-            identityCallback: identityCallback,
-            serviceAddress: serviceAddress,
-            expectedPeerAPRNs: expectedPeerAPRNs,
-            keepalive: keepalive,
-            portPromise: portPromise,
-            metricsSystem: metricsSystem
-        )
-
-        try await withLifecycleManagementHandlers(label: "gRPC server") {
-            try await withTaskCancellationHandler {
-                try await server.onClose.get()
-            } onCancel: {
-                server.close(promise: nil)
-            }
-        } onDrain: {
-            await cloudBoardProvider.drain()
-        }
-    }
-
-    private static func runGRPCServer(
-        group: NIOTSEventLoopGroup,
-        providers: [CallHandlerProvider],
-        identityCallback: GRPCTLSConfiguration.IdentityCallback?,
-        serviceAddress: SocketAddress,
-        expectedPeerAPRNs: [APRN]?,
-        keepalive: ServerConnectionKeepalive?,
-        portPromise: Promise<Int, Error>? = nil,
-        metricsSystem: MetricsSystem
-    ) async throws -> Server {
-        let loggingLogger = Logging.Logger(
-            osLogSubsystem: "com.apple.cloudos.cloudboard",
-            osLogCategory: "cloudboardd",
-            domain: "GRPCServer"
-        )
-
-        let server: Server
-
-        CloudBoardDaemon.logger.log("Running GRPC service at \(serviceAddress, privacy: .public)")
-
-        do {
-            if let identityCallback {
-                CloudBoardDaemon.logger.info("Running service with TLS.")
-                let config = try GRPCTLSConfiguration.cloudboardProviderConfiguration(
-                    identityCallback: identityCallback,
-                    expectedPeerAPRNs: expectedPeerAPRNs,
-                    metricsSystem: metricsSystem
-                )
-                var serverBuilder = Server.usingTLS(with: config, on: group)
-                    .withServiceProviders(providers)
-                    .withLogger(loggingLogger)
-                if let keepalive {
-                    CloudBoardDaemon.logger.info("Configuring GRPCServer keepalive")
-                    serverBuilder = serverBuilder
-                        .withKeepalive(keepalive)
-                }
-                server = try await serverBuilder.bind(host: serviceAddress.ipAddress!, port: serviceAddress.port!).get()
-            } else {
-                CloudBoardDaemon.logger.warning("Running service without TLS.")
-                server = try await Server.insecure(group: group)
-                    .withServiceProviders(providers)
-                    .withLogger(loggingLogger)
-                    .bind(host: serviceAddress.ipAddress!, port: serviceAddress.port!).get()
-            }
-        } catch {
-            portPromise?.fail(with: error)
-            throw error
-        }
-
-        portPromise?.succeed(with: server.channel.localAddress!.port!)
-
-        CloudBoardDaemon.logger
-            .info("Bound service at \(String(describing: server.channel.localAddress), privacy: .public)")
-
-        return server
-    }
-
-    private func resolveServiceAddress() async throws -> SocketAddress {
-        return try await self.config.resolveLocalServiceAddress()
+    private func resolveServiceAddress(cloudAppPort: Int?) async throws -> SocketAddress {
+        return try await self.config.resolveLocalServiceAddress(cloudAppPort: cloudAppPort)
     }
 }
 
@@ -834,7 +881,8 @@ struct CloudBoardDaemonLogMetadata: CustomStringConvertible {
     var requestTrackingID: String?
     var remotePID: Int?
     var workerID: UUID?
-    var spanID: String?
+    var spanID: UInt64?
+    var cloudApp: String?
 
     init(
         jobID: UUID? = nil,
@@ -842,7 +890,8 @@ struct CloudBoardDaemonLogMetadata: CustomStringConvertible {
         requestTrackingID: String? = nil,
         remotePID: Int? = nil,
         workerID: UUID? = nil,
-        spanID: String? = nil,
+        spanID: UInt64? = nil,
+        cloudApp: String? = nil
     ) {
         self.jobID = jobID
         self.rpcID = rpcID
@@ -850,37 +899,55 @@ struct CloudBoardDaemonLogMetadata: CustomStringConvertible {
         self.remotePID = remotePID
         self.workerID = workerID
         self.spanID = spanID
+        self.cloudApp = cloudApp
     }
 
     var description: String {
-        var text = ""
+        var fields: [String] = []
 
-        text.append("[")
         if let jobID = self.jobID {
-            text.append("jobID=\(jobID) ")
+            fields.append("jobID=\(jobID)")
         }
         if let rpcID = self.rpcID, rpcID != .zero {
-            text.append("rpcID=\(rpcID) ")
+            fields.append("rpcID=\(rpcID)")
         }
         if let requestTrackingID = self.requestTrackingID, requestTrackingID != "" {
-            text.append("requestTrackingID=\(requestTrackingID) ")
+            fields.append("requestTrackingID=\(requestTrackingID)")
         }
         if let remotePID = self.remotePID {
-            text.append("remotePid=\(remotePID) ")
+            fields.append("remotePid=\(remotePID)")
         }
         if let workerID = self.workerID {
-            text.append("workerID=\(workerID) ")
+            fields.append("workerID=\(workerID)")
         }
-
         if let spanID = self.spanID {
-            text.append("spanID=\(spanID)")
+            fields.append("spanID=\(spanID)")
+        }
+        if let cloudApp = self.cloudApp {
+            fields.append("cloudApp=\(cloudApp)")
         }
 
-        text.removeLast(1)
-        if !text.isEmpty {
-            text.append("]")
+        if !fields.isEmpty {
+            return "[\(fields.joined(separator: " "))]"
         }
+        return ""
+    }
+}
 
-        return text
+enum CloudBoardDaemonError: ReportableError {
+    case noCloudAppSet
+    case noCloudAssetDownloaderFramework
+    case maxInstanceCountExceedsLimit(Int)
+    case maxAuthContextCountExceedsLimit(Int)
+    case invalidServiceAddress(SocketAddress)
+
+    var publicDescription: String {
+        switch self {
+        case .noCloudAppSet: "No Cloud App setup in secure config"
+        case .noCloudAssetDownloaderFramework: "No CloudAssetDownloaderFramework"
+        case .maxInstanceCountExceedsLimit(let setLimit): "Max instance count \(setLimit) exceeds limit of \(CloudBoardDaemon.maxInstanceCount)"
+        case .maxAuthContextCountExceedsLimit(let setLimit): "Max auth context count \(setLimit) exceeds limit of \(CloudBoardDaemon.maxAuthContextCount)"
+        case .invalidServiceAddress(let address): "Invalid service address: \(address)"
+        }
     }
 }

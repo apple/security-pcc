@@ -17,6 +17,8 @@
 //  darwinOSBits
 //
 
+import Foundation
+import os
 import CryptoKit
 
 struct DInitAEADecryptionParams {

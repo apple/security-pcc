@@ -150,8 +150,9 @@ struct _AuditTable: Decodable {
 }
 
 /// Defines what logs splunkloggingd is allowed to forward
-class AuditTable {
-    var table: _AuditTable
+final class AuditTable: Sendable {
+    let table: _AuditTable
+    
     init(at path: URL) throws {
         log.log("Creating audit table at path: \(path.path(percentEncoded: false), privacy: .public)")
         let data = try Data(contentsOf: path)

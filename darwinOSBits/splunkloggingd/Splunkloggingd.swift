@@ -48,7 +48,11 @@ list individual format strings.
     @Option(name: .shortAndLong, help: "Splunk index")
     var index: String?
 
-    @Option(name: .shortAndLong, help: "Splunk HEC Server")
+    @Option(
+        name: .shortAndLong,
+        help: "Splunk HEC Server",
+        transform: { try URL(validating: $0) }
+    )
     var server: URL?
 
     @Option(name: .shortAndLong, help: "Buffer size (bytes)")

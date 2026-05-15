@@ -25,6 +25,7 @@ import FeatureFlags
 import Security_Private.SecKeyPriv
 import os.log
 @_weakLinked import SecureConfigDB
+import AppleKeyStore
 
 public struct EnsembleValidator: Validator {
     static let logger = Logger(subsystem: "com.apple.CloudAttestation", category: "EnsembleValidator")
@@ -102,6 +103,8 @@ public struct EnsembleValidator: Validator {
                 self.securityPolicy = .carry
             case .customer:
                 self.securityPolicy = .customer
+            case .customerProxy:
+                self.securityPolicy = .customerProxy
             @unknown default:
                 Self.logger.warning("Unknown config security policy \(secureConfig.securityPolicy.rawValue, privacy: .public), defaulting to customer")
                 self.securityPolicy = .customer

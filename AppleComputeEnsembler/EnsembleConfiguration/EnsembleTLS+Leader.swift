@@ -42,21 +42,40 @@ extension EnsemblerTLS {
 		}
 
 		DispatchQueue.global(qos: .userInteractive).async {
-			// No need to tell ourselves
-			for node in self.ensembleConfig.nodes where node.key != self.UDID {
-				do {
-					EnsemblerTLS.logger.info("Sending \(msg) message to \(node.value.rank)")
-					try self.tlsChannel?.sendControlMessage(node: node.value.rank, message: msgData)
-				} catch {
-					EnsemblerTLS.logger.warning(
-						"""
-						Failed to send ensemble control message \
-						\(msg, privacy: .public) to rank: \(node.value.rank) \
-						(UDID: \(node.key, privacy: .public))
-						"""
-					)
-				}
-			}
+            
+            // if called from follower, we should just send the message to leader.
+            // follower node does not have connection to all other followers, so it will just fail and show up as noise
+            if self.isLeader == false {
+                do {
+                    EnsemblerTLS.logger.info("EnsemblerTLS.broadcastMessage(): Sending \(msg, privacy: .public) message to leader")
+                    try self.tlsChannel?.sendControlMessage(node: 0, message: msgData)
+                } catch {
+                    EnsemblerTLS.logger.warning(
+                        """
+                        Failed to send ensemble control message \
+                        \(msg, privacy: .public) to leader
+                        """
+                    )
+                }
+            }
+            else {
+                EnsemblerTLS.logger.info("EnsemblerTLS.broadcastMessage(): Sending \(msg, privacy: .public) message to all followers")
+                // No need to tell ourselves
+                for node in self.ensembleConfig.nodes where node.key != self.UDID {
+                    do {
+                        EnsemblerTLS.logger.info("Sending \(msg) message to \(node.value.rank)")
+                        try self.tlsChannel?.sendControlMessage(node: node.value.rank, message: msgData)
+                    } catch {
+                        EnsemblerTLS.logger.warning(
+                              """
+                              Failed to send ensemble control message \
+                              \(msg, privacy: .public) to rank: \(node.value.rank) \
+                              (UDID: \(node.key, privacy: .public))
+                              """
+                        )
+                    }
+                }
+            }
 		}
 	}
 
@@ -410,8 +429,7 @@ extension EnsemblerTLS {
 				EnsemblerTLS.logger.info(
 					"""
 					EnsemblerTLS.handleKeyAccepted(): \
-					Send .ensembleCIOKeyShared message to \
-					rank \(destination, privacy: .public) (UDID: \(udid)).
+					broadcast .ensembleCIOKeyShared message to all nodes.
 					"""
 				)
 				// we dont need to broadcast repeatedly here, since the follower yammers at leader
@@ -420,8 +438,7 @@ extension EnsemblerTLS {
 				EnsemblerTLS.logger.info(
 					"""
 					EnsemblerTLS.handleKeyAccepted(): \
-					Successfully sent .ensembleCIOKeyShared message to \
-					rank \(destination, privacy: .public) (UDID: \(udid)).
+					Successfully broadcasted .ensembleCIOKeyShared message to all nodes
 					"""
 				)
 			} catch {
@@ -583,7 +600,7 @@ extension EnsemblerTLS {
 			)
 			return
 		}
-
+    
 		guard let destination = self.nodeMap[udid]?.rank else {
 			EnsemblerTLS.logger
 				.error(

@@ -479,7 +479,9 @@ AppleCIOMeshService::unregisterLink(unsigned acioIdx)
 	}
 
 	// Deactivate the entire mesh when a link drops.
-	_hasBeenDeactivated = true;
+	if (_active) {
+		_hasBeenDeactivated = true;
+	}
 
 	return kIOReturnSuccess;
 }

@@ -12,16 +12,15 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
+import CloudBoardDomain
 import CloudBoardJobAPI
 import CloudBoardJobHelperAPI
 import CryptoKit
 import Foundation
 
-// input and output on the inbound path)
+// input and output on the inbound path
 enum PipelinePayload: Equatable, Sendable {
-    case warmup(WarmupData)
+    case warmup(ManagedWarmupInfo)
     // Provided only when running within a proxy, once and only once
     // before *any* non warmup message, and no more mesages will be sent after it
     case nackAndExit(ParametersData)
@@ -30,20 +29,38 @@ enum PipelinePayload: Equatable, Sendable {
     // extracted from the parameters and sent separately
     case oneTimeToken(Data)
     case chunk(FinalizableChunk<Data>)
+    case openClientSubrequest(
+        clientSubrequestId: UInt32,
+        cryptoMaterialHandles: [CryptoMaterialHandle],
+        isDiscardable: Bool
+    )
+    case subrequestPayload(clientSubrequestId: UInt32, chunk: Data)
+    case closeSubrequest(clientSubrequestId: UInt32)
+    case cancelSubrequest(clientSubrequestId: UInt32)
     // Only used between WorkloadJobManager and cloud app
     case endOfInput
-    // Provided only when running within a proxy, once and only once, before any worker* messages
-    // the keyID is the identifier for the attestion (and associated key) used for the request
-    // extracted from the parameters and sent separately
-    case parametersMetaData(keyID: Data)
-    case workerAttestationAndDEK(info: WorkerAttestationInfo, dek: SymmetricKey)
+    /// Provided only when running within a proxy, once and only once, before any worker messages.
+    /// The `keyID` is the identifier for the attestation (and associated key) used for the request
+    /// extracted from the parameters and sent separately.
+    /// The `workload` is the workload parameters the request is being run with.
+    case parametersMetaData(keyID: Data, workload: [String: [String]])
+    /// ROPES wishes to negotiate a newly trusted worker
+    case workerNegotiatePick(
+        providedByRopes: WorkerNegotiatePickInfo
+    )
+    /// A worker has been chosen by ROPES
+    case selectedWorker(
+        info: WorkerAttestationInfo,
+        dek: SymmetricKey,
+        workloadParameters: [String: [String]]
+    )
     // Currently represents both encoded PrivateCloudCompute response chunks between CloudBoardMessenger and
     // WorkloadJobManager, and actual application payload chunks between WorkloadJobManager and the cloud app
     case workerResponseChunk(UUID, FinalizableChunk<Data>)
     // Only used between WorkloadJobManager and cloud app. For now we only indicate to the cloud app whether the
     // PrivateCloudCompute response summary (or in absence of a response summary the gRPC response status) from the
     // worker indicated the request was handled successfuly or not.
-    case workerResponseSummary(UUID, succeeded: Bool)
+    case workerResponseSummary(UUID, status: WorkerResponseStatus)
     // Only used between CloudBoardMessenger and WorkloadJobManager
     case workerResponseClose(
         UUID,
@@ -54,9 +71,12 @@ enum PipelinePayload: Equatable, Sendable {
     )
     case workerResponseEOF(UUID)
     // Only used between WorkloadJobManager and cloud app
-    case workerFound(UUID, releaseDigest: String, spanID: String?)
+    case workerFound(UUID, info: WorkerFoundInfo, spanID: UInt64?)
     case teardown
     case abandon
+    case applicationDataChunkingConfig(ApplicationDataChunkingConfiguration)
+    // Only used within jobhelper for CloudboardMessenger to notify WorkloadJobManager
+    case readyToSendAssetsMetadataRELEntry
 }
 
 extension PipelinePayload {

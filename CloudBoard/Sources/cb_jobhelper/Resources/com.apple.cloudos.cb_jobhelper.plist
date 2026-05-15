@@ -16,8 +16,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>_PersistToBootMode</key>
-	<string>rem</string>
 	<key>_AdditionalProperties</key>
 	<dict>
 		<key>CloudBoardJobType</key>

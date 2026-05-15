@@ -12,10 +12,9 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple Inc. All rights reserved.
-
 import Foundation
 internal import InternalGRPC
+internal import InternalSwiftProtobuf
 
 class ProxyDialBackStream {
     typealias InvokeProxyDialBackRequest = Com_Apple_Cloudboard_Api_V1_InvokeProxyDialBackRequest
@@ -56,14 +55,17 @@ class ProxyDialBackStream {
         }
     }
 
-    public static func attestationBundleDialBackRequest(
-        _ attestationBundle: ComputeNodeAttestation,
-        _ isResponseBypass: Bool
-    )
-    -> InvokeProxyDialBackRequest {
+    /// Handles the basic routing v1 vs v2 logic here
+    /// v1 gets an attestation ``Proto_Ropes_Common_Attestation``
+    /// v2 gets an selectedEnsemble ``Com_Apple_Cloudboard_Api_V1_ComputeToProxyMessage.SelectedEnsemble``
+    public static func initiateProxyWorkerSelected(
+        attestation: ComputeNodeAttestation,
+        workload: Proto_Ropes_Common_Workload,
+        isResponseBypass: Bool
+    ) -> InvokeProxyDialBackRequest {
         let attestationMessage = Proto_Ropes_Common_Attestation.with {
-            $0.nodeIdentifier = attestationBundle.keyID.base64EncodedString()
-            $0.attestationBundle = attestationBundle.attestationBundle
+            $0.nodeIdentifier = attestation.keyID.base64EncodedString()
+            $0.attestationBundle = attestation.attestationBundle
             if isResponseBypass {
                 // Mandatory field required by proxy when in response by pass mode
                 // For our purposes, the value is not important at the moment
@@ -73,7 +75,10 @@ class ProxyDialBackStream {
 
         return InvokeProxyDialBackRequest.with {
             $0.computeToProxyMessage = Com_Apple_Cloudboard_Api_V1_ComputeToProxyMessage.with {
-                $0.attestation = attestationMessage
+                $0.selectedEnsemble = Com_Apple_Cloudboard_Api_V1_ComputeToProxyMessage.SelectedEnsemble.with {
+                    $0.attestation = attestationMessage
+                    $0.computeEnsembleWorkload = workload
+                }
             }
         }
     }

@@ -12,13 +12,18 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
 internal import CloudAttestation
 @_spi(HPKEAlgID) import CryptoKit
 import Foundation
 internal import HTTPClientStateMachine
+internal import InternalSwiftProtobuf
+import os
 
 public struct LocalCloudBoardAttestationBundle: Sendable {
+    fileprivate static let logger: os.Logger = .init(
+        subsystem: "com.apple.cloudos.cloudboard",
+        category: "LocalCloudBoardClient.LocalCloudBoardAttestationBundle"
+    )
     internal enum AttestationBundleWrapper {
         // the validated bundle does not expose all information we need so we need to keep both the raw and the
         // validated bundle
@@ -28,19 +33,39 @@ public struct LocalCloudBoardAttestationBundle: Sendable {
 
     internal var attestationBundle: AttestationBundleWrapper
 
+    /// Digest identifying the software release running on the associated node
     public var releaseDigest: String?
 
+    /// Proxy-specific application data
     public struct ProxyAppData: Sendable {
+        /// The set of digests of all compute software releases the proxy is willing to transitively trust in behalf
+        /// of the client
         public var trustedReleaseSet: [String]
     }
 
-    public enum AppData: Sendable {
-        case none
-        case proxy(ProxyAppData)
+    /// Compute-specific application data
+    public struct ComputeAppData: Sendable {
+        /// Compute metadata such as the boot ID
+        public var metadata: [String: Data]
+        public var ensembleId: String?
+        public var bootId: String?
+        public var rackId: String?
     }
 
+    public enum AppData: Sendable {
+        /// No available application data
+        case none
+        /// Proxy-specific application data
+        case proxy(ProxyAppData)
+        /// Compute-specific application data
+        case compute(ComputeAppData)
+    }
+
+    /// Application-specific metadata included in the attestation
     public var appData: AppData
 
+    /// /// Serializes the attestation bundle
+    /// - Returns: The serialized bundle
     public func serializedData() throws -> Data {
         switch self.attestationBundle {
         case .cloudAttestationBundle(let unvalidatedBundle, _):
@@ -50,6 +75,8 @@ public struct LocalCloudBoardAttestationBundle: Sendable {
         }
     }
 
+    /// Provides a JSON representation of the attestation bundle.
+    /// - Returns: JSON representation. Throws if the JSON encoding fails.
     public func jsonString() throws -> String {
         switch self.attestationBundle {
         case .cloudAttestationBundle(let unvalidatedBundle, _):
@@ -68,6 +95,13 @@ public struct LocalCloudBoardAttestationBundle: Sendable {
             self.appData = .none
         case .proxy(let proxyAppData):
             self.appData = .proxy(.init(trustedReleaseSet: proxyAppData.transitivelyTrustedReleaseDigests))
+        case .compute(let computeAppData):
+            self.appData = .compute(.init(
+                metadata: computeAppData.metadata,
+                ensembleId: nil,
+                bootId: nil,
+                rackId: nil
+            ))
         }
     }
 
@@ -93,7 +127,36 @@ public struct LocalCloudBoardAttestationBundle: Sendable {
             self.appData = .proxy(.init(trustedReleaseSet: metadata.proxiedRelease.map { $0.digest.hexString }))
         } else {
             self.releaseDigest = try Release(bundle: unvalidatedBundle, evaluateTrust: false).sha256
-            self.appData = .none
+
+            // Parse ensemble/boot/rack IDs from attestation app data
+            var ensembleId: String?
+            var bootId: String?
+            var rackId: String?
+
+            do {
+                let protoBundle = try Proto_AttestationBundle(serializedBytes: unvalidatedBundle.serializedData())
+                let protoAppData = try Proto_AppData(serializedBytes: protoBundle.appData)
+                guard protoAppData.name == "Compute Node" else {
+                    // Not a compute node, skip parsing
+                    throw LocalCloudBoardClientError.internalError("Not a compute node attestation")
+                }
+                let appDataProto = try AttestationAppData(unpackingAny: protoAppData.metadata)
+                ensembleId = String(data: appDataProto.ensembleID, encoding: .utf8)
+                bootId = String(data: appDataProto.bootID, encoding: .utf8)
+                rackId = String(data: appDataProto.rackID, encoding: .utf8)
+            } catch {
+                Self.logger
+                    .error(
+                        "Failed to parse ensemble/boot/rack IDs from attestation app data: \(error, privacy: .public)"
+                    )
+            }
+
+            self.appData = .compute(.init(
+                metadata: [:],
+                ensembleId: ensembleId,
+                bootId: bootId,
+                rackId: rackId
+            ))
         }
     }
 }

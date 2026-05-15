@@ -25,7 +25,7 @@ import DarwinInit
 		let args = CommandLine.arguments.dropFirst().joined(separator: " ")
 		do {
 			logger.log("Running darwin-init \(args)")
-			var command = try DarwinInit.parseAsRoot(nil)
+			var command = try DarwinInitCommand.parseAsRoot(nil)
 			if var command = command as? AsyncParsableCommand {
 				try await command.run()
 			} else {
@@ -34,7 +34,7 @@ import DarwinInit
 			logger.debug("Completed darwin-init \(args)")
 		} catch {
 			logger.error("Failed darwin-init \(args): \(error.localizedDescription)")
-			DarwinInit.exit(withError: error)
+			DarwinInitCommand.exit(withError: error)
 		}
 	}
 }

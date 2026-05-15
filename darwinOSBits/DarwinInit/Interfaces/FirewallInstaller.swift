@@ -123,14 +123,19 @@ internal class InterfaceFinder {
 
 class FirewallInstaller {
     let firewallRulesInstalledEventName = "com.apple.darwininit.firewall.installed"
+    let computer: Computer
     let interfaceFinder: InterfaceFinder
+
+    /// Was there an error
+    var lastError: Swift.Error? = nil
 
     enum Error: Swift.Error {
         case wrongNumberOfManagementInterfaces(count: Int)
     }
 
-    init(interfaceFinder: InterfaceFinder = InterfaceFinder()) {
+    init(computer: Computer = RealComputer.shared, interfaceFinder: InterfaceFinder = InterfaceFinder()) {
         self.interfaceFinder = interfaceFinder
+        self.computer = computer
     }
 
     internal func findManagementNetworkInterfaceName() throws -> String {
@@ -166,16 +171,24 @@ class FirewallInstaller {
         return rules
     }
 
+    internal func installRules(_ rules: [String]) throws {
+        let combined = rules.joined(separator: "\n")
+        try installRules(combined)
+    }
+
     internal func installRules(_ rules: String) throws {
-        let rules = try performInterfaceSubstitutions(rules)
-        let rulesFilePathStr = "/var/db/darwin-init/firewall/rules.pf"
-        let rulesDirPath = URL(filePath: FilePath(rulesFilePathStr).removingLastComponent().string)
-        try FileManager.default.createDirectory(at: rulesDirPath, withIntermediateDirectories: true)
-        try rules.write(toFile: rulesFilePathStr, atomically: false, encoding: .utf8)
-        let pfctl = URL(fileURLWithPath: "/sbin/pfctl")
-        try Subprocess.run(executable: pfctl, arguments: ["-F", "all"])
-        try Subprocess.run(executable: pfctl, arguments: ["-f", rulesFilePathStr])
-        try Subprocess.run(executable: pfctl, arguments: ["-e"])
+        do {
+            let rules = try performInterfaceSubstitutions(rules)
+            try computer.fileSystem.mkdirs(kDInitFirewallRulesPath.removingLastComponent())
+            try computer.fileSystem.write(text: rules, to: kDInitFirewallRulesPath)
+            let pfctl = URL(fileURLWithPath: "/sbin/pfctl")
+            try computer.run(executable: pfctl, arguments: ["-F", "all"])
+            try computer.run(executable: pfctl, arguments: ["-f", kDInitFirewallRulesPath.string])
+            try computer.run(executable: pfctl, arguments: ["-e"])
+        } catch {
+            self.lastError = error
+            throw error
+        }
     }
 
     internal func sendFirewallRulesInstalledEvent() {

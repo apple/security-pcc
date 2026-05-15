@@ -24,15 +24,18 @@ import OpenDirectory
 import System
 
 enum OpenDirectory {
+
+    typealias User = UserManager.User
+
 	static func node() throws -> ODNode {
         // retries added per rdar://problem/58993561
 		return try retry(count: 3, delay: .seconds(1), backoff: .seconds(1), body: { _ in
 			return try ODNode(session: ODSession.default(), type: ODNodeType(kODNodeTypeLocalNodes))
 		})
 	}
-    static func create(user: DInitUserConfig) -> Bool {
-        let homeDirectory = FilePath("/Users").appending(user.userName)
-		
+    static func create(user: User) -> Bool {
+        let homeDirectory = FilePath("/Users").appending(user.name)
+
         do {
             try homeDirectory.createDirectory()
         } catch {
@@ -49,7 +52,7 @@ enum OpenDirectory {
 		}
 
         let attributes: [AnyHashable: Any] = [
-            kODAttributeTypeRecordName: [user.userName],
+            kODAttributeTypeRecordName: [user.name],
             kODAttributeTypeNFSHomeDirectory: [homeDirectory.description],
             kODAttributeTypeUserShell: [kDInitNewUserShell.description],
             kODAttributeTypePrimaryGroupID: ["\(user.gid)"],
@@ -63,7 +66,7 @@ enum OpenDirectory {
 
         let userRec: ODRecord
         do {
-            userRec = try node.createRecord(withRecordType: kODRecordTypeUsers, name: user.userName, attributes: attributes)
+            userRec = try node.createRecord(withRecordType: kODRecordTypeUsers, name: user.name, attributes: attributes)
         } catch {
             logger.error("userRec creation failed with error \(error.localizedDescription)")
             return false
@@ -79,7 +82,7 @@ enum OpenDirectory {
             }
         }
 
-        if user.isAdmin ?? false {
+        if user.isAdmin {
             let adminGroupRec: ODRecord
             do {
                 adminGroupRec = try node.record(withRecordType: kODRecordTypeGroups, name: "admin", attributes: nil)

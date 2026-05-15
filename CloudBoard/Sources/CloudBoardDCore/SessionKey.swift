@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import CloudBoardLogging
 import Foundation
 import NIOCore
@@ -45,9 +43,9 @@ struct SessionKey: Hashable, Sendable {
         /// Including length would needlessly complicate the metric filtering this provides
         var publicDescription: String {
             switch self {
-            case .insufficientBytes(let length):
+            case .insufficientBytes:
                 return "attempt to create from less than \(byteLength) bytes"
-            case .invalidByteCount(let length):
+            case .invalidByteCount:
                 return "exactly one SessionKey was used with invalid byte count"
             case .sentinelZeroValue:
                 return "SessionKey was initialized with a zero value"

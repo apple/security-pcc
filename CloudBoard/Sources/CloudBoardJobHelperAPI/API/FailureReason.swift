@@ -12,20 +12,20 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
-package import CloudBoardAsyncXPC
+internal import CloudBoardAsyncXPC
 import CloudBoardCommon
 import Foundation
 
 /// `FailureReason` describes a reason for a workload invocation failure which should be reported back to CloudBoard
 /// daemon, and from there to ROPES
-package enum FailureReason: ByteBufferCodable, Sendable, CustomStringConvertible, CaseIterable {
+package enum FailureReason: Int, ByteBufferCodable, Sendable, CustomStringConvertible, CaseIterable {
     case ohttpEncapsulationFailure
     case ohttpDecapsulationFailure
     case invalidAEAD
     case unknownKeyID
     case expiredKey
+    /// CloudBoard believes that some aspect of the initiate negotiate flow was illegal
+    case initiateNegotiationViolation
 
     public var description: String {
         return switch self {
@@ -34,48 +34,7 @@ package enum FailureReason: ByteBufferCodable, Sendable, CustomStringConvertible
         case .invalidAEAD: "invalidAEAD"
         case .unknownKeyID: "unknownKeyID"
         case .expiredKey: "expiredKey"
-        }
-    }
-
-    @inlinable
-    public func encode(to buffer: inout ByteBuffer) throws {
-        switch self {
-        case .ohttpEncapsulationFailure:
-            buffer.writeInteger(0)
-        case .ohttpDecapsulationFailure:
-            buffer.writeInteger(1)
-        case .invalidAEAD:
-            buffer.writeInteger(2)
-        case .unknownKeyID:
-            buffer.writeInteger(3)
-        case .expiredKey:
-            buffer.writeInteger(4)
-        }
-    }
-
-    public init(from buffer: inout ByteBuffer) throws {
-        guard let enumCase: Int = buffer.readInteger() else {
-            throw DecodingError.valueNotFound(
-                Self.self,
-                .init(codingPath: [], debugDescription: "no expected enum case")
-            )
-        }
-        switch enumCase {
-        case 0:
-            self = .ohttpEncapsulationFailure
-        case 1:
-            self = .ohttpDecapsulationFailure
-        case 2:
-            self = .invalidAEAD
-        case 3:
-            self = .unknownKeyID
-        case 4:
-            self = .expiredKey
-        case let value:
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: [ByteBufferCodingKey(Self.self)],
-                debugDescription: "bad result enum case \(value)"
-            ))
+        case .initiateNegotiationViolation: "initiateNegotiationViolation"
         }
     }
 }

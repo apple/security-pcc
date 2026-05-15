@@ -12,7 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
 import Foundation
 
 public struct ReleaseDigestEntry: Sendable, Hashable {

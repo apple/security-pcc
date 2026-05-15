@@ -12,14 +12,21 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import Foundation
 
-public struct CFPreferences {
+public struct CFPreferences: CustomStringConvertible {
     enum Storage {
         case real(domain: String)
         case test([String: CFPropertyList])
+    }
+
+    public var description: String {
+        switch self.storage {
+        case .real(domain: let domain):
+            return domain
+        case .test(let mocks):
+            return "test with \(mocks.count) preferences"
+        }
     }
 
     var storage: Storage
@@ -58,3 +65,6 @@ public struct CFPreferences {
         self.getValue(forKey: key) != nil
     }
 }
+
+@available(*, unavailable)
+extension CFPreferences: Sendable {}

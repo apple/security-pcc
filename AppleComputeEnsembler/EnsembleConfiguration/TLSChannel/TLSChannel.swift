@@ -25,6 +25,7 @@
 import Foundation
 import Network
 import OSLog
+import AppleComputeEnsembler
 
 private let logger = Logger(subsystem: kEnsemblerPrefix, category: "TLSChannel")
 
@@ -37,8 +38,8 @@ private let serverDefaultPort: UInt16 = 4250
 private let kDefaultAttestationExpiryInSeconds: Int = 8 * 60 * 60
 
 public protocol ServerConnectionDelegate {
-	/// An incoming message from a node.
-	func incomingMessage(node: Int, message: Data)
+	/// An incoming message from a node. Returns optional response data to send back.
+	func incomingMessage(node: Int, message: Data) -> Data?
 
 	func onServerStatusChange(state: NWListener.State)
 }
@@ -66,6 +67,13 @@ public final class TLSChannel {
 	var server: Server?
 	// client to leader in case of followers, and clients to followers in case of leader
 	var clients: [Int: Client] = [:]
+    var clientQueues: [Int: DispatchQueue] = [:]
+	// dedicated clients for data messaging (separate from control messaging)
+	var dataClients: [Int: Client] = [:]
+	var dataClientQueues: [Int: DispatchQueue] = [:]
+	// Serialization dispatch groups - one per follower to ensure only one request at a time per follower
+	private var dispatchGroups: [Int: DispatchGroup] = [:]
+	private let dispatchGroupLock = NSLock()
 	var configuration: BackendConfiguration
 	let serverDelegate: ServerConnectionDelegate
 	let clientDelegate: ClientConnectionDelegate
@@ -107,6 +115,30 @@ public final class TLSChannel {
 			throw EnsembleError.internalError(error: "Error getting client connections")
 		}
 		self.clients = clients
+		
+		// Set up dedicated data clients (separate connections for data messaging)
+		guard let dataClients = try self.getDataClients() else {
+			throw EnsembleError.internalError(error: "Error getting data client connections")
+		}
+		self.dataClients = dataClients
+		
+	}
+	
+	private func getDispatchGroupForNode(_ rank: Int) -> DispatchGroup? {
+		dispatchGroupLock.lock()
+		defer { dispatchGroupLock.unlock() }
+		
+		// Return existing dispatch group or create a new one if needed
+		if let existingGroup = dispatchGroups[rank] {
+			return existingGroup
+		}
+		
+		// Create new dispatch group if follower was added after initialization
+
+        let newGroup = DispatchGroup()
+        dispatchGroups[rank] = newGroup
+        logger.info("TLSChannel: Created new serialization dispatch group for follower rank \(rank)")
+        return newGroup
 	}
 
 	func refreshAttestation() throws {
@@ -137,14 +169,25 @@ public final class TLSChannel {
 		for client in self.clients {
 			client.value.stop()
 		}
+		
+		for client in self.dataClients {
+			client.value.stop()
+		}
 
 		try self.refreshAttestation()
 		guard let clients = try self.getClients() else {
 			throw EnsembleError.internalError(error: "Error getting client connections")
 		}
+		
+		guard let dataClients = try self.getDataClients() else {
+			throw EnsembleError.internalError(error: "Error getting data client connections")
+		}
 
 		self.clients.removeAll()
 		self.clients = clients
+		
+		self.dataClients.removeAll()
+		self.dataClients = dataClients
 	}
 
 	func getClients() throws -> [Int: Client]? {
@@ -152,6 +195,14 @@ public final class TLSChannel {
 			return try self.getClientsForLeader()
 		} else {
 			return try self.getClientsForFollower()
+		}
+	}
+
+	func getDataClients() throws -> [Int: Client]? {
+		if self.configuration.node.rank == 0 {
+			return try self.getDataClientsForLeader()
+		} else {
+			return try self.getDataClientsForFollower()
 		}
 	}
 
@@ -189,6 +240,8 @@ public final class TLSChannel {
 						delegate: self.clientDelegate
 					)
 				}
+                let label = "datamessage-queue-\(node.value.rank)"
+                clientQueues[node.value.rank] = DispatchQueue(label:label, qos: .userInitiated )
 			}
 		}
 
@@ -227,7 +280,8 @@ public final class TLSChannel {
 						delegate: self.clientDelegate
 					)
 				}
-
+                let label = "datamessagequeue-\(node.value.rank)"
+                clientQueues[node.value.rank] = DispatchSerialQueue(label:label, qos: .userInitiated )
 				// we will start the client to leader because followers need to checking first.
 				clients[node.value.rank]?.start()
 			}
@@ -236,15 +290,106 @@ public final class TLSChannel {
 		return clients
 	}
 
+	func getDataClientsForLeader() throws -> [Int: Client]? {
+		var dataClients: [Int: Client] = [:]
+		var targetPort: UInt16 = serverDefaultPort
+
+		// for leader we need to send data messages to all followers
+		for node in self.configuration.ensemble.nodes {
+			if node.value.port != nil {
+				targetPort = node.value.port!
+			}
+
+			guard let hostName = node.value.hostName else {
+				throw EnsembleError.internalError(error: "Error getting targets hostname")
+			}
+
+			if node.value.rank != 0 {
+				// Create dedicated data client connections for each follower
+				if self.useNoAttestation == true {
+					dataClients[node.value.rank] = try getClient(
+						server: hostName,
+						port: targetPort,
+						node: node.value.rank,
+						delegate: self.clientDelegate
+					)
+				} else {
+					dataClients[node.value.rank] = try self.getCloudAttestationBackedClient(
+						configuration: self.configuration,
+						server: hostName,
+						port: targetPort,
+						node: node.value.rank,
+						delegate: self.clientDelegate
+					)
+				}
+                let label = "dataclients-queue-\(node.value.rank)"
+                dataClientQueues[node.value.rank] = DispatchQueue(label: label, qos: .userInitiated)
+			}
+		}
+
+		return dataClients
+	}
+
+	func getDataClientsForFollower() throws -> [Int: Client]? {
+		var dataClients: [Int: Client] = [:]
+		var targetPort: UInt16 = serverDefaultPort
+
+		// for follower we need a data client connection to the leader
+		for node in self.configuration.ensemble.nodes {
+			if node.value.port != nil {
+				targetPort = node.value.port!
+			}
+
+			guard let hostName = node.value.hostName else {
+				throw EnsembleError.internalError(error: "Error getting targets hostname")
+			}
+
+			if node.value.rank == 0 {
+				// Create dedicated data client connection to leader
+				if self.useNoAttestation == true {
+					dataClients[node.value.rank] = try getClient(
+						server: hostName,
+						port: targetPort,
+						node: node.value.rank,
+						delegate: self.clientDelegate
+					)
+				} else {
+					dataClients[node.value.rank] = try self.getCloudAttestationBackedClient(
+						configuration: self.configuration,
+						server: hostName,
+						port: targetPort,
+						node: node.value.rank,
+						delegate: self.clientDelegate
+					)
+				}
+                let label = "dataclients-queue-\(node.value.rank)"
+                dataClientQueues[node.value.rank] = DispatchQueue(label: label, qos: .userInitiated)
+				// Start the data client to leader for followers
+				dataClients[node.value.rank]?.start()
+			}
+		}
+
+		return dataClients
+	}
+
 	func startClientsToFollowers() {
         EnsemblerTLS.logger.info("Starting clients to all followers.")
         for client in self.clients {
+            client.value.start()
+        }
+        
+        EnsemblerTLS.logger.info("Starting data clients to all followers.")
+        for client in self.dataClients {
             client.value.start()
         }
 	}
 
 	func startClientToLeader() {
 		self.clients[0]?.start()
+	}
+
+	func startDataClientToLeader() {
+		self.dataClients[0]?.start()
 	}
 
 	func sendControlMessage(node: Int, message: Data, expectAck: Bool = true) throws {
@@ -339,6 +484,23 @@ public final class TLSChannel {
 		for client in self.clients {
 			client.value.stop()
 		}
+		
+		logger.info(
+			"""
+			TLSChannel.closeClients on rank \(
+				self.configuration.node.rank,
+				privacy: .public
+			): Stopping all data clients )
+			"""
+		)
+		for client in self.dataClients {
+			client.value.stop()
+		}
+		
+		// Clean up dispatch groups
+		dispatchGroupLock.lock()
+		dispatchGroups.removeAll()
+		dispatchGroupLock.unlock()
 	}
 
 	func getEnsembleDeviceFilter(configuration: BackendConfiguration) -> EnsembleValidator
@@ -436,4 +598,170 @@ public final class TLSChannel {
 		}
 		return try Server(port: port, tlsOptions: tlsOptions, delegate: delegate, node: node)
 	}
+}
+
+import Security
+extension TLSChannel {
+
+    public func sendDataToAllFollowers(appID: String,
+                                       data: Data,
+                                       timeout: TimeInterval = 2.0,
+                                       completion: @escaping (Result<[NodeResponse], Error>) -> Void)
+    {
+        logger.info("TLSChannel.sendDataToAllFollowers: sending data to all followers with appID \(appID, privacy: .public)")
+        
+        // Collect all follower ranks (all nodes except rank 0 which is the leader)
+        let followerRanks = configuration.ensemble.nodes.values
+            .filter { $0.rank != 0 }  // Exclude leader (rank 0)
+            .map { $0.rank }
+            .sorted()
+        
+        guard !followerRanks.isEmpty else {
+            logger.warning("TLSChannel.sendDataToAllFollowers: no followers found in ensemble")
+            completion(.success([]))
+            return
+        }
+        
+        logger.info("TLSChannel.sendDataToAllFollowers: found \(followerRanks.count, privacy: .public) followers: \(followerRanks, privacy: .public)")
+        
+        let dispatchGroup = DispatchGroup()
+        var responses: [NodeResponse] = []
+        let responsesLock = NSLock()
+        
+        // Send data to each follower in parallel
+        for rank in followerRanks {
+            dispatchGroup.enter()
+            
+            logger.info("TLSChannel.sendDataToAllFollowers: Starting request to rank \(rank, privacy: .public)")
+            
+            // Execute each request in parallel on a concurrent queue
+            // But the actual sending will be serialized per follower by the client queue
+            DispatchQueue.global(qos: .userInitiated).async {
+                self.sendDataAndGetResponse(
+                    appID: appID,
+                    data: data,
+                    rank: rank,
+                    timeout: timeout
+                ) { result in
+                    defer { dispatchGroup.leave() }
+                    
+                    let nodeResponse: NodeResponse
+                    let timestamp = Date()
+                    
+                    switch result {
+                    case .success(let responseData):
+                        nodeResponse = NodeResponse(
+                            rank: rank,
+                            data: responseData,
+                            error: nil,
+                            timestamp: timestamp
+                        )
+                        logger.info("TLSChannel.sendDataToAllFollowers: received response from rank \(rank, privacy: .public)")
+                        
+                    case .failure(let error):
+                        nodeResponse = NodeResponse(
+                            rank: rank,
+                            data: nil,
+                            error: error,
+                            timestamp: timestamp
+                        )
+                        logger.error("TLSChannel.sendDataToAllFollowers: error from rank \(rank, privacy: .public): \(error, privacy: .public)")
+                    }
+                    
+                    responsesLock.lock()
+                    responses.append(nodeResponse)
+                    responsesLock.unlock()
+                }
+            }
+        }
+        
+        // Wait for all responses or timeout
+        dispatchGroup.notify(queue: .global()) {
+            logger.info("TLSChannel.sendDataToAllFollowers: completed sending to all followers, received \(responses.count, privacy: .public) responses")
+            
+            // Check if any response contains an error
+            let errorResponses = responses.filter { $0.error != nil }
+            if !errorResponses.isEmpty {
+                logger.error("TLSChannel.sendDataToAllFollowers: found \(errorResponses.count, privacy: .public) responses with errors")
+                for errorResponse in errorResponses {
+                    logger.error("TLSChannel.sendDataToAllFollowers: Error from rank \(errorResponse.rank, privacy: .public): \(String(reflecting: errorResponse.error), privacy: .public)")
+                }
+                // Return failure with the first error found, but include all responses
+                if let firstError = errorResponses.first?.error {
+                    completion(.failure(firstError))
+                } else {
+                    // Fallback in case error is somehow nil
+                    let genericError = EnsembleError.internalError(error: "One or more follower responses contained errors")
+                    completion(.failure(genericError))
+                }
+            } else {
+                completion(.success(responses))
+            }
+        }
+    }
+    
+    public func sendDataAndGetResponse(
+        appID: String, 
+        data: Data,
+        rank: Int,
+        timeout: TimeInterval = 2.0,
+        completion: @escaping (Result<Data, Error>) -> Void
+    ) {
+        
+        logger.info("TLSChannel.sendDataAndGetResponse: sending data to rank \(rank, privacy: .public) with appID \(appID, privacy: .public), data size: \(data.count) bytes")
+        
+        guard let clientQueue = dataClientQueues[rank], let client = self.dataClients[rank] else {
+            logger.error(
+                "TLSChannel.sendDataAndGetResponse() on rank \(rank, privacy: .public), no data client or data client queue exists"
+            )
+            
+            let error = EnsembleError.internalError(error: "No data client or data client queue exists for rank \(rank)")
+            completion(.failure(error))
+            return
+        }
+        
+        // Check client state before attempting to send
+        guard client.state == .ready else {
+            logger.warning("TLSChannel.sendDataAndGetResponse: Client to rank \(rank, privacy: .public) is not ready")
+            let error = EnsembleError.internalError(error: "Client connection to rank \(rank) is not ready")
+            completion(.failure(error))
+            return
+        }
+        
+        // Get the persistent dispatch group for this follower
+        guard let dispatchGroup = getDispatchGroupForNode(rank) else {
+            logger.error("TLSChannel.sendDataAndGetResponse: No dispatch group available for rank \(rank, privacy: .public)")
+            let error = EnsembleError.internalError(error: "No serialization dispatch group for rank \(rank)")
+            completion(.failure(error))
+            return
+        }
+        
+        // Now execute the actual request on the follower's dedicated queue
+        clientQueue.async {
+            // Wait for any previous request to the same follower to complete
+            logger.debug("TLSChannel.sendDataAndGetResponse: Waiting for dispatch group for rank \(rank, privacy: .public)")
+            dispatchGroup.wait()
+            
+            logger.debug("TLSChannel.sendDataAndGetResponse: Dispatch group available, starting request to rank \(rank, privacy: .public)")
+            
+            // Enter the group to indicate this request is in progress
+            dispatchGroup.enter()
+            
+            client.sendAndWaitForResponse(
+                appID: appID,
+                data: data,
+                currentNode: self.configuration.node.rank,
+                timeout: timeout
+            ) { result in
+                // Always leave the group when done, regardless of success/failure
+                defer {
+                    logger.debug("TLSChannel.sendDataAndGetResponse: Leaving dispatch group for rank \(rank, privacy: .public)")
+                    dispatchGroup.leave()
+                }
+                
+                completion(result)
+            }
+        }
+    }
+
 }

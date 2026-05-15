@@ -1,0 +1,4122 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 73;
+	objects = {
+
+/* Begin PBXAggregateTarget section */
+		01E4B0E52710E40D000EDCD0 /* base */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 01E4B0E62710E40D000EDCD0 /* Build configuration list for PBXAggregateTarget "base" */;
+			buildPhases = (
+			);
+			dependencies = (
+				7D58177F2DA72C1B0023264A /* PBXTargetDependency */,
+				7D58139C2DA4852B0023264A /* PBXTargetDependency */,
+				7DC2FEEB2D02220300F93068 /* PBXTargetDependency */,
+				7D51BAC02CE55075008DCCB4 /* PBXTargetDependency */,
+				EA2C4BFB2B85604900A2966F /* PBXTargetDependency */,
+				EA104E952B5763C80024808C /* PBXTargetDependency */,
+				0127AFBD2731D1AE004E5FEF /* PBXTargetDependency */,
+				EADC00072AFC17A500EAE9F5 /* PBXTargetDependency */,
+				92F083D62B190E9D00280C10 /* PBXTargetDependency */,
+				3B5636522ABBC09700C17EE0 /* PBXTargetDependency */,
+			);
+			name = base;
+			productName = base;
+		};
+		01E4B0EB2710E41D000EDCD0 /* kext */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 01E4B0EC2710E41D000EDCD0 /* Build configuration list for PBXAggregateTarget "kext" */;
+			buildPhases = (
+			);
+			dependencies = (
+				01E4B0F02710E428000EDCD0 /* PBXTargetDependency */,
+			);
+			name = kext;
+			productName = kext;
+		};
+		596BC7DF268FE2910036022D /* All */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 596BC7E0268FE2910036022D /* Build configuration list for PBXAggregateTarget "All" */;
+			buildPhases = (
+			);
+			dependencies = (
+				EAD238B02AD78C47003C0898 /* PBXTargetDependency */,
+				EAD238B22AD78C47003C0898 /* PBXTargetDependency */,
+			);
+			name = All;
+			productName = All;
+		};
+		7FA453DE2D107ECD00105233 /* VirtMesh_Guest */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 7FA453DF2D107ECD00105233 /* Build configuration list for PBXAggregateTarget "VirtMesh_Guest" */;
+			buildPhases = (
+			);
+			dependencies = (
+				7FDF86972D11AA31000CA8CF /* PBXTargetDependency */,
+				7FDF86992D11AA31000CA8CF /* PBXTargetDependency */,
+				7FA453EF2D107EF400105233 /* PBXTargetDependency */,
+			);
+			name = VirtMesh_Guest;
+			productName = VirtMesh_Guest;
+		};
+		7FA453E22D107ED500105233 /* VirtMesh_Host */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 7FA453E32D107ED500105233 /* Build configuration list for PBXAggregateTarget "VirtMesh_Host" */;
+			buildPhases = (
+			);
+			dependencies = (
+				7FA453F32D107EFD00105233 /* PBXTargetDependency */,
+				7FA453F12D107EF900105233 /* PBXTargetDependency */,
+			);
+			name = VirtMesh_Host;
+			productName = VirtMesh_Host;
+		};
+		7FA453E62D107EDE00105233 /* VirtMesh_Test */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 7FA453E72D107EDE00105233 /* Build configuration list for PBXAggregateTarget "VirtMesh_Test" */;
+			buildPhases = (
+			);
+			dependencies = (
+				7FC554A42D5AD1880075E127 /* PBXTargetDependency */,
+				7FC554A22D5AD1830075E127 /* PBXTargetDependency */,
+				7FA453ED2D107EE900105233 /* PBXTargetDependency */,
+				7FA453EB2D107EE400105233 /* PBXTargetDependency */,
+			);
+			name = VirtMesh_Test;
+			productName = VirtMesh_Test;
+		};
+		7FBFA8732CE42EBE00AB18AC /* VirtMesh_All */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 7FBFA8742CE42EBE00AB18AC /* Build configuration list for PBXAggregateTarget "VirtMesh_All" */;
+			buildPhases = (
+			);
+			dependencies = (
+				7FA453F52D107F2500105233 /* PBXTargetDependency */,
+				7FA453F72D107F2500105233 /* PBXTargetDependency */,
+				7FA453F92D107F2500105233 /* PBXTargetDependency */,
+			);
+			name = VirtMesh_All;
+			productName = VirtMesh_All;
+		};
+		EAD54F552B08191000E4FFE0 /* All_ios */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = EAD54F5A2B08191000E4FFE0 /* Build configuration list for PBXAggregateTarget "All_ios" */;
+			buildPhases = (
+			);
+			dependencies = (
+				7F111B872D81412C007D076E /* PBXTargetDependency */,
+				EAD54F562B08191000E4FFE0 /* PBXTargetDependency */,
+				EAD54F582B08191000E4FFE0 /* PBXTargetDependency */,
+			);
+			name = All_ios;
+			productName = All;
+		};
+/* End PBXAggregateTarget section */
+
+/* Begin PBXBuildFile section */
+		0127AFBB2731D172004E5FEF /* AppleCIOMeshSupport.h in Headers */ = {isa = PBXBuildFile; fileRef = 0127AFBA2731D165004E5FEF /* AppleCIOMeshSupport.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		0127AFC12731D342004E5FEF /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0127AFC02731D342004E5FEF /* Foundation.framework */; };
+		01F7BA022739DE4B00FEC37F /* AppleCIOMeshServiceRef.mm in Sources */ = {isa = PBXBuildFile; fileRef = 01F7BA012739DE4B00FEC37F /* AppleCIOMeshServiceRef.mm */; };
+		01F7BA042739DE7B00FEC37F /* AppleCIOMeshServiceRef.h in Headers */ = {isa = PBXBuildFile; fileRef = 01F7BA032739DE7700FEC37F /* AppleCIOMeshServiceRef.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		01F7BA052739E23900FEC37F /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5940A63D25D662BA00009C3F /* IOKit.framework */; };
+		3B5636462ABBC03700C17EE0 /* AppleCIOMeshSupport.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0127AFB22731D144004E5FEF /* AppleCIOMeshSupport.framework */; };
+		3B5636472ABBC03700C17EE0 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 593E608B26B2FAF500FBBD66 /* CoreFoundation.framework */; };
+		3B5636482ABBC03700C17EE0 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 593E608D26B2FAFA00FBBD66 /* IOKit.framework */; };
+		3B5636492ABBC03700C17EE0 /* libIOReport.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5911DF1626B300F8001CA9EF /* libIOReport.a */; };
+		3BD422992ABBC17C0068318D /* Main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3B56363F2ABBC02D00C17EE0 /* Main.mm */; };
+		592D33D025F054B8009DF054 /* Crc32.h in Headers */ = {isa = PBXBuildFile; fileRef = 592D33CE25F054B8009DF054 /* Crc32.h */; };
+		593E60672698ADD500FBBD66 /* AppleCIOMeshService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 59A66C09260E6CD5002E47C8 /* AppleCIOMeshService.cpp */; };
+		593E606B2698ADD500FBBD66 /* Crc32.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 592D33CF25F054B8009DF054 /* Crc32.cpp */; };
+		593E60712698AE7E00FBBD66 /* Statistics.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 593E606D2698AE7700FBBD66 /* Statistics.cpp */; };
+		5940A63E25D662BA00009C3F /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5940A63D25D662BA00009C3F /* IOKit.framework */; };
+		7D51BAB52CE55061008DCCB4 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 01BE7B142720949300F98BEE /* Foundation.framework */; };
+		7D51BAC12CE55087008DCCB4 /* AppleCIOMeshSupport.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0127AFB22731D144004E5FEF /* AppleCIOMeshSupport.framework */; platformFilters = (ios, macos, ); };
+		7D58152C2DA58F240023264A /* TcpConnection.mm in Sources */ = {isa = PBXBuildFile; fileRef = 811C70182D36E4B7004CCDA9 /* TcpConnection.mm */; };
+		7D58172E2DA71EB90023264A /* MeshNetTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D58172D2DA71EB90023264A /* MeshNetTypes.swift */; };
+		7D5817662DA726990023264A /* MeshNetTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D58172D2DA71EB90023264A /* MeshNetTypes.swift */; };
+		7D5817672DA7272D0023264A /* MeshNetFramework.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7D58175A2DA7264A0023264A /* MeshNetFramework.framework */; };
+		7D5817712DA7279B0023264A /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 01BE7B142720949300F98BEE /* Foundation.framework */; };
+		7D5817802DA72F140023264A /* MeshNetFramework.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7D58175A2DA7264A0023264A /* MeshNetFramework.framework */; };
+		7D5817EA2DA9AD1D0023264A /* TcpConnection.mm in Sources */ = {isa = PBXBuildFile; fileRef = 811C70182D36E4B7004CCDA9 /* TcpConnection.mm */; };
+		7F111B842D80CB15007D076E /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5940A63D25D662BA00009C3F /* IOKit.framework */; };
+		7F111B852D80CB1E007D076E /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5940A63D25D662BA00009C3F /* IOKit.framework */; };
+		7F162B5F2D43695A0068FFCD /* AppleCIOMeshUserClientInterface.h in Sources */ = {isa = PBXBuildFile; fileRef = EAC827A72AA6EA0F0070C380 /* AppleCIOMeshUserClientInterface.h */; };
+		7F162B602D43695A0068FFCD /* AppleCIOMeshConfigUserClientInterface.h in Sources */ = {isa = PBXBuildFile; fileRef = EA0C4E732AF9DACC002F6973 /* AppleCIOMeshConfigUserClientInterface.h */; };
+		7F162B622D436CE00068FFCD /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7F162B612D436CE00068FFCD /* IOKit.framework */; };
+		7F49780E2CEC369800560A96 /* AppleVirtMeshBroker.xpc in CopyFiles */ = {isa = PBXBuildFile; fileRef = 7FBFA88F2CE43EA400AB18AC /* AppleVirtMeshBroker.xpc */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		7F6A916D2D2E01580053C8F1 /* ensemblesetup-2nodes.json in Resources */ = {isa = PBXBuildFile; fileRef = 7F6A916C2D2E01580053C8F1 /* ensemblesetup-2nodes.json */; };
+		7FBFA8812CE430CC00AB18AC /* Virtualization.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7FBFA8802CE430CC00AB18AC /* Virtualization.framework */; platformFilters = (ios, macos, ); };
+		811C70192D36E4B7004CCDA9 /* TcpConnection.mm in Sources */ = {isa = PBXBuildFile; fileRef = 811C70182D36E4B7004CCDA9 /* TcpConnection.mm */; };
+		811C70212D36E931004CCDA9 /* Optional.h in Headers */ = {isa = PBXBuildFile; fileRef = 811C70162D36E4B7004CCDA9 /* Optional.h */; };
+		811C70222D36E931004CCDA9 /* TcpConnection.h in Headers */ = {isa = PBXBuildFile; fileRef = 811C70172D36E4B7004CCDA9 /* TcpConnection.h */; };
+		811C70232D372FCF004CCDA9 /* Optional.h in Headers */ = {isa = PBXBuildFile; fileRef = 811C70162D36E4B7004CCDA9 /* Optional.h */; };
+		811C70242D372FCF004CCDA9 /* TcpConnection.h in Headers */ = {isa = PBXBuildFile; fileRef = 811C70172D36E4B7004CCDA9 /* TcpConnection.h */; };
+		811C70252D372FDD004CCDA9 /* TcpConnection.mm in Sources */ = {isa = PBXBuildFile; fileRef = 811C70182D36E4B7004CCDA9 /* TcpConnection.mm */; };
+		811C73AB2D3ACE0C004CCDA9 /* Handshake.h in Headers */ = {isa = PBXBuildFile; fileRef = 811C73AA2D3ACE0C004CCDA9 /* Handshake.h */; };
+		811C73AC2D3ACE0C004CCDA9 /* Handshake.h in Headers */ = {isa = PBXBuildFile; fileRef = 811C73AA2D3ACE0C004CCDA9 /* Handshake.h */; };
+		817DCEDE2DB8320000F66B92 /* CFPrefsReader.mm in Sources */ = {isa = PBXBuildFile; fileRef = 817DCEDD2DB8320000F66B92 /* CFPrefsReader.mm */; };
+		817DCEDF2DB8320000F66B92 /* CFPrefsReader.h in Headers */ = {isa = PBXBuildFile; fileRef = 817DCEDC2DB8320000F66B92 /* CFPrefsReader.h */; };
+		818F58B62D42C49A003B9BC8 /* PeerConnectionInfo.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 818F58B52D42C488003B9BC8 /* PeerConnectionInfo.hpp */; };
+		81ED061C2D67E43C003DFB3A /* json.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 81ED061B2D67E43C003DFB3A /* json.cpp */; };
+		81ED061F2D680A3C003DFB3A /* plan.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 81ED061E2D680A3C003DFB3A /* plan.cpp */; };
+		81ED09B82D6F7BDE003DFB3A /* Smoketest.mm in Sources */ = {isa = PBXBuildFile; fileRef = 81ED09B72D6F7BDE003DFB3A /* Smoketest.mm */; };
+		926EF8962B05328900D7FA04 /* AppleCIOMeshAPI.mm in Sources */ = {isa = PBXBuildFile; fileRef = 926EF8942B05328900D7FA04 /* AppleCIOMeshAPI.mm */; };
+		926EF8972B05328900D7FA04 /* AppleCIOMeshAPI.h in Headers */ = {isa = PBXBuildFile; fileRef = 926EF8952B05328900D7FA04 /* AppleCIOMeshAPI.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		9285A1AA2AB975C10019292B /* Signpost.h in Headers */ = {isa = PBXBuildFile; fileRef = 9285A1A92AB975C10019292B /* Signpost.h */; };
+		9291E76A2B260E6300D059BE /* AppleCIOMeshConfigSupport.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EADC00052AFC177100EAE9F5 /* AppleCIOMeshConfigSupport.framework */; };
+		92A073832AEAF84900912970 /* AppleCIOMeshPtrQueue.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EA999E902AB66EB8007D1B3E /* AppleCIOMeshPtrQueue.cpp */; };
+		92A321522AE2FC41005E4EFA /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 92A321512AE2FC41005E4EFA /* Metal.framework */; };
+		92C3E3442B1F93FA0018F876 /* AppleCIOMeshAPIPrivate.h in Headers */ = {isa = PBXBuildFile; fileRef = 92C3E3432B1F93FA0018F876 /* AppleCIOMeshAPIPrivate.h */; settings = {ATTRIBUTES = (Private, ); }; };
+		92F083D72B190EB100280C10 /* AppleCIOMeshConfigSupport.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EADC00052AFC177100EAE9F5 /* AppleCIOMeshConfigSupport.framework */; };
+		EA0C4E742AF9DACC002F6973 /* AppleCIOMeshConfigUserClientInterface.h in Headers */ = {isa = PBXBuildFile; fileRef = EA0C4E732AF9DACC002F6973 /* AppleCIOMeshConfigUserClientInterface.h */; };
+		EA0C4E772AFA038B002F6973 /* AppleCIOMeshConfigUserClient.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EA0C4E752AFA038B002F6973 /* AppleCIOMeshConfigUserClient.cpp */; };
+		EA0C4E782AFA038B002F6973 /* AppleCIOMeshConfigUserClient.h in Headers */ = {isa = PBXBuildFile; fileRef = EA0C4E762AFA038B002F6973 /* AppleCIOMeshConfigUserClient.h */; };
+		EA0E10142B0EE9FC00A4BB5A /* CIOBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA0E10132B0EE9F800A4BB5A /* CIOBackend.swift */; };
+		EA0FAEE52AA7AF600005050E /* AppleCIOMeshSharedMemory.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EA0FAEE32AA7AF600005050E /* AppleCIOMeshSharedMemory.cpp */; };
+		EA0FAEE62AA7AF600005050E /* AppleCIOMeshSharedMemory.h in Headers */ = {isa = PBXBuildFile; fileRef = EA0FAEE42AA7AF600005050E /* AppleCIOMeshSharedMemory.h */; };
+		EA104E872B5763BD0024808C /* AppleCIOMeshConfigSupport.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EADC00052AFC177100EAE9F5 /* AppleCIOMeshConfigSupport.framework */; };
+		EA104E882B5763BD0024808C /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 92A321512AE2FC41005E4EFA /* Metal.framework */; };
+		EA104E8A2B5763BD0024808C /* AppleCIOMeshSupport.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0127AFB22731D144004E5FEF /* AppleCIOMeshSupport.framework */; };
+		EA104E8C2B5763BD0024808C /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 593E608B26B2FAF500FBBD66 /* CoreFoundation.framework */; };
+		EA104E8D2B5763BD0024808C /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 593E608D26B2FAFA00FBBD66 /* IOKit.framework */; };
+		EA104E8E2B5763BD0024808C /* libIOReport.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5911DF1626B300F8001CA9EF /* libIOReport.a */; };
+		EA104E962B5763D40024808C /* Main.mm in Sources */ = {isa = PBXBuildFile; fileRef = EA104E792B5761970024808C /* Main.mm */; };
+		EA29A6932AF36A40007C053C /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAE5892C2AF356040098BFAD /* main.swift */; };
+		EA29A69B2AF36E50007C053C /* Client.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA29A6972AF36E50007C053C /* Client.swift */; };
+		EA29A69C2AF36E50007C053C /* Server.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA29A6982AF36E50007C053C /* Server.swift */; };
+		EA2BE3892B5B92E600CE05EA /* AppleCIOMeshHardwarePlatform.h in Headers */ = {isa = PBXBuildFile; fileRef = EA2BE3872B5B92E600CE05EA /* AppleCIOMeshHardwarePlatform.h */; };
+		EA2BE38B2B5B9AF400CE05EA /* AppleCIOMeshHardwarePlatform.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EA2BE38A2B5B9AF400CE05EA /* AppleCIOMeshHardwarePlatform.cpp */; };
+		EA2C4BE82B846B9600A2966F /* AppleCIOMeshConfigSupport.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EADC00052AFC177100EAE9F5 /* AppleCIOMeshConfigSupport.framework */; };
+		EA2C4BE92B846B9600A2966F /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 92A321512AE2FC41005E4EFA /* Metal.framework */; };
+		EA2C4BEB2B846B9600A2966F /* AppleCIOMeshSupport.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0127AFB22731D144004E5FEF /* AppleCIOMeshSupport.framework */; };
+		EA2C4BED2B846B9600A2966F /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 593E608B26B2FAF500FBBD66 /* CoreFoundation.framework */; };
+		EA2C4BEE2B846B9600A2966F /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 593E608D26B2FAFA00FBBD66 /* IOKit.framework */; };
+		EA2C4BEF2B846B9600A2966F /* libIOReport.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5911DF1626B300F8001CA9EF /* libIOReport.a */; };
+		EA2C4BF92B846BE200A2966F /* Main.mm in Sources */ = {isa = PBXBuildFile; fileRef = EA2C4BF52B846BE200A2966F /* Main.mm */; };
+		EA3268E52D40749F006BD5A5 /* ensemblesetup-16n.json in Resources */ = {isa = PBXBuildFile; fileRef = EA3268E42D407497006BD5A5 /* ensemblesetup-16n.json */; };
+		EA49B7A52AA7E14A003B4688 /* AppleCIOMeshThunderboltCommands.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EA49B7A32AA7E14A003B4688 /* AppleCIOMeshThunderboltCommands.cpp */; };
+		EA49B7A62AA7E14A003B4688 /* AppleCIOMeshThunderboltCommands.h in Headers */ = {isa = PBXBuildFile; fileRef = EA49B7A42AA7E14A003B4688 /* AppleCIOMeshThunderboltCommands.h */; };
+		EA49B7AA2AA8EAC8003B4688 /* AppleCIOMeshControlCommand.h in Headers */ = {isa = PBXBuildFile; fileRef = EA49B7A82AA8EAC8003B4688 /* AppleCIOMeshControlCommand.h */; };
+		EA49B7AE2AA95D90003B4688 /* AppleCIOMeshControlPath.h in Headers */ = {isa = PBXBuildFile; fileRef = EA49B7AC2AA95D90003B4688 /* AppleCIOMeshControlPath.h */; };
+		EA4B50142AD0D87900F9D59A /* AppleCIOMeshRxPath.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EA4B50122AD0D87900F9D59A /* AppleCIOMeshRxPath.cpp */; };
+		EA4B50152AD0D87900F9D59A /* AppleCIOMeshRxPath.h in Headers */ = {isa = PBXBuildFile; fileRef = EA4B50132AD0D87900F9D59A /* AppleCIOMeshRxPath.h */; };
+		EA4B50182AD0D91900F9D59A /* AppleCIOMeshTxPath.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EA4B50162AD0D91900F9D59A /* AppleCIOMeshTxPath.cpp */; };
+		EA4B50192AD0D91900F9D59A /* AppleCIOMeshTxPath.h in Headers */ = {isa = PBXBuildFile; fileRef = EA4B50172AD0D91900F9D59A /* AppleCIOMeshTxPath.h */; };
+		EA4B501C2AD2620100F9D59A /* AppleCIOMeshForwarder.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EA4B501A2AD2620100F9D59A /* AppleCIOMeshForwarder.cpp */; };
+		EA4B501D2AD2620100F9D59A /* AppleCIOMeshForwarder.h in Headers */ = {isa = PBXBuildFile; fileRef = EA4B501B2AD2620100F9D59A /* AppleCIOMeshForwarder.h */; };
+		EA4E92082BAB7C0C00C0DD5F /* com.apple.CIOMesh.plist in CopyFiles */ = {isa = PBXBuildFile; fileRef = EA4E92042BAB4D0A00C0DD5F /* com.apple.CIOMesh.plist */; };
+		EA71886D2B927227009A5F02 /* RemoteServiceDiscovery.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EA71886C2B927227009A5F02 /* RemoteServiceDiscovery.framework */; };
+		EA71886E2B927EA3009A5F02 /* ensemblesetup-4nodes.json in Resources */ = {isa = PBXBuildFile; fileRef = 920F23CD2B5BC8E4005F0253 /* ensemblesetup-4nodes.json */; };
+		EA71886F2B927EA3009A5F02 /* ensemblesetup-hypercube.json in Resources */ = {isa = PBXBuildFile; fileRef = EA0C4E722AF95881002F6973 /* ensemblesetup-hypercube.json */; };
+		EA76C9D42B04ADD70074BBAE /* AppleCIOMeshCommandRouter.h in Headers */ = {isa = PBXBuildFile; fileRef = EA76C9D32B04ADD70074BBAE /* AppleCIOMeshCommandRouter.h */; };
+		EA76C9D52B04ADD70074BBAE /* AppleCIOMeshCommandRouter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EA76C9D22B04ADD70074BBAE /* AppleCIOMeshCommandRouter.cpp */; };
+		EA999E932AB66EB8007D1B3E /* AppleCIOMeshPtrQueue.h in Headers */ = {isa = PBXBuildFile; fileRef = EA999E912AB66EB8007D1B3E /* AppleCIOMeshPtrQueue.h */; };
+		EAC827982AA14E7B0070C380 /* AppleCIOMeshProtocolListener.h in Headers */ = {isa = PBXBuildFile; fileRef = EAC827972AA14E7B0070C380 /* AppleCIOMeshProtocolListener.h */; };
+		EAC8279A2AA14EC60070C380 /* AppleCIOMeshProtocolListener.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EAC827992AA14EC60070C380 /* AppleCIOMeshProtocolListener.cpp */; };
+		EAC8279D2AA1513C0070C380 /* ReturnCode.h in Headers */ = {isa = PBXBuildFile; fileRef = EAC8279B2AA1513C0070C380 /* ReturnCode.h */; };
+		EAC8279E2AA1513C0070C380 /* ReturnCode.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EAC8279C2AA1513C0070C380 /* ReturnCode.cpp */; };
+		EAC827A12AA163DD0070C380 /* AppleCIOMeshLink.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EAC8279F2AA163DD0070C380 /* AppleCIOMeshLink.cpp */; };
+		EAC827A22AA163DD0070C380 /* AppleCIOMeshLink.h in Headers */ = {isa = PBXBuildFile; fileRef = EAC827A02AA163DD0070C380 /* AppleCIOMeshLink.h */; };
+		EAC827A52AA1CE370070C380 /* AppleCIOMeshPath.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EAC827A32AA1CE370070C380 /* AppleCIOMeshPath.cpp */; };
+		EAC827A62AA1CE370070C380 /* AppleCIOMeshPath.h in Headers */ = {isa = PBXBuildFile; fileRef = EAC827A42AA1CE370070C380 /* AppleCIOMeshPath.h */; };
+		EAC827AA2AA6EB070070C380 /* AppleCIOMeshUserClient.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EAC827A82AA6EB070070C380 /* AppleCIOMeshUserClient.cpp */; };
+		EAC827AB2AA6EB070070C380 /* AppleCIOMeshUserClient.h in Headers */ = {isa = PBXBuildFile; fileRef = EAC827A92AA6EB070070C380 /* AppleCIOMeshUserClient.h */; };
+		EAD238BC2AD78D02003C0898 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD238BB2AD78D02003C0898 /* main.swift */; };
+		EAD238C52AD887F2003C0898 /* AppleCIOMeshChannel.h in Headers */ = {isa = PBXBuildFile; fileRef = EAD238C32AD887F2003C0898 /* AppleCIOMeshChannel.h */; };
+		EAD238C62AD8A571003C0898 /* AppleCIOMeshControlPath.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EA49B7AB2AA95D90003B4688 /* AppleCIOMeshControlPath.cpp */; };
+		EAD238C72AD8A6A3003C0898 /* AppleCIOMeshControlCommand.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EA49B7A72AA8EAC8003B4688 /* AppleCIOMeshControlCommand.cpp */; };
+		EAD238C82AD8E4C0003C0898 /* AppleCIOMeshChannel.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EAD238C22AD887F2003C0898 /* AppleCIOMeshChannel.cpp */; };
+		EAD54F5E2B08354700E4FFE0 /* EnsembleConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD54F5D2B08353F00E4FFE0 /* EnsembleConfiguration.swift */; };
+		EAD54F602B0839CE00E4FFE0 /* SocketBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD54F5F2B0839CB00E4FFE0 /* SocketBackend.swift */; };
+		EAD54F632B08568100E4FFE0 /* Backend.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD54F622B08568000E4FFE0 /* Backend.swift */; };
+		EAD54F652B09F3BB00E4FFE0 /* String+LocalizedError.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD54F642B09F3B400E4FFE0 /* String+LocalizedError.swift */; };
+		EAD54F682B0C12FC00E4FFE0 /* Router.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD54F672B0C12FA00E4FFE0 /* Router.swift */; };
+		EAD54F6C2B0C1A4E00E4FFE0 /* Router4.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD54F6B2B0C1A4C00E4FFE0 /* Router4.swift */; };
+		EAD54F6E2B0C280A00E4FFE0 /* Router2.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD54F6D2B0C280700E4FFE0 /* Router2.swift */; };
+		EAD54F702B0C910F00E4FFE0 /* Router8.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD54F6F2B0C910D00E4FFE0 /* Router8.swift */; };
+		EAD54F722B0C911F00E4FFE0 /* Router8Hypercube.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD54F712B0C911C00E4FFE0 /* Router8Hypercube.swift */; };
+		EAD54F742B0D908700E4FFE0 /* ControlMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD54F732B0D908300E4FFE0 /* ControlMessage.swift */; };
+		EADC00002AFC177100EAE9F5 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5940A63D25D662BA00009C3F /* IOKit.framework */; };
+		EADC000A2AFC17CA00EAE9F5 /* AppleCIOMeshConfigSupport.h in Headers */ = {isa = PBXBuildFile; fileRef = EADCFFF72AFC175600EAE9F5 /* AppleCIOMeshConfigSupport.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		EADC000D2AFC3CED00EAE9F5 /* AppleCIOMeshConfigServiceRef.mm in Sources */ = {isa = PBXBuildFile; fileRef = EADC000C2AFC3CED00EAE9F5 /* AppleCIOMeshConfigServiceRef.mm */; };
+		EADC000E2AFC3CFC00EAE9F5 /* AppleCIOMeshConfigServiceRef.h in Headers */ = {isa = PBXBuildFile; fileRef = EADC000B2AFC17EA00EAE9F5 /* AppleCIOMeshConfigServiceRef.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		EADCFFFF2AFC177100EAE9F5 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0127AFC02731D342004E5FEF /* Foundation.framework */; };
+		EAF32FDF2AE4AD1D00C224B4 /* AppleCIOMeshSharedMemoryHelpers.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EAF32FDD2AE4AD1D00C224B4 /* AppleCIOMeshSharedMemoryHelpers.cpp */; };
+		EAF32FE02AE4AD1D00C224B4 /* AppleCIOMeshSharedMemoryHelpers.h in Headers */ = {isa = PBXBuildFile; fileRef = EAF32FDE2AE4AD1D00C224B4 /* AppleCIOMeshSharedMemoryHelpers.h */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		0127AFBC2731D1AE004E5FEF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0127AFB12731D144004E5FEF;
+			remoteInfo = AppleCIOMeshSupport;
+		};
+		01E4B0EF2710E428000EDCD0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 598A213525D61614005CF37C;
+			remoteInfo = AppleCIOMesh;
+		};
+		3B5636422ABBC03700C17EE0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0127AFB12731D144004E5FEF;
+			remoteInfo = AppleCIOMeshSupport;
+		};
+		3B5636512ABBC09700C17EE0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3B5636402ABBC03700C17EE0;
+			remoteInfo = llmsim;
+		};
+		7D51BABF2CE55075008DCCB4 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7D51BAB32CE55061008DCCB4;
+			remoteInfo = TestEnsembleMap;
+		};
+		7D51BAC22CE5508B008DCCB4 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0127AFB12731D144004E5FEF;
+			remoteInfo = AppleCIOMeshSupport;
+		};
+		7D58139B2DA4852B0023264A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7D58128A2DA086460023264A;
+			remoteInfo = meshnetworkdaemon;
+		};
+		7D5817692DA7272D0023264A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7D5817592DA7264A0023264A;
+			remoteInfo = MeshNetFramework;
+		};
+		7D58177E2DA72C1B0023264A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7D58176F2DA727970023264A;
+			remoteInfo = MeshNetCtl;
+		};
+		7D5817822DA72F140023264A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7D5817592DA7264A0023264A;
+			remoteInfo = MeshNetFramework;
+		};
+		7DC2FEEA2D02220300F93068 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7DC2FEDF2D012D6300F93068;
+			remoteInfo = ConfigurationUnitTests;
+		};
+		7F111B862D81412C007D076E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7FA453DE2D107ECD00105233;
+			remoteInfo = VirtMesh_Guest;
+		};
+		7F49780B2CEC363B00560A96 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7FBFA88E2CE43EA400AB18AC;
+			remoteInfo = AppleVirtMeshBroker;
+		};
+		7FA453EA2D107EE400105233 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EA29A68A2AF36A34007C053C;
+			remoteInfo = ensembleconfig;
+		};
+		7FA453EC2D107EE900105233 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7F1707FB2CE52B790067BBAB;
+			remoteInfo = AppleVirtMeshIOBridge;
+		};
+		7FA453EE2D107EF400105233 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7F17087A2CE555A70067BBAB;
+			remoteInfo = AppleVirtMesh;
+		};
+		7FA453F02D107EF900105233 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7FBFA88E2CE43EA400AB18AC;
+			remoteInfo = AppleVirtMeshBroker;
+		};
+		7FA453F22D107EFD00105233 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7FBFA86A2CE42E5900AB18AC;
+			remoteInfo = AppleVirtMeshPlugin;
+		};
+		7FA453F42D107F2500105233 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7FA453DE2D107ECD00105233;
+			remoteInfo = VirtMesh_Guest;
+		};
+		7FA453F62D107F2500105233 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7FA453E22D107ED500105233;
+			remoteInfo = VirtMesh_Host;
+		};
+		7FA453F82D107F2500105233 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7FA453E62D107EDE00105233;
+			remoteInfo = VirtMesh_Test;
+		};
+		7FC554A12D5AD1830075E127 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EA104E812B5763BD0024808C;
+			remoteInfo = tmesh;
+		};
+		7FC554A32D5AD1880075E127 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3B5636402ABBC03700C17EE0;
+			remoteInfo = llmsim;
+		};
+		7FDF86962D11AA31000CA8CF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EADCFFF82AFC177100EAE9F5;
+			remoteInfo = AppleCIOMeshConfigSupport;
+		};
+		7FDF86982D11AA31000CA8CF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0127AFB12731D144004E5FEF;
+			remoteInfo = AppleCIOMeshSupport;
+		};
+		9291E76C2B260E6300D059BE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EADCFFF82AFC177100EAE9F5;
+			remoteInfo = AppleCIOMeshConfigSupport;
+		};
+		92F083D52B190E9D00280C10 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EA29A68A2AF36A34007C053C;
+			remoteInfo = ensembleconfig;
+		};
+		EA104E832B5763BD0024808C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0127AFB12731D144004E5FEF;
+			remoteInfo = AppleCIOMeshSupport;
+		};
+		EA104E942B5763C80024808C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EA104E812B5763BD0024808C;
+			remoteInfo = tmesh;
+		};
+		EA2C4BE42B846B9600A2966F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0127AFB12731D144004E5FEF;
+			remoteInfo = AppleCIOMeshSupport;
+		};
+		EA2C4BFA2B85604900A2966F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EA2C4BE22B846B9600A2966F;
+			remoteInfo = cioxfer;
+		};
+		EAD238AF2AD78C47003C0898 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 01E4B0E52710E40D000EDCD0;
+			remoteInfo = base;
+		};
+		EAD238B12AD78C47003C0898 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 01E4B0EB2710E41D000EDCD0;
+			remoteInfo = kext;
+		};
+		EAD54F572B08191000E4FFE0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 01E4B0E52710E40D000EDCD0;
+			remoteInfo = base;
+		};
+		EAD54F592B08191000E4FFE0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 01E4B0EB2710E41D000EDCD0;
+			remoteInfo = kext;
+		};
+		EADC00062AFC17A500EAE9F5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 598A212D25D61614005CF37C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EADCFFF82AFC177100EAE9F5;
+			remoteInfo = AppleCIOMeshConfigSupport;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		3B56364A2ABBC03700C17EE0 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		7D51BAB22CE55061008DCCB4 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = /usr/local/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		7D5812892DA086460023264A /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /System/Library/LaunchDaemons;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		7D58176B2DA7272E0023264A /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D58176E2DA727970023264A /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/local/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		7DC2FEDE2D012D6300F93068 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		7F162B502D4366380068FFCD /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		7F49780D2CEC368600560A96 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 6;
+			files = (
+				7F49780E2CEC369800560A96 /* AppleVirtMeshBroker.xpc in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EA104E732B5207A60024808C /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = /usr/appleinternal/bin;
+			dstSubfolderSpec = 0;
+			files = (
+				EA104E742B5207B60024808C /* run_cablemeshtest.sh in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		EA104E8F2B5763BD0024808C /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		EA2C4BF02B846B9600A2966F /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		EA4E92072BAB7BE300C0DD5F /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = /System/Library/Preferences/Logging/Subsystems;
+			dstSubfolderSpec = 0;
+			files = (
+				EA4E92082BAB7C0C00C0DD5F /* com.apple.CIOMesh.plist in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		EAD238B72AD78D02003C0898 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0127AFB22731D144004E5FEF /* AppleCIOMeshSupport.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = AppleCIOMeshSupport.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		0127AFBA2731D165004E5FEF /* AppleCIOMeshSupport.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshSupport.h; sourceTree = "<group>"; };
+		0127AFC02731D342004E5FEF /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX12.4.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		01BE7B142720949300F98BEE /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
+		01CEE452274305D7002B47C2 /* AppleCIOMeshService.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshService.h; sourceTree = "<group>"; };
+		01CEE45A2743067E002B47C2 /* Config.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Config.h; sourceTree = "<group>"; };
+		01CEE4612743067F002B47C2 /* Compiler.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Compiler.h; sourceTree = "<group>"; };
+		01F7BA012739DE4B00FEC37F /* AppleCIOMeshServiceRef.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = AppleCIOMeshServiceRef.mm; sourceTree = "<group>"; };
+		01F7BA032739DE7700FEC37F /* AppleCIOMeshServiceRef.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshServiceRef.h; sourceTree = "<group>"; };
+		3B56363F2ABBC02D00C17EE0 /* Main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Main.mm; sourceTree = "<group>"; };
+		3B56364E2ABBC03700C17EE0 /* llmsim */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = llmsim; sourceTree = BUILT_PRODUCTS_DIR; };
+		3B56364F2ABBC05B00C17EE0 /* libSystem.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libSystem.tbd; path = usr/lib/libSystem.tbd; sourceTree = SDKROOT; };
+		5911DF1626B300F8001CA9EF /* libIOReport.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libIOReport.a; path = usr/local/lib/libIOReport.a; sourceTree = SDKROOT; };
+		592D33CE25F054B8009DF054 /* Crc32.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Crc32.h; sourceTree = "<group>"; };
+		592D33CF25F054B8009DF054 /* Crc32.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = Crc32.cpp; sourceTree = "<group>"; };
+		593E606C2698AE7700FBBD66 /* SymbolWorkaround.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SymbolWorkaround.h; sourceTree = "<group>"; };
+		593E606D2698AE7700FBBD66 /* Statistics.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = Statistics.cpp; sourceTree = "<group>"; };
+		593E606E2698AE7700FBBD66 /* Log.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Log.h; sourceTree = "<group>"; };
+		593E606F2698AE7700FBBD66 /* Statistics.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Statistics.h; sourceTree = "<group>"; };
+		593E60702698AE7700FBBD66 /* Error.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Error.h; sourceTree = "<group>"; };
+		593E60742698B2C700FBBD66 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		593E608B26B2FAF500FBBD66 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX12.0.sdk/System/Library/Frameworks/CoreFoundation.framework; sourceTree = DEVELOPER_DIR; };
+		593E608D26B2FAFA00FBBD66 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX12.0.sdk/System/Library/Frameworks/IOKit.framework; sourceTree = DEVELOPER_DIR; };
+		593E608F26B2FB0000FBBD66 /* libIOReport.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libIOReport.tbd; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX12.0.sdk/usr/lib/libIOReport.tbd; sourceTree = DEVELOPER_DIR; };
+		5940A63D25D662BA00009C3F /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
+		59716EA3267BA019008BFA38 /* Kernel.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Kernel.framework; path = System/Library/Frameworks/Kernel.framework; sourceTree = SDKROOT; };
+		59822E062694CA6D00D1F40E /* kext.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = kext.xcconfig; sourceTree = "<group>"; };
+		598A213625D61614005CF37C /* AppleCIOMesh.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppleCIOMesh.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		59A66C09260E6CD5002E47C8 /* AppleCIOMeshService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshService.cpp; sourceTree = "<group>"; };
+		7D51BAB42CE55061008DCCB4 /* TestEnsembleMap */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = TestEnsembleMap; sourceTree = BUILT_PRODUCTS_DIR; };
+		7D58128B2DA086460023264A /* meshnetd */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = meshnetd; sourceTree = BUILT_PRODUCTS_DIR; };
+		7D58172D2DA71EB90023264A /* MeshNetTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshNetTypes.swift; sourceTree = "<group>"; };
+		7D58175A2DA7264A0023264A /* MeshNetFramework.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = MeshNetFramework.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		7D5817702DA727970023264A /* MeshNetCtl */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = MeshNetCtl; sourceTree = BUILT_PRODUCTS_DIR; };
+		7DC2FEE02D012D6300F93068 /* ConfigurationUnitTests */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ConfigurationUnitTests; sourceTree = BUILT_PRODUCTS_DIR; };
+		7F162B522D4366380068FFCD /* MeshAPICompatibility */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = MeshAPICompatibility; sourceTree = BUILT_PRODUCTS_DIR; };
+		7F162B612D436CE00068FFCD /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.1.sdk/System/Library/Frameworks/IOKit.framework; sourceTree = DEVELOPER_DIR; };
+		7F1707FC2CE52B790067BBAB /* AppleVirtMeshIOBridge.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppleVirtMeshIOBridge.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		7F17087B2CE555A70067BBAB /* AppleVirtMesh.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppleVirtMesh.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		7F6A916C2D2E01580053C8F1 /* ensemblesetup-2nodes.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "ensemblesetup-2nodes.json"; sourceTree = "<group>"; };
+		7FBFA86B2CE42E5900AB18AC /* com.apple.AppleVirtMeshPlugin.Virtio.vzplugin */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = com.apple.AppleVirtMeshPlugin.Virtio.vzplugin; sourceTree = BUILT_PRODUCTS_DIR; };
+		7FBFA8802CE430CC00AB18AC /* Virtualization.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Virtualization.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.1.Internal.sdk/AppleInternal/Library/Frameworks/Virtualization.framework; sourceTree = DEVELOPER_DIR; };
+		7FBFA88F2CE43EA400AB18AC /* AppleVirtMeshBroker.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = AppleVirtMeshBroker.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
+		811C70162D36E4B7004CCDA9 /* Optional.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Optional.h; sourceTree = "<group>"; };
+		811C70172D36E4B7004CCDA9 /* TcpConnection.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TcpConnection.h; sourceTree = "<group>"; };
+		811C70182D36E4B7004CCDA9 /* TcpConnection.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = TcpConnection.mm; sourceTree = "<group>"; };
+		811C73AA2D3ACE0C004CCDA9 /* Handshake.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Handshake.h; sourceTree = "<group>"; };
+		817DCEDC2DB8320000F66B92 /* CFPrefsReader.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = CFPrefsReader.h; sourceTree = "<group>"; };
+		817DCEDD2DB8320000F66B92 /* CFPrefsReader.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = CFPrefsReader.mm; sourceTree = "<group>"; };
+		818F58B52D42C488003B9BC8 /* PeerConnectionInfo.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = PeerConnectionInfo.hpp; sourceTree = "<group>"; };
+		81ED061A2D67E43C003DFB3A /* json.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = json.h; sourceTree = "<group>"; };
+		81ED061B2D67E43C003DFB3A /* json.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = json.cpp; sourceTree = "<group>"; };
+		81ED061D2D67FF87003DFB3A /* plan.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = plan.h; sourceTree = "<group>"; };
+		81ED061E2D680A3C003DFB3A /* plan.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = plan.cpp; sourceTree = "<group>"; };
+		81ED09B72D6F7BDE003DFB3A /* Smoketest.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Smoketest.mm; sourceTree = "<group>"; };
+		920F23CD2B5BC8E4005F0253 /* ensemblesetup-4nodes.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = "ensemblesetup-4nodes.json"; sourceTree = "<group>"; };
+		920F23CE2B5BC8E4005F0253 /* ensemblesetup-bad.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = "ensemblesetup-bad.json"; sourceTree = "<group>"; };
+		920F23CF2B5BC8E4005F0253 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		920F23D02B5BC8F2005F0253 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		920F23D12B5BC8FD005F0253 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		926EF8942B05328900D7FA04 /* AppleCIOMeshAPI.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; path = AppleCIOMeshAPI.mm; sourceTree = "<group>"; };
+		926EF8952B05328900D7FA04 /* AppleCIOMeshAPI.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshAPI.h; sourceTree = "<group>"; };
+		9285A1A92AB975C10019292B /* Signpost.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Signpost.h; sourceTree = "<group>"; };
+		9285A1AB2AB97A420019292B /* signpost.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = signpost.plist; sourceTree = "<group>"; };
+		92A321512AE2FC41005E4EFA /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		92C3E3432B1F93FA0018F876 /* AppleCIOMeshAPIPrivate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshAPIPrivate.h; sourceTree = "<group>"; };
+		EA0C4E722AF95881002F6973 /* ensemblesetup-hypercube.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "ensemblesetup-hypercube.json"; sourceTree = "<group>"; };
+		EA0C4E732AF9DACC002F6973 /* AppleCIOMeshConfigUserClientInterface.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshConfigUserClientInterface.h; sourceTree = "<group>"; };
+		EA0C4E752AFA038B002F6973 /* AppleCIOMeshConfigUserClient.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshConfigUserClient.cpp; sourceTree = "<group>"; };
+		EA0C4E762AFA038B002F6973 /* AppleCIOMeshConfigUserClient.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshConfigUserClient.h; sourceTree = "<group>"; };
+		EA0C4E7A2AFABDCA002F6973 /* UserClientHelpers.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = UserClientHelpers.h; sourceTree = "<group>"; };
+		EA0E10132B0EE9F800A4BB5A /* CIOBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CIOBackend.swift; sourceTree = "<group>"; };
+		EA0E101A2B131D1300A4BB5A /* ensemblesetup.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = ensemblesetup.json; sourceTree = "<group>"; };
+		EA0FAEE32AA7AF600005050E /* AppleCIOMeshSharedMemory.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshSharedMemory.cpp; sourceTree = "<group>"; };
+		EA0FAEE42AA7AF600005050E /* AppleCIOMeshSharedMemory.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshSharedMemory.h; sourceTree = "<group>"; };
+		EA104E792B5761970024808C /* Main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Main.mm; sourceTree = "<group>"; };
+		EA104E7A2B5761970024808C /* Entitlements.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Entitlements.entitlements; sourceTree = "<group>"; };
+		EA104E7C2B5761CD0024808C /* Entitlements.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; path = Entitlements.entitlements; sourceTree = "<group>"; };
+		EA104E802B57639A0024808C /* Entitlements.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; path = Entitlements.entitlements; sourceTree = "<group>"; };
+		EA104E932B5763BD0024808C /* tmesh */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = tmesh; sourceTree = BUILT_PRODUCTS_DIR; };
+		EA29A6922AF36A34007C053C /* ensembleconfig */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ensembleconfig; sourceTree = BUILT_PRODUCTS_DIR; };
+		EA29A6972AF36E50007C053C /* Client.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Client.swift; sourceTree = "<group>"; };
+		EA29A6982AF36E50007C053C /* Server.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Server.swift; sourceTree = "<group>"; };
+		EA2BE3872B5B92E600CE05EA /* AppleCIOMeshHardwarePlatform.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshHardwarePlatform.h; sourceTree = "<group>"; };
+		EA2BE38A2B5B9AF400CE05EA /* AppleCIOMeshHardwarePlatform.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshHardwarePlatform.cpp; sourceTree = "<group>"; };
+		EA2C4BF42B846B9600A2966F /* cioxfer */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = cioxfer; sourceTree = BUILT_PRODUCTS_DIR; };
+		EA2C4BF52B846BE200A2966F /* Main.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; path = Main.mm; sourceTree = "<group>"; };
+		EA2C4BF62B846BE200A2966F /* Entitlements.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; path = Entitlements.entitlements; sourceTree = "<group>"; };
+		EA2C4BF72B846BE200A2966F /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		EA3268E42D407497006BD5A5 /* ensemblesetup-16n.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "ensemblesetup-16n.json"; sourceTree = "<group>"; };
+		EA38DCAF2AAAF08400F5C88F /* Align.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Align.h; sourceTree = "<group>"; };
+		EA49B7A32AA7E14A003B4688 /* AppleCIOMeshThunderboltCommands.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshThunderboltCommands.cpp; sourceTree = "<group>"; };
+		EA49B7A42AA7E14A003B4688 /* AppleCIOMeshThunderboltCommands.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshThunderboltCommands.h; sourceTree = "<group>"; };
+		EA49B7A72AA8EAC8003B4688 /* AppleCIOMeshControlCommand.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshControlCommand.cpp; sourceTree = "<group>"; };
+		EA49B7A82AA8EAC8003B4688 /* AppleCIOMeshControlCommand.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshControlCommand.h; sourceTree = "<group>"; };
+		EA49B7AB2AA95D90003B4688 /* AppleCIOMeshControlPath.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshControlPath.cpp; sourceTree = "<group>"; };
+		EA49B7AC2AA95D90003B4688 /* AppleCIOMeshControlPath.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshControlPath.h; sourceTree = "<group>"; };
+		EA4B50122AD0D87900F9D59A /* AppleCIOMeshRxPath.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshRxPath.cpp; sourceTree = "<group>"; };
+		EA4B50132AD0D87900F9D59A /* AppleCIOMeshRxPath.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshRxPath.h; sourceTree = "<group>"; };
+		EA4B50162AD0D91900F9D59A /* AppleCIOMeshTxPath.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshTxPath.cpp; sourceTree = "<group>"; };
+		EA4B50172AD0D91900F9D59A /* AppleCIOMeshTxPath.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshTxPath.h; sourceTree = "<group>"; };
+		EA4B501A2AD2620100F9D59A /* AppleCIOMeshForwarder.cpp */ = {isa = PBXFileReference; indentWidth = 2; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshForwarder.cpp; sourceTree = "<group>"; tabWidth = 2; };
+		EA4B501B2AD2620100F9D59A /* AppleCIOMeshForwarder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshForwarder.h; sourceTree = "<group>"; };
+		EA4E92042BAB4D0A00C0DD5F /* com.apple.CIOMesh.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.apple.CIOMesh.plist; sourceTree = "<group>"; };
+		EA57DCC32B4493E40017E54A /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		EA71886C2B927227009A5F02 /* RemoteServiceDiscovery.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RemoteServiceDiscovery.framework; path = System/Library/PrivateFrameworks/RemoteServiceDiscovery.framework; sourceTree = SDKROOT; };
+		EA76C9D22B04ADD70074BBAE /* AppleCIOMeshCommandRouter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshCommandRouter.cpp; sourceTree = "<group>"; };
+		EA76C9D32B04ADD70074BBAE /* AppleCIOMeshCommandRouter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshCommandRouter.h; sourceTree = "<group>"; };
+		EA999E902AB66EB8007D1B3E /* AppleCIOMeshPtrQueue.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshPtrQueue.cpp; sourceTree = "<group>"; };
+		EA999E912AB66EB8007D1B3E /* AppleCIOMeshPtrQueue.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshPtrQueue.h; sourceTree = "<group>"; };
+		EAC827972AA14E7B0070C380 /* AppleCIOMeshProtocolListener.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshProtocolListener.h; sourceTree = "<group>"; };
+		EAC827992AA14EC60070C380 /* AppleCIOMeshProtocolListener.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshProtocolListener.cpp; sourceTree = "<group>"; };
+		EAC8279B2AA1513C0070C380 /* ReturnCode.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ReturnCode.h; sourceTree = "<group>"; };
+		EAC8279C2AA1513C0070C380 /* ReturnCode.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = ReturnCode.cpp; sourceTree = "<group>"; };
+		EAC8279F2AA163DD0070C380 /* AppleCIOMeshLink.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshLink.cpp; sourceTree = "<group>"; };
+		EAC827A02AA163DD0070C380 /* AppleCIOMeshLink.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshLink.h; sourceTree = "<group>"; };
+		EAC827A32AA1CE370070C380 /* AppleCIOMeshPath.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshPath.cpp; sourceTree = "<group>"; };
+		EAC827A42AA1CE370070C380 /* AppleCIOMeshPath.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshPath.h; sourceTree = "<group>"; };
+		EAC827A72AA6EA0F0070C380 /* AppleCIOMeshUserClientInterface.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshUserClientInterface.h; sourceTree = "<group>"; };
+		EAC827A82AA6EB070070C380 /* AppleCIOMeshUserClient.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshUserClient.cpp; sourceTree = "<group>"; };
+		EAC827A92AA6EB070070C380 /* AppleCIOMeshUserClient.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshUserClient.h; sourceTree = "<group>"; };
+		EAD238B92AD78D02003C0898 /* meshsim */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = meshsim; sourceTree = BUILT_PRODUCTS_DIR; };
+		EAD238BB2AD78D02003C0898 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		EAD238C02AD79180003C0898 /* chassissetup.csv */ = {isa = PBXFileReference; lastKnownFileType = text; path = chassissetup.csv; sourceTree = "<group>"; };
+		EAD238C22AD887F2003C0898 /* AppleCIOMeshChannel.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshChannel.cpp; sourceTree = "<group>"; };
+		EAD238C32AD887F2003C0898 /* AppleCIOMeshChannel.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshChannel.h; sourceTree = "<group>"; };
+		EAD54F5D2B08353F00E4FFE0 /* EnsembleConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnsembleConfiguration.swift; sourceTree = "<group>"; };
+		EAD54F5F2B0839CB00E4FFE0 /* SocketBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketBackend.swift; sourceTree = "<group>"; };
+		EAD54F622B08568000E4FFE0 /* Backend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend.swift; sourceTree = "<group>"; };
+		EAD54F642B09F3B400E4FFE0 /* String+LocalizedError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "String+LocalizedError.swift"; sourceTree = "<group>"; };
+		EAD54F672B0C12FA00E4FFE0 /* Router.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Router.swift; sourceTree = "<group>"; };
+		EAD54F6B2B0C1A4C00E4FFE0 /* Router4.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Router4.swift; sourceTree = "<group>"; };
+		EAD54F6D2B0C280700E4FFE0 /* Router2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Router2.swift; sourceTree = "<group>"; };
+		EAD54F6F2B0C910D00E4FFE0 /* Router8.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Router8.swift; sourceTree = "<group>"; };
+		EAD54F712B0C911C00E4FFE0 /* Router8Hypercube.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Router8Hypercube.swift; sourceTree = "<group>"; };
+		EAD54F732B0D908300E4FFE0 /* ControlMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlMessage.swift; sourceTree = "<group>"; };
+		EADC00052AFC177100EAE9F5 /* AppleCIOMeshConfigSupport.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = AppleCIOMeshConfigSupport.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		EADC000B2AFC17EA00EAE9F5 /* AppleCIOMeshConfigServiceRef.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshConfigServiceRef.h; sourceTree = "<group>"; };
+		EADC000C2AFC3CED00EAE9F5 /* AppleCIOMeshConfigServiceRef.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = AppleCIOMeshConfigServiceRef.mm; sourceTree = "<group>"; };
+		EADCFFF72AFC175600EAE9F5 /* AppleCIOMeshConfigSupport.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshConfigSupport.h; sourceTree = "<group>"; };
+		EAE5892C2AF356040098BFAD /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		EAF32FDD2AE4AD1D00C224B4 /* AppleCIOMeshSharedMemoryHelpers.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AppleCIOMeshSharedMemoryHelpers.cpp; sourceTree = "<group>"; };
+		EAF32FDE2AE4AD1D00C224B4 /* AppleCIOMeshSharedMemoryHelpers.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppleCIOMeshSharedMemoryHelpers.h; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		7D51BAC62CE5509A008DCCB4 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				TestEnsembleMap.mm,
+			);
+			target = 7D51BAB32CE55061008DCCB4 /* TestEnsembleMap */;
+		};
+		7F162B5C2D4367AB0068FFCD /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Guest/MeshAPICompatibility/main.cpp,
+			);
+			target = 7F162B512D4366380068FFCD /* MeshAPICompatibility */;
+		};
+		7F17080E2CE52B8D0067BBAB /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Guest/AppleVirtMeshIOBridge/Driver.cpp,
+				Guest/AppleVirtMeshIOBridge/Driver.h,
+				Guest/AppleVirtMeshIOBridge/Interfaces.h,
+				Guest/AppleVirtMeshIOBridge/Transaction.cpp,
+				Guest/AppleVirtMeshIOBridge/Transaction.h,
+				Guest/AppleVirtMeshIOBridge/UserClient.cpp,
+				Guest/AppleVirtMeshIOBridge/UserClient.h,
+				Utils/Log.h,
+				Utils/Message.cpp,
+				Utils/Message.h,
+			);
+			target = 7F1707FB2CE52B790067BBAB /* AppleVirtMeshIOBridge */;
+		};
+		7F1708902CE555CA0067BBAB /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Guest/AppleVirtMesh/Common.h,
+				Guest/AppleVirtMesh/Config.h,
+				Guest/AppleVirtMesh/Driver.cpp,
+				Guest/AppleVirtMesh/Driver.h,
+				Guest/AppleVirtMesh/Interfaces.h,
+				Guest/AppleVirtMesh/SharedMemory.cpp,
+				Guest/AppleVirtMesh/SharedMemory.h,
+				Guest/AppleVirtMesh/UserClient.cpp,
+				Guest/AppleVirtMesh/UserClient.h,
+				Guest/AppleVirtMesh/UserClientConfig.cpp,
+				Guest/AppleVirtMesh/UserClientConfig.h,
+				Guest/AppleVirtMesh/UserClientMain.cpp,
+				Guest/AppleVirtMesh/UserClientMain.h,
+				Guest/AppleVirtMesh/VirtIOChannel.cpp,
+				Guest/AppleVirtMesh/VirtIOChannel.h,
+				Guest/AppleVirtMeshIOBridge/Driver.cpp,
+				Guest/AppleVirtMeshIOBridge/Driver.h,
+				Guest/AppleVirtMeshIOBridge/Interfaces.h,
+				Guest/AppleVirtMeshIOBridge/Transaction.cpp,
+				Guest/AppleVirtMeshIOBridge/Transaction.h,
+				Guest/AppleVirtMeshIOBridge/UserClient.cpp,
+				Guest/AppleVirtMeshIOBridge/UserClient.h,
+				Utils/Message.cpp,
+				Utils/Message.h,
+			);
+			target = 7F17087A2CE555A70067BBAB /* AppleVirtMesh */;
+		};
+		7FBFA87F2CE42F0E00AB18AC /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Host/AppleVirtMeshPlugin/BrokerSubmitter.m,
+				Host/AppleVirtMeshPlugin/IOBridge.mm,
+				Host/AppleVirtMeshPlugin/Plugin.mm,
+				Host/AppleVirtMeshPlugin/PluginMain.mm,
+				Utils/Message.cpp,
+			);
+			target = 7FBFA86A2CE42E5900AB18AC /* AppleVirtMeshPlugin */;
+		};
+		7FBFA89D2CE43EAA00AB18AC /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Host/AppleVirtMeshBroker/BrokerMain.mm,
+			);
+			target = 7FBFA88E2CE43EA400AB18AC /* AppleVirtMeshBroker */;
+		};
+		81CA78702DBACA3300BEAC87 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				bridgingheader.h,
+				tcp_core.h,
+			);
+			target = 7D58128A2DA086460023264A /* meshnetd */;
+		};
+		81CA78732DBACA7600BEAC87 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				TcpConnectionWrapper.h,
+			);
+			target = 7D58176F2DA727970023264A /* MeshNetCtl */;
+		};
+		81CB570D2E01D6A900E76D50 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			privateHeaders = (
+				MeshNetFramework.h,
+			);
+			target = 7D5817592DA7264A0023264A /* MeshNetFramework */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		7D5813982DA484AE0023264A /* PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = 7D5812892DA086460023264A /* CopyFiles */;
+			membershipExceptions = (
+				com.apple.cloudos.meshnetd.plist,
+			);
+		};
+		7F162B5E2D4369400068FFCD /* PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = 7F162B4E2D4366380068FFCD /* Sources */;
+			membershipExceptions = (
+				Guest/AppleVirtMesh/Interfaces.h,
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		7D5112322CDAE13900D0A369 /* UnitTests */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (7D51BAC62CE5509A008DCCB4 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = UnitTests; sourceTree = "<group>"; };
+		7D58128C2DA086460023264A /* MeshNetD */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (81CA78702DBACA3300BEAC87 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, 7D5813982DA484AE0023264A /* PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = MeshNetD; sourceTree = "<group>"; };
+		7D58175B2DA7264A0023264A /* MeshNetFramework */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (81CB570D2E01D6A900E76D50 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = MeshNetFramework; sourceTree = "<group>"; };
+		7D5817722DA7279B0023264A /* MeshNetCtl */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (81CA78732DBACA7600BEAC87 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = MeshNetCtl; sourceTree = "<group>"; };
+		7DC2FEE12D012D6300F93068 /* ConfigurationUnitTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = ConfigurationUnitTests; sourceTree = "<group>"; };
+		7FBFA8792CE42F0300AB18AC /* VirtMesh */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (7FBFA87F2CE42F0E00AB18AC /* PBXFileSystemSynchronizedBuildFileExceptionSet */, 7FBFA89D2CE43EAA00AB18AC /* PBXFileSystemSynchronizedBuildFileExceptionSet */, 7F17080E2CE52B8D0067BBAB /* PBXFileSystemSynchronizedBuildFileExceptionSet */, 7F1708902CE555CA0067BBAB /* PBXFileSystemSynchronizedBuildFileExceptionSet */, 7F162B5C2D4367AB0068FFCD /* PBXFileSystemSynchronizedBuildFileExceptionSet */, 7F162B5E2D4369400068FFCD /* PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = VirtMesh; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		0127AFAF2731D144004E5FEF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7D5817672DA7272D0023264A /* MeshNetFramework.framework in Frameworks */,
+				0127AFC12731D342004E5FEF /* Foundation.framework in Frameworks */,
+				9291E76A2B260E6300D059BE /* AppleCIOMeshConfigSupport.framework in Frameworks */,
+				01F7BA052739E23900FEC37F /* IOKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3B5636452ABBC03700C17EE0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				92F083D72B190EB100280C10 /* AppleCIOMeshConfigSupport.framework in Frameworks */,
+				92A321522AE2FC41005E4EFA /* Metal.framework in Frameworks */,
+				3B5636462ABBC03700C17EE0 /* AppleCIOMeshSupport.framework in Frameworks */,
+				3B5636472ABBC03700C17EE0 /* CoreFoundation.framework in Frameworks */,
+				3B5636482ABBC03700C17EE0 /* IOKit.framework in Frameworks */,
+				3B5636492ABBC03700C17EE0 /* libIOReport.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		598A213325D61614005CF37C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5940A63E25D662BA00009C3F /* IOKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D51BAB12CE55061008DCCB4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7D51BAC12CE55087008DCCB4 /* AppleCIOMeshSupport.framework in Frameworks */,
+				7D51BAB52CE55061008DCCB4 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D5812882DA086460023264A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D5817572DA7264A0023264A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D58176D2DA727970023264A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7D5817802DA72F140023264A /* MeshNetFramework.framework in Frameworks */,
+				7D5817712DA7279B0023264A /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7DC2FEDD2D012D6300F93068 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7F162B4F2D4366380068FFCD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7F162B622D436CE00068FFCD /* IOKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7F1707F92CE52B790067BBAB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7F111B842D80CB15007D076E /* IOKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7F1708782CE555A70067BBAB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7F111B852D80CB1E007D076E /* IOKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7FBFA8682CE42E5900AB18AC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7FBFA8812CE430CC00AB18AC /* Virtualization.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7FBFA88C2CE43EA400AB18AC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CFD8A4B12B3216C400CC1136 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EA104E862B5763BD0024808C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA104E872B5763BD0024808C /* AppleCIOMeshConfigSupport.framework in Frameworks */,
+				EA104E882B5763BD0024808C /* Metal.framework in Frameworks */,
+				EA104E8A2B5763BD0024808C /* AppleCIOMeshSupport.framework in Frameworks */,
+				EA104E8C2B5763BD0024808C /* CoreFoundation.framework in Frameworks */,
+				EA104E8D2B5763BD0024808C /* IOKit.framework in Frameworks */,
+				EA104E8E2B5763BD0024808C /* libIOReport.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EA29A68D2AF36A34007C053C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA71886D2B927227009A5F02 /* RemoteServiceDiscovery.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EA2C4BE72B846B9600A2966F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA2C4BE82B846B9600A2966F /* AppleCIOMeshConfigSupport.framework in Frameworks */,
+				EA2C4BE92B846B9600A2966F /* Metal.framework in Frameworks */,
+				EA2C4BEB2B846B9600A2966F /* AppleCIOMeshSupport.framework in Frameworks */,
+				EA2C4BED2B846B9600A2966F /* CoreFoundation.framework in Frameworks */,
+				EA2C4BEE2B846B9600A2966F /* IOKit.framework in Frameworks */,
+				EA2C4BEF2B846B9600A2966F /* libIOReport.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EAD238B62AD78D02003C0898 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EADCFFFE2AFC177100EAE9F5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EADCFFFF2AFC177100EAE9F5 /* Foundation.framework in Frameworks */,
+				EADC00002AFC177100EAE9F5 /* IOKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0127AFB92731D165004E5FEF /* Framework */ = {
+			isa = PBXGroup;
+			children = (
+				EA4E92062BAB4D1100C0DD5F /* SupportingFiles */,
+				926EF8952B05328900D7FA04 /* AppleCIOMeshAPI.h */,
+				926EF8942B05328900D7FA04 /* AppleCIOMeshAPI.mm */,
+				92C3E3432B1F93FA0018F876 /* AppleCIOMeshAPIPrivate.h */,
+				818F58B52D42C488003B9BC8 /* PeerConnectionInfo.hpp */,
+				0127AFBA2731D165004E5FEF /* AppleCIOMeshSupport.h */,
+				01F7BA032739DE7700FEC37F /* AppleCIOMeshServiceRef.h */,
+				01F7BA012739DE4B00FEC37F /* AppleCIOMeshServiceRef.mm */,
+				817DCEDC2DB8320000F66B92 /* CFPrefsReader.h */,
+				817DCEDD2DB8320000F66B92 /* CFPrefsReader.mm */,
+			);
+			path = Framework;
+			sourceTree = "<group>";
+		};
+		3B56363E2ABBBFC900C17EE0 /* llmsim */ = {
+			isa = PBXGroup;
+			children = (
+				EA104E7D2B5762C50024808C /* SupportingFiles */,
+				3B56363F2ABBC02D00C17EE0 /* Main.mm */,
+				81ED09B72D6F7BDE003DFB3A /* Smoketest.mm */,
+				81ED061A2D67E43C003DFB3A /* json.h */,
+				81ED061B2D67E43C003DFB3A /* json.cpp */,
+				81ED061D2D67FF87003DFB3A /* plan.h */,
+				81ED061E2D680A3C003DFB3A /* plan.cpp */,
+			);
+			path = llmsim;
+			sourceTree = "<group>";
+		};
+		593E60612698A1AD00FBBD66 /* Common */ = {
+			isa = PBXGroup;
+			children = (
+				811C70162D36E4B7004CCDA9 /* Optional.h */,
+				811C70172D36E4B7004CCDA9 /* TcpConnection.h */,
+				811C70182D36E4B7004CCDA9 /* TcpConnection.mm */,
+				811C73AA2D3ACE0C004CCDA9 /* Handshake.h */,
+				EA38DCAF2AAAF08400F5C88F /* Align.h */,
+				01CEE4612743067F002B47C2 /* Compiler.h */,
+				01CEE45A2743067E002B47C2 /* Config.h */,
+				7D58172D2DA71EB90023264A /* MeshNetTypes.swift */,
+			);
+			path = Common;
+			sourceTree = "<group>";
+		};
+		593E60622698A4A300FBBD66 /* Util */ = {
+			isa = PBXGroup;
+			children = (
+				592D33CF25F054B8009DF054 /* Crc32.cpp */,
+				592D33CE25F054B8009DF054 /* Crc32.h */,
+				593E60702698AE7700FBBD66 /* Error.h */,
+				593E606E2698AE7700FBBD66 /* Log.h */,
+				EAC8279C2AA1513C0070C380 /* ReturnCode.cpp */,
+				EAC8279B2AA1513C0070C380 /* ReturnCode.h */,
+				593E606D2698AE7700FBBD66 /* Statistics.cpp */,
+				593E606F2698AE7700FBBD66 /* Statistics.h */,
+				593E606C2698AE7700FBBD66 /* SymbolWorkaround.h */,
+			);
+			path = Util;
+			sourceTree = "<group>";
+		};
+		5940A63C25D662B900009C3F /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				7F162B612D436CE00068FFCD /* IOKit.framework */,
+				7FBFA8802CE430CC00AB18AC /* Virtualization.framework */,
+				EA71886C2B927227009A5F02 /* RemoteServiceDiscovery.framework */,
+				EA57DCC32B4493E40017E54A /* CoreGraphics.framework */,
+				92A321512AE2FC41005E4EFA /* Metal.framework */,
+				3B56364F2ABBC05B00C17EE0 /* libSystem.tbd */,
+				01BE7B142720949300F98BEE /* Foundation.framework */,
+				0127AFC02731D342004E5FEF /* Foundation.framework */,
+				5911DF1626B300F8001CA9EF /* libIOReport.a */,
+				593E608F26B2FB0000FBBD66 /* libIOReport.tbd */,
+				593E608D26B2FAFA00FBBD66 /* IOKit.framework */,
+				593E608B26B2FAF500FBBD66 /* CoreFoundation.framework */,
+				59716EA3267BA019008BFA38 /* Kernel.framework */,
+				5940A63D25D662BA00009C3F /* IOKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		59822E052694CA5800D1F40E /* SupportingFiles */ = {
+			isa = PBXGroup;
+			children = (
+				593E60742698B2C700FBBD66 /* Info.plist */,
+				59822E062694CA6D00D1F40E /* kext.xcconfig */,
+				9285A1AB2AB97A420019292B /* signpost.plist */,
+			);
+			path = SupportingFiles;
+			sourceTree = "<group>";
+		};
+		598A212C25D61614005CF37C = {
+			isa = PBXGroup;
+			children = (
+				7FBFA8792CE42F0300AB18AC /* VirtMesh */,
+				593E60612698A1AD00FBBD66 /* Common */,
+				598A213825D61614005CF37C /* Kext */,
+				0127AFB92731D165004E5FEF /* Framework */,
+				EA0C4E7B2AFC0780002F6973 /* ConfigFramework */,
+				3B56363E2ABBBFC900C17EE0 /* llmsim */,
+				EA104E7B2B5761970024808C /* tmesh */,
+				EA2C4BE12B846B5000A2966F /* cioxfer */,
+				EAE5892B2AF355DB0098BFAD /* ensembleconfig */,
+				EAD238BA2AD78D02003C0898 /* meshsim */,
+				CFD8A4B52B3216C400CC1136 /* cablemeshtest */,
+				7DC2FEE12D012D6300F93068 /* ConfigurationUnitTests */,
+				7D58128C2DA086460023264A /* MeshNetD */,
+				7D58175B2DA7264A0023264A /* MeshNetFramework */,
+				7D5817722DA7279B0023264A /* MeshNetCtl */,
+				598A213725D61614005CF37C /* Products */,
+				5940A63C25D662B900009C3F /* Frameworks */,
+				7D5112322CDAE13900D0A369 /* UnitTests */,
+			);
+			indentWidth = 2;
+			sourceTree = "<group>";
+			tabWidth = 2;
+		};
+		598A213725D61614005CF37C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				598A213625D61614005CF37C /* AppleCIOMesh.kext */,
+				0127AFB22731D144004E5FEF /* AppleCIOMeshSupport.framework */,
+				3B56364E2ABBC03700C17EE0 /* llmsim */,
+				EAD238B92AD78D02003C0898 /* meshsim */,
+				EA29A6922AF36A34007C053C /* ensembleconfig */,
+				EADC00052AFC177100EAE9F5 /* AppleCIOMeshConfigSupport.framework */,
+				EA104E932B5763BD0024808C /* tmesh */,
+				EA2C4BF42B846B9600A2966F /* cioxfer */,
+				7D51BAB42CE55061008DCCB4 /* TestEnsembleMap */,
+				7FBFA86B2CE42E5900AB18AC /* com.apple.AppleVirtMeshPlugin.Virtio.vzplugin */,
+				7FBFA88F2CE43EA400AB18AC /* AppleVirtMeshBroker.xpc */,
+				7F1707FC2CE52B790067BBAB /* AppleVirtMeshIOBridge.kext */,
+				7F17087B2CE555A70067BBAB /* AppleVirtMesh.kext */,
+				7DC2FEE02D012D6300F93068 /* ConfigurationUnitTests */,
+				7F162B522D4366380068FFCD /* MeshAPICompatibility */,
+				7D58128B2DA086460023264A /* meshnetd */,
+				7D58175A2DA7264A0023264A /* MeshNetFramework.framework */,
+				7D5817702DA727970023264A /* MeshNetCtl */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		598A213825D61614005CF37C /* Kext */ = {
+			isa = PBXGroup;
+			children = (
+				593E60622698A4A300FBBD66 /* Util */,
+				59822E052694CA5800D1F40E /* SupportingFiles */,
+				EA999E902AB66EB8007D1B3E /* AppleCIOMeshPtrQueue.cpp */,
+				EA999E912AB66EB8007D1B3E /* AppleCIOMeshPtrQueue.h */,
+				EA76C9D22B04ADD70074BBAE /* AppleCIOMeshCommandRouter.cpp */,
+				EA76C9D32B04ADD70074BBAE /* AppleCIOMeshCommandRouter.h */,
+				EA49B7A72AA8EAC8003B4688 /* AppleCIOMeshControlCommand.cpp */,
+				EA49B7A82AA8EAC8003B4688 /* AppleCIOMeshControlCommand.h */,
+				EA49B7AB2AA95D90003B4688 /* AppleCIOMeshControlPath.cpp */,
+				EA49B7AC2AA95D90003B4688 /* AppleCIOMeshControlPath.h */,
+				EA4B501A2AD2620100F9D59A /* AppleCIOMeshForwarder.cpp */,
+				EA4B501B2AD2620100F9D59A /* AppleCIOMeshForwarder.h */,
+				EAD238C22AD887F2003C0898 /* AppleCIOMeshChannel.cpp */,
+				EAD238C32AD887F2003C0898 /* AppleCIOMeshChannel.h */,
+				EAC8279F2AA163DD0070C380 /* AppleCIOMeshLink.cpp */,
+				EAC827A02AA163DD0070C380 /* AppleCIOMeshLink.h */,
+				EAC827A32AA1CE370070C380 /* AppleCIOMeshPath.cpp */,
+				EAC827A42AA1CE370070C380 /* AppleCIOMeshPath.h */,
+				EA4B50122AD0D87900F9D59A /* AppleCIOMeshRxPath.cpp */,
+				EA4B50132AD0D87900F9D59A /* AppleCIOMeshRxPath.h */,
+				EA4B50162AD0D91900F9D59A /* AppleCIOMeshTxPath.cpp */,
+				EA4B50172AD0D91900F9D59A /* AppleCIOMeshTxPath.h */,
+				EAC827992AA14EC60070C380 /* AppleCIOMeshProtocolListener.cpp */,
+				EAC827972AA14E7B0070C380 /* AppleCIOMeshProtocolListener.h */,
+				EA2BE38A2B5B9AF400CE05EA /* AppleCIOMeshHardwarePlatform.cpp */,
+				EA2BE3872B5B92E600CE05EA /* AppleCIOMeshHardwarePlatform.h */,
+				59A66C09260E6CD5002E47C8 /* AppleCIOMeshService.cpp */,
+				01CEE452274305D7002B47C2 /* AppleCIOMeshService.h */,
+				EA0FAEE32AA7AF600005050E /* AppleCIOMeshSharedMemory.cpp */,
+				EA0FAEE42AA7AF600005050E /* AppleCIOMeshSharedMemory.h */,
+				EAF32FDD2AE4AD1D00C224B4 /* AppleCIOMeshSharedMemoryHelpers.cpp */,
+				EAF32FDE2AE4AD1D00C224B4 /* AppleCIOMeshSharedMemoryHelpers.h */,
+				EA49B7A32AA7E14A003B4688 /* AppleCIOMeshThunderboltCommands.cpp */,
+				EA49B7A42AA7E14A003B4688 /* AppleCIOMeshThunderboltCommands.h */,
+				EAC827A82AA6EB070070C380 /* AppleCIOMeshUserClient.cpp */,
+				EAC827A92AA6EB070070C380 /* AppleCIOMeshUserClient.h */,
+				EAC827A72AA6EA0F0070C380 /* AppleCIOMeshUserClientInterface.h */,
+				EA0C4E752AFA038B002F6973 /* AppleCIOMeshConfigUserClient.cpp */,
+				EA0C4E762AFA038B002F6973 /* AppleCIOMeshConfigUserClient.h */,
+				EA0C4E732AF9DACC002F6973 /* AppleCIOMeshConfigUserClientInterface.h */,
+				9285A1A92AB975C10019292B /* Signpost.h */,
+				EA0C4E7A2AFABDCA002F6973 /* UserClientHelpers.h */,
+			);
+			path = Kext;
+			sourceTree = "<group>";
+		};
+		EA0C4E712AF9585D002F6973 /* SupportingFiles */ = {
+			isa = PBXGroup;
+			children = (
+				EA3268E42D407497006BD5A5 /* ensemblesetup-16n.json */,
+				EA104E802B57639A0024808C /* Entitlements.entitlements */,
+				920F23CF2B5BC8E4005F0253 /* Info.plist */,
+				920F23CD2B5BC8E4005F0253 /* ensemblesetup-4nodes.json */,
+				7F6A916C2D2E01580053C8F1 /* ensemblesetup-2nodes.json */,
+				920F23CE2B5BC8E4005F0253 /* ensemblesetup-bad.json */,
+				EA0C4E722AF95881002F6973 /* ensemblesetup-hypercube.json */,
+				EA0E101A2B131D1300A4BB5A /* ensemblesetup.json */,
+			);
+			path = SupportingFiles;
+			sourceTree = "<group>";
+		};
+		EA0C4E7B2AFC0780002F6973 /* ConfigFramework */ = {
+			isa = PBXGroup;
+			children = (
+				EADCFFF72AFC175600EAE9F5 /* AppleCIOMeshConfigSupport.h */,
+				EADC000B2AFC17EA00EAE9F5 /* AppleCIOMeshConfigServiceRef.h */,
+				EADC000C2AFC3CED00EAE9F5 /* AppleCIOMeshConfigServiceRef.mm */,
+			);
+			path = ConfigFramework;
+			sourceTree = "<group>";
+		};
+		EA104E7B2B5761970024808C /* tmesh */ = {
+			isa = PBXGroup;
+			children = (
+				EA104E7E2B5762D50024808C /* SupportingFiles */,
+				EA104E792B5761970024808C /* Main.mm */,
+			);
+			path = tmesh;
+			sourceTree = "<group>";
+		};
+		EA104E7D2B5762C50024808C /* SupportingFiles */ = {
+			isa = PBXGroup;
+			children = (
+				920F23D12B5BC8FD005F0253 /* Info.plist */,
+				EA104E7C2B5761CD0024808C /* Entitlements.entitlements */,
+			);
+			path = SupportingFiles;
+			sourceTree = "<group>";
+		};
+		EA104E7E2B5762D50024808C /* SupportingFiles */ = {
+			isa = PBXGroup;
+			children = (
+				920F23D02B5BC8F2005F0253 /* Info.plist */,
+				EA104E7A2B5761970024808C /* Entitlements.entitlements */,
+			);
+			path = SupportingFiles;
+			sourceTree = "<group>";
+		};
+		EA29A6942AF36E16007C053C /* cioSocket */ = {
+			isa = PBXGroup;
+			children = (
+				EA29A6972AF36E50007C053C /* Client.swift */,
+				EA29A6982AF36E50007C053C /* Server.swift */,
+			);
+			path = cioSocket;
+			sourceTree = "<group>";
+		};
+		EA2C4BE12B846B5000A2966F /* cioxfer */ = {
+			isa = PBXGroup;
+			children = (
+				EA2C4BF82B846BE200A2966F /* SupportingFiles */,
+				EA2C4BF52B846BE200A2966F /* Main.mm */,
+			);
+			path = cioxfer;
+			sourceTree = "<group>";
+		};
+		EA2C4BF82B846BE200A2966F /* SupportingFiles */ = {
+			isa = PBXGroup;
+			children = (
+				EA2C4BF62B846BE200A2966F /* Entitlements.entitlements */,
+				EA2C4BF72B846BE200A2966F /* Info.plist */,
+			);
+			path = SupportingFiles;
+			sourceTree = "<group>";
+		};
+		EA4E92062BAB4D1100C0DD5F /* SupportingFiles */ = {
+			isa = PBXGroup;
+			children = (
+				EA4E92042BAB4D0A00C0DD5F /* com.apple.CIOMesh.plist */,
+			);
+			path = SupportingFiles;
+			sourceTree = "<group>";
+		};
+		EAD238BA2AD78D02003C0898 /* meshsim */ = {
+			isa = PBXGroup;
+			children = (
+				EAD238C12AD79188003C0898 /* SupportingFiles */,
+				EAD238BB2AD78D02003C0898 /* main.swift */,
+			);
+			path = meshsim;
+			sourceTree = "<group>";
+		};
+		EAD238C12AD79188003C0898 /* SupportingFiles */ = {
+			isa = PBXGroup;
+			children = (
+				EAD238C02AD79180003C0898 /* chassissetup.csv */,
+			);
+			path = SupportingFiles;
+			sourceTree = "<group>";
+		};
+		EAD54F612B08567400E4FFE0 /* Backend */ = {
+			isa = PBXGroup;
+			children = (
+				EAD54F622B08568000E4FFE0 /* Backend.swift */,
+				EAD54F5F2B0839CB00E4FFE0 /* SocketBackend.swift */,
+				EA0E10132B0EE9F800A4BB5A /* CIOBackend.swift */,
+			);
+			path = Backend;
+			sourceTree = "<group>";
+		};
+		EAD54F662B0C12E500E4FFE0 /* Router */ = {
+			isa = PBXGroup;
+			children = (
+				EAD54F672B0C12FA00E4FFE0 /* Router.swift */,
+				EAD54F6D2B0C280700E4FFE0 /* Router2.swift */,
+				EAD54F6B2B0C1A4C00E4FFE0 /* Router4.swift */,
+				EAD54F6F2B0C910D00E4FFE0 /* Router8.swift */,
+				EAD54F712B0C911C00E4FFE0 /* Router8Hypercube.swift */,
+			);
+			path = Router;
+			sourceTree = "<group>";
+		};
+		EAE5892B2AF355DB0098BFAD /* ensembleconfig */ = {
+			isa = PBXGroup;
+			children = (
+				EA0C4E712AF9585D002F6973 /* SupportingFiles */,
+				EAD54F612B08567400E4FFE0 /* Backend */,
+				EAD54F662B0C12E500E4FFE0 /* Router */,
+				EA29A6942AF36E16007C053C /* cioSocket */,
+				EAD54F732B0D908300E4FFE0 /* ControlMessage.swift */,
+				EAD54F5D2B08353F00E4FFE0 /* EnsembleConfiguration.swift */,
+				EAE5892C2AF356040098BFAD /* main.swift */,
+				EAD54F642B09F3B400E4FFE0 /* String+LocalizedError.swift */,
+			);
+			path = ensembleconfig;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXHeadersBuildPhase section */
+		0127AFAD2731D144004E5FEF /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				817DCEDF2DB8320000F66B92 /* CFPrefsReader.h in Headers */,
+				926EF8972B05328900D7FA04 /* AppleCIOMeshAPI.h in Headers */,
+				0127AFBB2731D172004E5FEF /* AppleCIOMeshSupport.h in Headers */,
+				818F58B62D42C49A003B9BC8 /* PeerConnectionInfo.hpp in Headers */,
+				92C3E3442B1F93FA0018F876 /* AppleCIOMeshAPIPrivate.h in Headers */,
+				811C73AC2D3ACE0C004CCDA9 /* Handshake.h in Headers */,
+				01F7BA042739DE7B00FEC37F /* AppleCIOMeshServiceRef.h in Headers */,
+				811C70232D372FCF004CCDA9 /* Optional.h in Headers */,
+				811C70242D372FCF004CCDA9 /* TcpConnection.h in Headers */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		598A213125D61614005CF37C /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA0C4E782AFA038B002F6973 /* AppleCIOMeshConfigUserClient.h in Headers */,
+				EA4B50152AD0D87900F9D59A /* AppleCIOMeshRxPath.h in Headers */,
+				EA0FAEE62AA7AF600005050E /* AppleCIOMeshSharedMemory.h in Headers */,
+				9285A1AA2AB975C10019292B /* Signpost.h in Headers */,
+				EAC827A62AA1CE370070C380 /* AppleCIOMeshPath.h in Headers */,
+				EA76C9D42B04ADD70074BBAE /* AppleCIOMeshCommandRouter.h in Headers */,
+				EAC8279D2AA1513C0070C380 /* ReturnCode.h in Headers */,
+				EA49B7AA2AA8EAC8003B4688 /* AppleCIOMeshControlCommand.h in Headers */,
+				EAC827AB2AA6EB070070C380 /* AppleCIOMeshUserClient.h in Headers */,
+				EA4B501D2AD2620100F9D59A /* AppleCIOMeshForwarder.h in Headers */,
+				EA49B7AE2AA95D90003B4688 /* AppleCIOMeshControlPath.h in Headers */,
+				EAC827A22AA163DD0070C380 /* AppleCIOMeshLink.h in Headers */,
+				EA49B7A62AA7E14A003B4688 /* AppleCIOMeshThunderboltCommands.h in Headers */,
+				EAC827982AA14E7B0070C380 /* AppleCIOMeshProtocolListener.h in Headers */,
+				EAD238C52AD887F2003C0898 /* AppleCIOMeshChannel.h in Headers */,
+				EA0C4E742AF9DACC002F6973 /* AppleCIOMeshConfigUserClientInterface.h in Headers */,
+				EA999E932AB66EB8007D1B3E /* AppleCIOMeshPtrQueue.h in Headers */,
+				EA2BE3892B5B92E600CE05EA /* AppleCIOMeshHardwarePlatform.h in Headers */,
+				EAF32FE02AE4AD1D00C224B4 /* AppleCIOMeshSharedMemoryHelpers.h in Headers */,
+				592D33D025F054B8009DF054 /* Crc32.h in Headers */,
+				EA4B50192AD0D91900F9D59A /* AppleCIOMeshTxPath.h in Headers */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D5817552DA7264A0023264A /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7F1707F72CE52B790067BBAB /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7F1708762CE555A70067BBAB /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		81CA786F2DBACA3300BEAC87 /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		81CA78722DBACA7600BEAC87 /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EADCFFF92AFC177100EAE9F5 /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EADC000E2AFC3CFC00EAE9F5 /* AppleCIOMeshConfigServiceRef.h in Headers */,
+				811C73AB2D3ACE0C004CCDA9 /* Handshake.h in Headers */,
+				EADC000A2AFC17CA00EAE9F5 /* AppleCIOMeshConfigSupport.h in Headers */,
+				811C70212D36E931004CCDA9 /* Optional.h in Headers */,
+				811C70222D36E931004CCDA9 /* TcpConnection.h in Headers */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXHeadersBuildPhase section */
+
+/* Begin PBXNativeTarget section */
+		0127AFB12731D144004E5FEF /* AppleCIOMeshSupport */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0127AFB82731D144004E5FEF /* Build configuration list for PBXNativeTarget "AppleCIOMeshSupport" */;
+			buildPhases = (
+				0127AFAD2731D144004E5FEF /* Headers */,
+				0127AFAE2731D144004E5FEF /* Sources */,
+				0127AFAF2731D144004E5FEF /* Frameworks */,
+				0127AFB02731D144004E5FEF /* Resources */,
+				EA4E92072BAB7BE300C0DD5F /* CopyFiles */,
+				7D58176B2DA7272E0023264A /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				9291E76D2B260E6300D059BE /* PBXTargetDependency */,
+				7D58176A2DA7272D0023264A /* PBXTargetDependency */,
+			);
+			name = AppleCIOMeshSupport;
+			productName = AppleCIOMeshSupport;
+			productReference = 0127AFB22731D144004E5FEF /* AppleCIOMeshSupport.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+		3B5636402ABBC03700C17EE0 /* llmsim */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3B56364B2ABBC03700C17EE0 /* Build configuration list for PBXNativeTarget "llmsim" */;
+			buildPhases = (
+				3B5636432ABBC03700C17EE0 /* Sources */,
+				3B5636452ABBC03700C17EE0 /* Frameworks */,
+				3B56364A2ABBC03700C17EE0 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				3B5636412ABBC03700C17EE0 /* PBXTargetDependency */,
+			);
+			name = llmsim;
+			productName = ringstat;
+			productReference = 3B56364E2ABBC03700C17EE0 /* llmsim */;
+			productType = "com.apple.product-type.tool";
+		};
+		598A213525D61614005CF37C /* AppleCIOMesh */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 598A214025D61614005CF37C /* Build configuration list for PBXNativeTarget "AppleCIOMesh" */;
+			buildPhases = (
+				598A213125D61614005CF37C /* Headers */,
+				598A213225D61614005CF37C /* Sources */,
+				598A213325D61614005CF37C /* Frameworks */,
+				598A213425D61614005CF37C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AppleCIOMesh;
+			productName = AppleCIOMesh;
+			productReference = 598A213625D61614005CF37C /* AppleCIOMesh.kext */;
+			productType = "com.apple.product-type.kernel-extension";
+		};
+		7D51BAB32CE55061008DCCB4 /* TestEnsembleMap */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7D51BABC2CE55061008DCCB4 /* Build configuration list for PBXNativeTarget "TestEnsembleMap" */;
+			buildPhases = (
+				7D51BAB02CE55061008DCCB4 /* Sources */,
+				7D51BAB12CE55061008DCCB4 /* Frameworks */,
+				7D51BAB22CE55061008DCCB4 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7D51BAC32CE5508B008DCCB4 /* PBXTargetDependency */,
+			);
+			name = TestEnsembleMap;
+			packageProductDependencies = (
+			);
+			productName = TestEnsembleMap;
+			productReference = 7D51BAB42CE55061008DCCB4 /* TestEnsembleMap */;
+			productType = "com.apple.product-type.tool";
+		};
+		7D58128A2DA086460023264A /* meshnetd */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7D5812912DA086460023264A /* Build configuration list for PBXNativeTarget "meshnetd" */;
+			buildPhases = (
+				81CA786F2DBACA3300BEAC87 /* Headers */,
+				7D5812872DA086460023264A /* Sources */,
+				7D5812882DA086460023264A /* Frameworks */,
+				7D5812892DA086460023264A /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				7D58128C2DA086460023264A /* MeshNetD */,
+			);
+			name = meshnetd;
+			packageProductDependencies = (
+			);
+			productName = meshnetworkdaemon;
+			productReference = 7D58128B2DA086460023264A /* meshnetd */;
+			productType = "com.apple.product-type.tool";
+		};
+		7D5817592DA7264A0023264A /* MeshNetFramework */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7D5817612DA7264A0023264A /* Build configuration list for PBXNativeTarget "MeshNetFramework" */;
+			buildPhases = (
+				7D5817552DA7264A0023264A /* Headers */,
+				7D5817562DA7264A0023264A /* Sources */,
+				7D5817572DA7264A0023264A /* Frameworks */,
+				7D5817582DA7264A0023264A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				7D58175B2DA7264A0023264A /* MeshNetFramework */,
+			);
+			name = MeshNetFramework;
+			packageProductDependencies = (
+			);
+			productName = MeshNetFramework;
+			productReference = 7D58175A2DA7264A0023264A /* MeshNetFramework.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+		7D58176F2DA727970023264A /* MeshNetCtl */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7D5817782DA7279B0023264A /* Build configuration list for PBXNativeTarget "MeshNetCtl" */;
+			buildPhases = (
+				81CA78722DBACA7600BEAC87 /* Headers */,
+				7D58176C2DA727970023264A /* Sources */,
+				7D58176D2DA727970023264A /* Frameworks */,
+				7D58176E2DA727970023264A /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7D5817832DA72F140023264A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				7D5817722DA7279B0023264A /* MeshNetCtl */,
+			);
+			name = MeshNetCtl;
+			packageProductDependencies = (
+			);
+			productName = MeshNetCtl;
+			productReference = 7D5817702DA727970023264A /* MeshNetCtl */;
+			productType = "com.apple.product-type.tool";
+		};
+		7DC2FEDF2D012D6300F93068 /* ConfigurationUnitTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7DC2FEE42D012D6300F93068 /* Build configuration list for PBXNativeTarget "ConfigurationUnitTests" */;
+			buildPhases = (
+				7DC2FEDC2D012D6300F93068 /* Sources */,
+				7DC2FEDD2D012D6300F93068 /* Frameworks */,
+				7DC2FEDE2D012D6300F93068 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				7DC2FEE12D012D6300F93068 /* ConfigurationUnitTests */,
+			);
+			name = ConfigurationUnitTests;
+			packageProductDependencies = (
+			);
+			productName = ConfigurationUnitTests;
+			productReference = 7DC2FEE02D012D6300F93068 /* ConfigurationUnitTests */;
+			productType = "com.apple.product-type.tool";
+		};
+		7F162B512D4366380068FFCD /* MeshAPICompatibility */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7F162B562D4366380068FFCD /* Build configuration list for PBXNativeTarget "MeshAPICompatibility" */;
+			buildPhases = (
+				7F162B4E2D4366380068FFCD /* Sources */,
+				7F162B4F2D4366380068FFCD /* Frameworks */,
+				7F162B502D4366380068FFCD /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MeshAPICompatibility;
+			productName = MeshAPICompatibility;
+			productReference = 7F162B522D4366380068FFCD /* MeshAPICompatibility */;
+			productType = "com.apple.product-type.tool";
+		};
+		7F1707FB2CE52B790067BBAB /* AppleVirtMeshIOBridge */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7F1708032CE52B790067BBAB /* Build configuration list for PBXNativeTarget "AppleVirtMeshIOBridge" */;
+			buildPhases = (
+				7F1707F72CE52B790067BBAB /* Headers */,
+				7F1707F82CE52B790067BBAB /* Sources */,
+				7F1707F92CE52B790067BBAB /* Frameworks */,
+				7F1707FA2CE52B790067BBAB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AppleVirtMeshIOBridge;
+			productName = AppleVirtMeshBridge;
+			productReference = 7F1707FC2CE52B790067BBAB /* AppleVirtMeshIOBridge.kext */;
+			productType = "com.apple.product-type.kernel-extension";
+		};
+		7F17087A2CE555A70067BBAB /* AppleVirtMesh */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7F1708822CE555A70067BBAB /* Build configuration list for PBXNativeTarget "AppleVirtMesh" */;
+			buildPhases = (
+				7F1708762CE555A70067BBAB /* Headers */,
+				7F1708772CE555A70067BBAB /* Sources */,
+				7F1708782CE555A70067BBAB /* Frameworks */,
+				7F1708792CE555A70067BBAB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AppleVirtMesh;
+			productName = AppleVirtMesh;
+			productReference = 7F17087B2CE555A70067BBAB /* AppleVirtMesh.kext */;
+			productType = "com.apple.product-type.kernel-extension";
+		};
+		7FBFA86A2CE42E5900AB18AC /* AppleVirtMeshPlugin */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7FBFA8722CE42E5900AB18AC /* Build configuration list for PBXNativeTarget "AppleVirtMeshPlugin" */;
+			buildPhases = (
+				7FBFA8672CE42E5900AB18AC /* Sources */,
+				7FBFA8682CE42E5900AB18AC /* Frameworks */,
+				7FBFA8692CE42E5900AB18AC /* Resources */,
+				7F49780D2CEC368600560A96 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7F49780C2CEC363B00560A96 /* PBXTargetDependency */,
+			);
+			name = AppleVirtMeshPlugin;
+			productName = AppleVirtMeshPlugin;
+			productReference = 7FBFA86B2CE42E5900AB18AC /* com.apple.AppleVirtMeshPlugin.Virtio.vzplugin */;
+			productType = "com.apple.product-type.xpc-service";
+		};
+		7FBFA88E2CE43EA400AB18AC /* AppleVirtMeshBroker */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7FBFA8952CE43EA400AB18AC /* Build configuration list for PBXNativeTarget "AppleVirtMeshBroker" */;
+			buildPhases = (
+				7FBFA88B2CE43EA400AB18AC /* Sources */,
+				7FBFA88C2CE43EA400AB18AC /* Frameworks */,
+				7FBFA88D2CE43EA400AB18AC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AppleVirtMeshBroker;
+			productName = AppleVirtMeshBroker;
+			productReference = 7FBFA88F2CE43EA400AB18AC /* AppleVirtMeshBroker.xpc */;
+			productType = "com.apple.product-type.xpc-service";
+		};
+		CFD8A4B32B3216C400CC1136 /* cablemeshtest */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CFD8A4BA2B3216C400CC1136 /* Build configuration list for PBXNativeTarget "cablemeshtest" */;
+			buildPhases = (
+				CFD8A4B02B3216C400CC1136 /* Sources */,
+				CFD8A4B12B3216C400CC1136 /* Frameworks */,
+				EA104E732B5207A60024808C /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = cablemeshtest;
+			productName = "ensembleconfig-clone";
+			productReference = CFD8A4B42B3216C400CC1136 /* cablemeshtest */;
+			productType = "com.apple.product-type.tool";
+		};
+		EA104E812B5763BD0024808C /* tmesh */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EA104E902B5763BD0024808C /* Build configuration list for PBXNativeTarget "tmesh" */;
+			buildPhases = (
+				EA104E842B5763BD0024808C /* Sources */,
+				EA104E862B5763BD0024808C /* Frameworks */,
+				EA104E8F2B5763BD0024808C /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				EA104E822B5763BD0024808C /* PBXTargetDependency */,
+			);
+			name = tmesh;
+			productName = ringstat;
+			productReference = EA104E932B5763BD0024808C /* tmesh */;
+			productType = "com.apple.product-type.tool";
+		};
+		EA29A68A2AF36A34007C053C /* ensembleconfig */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EA29A68F2AF36A34007C053C /* Build configuration list for PBXNativeTarget "ensembleconfig" */;
+			buildPhases = (
+				EA29A68B2AF36A34007C053C /* Sources */,
+				EA29A68D2AF36A34007C053C /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ensembleconfig;
+			productName = meshsim;
+			productReference = EA29A6922AF36A34007C053C /* ensembleconfig */;
+			productType = "com.apple.product-type.tool";
+		};
+		EA2C4BE22B846B9600A2966F /* cioxfer */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EA2C4BF12B846B9600A2966F /* Build configuration list for PBXNativeTarget "cioxfer" */;
+			buildPhases = (
+				EA2C4BE52B846B9600A2966F /* Sources */,
+				EA2C4BE72B846B9600A2966F /* Frameworks */,
+				EA2C4BF02B846B9600A2966F /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				EA2C4BE32B846B9600A2966F /* PBXTargetDependency */,
+			);
+			name = cioxfer;
+			productName = ringstat;
+			productReference = EA2C4BF42B846B9600A2966F /* cioxfer */;
+			productType = "com.apple.product-type.tool";
+		};
+		EAD238B82AD78D02003C0898 /* meshsim */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EAD238BD2AD78D02003C0898 /* Build configuration list for PBXNativeTarget "meshsim" */;
+			buildPhases = (
+				EAD238B52AD78D02003C0898 /* Sources */,
+				EAD238B62AD78D02003C0898 /* Frameworks */,
+				EAD238B72AD78D02003C0898 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = meshsim;
+			productName = meshsim;
+			productReference = EAD238B92AD78D02003C0898 /* meshsim */;
+			productType = "com.apple.product-type.tool";
+		};
+		EADCFFF82AFC177100EAE9F5 /* AppleCIOMeshConfigSupport */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EADC00022AFC177100EAE9F5 /* Build configuration list for PBXNativeTarget "AppleCIOMeshConfigSupport" */;
+			buildPhases = (
+				EADCFFF92AFC177100EAE9F5 /* Headers */,
+				EADCFFFC2AFC177100EAE9F5 /* Sources */,
+				EADCFFFE2AFC177100EAE9F5 /* Frameworks */,
+				EADC00012AFC177100EAE9F5 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AppleCIOMeshConfigSupport;
+			productName = AppleCIOMeshConfigSupport;
+			productReference = EADC00052AFC177100EAE9F5 /* AppleCIOMeshConfigSupport.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		598A212D25D61614005CF37C /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1300;
+				TargetAttributes = {
+					0127AFB12731D144004E5FEF = {
+						CreatedOnToolsVersion = 13.2;
+					};
+					01E4B0E52710E40D000EDCD0 = {
+						CreatedOnToolsVersion = 13.2;
+					};
+					01E4B0EB2710E41D000EDCD0 = {
+						CreatedOnToolsVersion = 13.2;
+					};
+					596BC7DF268FE2910036022D = {
+						CreatedOnToolsVersion = 13.0;
+					};
+					598A213525D61614005CF37C = {
+						CreatedOnToolsVersion = 13.0;
+					};
+					7D51BAB32CE55061008DCCB4 = {
+						CreatedOnToolsVersion = 16.0.1;
+					};
+					7D58128A2DA086460023264A = {
+						CreatedOnToolsVersion = 16.0.1;
+					};
+					7D5817592DA7264A0023264A = {
+						CreatedOnToolsVersion = 16.0.1;
+					};
+					7D58176F2DA727970023264A = {
+						CreatedOnToolsVersion = 16.0.1;
+						LastSwiftMigration = 1600;
+					};
+					7DC2FEDF2D012D6300F93068 = {
+						CreatedOnToolsVersion = 16.3;
+					};
+					7F162B512D4366380068FFCD = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					7F1707FB2CE52B790067BBAB = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					7F17087A2CE555A70067BBAB = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					7FA453DE2D107ECD00105233 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					7FA453E22D107ED500105233 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					7FA453E62D107EDE00105233 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					7FBFA86A2CE42E5900AB18AC = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					7FBFA8732CE42EBE00AB18AC = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					7FBFA88E2CE43EA400AB18AC = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					CFD8A4B32B3216C400CC1136 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					EAD238B82AD78D02003C0898 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 598A213025D61614005CF37C /* Build configuration list for PBXProject "AppleCIOMesh" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 598A212C25D61614005CF37C;
+			packageReferences = (
+			);
+			preferredProjectObjectVersion = 50;
+			productRefGroup = 598A213725D61614005CF37C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				596BC7DF268FE2910036022D /* All */,
+				EAD54F552B08191000E4FFE0 /* All_ios */,
+				01E4B0E52710E40D000EDCD0 /* base */,
+				01E4B0EB2710E41D000EDCD0 /* kext */,
+				598A213525D61614005CF37C /* AppleCIOMesh */,
+				0127AFB12731D144004E5FEF /* AppleCIOMeshSupport */,
+				EADCFFF82AFC177100EAE9F5 /* AppleCIOMeshConfigSupport */,
+				3B5636402ABBC03700C17EE0 /* llmsim */,
+				EAD238B82AD78D02003C0898 /* meshsim */,
+				EA29A68A2AF36A34007C053C /* ensembleconfig */,
+				EA104E812B5763BD0024808C /* tmesh */,
+				EA2C4BE22B846B9600A2966F /* cioxfer */,
+				7D51BAB32CE55061008DCCB4 /* TestEnsembleMap */,
+				7FBFA86A2CE42E5900AB18AC /* AppleVirtMeshPlugin */,
+				7FBFA8732CE42EBE00AB18AC /* VirtMesh_All */,
+				7FBFA88E2CE43EA400AB18AC /* AppleVirtMeshBroker */,
+				7F1707FB2CE52B790067BBAB /* AppleVirtMeshIOBridge */,
+				7F17087A2CE555A70067BBAB /* AppleVirtMesh */,
+				7DC2FEDF2D012D6300F93068 /* ConfigurationUnitTests */,
+				7FA453DE2D107ECD00105233 /* VirtMesh_Guest */,
+				7FA453E22D107ED500105233 /* VirtMesh_Host */,
+				7FA453E62D107EDE00105233 /* VirtMesh_Test */,
+				7F162B512D4366380068FFCD /* MeshAPICompatibility */,
+				7D58128A2DA086460023264A /* meshnetd */,
+				7D5817592DA7264A0023264A /* MeshNetFramework */,
+				7D58176F2DA727970023264A /* MeshNetCtl */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		0127AFB02731D144004E5FEF /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		598A213425D61614005CF37C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D5817582DA7264A0023264A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7F1707FA2CE52B790067BBAB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7F1708792CE555A70067BBAB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7FBFA8692CE42E5900AB18AC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7FBFA88D2CE43EA400AB18AC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EADC00012AFC177100EAE9F5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA3268E52D40749F006BD5A5 /* ensemblesetup-16n.json in Resources */,
+				EA71886E2B927EA3009A5F02 /* ensemblesetup-4nodes.json in Resources */,
+				7F6A916D2D2E01580053C8F1 /* ensemblesetup-2nodes.json in Resources */,
+				EA71886F2B927EA3009A5F02 /* ensemblesetup-hypercube.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0127AFAE2731D144004E5FEF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				817DCEDE2DB8320000F66B92 /* CFPrefsReader.mm in Sources */,
+				811C70252D372FDD004CCDA9 /* TcpConnection.mm in Sources */,
+				01F7BA022739DE4B00FEC37F /* AppleCIOMeshServiceRef.mm in Sources */,
+				926EF8962B05328900D7FA04 /* AppleCIOMeshAPI.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3B5636432ABBC03700C17EE0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3BD422992ABBC17C0068318D /* Main.mm in Sources */,
+				81ED09B82D6F7BDE003DFB3A /* Smoketest.mm in Sources */,
+				81ED061C2D67E43C003DFB3A /* json.cpp in Sources */,
+				81ED061F2D680A3C003DFB3A /* plan.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		598A213225D61614005CF37C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA76C9D52B04ADD70074BBAE /* AppleCIOMeshCommandRouter.cpp in Sources */,
+				EAC827AA2AA6EB070070C380 /* AppleCIOMeshUserClient.cpp in Sources */,
+				593E60712698AE7E00FBBD66 /* Statistics.cpp in Sources */,
+				EAC8279E2AA1513C0070C380 /* ReturnCode.cpp in Sources */,
+				EAC827A52AA1CE370070C380 /* AppleCIOMeshPath.cpp in Sources */,
+				EAD238C62AD8A571003C0898 /* AppleCIOMeshControlPath.cpp in Sources */,
+				EAC8279A2AA14EC60070C380 /* AppleCIOMeshProtocolListener.cpp in Sources */,
+				593E60672698ADD500FBBD66 /* AppleCIOMeshService.cpp in Sources */,
+				593E606B2698ADD500FBBD66 /* Crc32.cpp in Sources */,
+				EAD238C72AD8A6A3003C0898 /* AppleCIOMeshControlCommand.cpp in Sources */,
+				EA49B7A52AA7E14A003B4688 /* AppleCIOMeshThunderboltCommands.cpp in Sources */,
+				EA0C4E772AFA038B002F6973 /* AppleCIOMeshConfigUserClient.cpp in Sources */,
+				EA4B501C2AD2620100F9D59A /* AppleCIOMeshForwarder.cpp in Sources */,
+				EA2BE38B2B5B9AF400CE05EA /* AppleCIOMeshHardwarePlatform.cpp in Sources */,
+				EAD238C82AD8E4C0003C0898 /* AppleCIOMeshChannel.cpp in Sources */,
+				EA0FAEE52AA7AF600005050E /* AppleCIOMeshSharedMemory.cpp in Sources */,
+				EAC827A12AA163DD0070C380 /* AppleCIOMeshLink.cpp in Sources */,
+				EA4B50182AD0D91900F9D59A /* AppleCIOMeshTxPath.cpp in Sources */,
+				92A073832AEAF84900912970 /* AppleCIOMeshPtrQueue.cpp in Sources */,
+				EA4B50142AD0D87900F9D59A /* AppleCIOMeshRxPath.cpp in Sources */,
+				EAF32FDF2AE4AD1D00C224B4 /* AppleCIOMeshSharedMemoryHelpers.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D51BAB02CE55061008DCCB4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D5812872DA086460023264A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7D58152C2DA58F240023264A /* TcpConnection.mm in Sources */,
+				7D58172E2DA71EB90023264A /* MeshNetTypes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D5817562DA7264A0023264A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7D5817662DA726990023264A /* MeshNetTypes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7D58176C2DA727970023264A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7D5817EA2DA9AD1D0023264A /* TcpConnection.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7DC2FEDC2D012D6300F93068 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7F162B4E2D4366380068FFCD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7F162B5F2D43695A0068FFCD /* AppleCIOMeshUserClientInterface.h in Sources */,
+				7F162B602D43695A0068FFCD /* AppleCIOMeshConfigUserClientInterface.h in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7F1707F82CE52B790067BBAB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7F1708772CE555A70067BBAB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7FBFA8672CE42E5900AB18AC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7FBFA88B2CE43EA400AB18AC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CFD8A4B02B3216C400CC1136 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CF5E20152B506FC2005C2EBD /* CIOBackend.swift in Sources */,
+				CFE8C8FD2B44F12B0036F482 /* Client.swift in Sources */,
+				CFE8C8FE2B44F12B0036F482 /* Server.swift in Sources */,
+				CFE8C8FC2B44F0B90036F482 /* String+LocalizedError.swift in Sources */,
+				CFE8C8FB2B44EEA20036F482 /* EnsembleConfiguration.swift in Sources */,
+				CFE8C8F92B44EACE0036F482 /* Backend.swift in Sources */,
+				CFE8C9022B4607780036F482 /* SocketBackendHelper.swift in Sources */,
+				CFE8C8FA2B44EACE0036F482 /* SocketBackend.swift in Sources */,
+				CFE8C9042B4611050036F482 /* Errors.swift in Sources */,
+				CFD8A4B72B3216C400CC1136 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EA104E842B5763BD0024808C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA104E962B5763D40024808C /* Main.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EA29A68B2AF36A34007C053C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA0E10142B0EE9FC00A4BB5A /* CIOBackend.swift in Sources */,
+				EAD54F6E2B0C280A00E4FFE0 /* Router2.swift in Sources */,
+				EAD54F742B0D908700E4FFE0 /* ControlMessage.swift in Sources */,
+				EAD54F682B0C12FC00E4FFE0 /* Router.swift in Sources */,
+				EA29A69C2AF36E50007C053C /* Server.swift in Sources */,
+				EAD54F5E2B08354700E4FFE0 /* EnsembleConfiguration.swift in Sources */,
+				EAD54F632B08568100E4FFE0 /* Backend.swift in Sources */,
+				EA29A69B2AF36E50007C053C /* Client.swift in Sources */,
+				EAD54F652B09F3BB00E4FFE0 /* String+LocalizedError.swift in Sources */,
+				EA29A6932AF36A40007C053C /* main.swift in Sources */,
+				EAD54F6C2B0C1A4E00E4FFE0 /* Router4.swift in Sources */,
+				EAD54F722B0C911F00E4FFE0 /* Router8Hypercube.swift in Sources */,
+				EAD54F602B0839CE00E4FFE0 /* SocketBackend.swift in Sources */,
+				EAD54F702B0C910F00E4FFE0 /* Router8.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EA2C4BE52B846B9600A2966F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA2C4BF92B846BE200A2966F /* Main.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EAD238B52AD78D02003C0898 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EAD238BC2AD78D02003C0898 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EADCFFFC2AFC177100EAE9F5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EADC000D2AFC3CED00EAE9F5 /* AppleCIOMeshConfigServiceRef.mm in Sources */,
+				811C70192D36E4B7004CCDA9 /* TcpConnection.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		0127AFBD2731D1AE004E5FEF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0127AFB12731D144004E5FEF /* AppleCIOMeshSupport */;
+			targetProxy = 0127AFBC2731D1AE004E5FEF /* PBXContainerItemProxy */;
+		};
+		01E4B0F02710E428000EDCD0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 598A213525D61614005CF37C /* AppleCIOMesh */;
+			targetProxy = 01E4B0EF2710E428000EDCD0 /* PBXContainerItemProxy */;
+		};
+		3B5636412ABBC03700C17EE0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0127AFB12731D144004E5FEF /* AppleCIOMeshSupport */;
+			targetProxy = 3B5636422ABBC03700C17EE0 /* PBXContainerItemProxy */;
+		};
+		3B5636522ABBC09700C17EE0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 3B5636402ABBC03700C17EE0 /* llmsim */;
+			targetProxy = 3B5636512ABBC09700C17EE0 /* PBXContainerItemProxy */;
+		};
+		7D51BAC02CE55075008DCCB4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7D51BAB32CE55061008DCCB4 /* TestEnsembleMap */;
+			targetProxy = 7D51BABF2CE55075008DCCB4 /* PBXContainerItemProxy */;
+		};
+		7D51BAC32CE5508B008DCCB4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilters = (
+				ios,
+				macos,
+			);
+			target = 0127AFB12731D144004E5FEF /* AppleCIOMeshSupport */;
+			targetProxy = 7D51BAC22CE5508B008DCCB4 /* PBXContainerItemProxy */;
+		};
+		7D58139C2DA4852B0023264A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7D58128A2DA086460023264A /* meshnetd */;
+			targetProxy = 7D58139B2DA4852B0023264A /* PBXContainerItemProxy */;
+		};
+		7D58176A2DA7272D0023264A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7D5817592DA7264A0023264A /* MeshNetFramework */;
+			targetProxy = 7D5817692DA7272D0023264A /* PBXContainerItemProxy */;
+		};
+		7D58177F2DA72C1B0023264A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7D58176F2DA727970023264A /* MeshNetCtl */;
+			targetProxy = 7D58177E2DA72C1B0023264A /* PBXContainerItemProxy */;
+		};
+		7D5817832DA72F140023264A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7D5817592DA7264A0023264A /* MeshNetFramework */;
+			targetProxy = 7D5817822DA72F140023264A /* PBXContainerItemProxy */;
+		};
+		7DC2FEEB2D02220300F93068 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7DC2FEDF2D012D6300F93068 /* ConfigurationUnitTests */;
+			targetProxy = 7DC2FEEA2D02220300F93068 /* PBXContainerItemProxy */;
+		};
+		7F111B872D81412C007D076E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7FA453DE2D107ECD00105233 /* VirtMesh_Guest */;
+			targetProxy = 7F111B862D81412C007D076E /* PBXContainerItemProxy */;
+		};
+		7F49780C2CEC363B00560A96 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7FBFA88E2CE43EA400AB18AC /* AppleVirtMeshBroker */;
+			targetProxy = 7F49780B2CEC363B00560A96 /* PBXContainerItemProxy */;
+		};
+		7FA453EB2D107EE400105233 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EA29A68A2AF36A34007C053C /* ensembleconfig */;
+			targetProxy = 7FA453EA2D107EE400105233 /* PBXContainerItemProxy */;
+		};
+		7FA453ED2D107EE900105233 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7F1707FB2CE52B790067BBAB /* AppleVirtMeshIOBridge */;
+			targetProxy = 7FA453EC2D107EE900105233 /* PBXContainerItemProxy */;
+		};
+		7FA453EF2D107EF400105233 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7F17087A2CE555A70067BBAB /* AppleVirtMesh */;
+			targetProxy = 7FA453EE2D107EF400105233 /* PBXContainerItemProxy */;
+		};
+		7FA453F12D107EF900105233 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7FBFA88E2CE43EA400AB18AC /* AppleVirtMeshBroker */;
+			targetProxy = 7FA453F02D107EF900105233 /* PBXContainerItemProxy */;
+		};
+		7FA453F32D107EFD00105233 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7FBFA86A2CE42E5900AB18AC /* AppleVirtMeshPlugin */;
+			targetProxy = 7FA453F22D107EFD00105233 /* PBXContainerItemProxy */;
+		};
+		7FA453F52D107F2500105233 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7FA453DE2D107ECD00105233 /* VirtMesh_Guest */;
+			targetProxy = 7FA453F42D107F2500105233 /* PBXContainerItemProxy */;
+		};
+		7FA453F72D107F2500105233 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7FA453E22D107ED500105233 /* VirtMesh_Host */;
+			targetProxy = 7FA453F62D107F2500105233 /* PBXContainerItemProxy */;
+		};
+		7FA453F92D107F2500105233 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7FA453E62D107EDE00105233 /* VirtMesh_Test */;
+			targetProxy = 7FA453F82D107F2500105233 /* PBXContainerItemProxy */;
+		};
+		7FC554A22D5AD1830075E127 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EA104E812B5763BD0024808C /* tmesh */;
+			targetProxy = 7FC554A12D5AD1830075E127 /* PBXContainerItemProxy */;
+		};
+		7FC554A42D5AD1880075E127 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 3B5636402ABBC03700C17EE0 /* llmsim */;
+			targetProxy = 7FC554A32D5AD1880075E127 /* PBXContainerItemProxy */;
+		};
+		7FDF86972D11AA31000CA8CF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EADCFFF82AFC177100EAE9F5 /* AppleCIOMeshConfigSupport */;
+			targetProxy = 7FDF86962D11AA31000CA8CF /* PBXContainerItemProxy */;
+		};
+		7FDF86992D11AA31000CA8CF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0127AFB12731D144004E5FEF /* AppleCIOMeshSupport */;
+			targetProxy = 7FDF86982D11AA31000CA8CF /* PBXContainerItemProxy */;
+		};
+		9291E76D2B260E6300D059BE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EADCFFF82AFC177100EAE9F5 /* AppleCIOMeshConfigSupport */;
+			targetProxy = 9291E76C2B260E6300D059BE /* PBXContainerItemProxy */;
+		};
+		92F083D62B190E9D00280C10 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EA29A68A2AF36A34007C053C /* ensembleconfig */;
+			targetProxy = 92F083D52B190E9D00280C10 /* PBXContainerItemProxy */;
+		};
+		EA104E822B5763BD0024808C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0127AFB12731D144004E5FEF /* AppleCIOMeshSupport */;
+			targetProxy = EA104E832B5763BD0024808C /* PBXContainerItemProxy */;
+		};
+		EA104E952B5763C80024808C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EA104E812B5763BD0024808C /* tmesh */;
+			targetProxy = EA104E942B5763C80024808C /* PBXContainerItemProxy */;
+		};
+		EA2C4BE32B846B9600A2966F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0127AFB12731D144004E5FEF /* AppleCIOMeshSupport */;
+			targetProxy = EA2C4BE42B846B9600A2966F /* PBXContainerItemProxy */;
+		};
+		EA2C4BFB2B85604900A2966F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EA2C4BE22B846B9600A2966F /* cioxfer */;
+			targetProxy = EA2C4BFA2B85604900A2966F /* PBXContainerItemProxy */;
+		};
+		EAD238B02AD78C47003C0898 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 01E4B0E52710E40D000EDCD0 /* base */;
+			targetProxy = EAD238AF2AD78C47003C0898 /* PBXContainerItemProxy */;
+		};
+		EAD238B22AD78C47003C0898 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 01E4B0EB2710E41D000EDCD0 /* kext */;
+			targetProxy = EAD238B12AD78C47003C0898 /* PBXContainerItemProxy */;
+		};
+		EAD54F562B08191000E4FFE0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 01E4B0E52710E40D000EDCD0 /* base */;
+			targetProxy = EAD54F572B08191000E4FFE0 /* PBXContainerItemProxy */;
+		};
+		EAD54F582B08191000E4FFE0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 01E4B0EB2710E41D000EDCD0 /* kext */;
+			targetProxy = EAD54F592B08191000E4FFE0 /* PBXContainerItemProxy */;
+		};
+		EADC00072AFC17A500EAE9F5 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EADCFFF82AFC177100EAE9F5 /* AppleCIOMeshConfigSupport */;
+			targetProxy = EADC00062AFC17A500EAE9F5 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0127AFB62731D144004E5FEF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = /System/Library/PrivateFrameworks;
+				MARKETING_VERSION = 1.0;
+				OTHER_CFLAGS = "-DMACH_ASSERT=1";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.AppleCIOMeshSupport;
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SUPPORTS_TEXT_BASED_API = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TAPI_LANGUAGE = "objective-c++";
+				TAPI_LANGUAGE_STANDARD = "c++17";
+				TAPI_VERIFY_MODE = Pedantic;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Debug;
+		};
+		0127AFB72731D144004E5FEF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = /System/Library/PrivateFrameworks;
+				MARKETING_VERSION = 1.0;
+				OTHER_CFLAGS = "-DMACH_ASSERT=1";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.AppleCIOMeshSupport;
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SUPPORTS_TEXT_BASED_API = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TAPI_LANGUAGE = "objective-c++";
+				TAPI_LANGUAGE_STANDARD = "c++17";
+				TAPI_VERIFY_MODE = Pedantic;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Release;
+		};
+		01E4B0E72710E40D000EDCD0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		01E4B0E82710E40D000EDCD0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+		01E4B0ED2710E41D000EDCD0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		01E4B0EE2710E41D000EDCD0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+		3B56364C2ABBC03700C17EE0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Entitlements.entitlements";
+				INFOPLIST_FILE = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Info.plist";
+				INSTALL_PATH = /usr/appleinternal/bin;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh.llmsim;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SYSTEM_HEADER_SEARCH_PATHS = /Library/Apple/usr/include;
+			};
+			name = Debug;
+		};
+		3B56364D2ABBC03700C17EE0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Entitlements.entitlements";
+				INFOPLIST_FILE = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Info.plist";
+				INSTALL_PATH = /usr/appleinternal/bin;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh.llmsim;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SYSTEM_HEADER_SEARCH_PATHS = /Library/Apple/usr/include;
+			};
+			name = Release;
+		};
+		596BC7E1268FE2910036022D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CLANG_WARN_XNU_TYPED_ALLOCATORS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		596BC7E2268FE2910036022D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CLANG_WARN_XNU_TYPED_ALLOCATORS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+		598A213E25D61614005CF37C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = YES;
+				ARCHS = arm64e;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_ANALYZER_SECURITY_FLOATLOOPCOUNTER = YES;
+				CLANG_ANALYZER_SECURITY_INSECUREAPI_RAND = YES;
+				CLANG_ANALYZER_SECURITY_INSECUREAPI_STRCPY = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_ASSIGN_ENUM = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = NO;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_FRAMEWORK_INCLUDE_PRIVATE_FROM_PUBLIC = NO;
+				CLANG_WARN_IMPLICIT_SIGN_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_IMPLICIT_CONVERSION = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_HIDDEN_VIRTUAL_FUNCTIONS = YES;
+				GCC_WARN_PEDANTIC = NO;
+				GCC_WARN_SIGN_COMPARE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_LABEL = YES;
+				GCC_WARN_UNUSED_PARAMETER = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				OTHER_CFLAGS = "-DMACH_ASSERT=1";
+				SDKROOT = macosx.internal;
+				STRIP_INSTALLED_PRODUCT = NO;
+				SUPPORTED_PLATFORMS = "macosx iphoneos";
+				USER_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/";
+			};
+			name = Debug;
+		};
+		598A213F25D61614005CF37C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = YES;
+				ARCHS = arm64e;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_ANALYZER_SECURITY_FLOATLOOPCOUNTER = YES;
+				CLANG_ANALYZER_SECURITY_INSECUREAPI_RAND = YES;
+				CLANG_ANALYZER_SECURITY_INSECUREAPI_STRCPY = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_ASSIGN_ENUM = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = NO;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_FRAMEWORK_INCLUDE_PRIVATE_FROM_PUBLIC = NO;
+				CLANG_WARN_IMPLICIT_SIGN_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_IMPLICIT_CONVERSION = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_HIDDEN_VIRTUAL_FUNCTIONS = YES;
+				GCC_WARN_PEDANTIC = NO;
+				GCC_WARN_SIGN_COMPARE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_LABEL = YES;
+				GCC_WARN_UNUSED_PARAMETER = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				OTHER_CFLAGS = "-DMACH_ASSERT=1";
+				SDKROOT = macosx.internal;
+				STRIP_INSTALLED_PRODUCT = NO;
+				SUPPORTED_PLATFORMS = "macosx iphoneos";
+				USER_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/";
+			};
+			name = Release;
+		};
+		598A214125D61614005CF37C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;
+				CLANG_WARN_XNU_TYPED_ALLOCATORS = YES_ERROR;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1.0.0;
+				GCC_WARN_SIGN_COMPARE = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "$(PROJECT_DIR)/Kext/SupportingFiles/Info.plist";
+				MARKETING_VERSION = 1.0.0;
+				MODULE_NAME = com.apple.driver.AppleCIOMesh;
+				MODULE_VERSION = 1.0.0d1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				USER_HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Kext",
+				);
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Debug;
+		};
+		598A214225D61614005CF37C /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 59822E062694CA6D00D1F40E /* kext.xcconfig */;
+			buildSettings = {
+				ARCHS = arm64e;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;
+				CLANG_WARN_XNU_TYPED_ALLOCATORS = YES_ERROR;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1.0.0;
+				GCC_WARN_SIGN_COMPARE = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "$(PROJECT_DIR)/Kext/SupportingFiles/Info.plist";
+				MARKETING_VERSION = 1.0.0;
+				MODULE_NAME = com.apple.driver.AppleCIOMesh;
+				MODULE_VERSION = 1.0.0d1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				USER_HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Kext",
+				);
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Release;
+		};
+		7D51BABD2CE55061008DCCB4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				INSTALL_PATH = /usr/appleinternal/bin;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos.internal;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		7D51BABE2CE55061008DCCB4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				INSTALL_PATH = /usr/appleinternal/bin;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos.internal;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		7D58128F2DA086460023264A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = MeshNetD/Entitlements.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				INSTALL_PATH = /usr/libexec;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos.internal;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = MeshNetD/bridgingheader.h;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		7D5812902DA086460023264A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = MeshNetD/Entitlements.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				INSTALL_PATH = /usr/libexec;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos.internal;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = MeshNetD/bridgingheader.h;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		7D5817622DA7264A0023264A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "$(INSTALL_PATH)";
+				ENABLE_MODULE_VERIFIER = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks";
+				LD_RUNPATH_SEARCH_PATHS = "";
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
+				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.MeshNetFramework;
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SDKROOT = iphoneos.internal;
+				SUPPORTS_TEXT_BASED_API = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Debug;
+		};
+		7D5817632DA7264A0023264A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "$(INSTALL_PATH)";
+				ENABLE_MODULE_VERIFIER = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks";
+				LD_RUNPATH_SEARCH_PATHS = "";
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
+				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.MeshNetFramework;
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SDKROOT = iphoneos.internal;
+				SUPPORTS_TEXT_BASED_API = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Release;
+		};
+		7D5817792DA7279B0023264A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = MeshNetCtl/Entitlements.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos.internal;
+				SWIFT_OBJC_BRIDGING_HEADER = MeshNetCtl/bridgingheader.h;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		7D58177A2DA7279B0023264A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = MeshNetCtl/Entitlements.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos.internal;
+				SWIFT_OBJC_BRIDGING_HEADER = MeshNetCtl/bridgingheader.h;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		7DC2FEE52D012D6300F93068 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Entitlements.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh.ConfigurationUnitTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		7DC2FEE62D012D6300F93068 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Entitlements.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh.ConfigurationUnitTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		7F162B572D4366380068FFCD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++23";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.1;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx.internal;
+			};
+			name = Debug;
+		};
+		7F162B582D4366380068FFCD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++23";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.1;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx.internal;
+			};
+			name = Release;
+		};
+		7F1708042CE52B790067BBAB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 59822E062694CA6D00D1F40E /* kext.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++23";
+				CLANG_ENABLE_MODULES = NO;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = NO;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1.0.0;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_TESTABILITY = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					IOKIT_ENABLE_SHARED_PTR,
+					IOKIT_ENABLE_EXPERIMENTAL_SHARED_PTR_IN_API,
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SDKROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders",
+					"$(SRCROOT)",
+					"$(SDKROOT)/System/Library/Frameworks/Kernel.framework/Headers",
+					"$(inherited)",
+				);
+				INFOPLIST_FILE = VirtMesh/Guest/AppleVirtMeshIOBridge/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppleVirtMeshIOBridge;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2024 Apple Inc. All rights reserved.";
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.1;
+				MARKETING_VERSION = 1.0;
+				MODULE_NAME = com.apple.driver.AppleVirtMeshIOBridge;
+				MODULE_VERSION = 1.0.0;
+				OTHER_CFLAGS = "-DMACH_ASSERT=0";
+				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
+				OTHER_TAPI_FLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleVirtMeshIOBridge;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PUBLIC_HEADERS_FOLDER_PATH = /usr/local/include;
+				RUN_CLANG_STATIC_ANALYZER = YES;
+				SDKROOT = iphoneos.internal;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(SDKROOT)/System/Library/PrivateFrameworks",
+					"$(SDKROOT)/Library/Apple/System/Library/PrivateFrameworks",
+					"$(inherited)",
+				);
+				SYSTEM_HEADER_SEARCH_PATHS = "$(inherited)";
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Debug;
+		};
+		7F1708052CE52B790067BBAB /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 59822E062694CA6D00D1F40E /* kext.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++23";
+				CLANG_ENABLE_MODULES = NO;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = NO;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1.0.0;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					IOKIT_ENABLE_SHARED_PTR,
+					IOKIT_ENABLE_EXPERIMENTAL_SHARED_PTR_IN_API,
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SDKROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders",
+					"$(SRCROOT)",
+					"$(SDKROOT)/System/Library/Frameworks/Kernel.framework/Headers",
+					"$(inherited)",
+				);
+				INFOPLIST_FILE = VirtMesh/Guest/AppleVirtMeshIOBridge/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppleVirtMeshIOBridge;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2024 Apple Inc. All rights reserved.";
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.1;
+				MARKETING_VERSION = 1.0;
+				MODULE_NAME = com.apple.driver.AppleVirtMeshIOBridge;
+				MODULE_VERSION = 1.0.0;
+				OTHER_CFLAGS = "-DMACH_ASSERT=0";
+				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
+				OTHER_TAPI_FLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleVirtMeshIOBridge;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PUBLIC_HEADERS_FOLDER_PATH = /usr/local/include;
+				RUN_CLANG_STATIC_ANALYZER = YES;
+				SDKROOT = iphoneos.internal;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(SDKROOT)/System/Library/PrivateFrameworks",
+					"$(SDKROOT)/Library/Apple/System/Library/PrivateFrameworks",
+					"$(inherited)",
+				);
+				SYSTEM_HEADER_SEARCH_PATHS = "$(inherited)";
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Release;
+		};
+		7F1708832CE555A70067BBAB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++23";
+				CLANG_ENABLE_MODULES = NO;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = NO;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1.0.0;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					IOKIT_ENABLE_SHARED_PTR,
+					IOKIT_ENABLE_EXPERIMENTAL_SHARED_PTR_IN_API,
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SDKROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders",
+					"$(SDKROOT)/System/Library/Frameworks/Kernel.framework/Headers",
+					"$(SRCROOT)",
+					"$(inherited)",
+				);
+				INFOPLIST_FILE = VirtMesh/Guest/AppleVirtMesh/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppleVirtMesh;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2024 Apple Inc. All rights reserved.";
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.1;
+				MARKETING_VERSION = 1.0;
+				MODULE_NAME = com.apple.driver.AppleVirtMesh;
+				MODULE_VERSION = 1.0.0;
+				OTHER_CFLAGS = "-DMACH_ASSERT=1";
+				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
+				OTHER_TAPI_FLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleVirtMesh;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				RUN_CLANG_STATIC_ANALYZER = YES;
+				SDKROOT = iphoneos.internal;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(SDKROOT)/System/Library/PrivateFrameworks",
+					"$(SDKROOT)/Library/Apple/System/Library/PrivateFrameworks",
+					"$(inherited)",
+				);
+				SYSTEM_HEADER_SEARCH_PATHS = "$(inherited)";
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Debug;
+		};
+		7F1708842CE555A70067BBAB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++23";
+				CLANG_ENABLE_MODULES = NO;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = NO;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1.0.0;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					IOKIT_ENABLE_SHARED_PTR,
+					IOKIT_ENABLE_EXPERIMENTAL_SHARED_PTR_IN_API,
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SDKROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders",
+					"$(SDKROOT)/System/Library/Frameworks/Kernel.framework/Headers",
+					"$(SRCROOT)",
+					"$(inherited)",
+				);
+				INFOPLIST_FILE = VirtMesh/Guest/AppleVirtMesh/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppleVirtMesh;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2024 Apple Inc. All rights reserved.";
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.1;
+				MARKETING_VERSION = 1.0;
+				MODULE_NAME = com.apple.driver.AppleVirtMesh;
+				MODULE_VERSION = 1.0.0;
+				OTHER_CFLAGS = "-DMACH_ASSERT=1";
+				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
+				OTHER_TAPI_FLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleVirtMesh;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				RUN_CLANG_STATIC_ANALYZER = YES;
+				SDKROOT = iphoneos.internal;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(SDKROOT)/System/Library/PrivateFrameworks",
+					"$(SDKROOT)/Library/Apple/System/Library/PrivateFrameworks",
+					"$(inherited)",
+				);
+				SYSTEM_HEADER_SEARCH_PATHS = "$(inherited)";
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Release;
+		};
+		7FA453E02D107ECD00105233 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		7FA453E12D107ECD00105233 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+		7FA453E42D107ED500105233 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		7FA453E52D107ED500105233 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+		7FA453E82D107EDE00105233 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		7FA453E92D107EDE00105233 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+		7FBFA8702CE42E5900AB18AC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++23";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = NO;
+				CODE_SIGN_ENTITLEMENTS = VirtMesh/Host/AppleVirtMeshPlugin/Plugin.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				FRAMEWORK_SEARCH_PATHS = "$(inherited)";
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VirtMesh/Host/AppleVirtMeshPlugin/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppleVirtMeshPlugin;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = /System/Library/Plugins;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_CFLAGS = (
+					"-DMACH_ASSERT=1",
+					"-DXPC_APP_SERVER=1",
+				);
+				OTHER_TAPI_FLAGS = "-DXPC_APP_SERVER=1";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.AppleVirtMeshPlugin.Virtio;
+				PRODUCT_MODULE_NAME = com.apple.AppleVirtMeshPlugin.Virtio;
+				PRODUCT_NAME = com.apple.AppleVirtMeshPlugin.Virtio;
+				SDKROOT = macosx.internal;
+				SKIP_INSTALL = NO;
+				SUPPORTED_PLATFORMS = macosx;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SYSTEM_HEADER_SEARCH_PATHS = "$(SDKROOT)$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks";
+				WRAPPER_EXTENSION = vzplugin;
+			};
+			name = Debug;
+		};
+		7FBFA8712CE42E5900AB18AC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++23";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = NO;
+				CODE_SIGN_ENTITLEMENTS = VirtMesh/Host/AppleVirtMeshPlugin/Plugin.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				FRAMEWORK_SEARCH_PATHS = "$(inherited)";
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VirtMesh/Host/AppleVirtMeshPlugin/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppleVirtMeshPlugin;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = /System/Library/Plugins;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_CFLAGS = (
+					"-DMACH_ASSERT=1",
+					"-DXPC_APP_SERVER=1",
+				);
+				OTHER_TAPI_FLAGS = "-DXPC_APP_SERVER=1";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.AppleVirtMeshPlugin.Virtio;
+				PRODUCT_MODULE_NAME = com.apple.AppleVirtMeshPlugin.Virtio;
+				PRODUCT_NAME = com.apple.AppleVirtMeshPlugin.Virtio;
+				SDKROOT = macosx.internal;
+				SKIP_INSTALL = NO;
+				SUPPORTED_PLATFORMS = macosx;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SYSTEM_HEADER_SEARCH_PATHS = "$(SDKROOT)$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks";
+				VALIDATE_PRODUCT = YES;
+				WRAPPER_EXTENSION = vzplugin;
+			};
+			name = Release;
+		};
+		7FBFA8752CE42EBE00AB18AC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				OTHER_CFLAGS = "-DMACH_ASSERT=1";
+				OTHER_TAPI_FLAGS = "";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		7FBFA8762CE42EBE00AB18AC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				OTHER_CFLAGS = "-DMACH_ASSERT=1";
+				OTHER_TAPI_FLAGS = "";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+		7FBFA8962CE43EA400AB18AC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++23";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = NO;
+				CODE_SIGN_ENTITLEMENTS = VirtMesh/Host/AppleVirtMeshBroker/Broker.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VirtMesh/Host/AppleVirtMeshBroker/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppleVirtMeshBroker;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = /System/Library/Plugins;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.1;
+				MARKETING_VERSION = 1.0;
+				OTHER_CFLAGS = (
+					"-DMACH_ASSERT=1",
+					"-DXPC_APP_SERVER=1",
+				);
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(OTHER_CFLAGS)",
+					"-DXPC_APP_SERVER=1",
+				);
+				OTHER_TAPI_FLAGS = "-DXPC_APP_SERVER=1";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.AppleVirtMeshBroker;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx.internal;
+				SKIP_INSTALL = NO;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					"$(SDKROOT)/System/Library/PrivateFrameworks",
+					"$(SDKROOT)/Library/Apple/System/Library/PrivateFrameworks",
+				);
+			};
+			name = Debug;
+		};
+		7FBFA8972CE43EA400AB18AC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++23";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = NO;
+				CODE_SIGN_ENTITLEMENTS = VirtMesh/Host/AppleVirtMeshBroker/Broker.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = VirtMesh/Host/AppleVirtMeshBroker/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppleVirtMeshBroker;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = /System/Library/Plugins;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.1;
+				MARKETING_VERSION = 1.0;
+				OTHER_CFLAGS = (
+					"-DMACH_ASSERT=1",
+					"-DXPC_APP_SERVER=1",
+				);
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(OTHER_CFLAGS)",
+					"-DXPC_APP_SERVER=1",
+				);
+				OTHER_TAPI_FLAGS = "-DXPC_APP_SERVER=1";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.AppleVirtMeshBroker;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx.internal;
+				SKIP_INSTALL = NO;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					"$(SDKROOT)/System/Library/PrivateFrameworks",
+					"$(SDKROOT)/Library/Apple/System/Library/PrivateFrameworks",
+				);
+			};
+			name = Release;
+		};
+		CFD8A4B82B3216C400CC1136 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_MASTER_OBJECT_FILE = NO;
+				INSTALL_PATH = /usr/appleinternal/bin;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		CFD8A4B92B3216C400CC1136 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_MASTER_OBJECT_FILE = NO;
+				INSTALL_PATH = /usr/appleinternal/bin;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		EA104E912B5763BD0024808C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Entitlements.entitlements";
+				CODE_SIGN_IDENTITY = "-";
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				HEADER_SEARCH_PATHS = "";
+				INFOPLIST_FILE = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Info.plist";
+				INSTALL_PATH = /usr/bin;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				OTHER_CFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh.tmesh;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx.internal;
+				SYSTEM_HEADER_SEARCH_PATHS = /Library/Apple/usr/include;
+			};
+			name = Debug;
+		};
+		EA104E922B5763BD0024808C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Entitlements.entitlements";
+				CODE_SIGN_IDENTITY = "-";
+				HEADER_SEARCH_PATHS = "";
+				INFOPLIST_FILE = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Info.plist";
+				INSTALL_PATH = /usr/bin;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				OTHER_CFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh.tmesh;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx.internal;
+				SYSTEM_HEADER_SEARCH_PATHS = /Library/Apple/usr/include;
+			};
+			name = Release;
+		};
+		EA29A6902AF36A34007C053C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Entitlements.entitlements";
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				INFOPLIST_FILE = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Info.plist";
+				INSTALL_PATH = /usr/bin;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh.ensembleconfig;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx.internal;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SDKROOT)$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks",
+				);
+			};
+			name = Debug;
+		};
+		EA29A6912AF36A34007C053C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Entitlements.entitlements";
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				INFOPLIST_FILE = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Info.plist";
+				INSTALL_PATH = /usr/bin;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh.ensembleconfig;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx.internal;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SDKROOT)$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks",
+				);
+			};
+			name = Release;
+		};
+		EA2C4BF22B846B9600A2966F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Entitlements.entitlements";
+				CODE_SIGN_IDENTITY = "-";
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				HEADER_SEARCH_PATHS = "";
+				INFOPLIST_FILE = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Info.plist";
+				INSTALL_PATH = /usr/appleinternal/bin;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				OTHER_CFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh.cioxfer;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx.internal;
+				SYSTEM_HEADER_SEARCH_PATHS = /Library/Apple/usr/include;
+			};
+			name = Debug;
+		};
+		EA2C4BF32B846B9600A2966F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_ENTITLEMENTS = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Entitlements.entitlements";
+				CODE_SIGN_IDENTITY = "-";
+				HEADER_SEARCH_PATHS = "";
+				INFOPLIST_FILE = "$(PROJECT_DIR)/$(TARGET_NAME)/SupportingFiles/Info.plist";
+				INSTALL_PATH = /usr/appleinternal/bin;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				OTHER_CFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.driver.AppleCIOMesh.cioxfer;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx.internal;
+				SYSTEM_HEADER_SEARCH_PATHS = /Library/Apple/usr/include;
+			};
+			name = Release;
+		};
+		EAD238BE2AD78D02003C0898 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				INSTALL_PATH = /usr/appleinternal/bin;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		EAD238BF2AD78D02003C0898 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				INSTALL_PATH = /usr/appleinternal/bin;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		EAD54F5B2B08191000E4FFE0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CLANG_WARN_XNU_TYPED_ALLOCATORS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos.internal;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+			};
+			name = Debug;
+		};
+		EAD54F5C2B08191000E4FFE0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CLANG_WARN_XNU_TYPED_ALLOCATORS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos.internal;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+			};
+			name = Release;
+		};
+		EADC00032AFC177100EAE9F5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = /System/Library/PrivateFrameworks;
+				MACH_O_TYPE = mh_dylib;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.AppleCIOMeshConfigSupport;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTS_TEXT_BASED_API = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TAPI_VERIFY_MODE = Pedantic;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Debug;
+		};
+		EADC00042AFC177100EAE9F5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64e;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = /System/Library/PrivateFrameworks;
+				MACH_O_TYPE = mh_dylib;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apple.AppleCIOMeshConfigSupport;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTS_TEXT_BASED_API = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TAPI_VERIFY_MODE = Pedantic;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0127AFB82731D144004E5FEF /* Build configuration list for PBXNativeTarget "AppleCIOMeshSupport" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0127AFB62731D144004E5FEF /* Debug */,
+				0127AFB72731D144004E5FEF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		01E4B0E62710E40D000EDCD0 /* Build configuration list for PBXAggregateTarget "base" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				01E4B0E72710E40D000EDCD0 /* Debug */,
+				01E4B0E82710E40D000EDCD0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		01E4B0EC2710E41D000EDCD0 /* Build configuration list for PBXAggregateTarget "kext" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				01E4B0ED2710E41D000EDCD0 /* Debug */,
+				01E4B0EE2710E41D000EDCD0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3B56364B2ABBC03700C17EE0 /* Build configuration list for PBXNativeTarget "llmsim" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3B56364C2ABBC03700C17EE0 /* Debug */,
+				3B56364D2ABBC03700C17EE0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		596BC7E0268FE2910036022D /* Build configuration list for PBXAggregateTarget "All" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				596BC7E1268FE2910036022D /* Debug */,
+				596BC7E2268FE2910036022D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		598A213025D61614005CF37C /* Build configuration list for PBXProject "AppleCIOMesh" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				598A213E25D61614005CF37C /* Debug */,
+				598A213F25D61614005CF37C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		598A214025D61614005CF37C /* Build configuration list for PBXNativeTarget "AppleCIOMesh" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				598A214125D61614005CF37C /* Debug */,
+				598A214225D61614005CF37C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7D51BABC2CE55061008DCCB4 /* Build configuration list for PBXNativeTarget "TestEnsembleMap" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7D51BABD2CE55061008DCCB4 /* Debug */,
+				7D51BABE2CE55061008DCCB4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7D5812912DA086460023264A /* Build configuration list for PBXNativeTarget "meshnetd" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7D58128F2DA086460023264A /* Debug */,
+				7D5812902DA086460023264A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7D5817612DA7264A0023264A /* Build configuration list for PBXNativeTarget "MeshNetFramework" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7D5817622DA7264A0023264A /* Debug */,
+				7D5817632DA7264A0023264A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7D5817782DA7279B0023264A /* Build configuration list for PBXNativeTarget "MeshNetCtl" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7D5817792DA7279B0023264A /* Debug */,
+				7D58177A2DA7279B0023264A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7DC2FEE42D012D6300F93068 /* Build configuration list for PBXNativeTarget "ConfigurationUnitTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7DC2FEE52D012D6300F93068 /* Debug */,
+				7DC2FEE62D012D6300F93068 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7F162B562D4366380068FFCD /* Build configuration list for PBXNativeTarget "MeshAPICompatibility" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7F162B572D4366380068FFCD /* Debug */,
+				7F162B582D4366380068FFCD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7F1708032CE52B790067BBAB /* Build configuration list for PBXNativeTarget "AppleVirtMeshIOBridge" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7F1708042CE52B790067BBAB /* Debug */,
+				7F1708052CE52B790067BBAB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7F1708822CE555A70067BBAB /* Build configuration list for PBXNativeTarget "AppleVirtMesh" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7F1708832CE555A70067BBAB /* Debug */,
+				7F1708842CE555A70067BBAB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7FA453DF2D107ECD00105233 /* Build configuration list for PBXAggregateTarget "VirtMesh_Guest" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7FA453E02D107ECD00105233 /* Debug */,
+				7FA453E12D107ECD00105233 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7FA453E32D107ED500105233 /* Build configuration list for PBXAggregateTarget "VirtMesh_Host" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7FA453E42D107ED500105233 /* Debug */,
+				7FA453E52D107ED500105233 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7FA453E72D107EDE00105233 /* Build configuration list for PBXAggregateTarget "VirtMesh_Test" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7FA453E82D107EDE00105233 /* Debug */,
+				7FA453E92D107EDE00105233 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7FBFA8722CE42E5900AB18AC /* Build configuration list for PBXNativeTarget "AppleVirtMeshPlugin" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7FBFA8702CE42E5900AB18AC /* Debug */,
+				7FBFA8712CE42E5900AB18AC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7FBFA8742CE42EBE00AB18AC /* Build configuration list for PBXAggregateTarget "VirtMesh_All" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7FBFA8752CE42EBE00AB18AC /* Debug */,
+				7FBFA8762CE42EBE00AB18AC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7FBFA8952CE43EA400AB18AC /* Build configuration list for PBXNativeTarget "AppleVirtMeshBroker" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7FBFA8962CE43EA400AB18AC /* Debug */,
+				7FBFA8972CE43EA400AB18AC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CFD8A4BA2B3216C400CC1136 /* Build configuration list for PBXNativeTarget "cablemeshtest" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CFD8A4B82B3216C400CC1136 /* Debug */,
+				CFD8A4B92B3216C400CC1136 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EA104E902B5763BD0024808C /* Build configuration list for PBXNativeTarget "tmesh" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EA104E912B5763BD0024808C /* Debug */,
+				EA104E922B5763BD0024808C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EA29A68F2AF36A34007C053C /* Build configuration list for PBXNativeTarget "ensembleconfig" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EA29A6902AF36A34007C053C /* Debug */,
+				EA29A6912AF36A34007C053C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EA2C4BF12B846B9600A2966F /* Build configuration list for PBXNativeTarget "cioxfer" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EA2C4BF22B846B9600A2966F /* Debug */,
+				EA2C4BF32B846B9600A2966F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EAD238BD2AD78D02003C0898 /* Build configuration list for PBXNativeTarget "meshsim" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EAD238BE2AD78D02003C0898 /* Debug */,
+				EAD238BF2AD78D02003C0898 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EAD54F5A2B08191000E4FFE0 /* Build configuration list for PBXAggregateTarget "All_ios" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EAD54F5B2B08191000E4FFE0 /* Debug */,
+				EAD54F5C2B08191000E4FFE0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EADC00022AFC177100EAE9F5 /* Build configuration list for PBXNativeTarget "AppleCIOMeshConfigSupport" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EADC00032AFC177100EAE9F5 /* Debug */,
+				EADC00042AFC177100EAE9F5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 598A212D25D61614005CF37C /* Project object */;
+}

@@ -17,6 +17,9 @@
 //  darwinOSBits
 //
 
+import _Builtin_stddef.size_t
+internal import DarwinInitBridging
+
 struct DInitTailSpinConfigSubclassOptions {
 	var subclass_number: UInt8
 	var subclass_enabled: Bool

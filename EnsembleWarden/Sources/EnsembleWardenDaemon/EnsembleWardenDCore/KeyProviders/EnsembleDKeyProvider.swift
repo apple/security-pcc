@@ -26,12 +26,13 @@ package import CryptoKit
 package import Foundation
 private import os
 
+#if canImport(AppleComputeEnsembler)
 package final class EnsembleDKeyProvider: Sendable {
     fileprivate let ensemblerSession: EnsemblerSession
     private let logger = Logger(subsystem: "com.apple.cloudos.ensemblewardend", category: "EnsembleDKeyProvider")
 
     internal init() throws {
-        logger.log("Establishing ensembler session")
+        logger.debug("Establishing ensembler session")
         self.ensemblerSession = try .init()
     }
 }
@@ -43,10 +44,26 @@ extension EnsembleDKeyProvider: KeyProvider {
     }
 
     package func fetch(key: UUID) throws -> SymmetricKey {
-        self.logger.log("Fetching key from ensembled")
+        self.logger.debug("Fetching key from ensembled")
         let key: SymmetricKey = try self.ensemblerSession.getDataKey(token: key)
-        self.logger.log("Fetched key")
+        self.logger.debug("Fetched key")
         return key
     }
 
 }
+#else
+
+package final class EnsembleDKeyProvider: Sendable {
+    internal init() throws { }
+}
+
+extension EnsembleDKeyProvider: KeyProvider {
+    package func fetch(wrappedKey: UUID, requestID: UUID, spanID: UInt64) throws -> AES.GCM.SealedBox {
+        try .init(combined: Data())
+    }
+
+    package func fetch(key: UUID) throws -> SymmetricKey {
+        SymmetricKey(size: .bits256)
+    }
+}
+#endif

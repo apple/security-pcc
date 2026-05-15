@@ -12,14 +12,15 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
-
 import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardJobAPI
+import CloudBoardJobHelperAPI
 import CloudBoardLogging
 import CloudBoardMetrics
 import Foundation
 import os
+import Tracing
 
 struct CloudBoardJobHelperRequestSummary: RequestSummary {
     var operationName: String = "cb_jobhelper response summary"
@@ -43,9 +44,10 @@ struct CloudBoardJobHelperRequestSummary: RequestSummary {
     var receivedSetup: Bool = false
     var receivedParameters: Bool = false
     var requestID: String?
-    var spanID: String?
-    var parentSpanID: String?
+    var spanID: UInt64?
+    var parentSpanID: UInt64?
     var isNack: Bool = false
+    var requestExecutionError: [RequestExecutionSpanError] = []
 
     init() {}
 
@@ -66,8 +68,8 @@ struct CloudBoardJobHelperRequestSummary: RequestSummary {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.spanID ?? "", privacy: .public)
-        tracing.parent_span_id=\(self.parentSpanID ?? "", privacy: .public)
+        tracing.span_id=\(self.spanID?.hexEncoded ?? "", privacy: .public)
+        tracing.parent_span_id=\(self.parentSpanID?.hexEncoded ?? "", privacy: .public)
         tracing.start_time_unix_nano=\(self.startTimeNanos ?? 0, privacy: .public)
         tracing.end_time_unix_nano=\(self.endTimeNanos ?? 0, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
@@ -78,6 +80,7 @@ struct CloudBoardJobHelperRequestSummary: RequestSummary {
         error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
         requestMessageCount=\(self.requestMessageCount, privacy: .public)
         responseMessageCount=\(self.responseMessageCount, privacy: .public)
+        requestExecutionError=\(self.requestExecutionError, privacy: .public)
         """)
     }
 
@@ -157,6 +160,7 @@ struct CloudBoardJobHelperRequestSummary: RequestSummary {
         self.responseMessageCount = span?.attributes.requestSummary.responseChunkAttributes
             .responseMessagesCount ?? 0
         self.responseFinalChunkSeen = span?.attributes.requestSummary.responseChunkAttributes.isFinal ?? false
+        self.requestExecutionError = span?.attributes.requestSummary.requestExecutionErrorAttributes.errors ?? []
         if let error = span?.errors.first {
             self.populate(error: error)
         }
@@ -247,7 +251,7 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         self.logMetadata.requestTrackingID
     }
 
-    var spanID: String? {
+    var spanID: UInt64? {
         self.logMetadata.spanID
     }
 
@@ -261,7 +265,7 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
     var message: StaticString
     var error: Error?
 
-    public init(
+    init(
         logMetadata: CloudBoardJobHelperLogMetadata,
         requestMessageCount: Int = 0,
         responseMessageCount: Int = 0,
@@ -279,7 +283,7 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         }
     }
 
-    public func log(to logger: Logger, level: OSLogType = .default) {
+    func log(to logger: Logger, level: OSLogType = .default) {
         logger.log(level: level, """
         ttl=\(self.type, privacy: .public)
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
@@ -288,7 +292,7 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         tracing.status=\(status?.rawValue ?? "", privacy: .public)
@@ -300,7 +304,7 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         """)
     }
 
-    public func log(workerID: UUID, to logger: Logger, level: OSLogType = .default) {
+    func log(to logger: Logger, keyID: Data?, level: OSLogType = .default) {
         logger.log(level: level, """
         ttl=\(self.type, privacy: .public)
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
@@ -309,7 +313,29 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        tracing.status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        message=\(self.message, privacy: .public)
+        requestMessageCount=\(self.requestMessageCount, privacy: .public)
+        responseMessageCount=\(self.responseMessageCount, privacy: .public)
+        keyID=\(keyID?.base64EncodedString() ?? "", privacy: .public)
+        """)
+    }
+
+    func log(workerID: UUID, to logger: Logger, level: OSLogType = .default) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+        remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
+        request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         tracing.status=\(status?.rawValue ?? "", privacy: .public)
@@ -322,7 +348,7 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         """)
     }
 
-    public func log(workerID: UUID, pccResponseStatus: Int, to logger: Logger, level: OSLogType = .default) {
+    func log(workerID: UUID, pccResponseStatus: Int, to logger: Logger, level: OSLogType = .default) {
         logger.log(level: level, """
         ttl=\(self.type, privacy: .public)
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
@@ -331,7 +357,7 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         tracing.status=\(status?.rawValue ?? "", privacy: .public)
@@ -345,7 +371,7 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         """)
     }
 
-    public func log(
+    func log(
         workerID: UUID,
         grpcStatus: Int,
         grpcMessage: String?,
@@ -362,7 +388,7 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         tracing.status=\(status?.rawValue ?? "", privacy: .public)
@@ -379,10 +405,11 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         """)
     }
 
-    public func log(
+    func log(
         workerID: UUID,
         serviceName: String,
         routingParameters: [String: [String]],
+        groupID: String?,
         to logger: Logger,
         level: OSLogType = .default
     ) {
@@ -394,7 +421,7 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         tracing.status=\(status?.rawValue ?? "", privacy: .public)
@@ -406,6 +433,168 @@ struct WorkloadJobManagerCheckpoint: RequestCheckpoint {
         worker.uuid=\(workerID, privacy: .public)
         worker.serviceName=\(serviceName, privacy: .public)
         worker.routingParameters=\(routingParameters, privacy: .public)
+        worker.groupID=\(groupID ?? "", privacy: .public)
+        """)
+    }
+
+    func log(
+        requestExecutionError: RequestExecutionError?,
+        to logger: Logger,
+        level: OSLogType = .default
+    ) {
+        if let requestExecutionError {
+            logger.log(level: level, """
+            ttl=\(self.type, privacy: .public)
+            jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+            remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
+            request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
+            tracing.name=\(self.operationName, privacy: .public)
+            tracing.type=\(self.type, privacy: .public)
+            tracing.trace_id=\(
+                self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "",
+                privacy: .public
+            )
+            tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+            service.name=\(self.serviceName, privacy: .public)
+            service.namespace=\(self.namespace, privacy: .public)
+            tracing.status=\(status?.rawValue ?? "", privacy: .public)
+            error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+            error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+            message=\(self.message, privacy: .public)
+            requestMessageCount=\(self.requestMessageCount, privacy: .public)
+            responseMessageCount=\(self.responseMessageCount, privacy: .public)
+            requestExecutionError.errorSource=\(requestExecutionError.errorSource, privacy: .public)
+            requestExecutionError.errorMessage=\(requestExecutionError.errorMessage, privacy: .public)
+            requestExecutionError.errorCode=\(requestExecutionError.errorCode, privacy: .public)
+            """)
+        } else {
+            self.log(to: logger, level: level)
+        }
+    }
+
+    func log(
+        subrequestID: UInt32,
+        subresponseStatus: InternalSubresponseStatus,
+        duration: Duration,
+        to logger: Logger,
+        level: OSLogType = .default
+    ) {
+        switch subresponseStatus {
+        case .error(let requestExecutionError):
+            logger.log(level: level, """
+            ttl=\(self.type, privacy: .public)
+            jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+            remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
+            request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
+            tracing.name=\(self.operationName, privacy: .public)
+            tracing.type=\(self.type, privacy: .public)
+            tracing.trace_id=\(
+                self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "",
+                privacy: .public
+            )
+            tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+            service.name=\(self.serviceName, privacy: .public)
+            service.namespace=\(self.namespace, privacy: .public)
+            tracing.status=\(status?.rawValue ?? "", privacy: .public)
+            error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+            error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+            message=\(self.message, privacy: .public)
+            requestMessageCount=\(self.requestMessageCount, privacy: .public)
+            responseMessageCount=\(self.responseMessageCount, privacy: .public)
+            subrequest.id=\(subrequestID, privacy: .public)
+            subrequest.duration_ms=\(Int(duration.milliseconds), privacy: .public)
+            subrequest.status=\("error", privacy: .public)
+            subrequest.requestExecutionError.errorSource=\(requestExecutionError.errorSource, privacy: .public)
+            subrequest.requestExecutionError.errorMessage=\(requestExecutionError.errorMessage, privacy: .public)
+            subrequest.requestExecutionError.errorCode=\(requestExecutionError.errorCode, privacy: .public)
+            """)
+        case .ok, .discarded:
+            logger.log(level: level, """
+            ttl=\(self.type, privacy: .public)
+            jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+            remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
+            request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
+            tracing.name=\(self.operationName, privacy: .public)
+            tracing.type=\(self.type, privacy: .public)
+            tracing.trace_id=\(
+                self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "",
+                privacy: .public
+            )
+            tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+            service.name=\(self.serviceName, privacy: .public)
+            service.namespace=\(self.namespace, privacy: .public)
+            tracing.status=\(status?.rawValue ?? "", privacy: .public)
+            error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+            error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+            message=\(self.message, privacy: .public)
+            requestMessageCount=\(self.requestMessageCount, privacy: .public)
+            responseMessageCount=\(self.responseMessageCount, privacy: .public)
+            subrequest.id=\(subrequestID, privacy: .public)
+            subrequest.duration_ms=\(Int(duration.milliseconds), privacy: .public)
+            subrequest.status=\(subresponseStatus.description, privacy: .public)
+            """)
+        }
+    }
+
+    func log(to logger: Logger, subrequestID: UInt32, level: OSLogType = .default) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+        remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
+        request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        tracing.status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        message=\(self.message, privacy: .public)
+        subrequest.id=\(subrequestID, privacy: .public)
+        """)
+    }
+
+    func log(to logger: Logger, subrequestID: UInt32, cryptoMaterialCount: Int, level: OSLogType = .default) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+        remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
+        request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        tracing.status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        message=\(self.message, privacy: .public)
+        subrequest.id=\(subrequestID, privacy: .public)
+        cryptoMaterialCount=\(cryptoMaterialCount, privacy: .public)
+        """)
+    }
+
+    func log(to logger: Logger, supportAppPID: Int?, cryptoMaterialHandle: UUID, level: OSLogType = .default) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+        remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
+        request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        tracing.status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        message=\(self.message, privacy: .public)
+        supportapp.pid=\(supportAppPID.map { "\($0)" } ?? "", privacy: .public)
+        cryptoMaterialHandle=\(cryptoMaterialHandle.uuidString, privacy: .public)
         """)
     }
 }
@@ -424,7 +613,7 @@ extension WorkloadJobManagerCheckpoint {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         tracing.status=\(status?.rawValue ?? "", privacy: .public)
@@ -454,12 +643,21 @@ extension PipelinePayload {
         case .warmup: return "warmup"
         case .nackAndExit: return "nackAndExit"
         case .parametersMetaData: return "parametersMetaData"
+        case .workerNegotiatePick(providedByRopes: let providedByRopes):
+            // it's all from ROPES or metadata keys, so fine to print in full
+            return "workerNegotiatePick \(providedByRopes)"
         case .workerFound: return "workerFound"
-        case .workerAttestationAndDEK: return "workerAttestationAndDEK"
+        case .selectedWorker: return "workerAttestationAndDEK"
         case .workerResponseChunk: return "workerResponseChunk"
         case .workerResponseSummary: return "workerResponseSummary"
         case .workerResponseClose: return "workerResponseClose"
         case .workerResponseEOF: return "workerResponseEOF"
+        case .openClientSubrequest: return "openClientSubrequest"
+        case .subrequestPayload: return "subrequestPayload"
+        case .closeSubrequest: return "closeSubrequest"
+        case .cancelSubrequest: return "cancelSubrequest"
+        case .applicationDataChunkingConfig: return "applicationDataChunkingConfig"
+        case .readyToSendAssetsMetadataRELEntry: return "readyToSendAssetsMetadataRELEntry"
         }
     }
 }
@@ -476,19 +674,31 @@ extension PipelinePayload: CustomStringConvertible {
         case .teardown: return "teardown"
         case .warmup(let warmup): return "warmup \(warmup)"
         case .nackAndExit: return "nackAndExit"
-        case .parametersMetaData(let keyID): return "parametersMetaData \(keyID)"
-        case .workerFound(let workerID, let releaseDigest, let spanID):
+        case .parametersMetaData(let keyID, _): return "parametersMetaData \(keyID)"
+        case .workerFound(let workerID, let releaseDigest, _):
             return "workerFound (worker: \(workerID), releaseDigest: \(releaseDigest))"
-        case .workerAttestationAndDEK(let info, _):
-            return "workerAttestation (worker: \(info.workerID), keyID: \(info.keyID))"
+        case .selectedWorker(let info, _, let workloadParameters):
+            return "workerAttestation (worker: \(info.workerID), keyID: \(info.keyID), workloadParameters: \(workloadParameters.description)"
         case .workerResponseChunk(let workerID, _): return "workerResponsePayload (worker: \(workerID))"
         case .workerResponseSummary(let workerID, _): return "workerResponseSummary (worker: \(workerID))"
-        case .workerResponseClose(
-            let workerID,
-            let grpcCode,
-            _, let ropesErrorCode, _
-        ): return "workerResponseClose (worker: \(workerID), grpcCode: \(grpcCode), ropesErrorCode: \(ropesErrorCode)"
+        case .workerResponseClose(let workerID, let grpcCode, _, let ropesErrorCode, _):
+            return "workerResponseClose (worker: \(workerID), grpcCode: \(grpcCode), ropesErrorCode: \(ropesErrorCode.map { "\($0)" } ?? "nil"))"
         case .workerResponseEOF(let workerID): return "workerResponseEOF (worker: \(workerID))"
+        case .openClientSubrequest(
+            let subrequestID,
+            let cryptoMaterialsHandle,
+            let isDiscardable
+        ): return "openClientSubrequest (subrequestID: \(subrequestID), cryptoMaterialsHandle: \(cryptoMaterialsHandle), isDiscardable: \(isDiscardable))"
+        case .subrequestPayload(
+            let clientSubrequestId,
+            let chunk
+        ): return "subrequestPayload (clientSubrequestId: \(clientSubrequestId), chunk: \(chunk.count))"
+        case .closeSubrequest(let clientSubrequestId): return "closeSubrequest (clientSubrequestId: \(clientSubrequestId))"
+        case .cancelSubrequest(let clientSubrequestId): return "cancelSubrequest (clientSubrequestId: \(clientSubrequestId))"
+        case .workerNegotiatePick(providedByRopes: let providedByRopes):
+            return "workerNegotiatePick \(providedByRopes)"
+        case .applicationDataChunkingConfig(let config): return "applicationDataChunkingConfig (config: \(config))"
+        case .readyToSendAssetsMetadataRELEntry: return "readyToSendAssetsMetadataRELEntry"
         }
     }
 }
@@ -508,7 +718,7 @@ extension WorkloadJobManagerCheckpoint {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         tracing.status=\(status?.rawValue ?? "", privacy: .public)
@@ -634,13 +844,57 @@ struct CloudboardJobHelperCheckpoint: RequestCheckpoint {
         request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         tracing.status=\(status?.rawValue ?? "", privacy: .public)
         error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
         error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        message=\(self.message, privacy: .public)
+        """)
+    }
+
+    public func log(forCloudApp cloudApp: String, to logger: Logger, level: OSLogType = .default) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+        request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+        tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        tracing.status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        cloudApp=\(cloudApp, privacy: .public)
+        message=\(self.message, privacy: .public)
+        """)
+    }
+
+    public func log(
+        forCloudApp cloudApp: String,
+        forSupportApp supportApp: String,
+        to logger: Logger,
+        level: OSLogType = .default
+    ) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+        request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+        tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        tracing.status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        cloudApp=\(cloudApp, privacy: .public)
+        supportApp=\(supportApp, privacy: .public)
         message=\(self.message, privacy: .public)
         """)
     }

@@ -12,13 +12,12 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardIdentity
 import CloudBoardLogging
 import CloudBoardMetrics
 import Dispatch
 import Foundation
+import GRPCClientConfiguration
 import InternalGRPC
 import Network
 import os
@@ -34,7 +33,7 @@ extension GRPCTLSConfiguration {
         category: "TLSValidator"
     )
 
-    typealias IdentityCallback = @Sendable () -> IdentityManager.ResolvedIdentity?
+    typealias IdentityCallback = @Sendable () throws -> IdentityManager.ResolvedIdentity?
 
     private static let supportedAPRNDomains = ["sdr", "aci-kube"]
 

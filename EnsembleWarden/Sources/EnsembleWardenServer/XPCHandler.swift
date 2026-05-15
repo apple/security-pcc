@@ -26,135 +26,138 @@ private import IOSurface
 private import os
 @_spiOnly import Security_Private.SecTaskPriv
 @_spi(Private) @preconcurrency private import XPC
+private import XPCPrivate
 
 /// Handling of XPC message types
 ///
 /// Takes XPC messages and calls the user's handlers with their nice Swift APIs.
-package struct XPCHandler<UserHandler: EnsembleWardenServerHandler & Sendable>: XPCPeerHandler, Sendable {
-    /// Entitlement that the caller must have been compiled with to auths them.
-    private var entitlement: String
+package struct XPCHandler<UserHandler: EnsembleWardenServerHandler & Sendable, Factory: MetricsFactory>: XPCPeerHandler, Sendable {
     private let handler: UserHandler
     private let logger = Logger(subsystem: "com.apple.cloudos.ensemblewardend", category: "XPCHandler")
+    private let ensembleWardenMetrics: EnsembleWardenMetrics<Factory>
 
-    package init(ensembleWardenHandler: UserHandler, entitlement: String) {
+    package init(ensembleWardenHandler: UserHandler, ensembleWardenMetrics: EnsembleWardenMetrics<Factory>) {
         self.handler = ensembleWardenHandler
-        self.entitlement = entitlement
+        self.ensembleWardenMetrics = ensembleWardenMetrics
     }
 
-    private func handle(startMessage: EnsembleWardenDaemonXPC.Start) async throws -> EnsembleWardenDaemonXPC.Start.Response {
-        handler.start(keyEncryptionKey: startMessage.keyEncryptionKey,
-                      keyID: startMessage.keyID,
-                      requestID: startMessage.requestID,
-                      spanID: startMessage.spanID)
-        return .init()
+    private func handle(startMessage: EnsembleWardenDaemonXPC.Start) async -> EnsembleWardenDaemonXPC.Start.Response {
+        await PrismTracing.withResumed(requestID: startMessage.requestID) {
+            await self.doHandle(startMessage: startMessage)
+        }
     }
 
-    private func handle(publishMessage: EnsembleWardenDaemonXPC.Publish) async throws -> EnsembleWardenDaemonXPC.Publish.Response {
-        try await handler.onPublish(serializedXPCRequest: publishMessage.serializedXPCRequest,
-                                    privateData: publishMessage.ioSurfaces,
-                                    requestID: publishMessage.requestID,
-                                    spanID: .init(uint: publishMessage.spanID))
-        return .init()
-    }
+    private func doHandle(startMessage: EnsembleWardenDaemonXPC.Start) async -> EnsembleWardenDaemonXPC.Start.Response {
+        let ensemblePorterConnection: xpc_connection_t?
+        if let xpcObject = startMessage.ensemblePorterConnection {
+            let dict = xpcObject.copyUnderlyingXPCObject()
 
-    private func handle(finishMessage: EnsembleWardenDaemonXPC.Finish) async throws -> EnsembleWardenDaemonXPC.Finish.Response {
-        try await handler.onFinish()
-        return .init()
-    }
+            ensemblePorterConnection = xpc_dictionary_create_connection(
+                dict,
+                EnsembleWardenConstants.ensemblePorterConnectionNameInXPCDict)
+            // Given the startMessage has a `ensemblePorterConnection` we better
+            // not get a nil here.
+            assert(ensemblePorterConnection != nil)
+        } else {
+            ensemblePorterConnection = nil
+        }
 
-    private func handle(fetchMessage: EnsembleWardenDaemonXPC.Fetch) async throws -> EnsembleWardenDaemonXPC.Fetch.Response {
-        let ioSurfaces = try await handler.onFetch(serializedXPCRequest: fetchMessage.serializedXPCRequest,
-                                                   requestID: fetchMessage.requestID,
-                                                   spanID: .init(uint: fetchMessage.spanID))
-        return ioSurfaces
-    }
-
-    private func handle(message: EnsembleWardenDaemonXPC.Request) async throws -> [IOSurface] {
-        switch message {
-        case .empty: return []
-        case .start(let startMessage):
-            _ = try await Metrics.reportingXPCMetrics(operationName: "start") {
-                try await handle(startMessage: startMessage)
+        let ensembleWardenCryptoHandles: EnsembleWardenCryptoHandles
+        if let ensemblePorterConnection {
+            ensembleWardenCryptoHandles = .init(
+                ensemblePorterIdentifier: .ensemblePorterHandle(
+                    ensemblePorterConnection))
+        } else if let followerToken = startMessage.followerToken {
+            ensembleWardenCryptoHandles = .init(
+                ensemblePorterIdentifier: .followerToken(followerToken))
+        } else {
+            return .failure(EnsembleWardenError.invalidStartMessage)
+        }
+        do {
+            return try await self.ensembleWardenMetrics.reportingXPCMetrics(operationName: "start") {
+                let tokens = try await handler.start(ensembleWardenCryptoHandles: ensembleWardenCryptoHandles,
+                                                     requestID: PrismTracing.requestID,
+                                                     spanID: PrismTracing.spanID)
+                return .success(tokens.values)
             }
-            return []
-        case .publish(let publishMessage):
-            _ = try await Metrics.reportingXPCMetrics(operationName: "publish") {
-                try await handle(publishMessage: publishMessage)
+        } catch {
+            return self.handleError(operation: "start", error: error) { .failure($0) }
+        }
+    }
+
+    private func handle(publishMessage: EnsembleWardenDaemonXPC.Publish) async -> EnsembleWardenDaemonXPC.Publish.Response {
+        do {
+            return try await PrismTracing.withResumed(requestID: publishMessage.requestID,
+                                                      spanID: publishMessage.spanID) {
+                return try await self.ensembleWardenMetrics.reportingXPCMetrics(operationName: "publish") {
+                    try await handler.onPublish(serializedXPCRequest: publishMessage.serializedXPCRequest,
+                                                privateData: publishMessage.ioSurfaces,
+                                                purpose: .init(xpcPurpose: publishMessage.purpose),
+                                                requestID: PrismTracing.requestID,
+                                                spanID: PrismTracing.spanID)
+                    return .success(.init())
+                }
             }
-            return []
-        case .fetch(let fetchMessage):
-            return try await Metrics.reportingXPCMetrics(operationName: "fetch") {
-                return try await handle(fetchMessage: fetchMessage)
+        } catch {
+            return self.handleError(operation: "publish", error: error) { .failure($0) }
+        }
+    }
+
+
+    private func handle(fetchMessage: EnsembleWardenDaemonXPC.Fetch) async -> EnsembleWardenDaemonXPC.Fetch.Response {
+        do {
+            return try await PrismTracing.withResumed(requestID: fetchMessage.requestID,
+                                                      spanID: fetchMessage.spanID) {
+                return try await self.ensembleWardenMetrics.reportingXPCMetrics(operationName: "fetch") {
+                    let ioSurfaces = try await handler.onFetch(serializedXPCRequest: fetchMessage.serializedXPCRequest,
+                                                               requestID: PrismTracing.requestID,
+                                                               spanID: .init(uint: PrismTracing.spanID))
+
+                    return .success(ioSurfaces)
+                }
             }
-        case .finish(let finishMessage):
-            _ = try await Metrics.reportingXPCMetrics(operationName: "finish") {
-                try await handle(finishMessage: finishMessage)
+        } catch {
+            return self.handleError(operation: "fetch", error: error) { .failure($0) }
+        }
+    }
+
+    private func handle(prefaultMessage: EnsembleWardenDaemonXPC.Prefault) async -> EnsembleWardenDaemonXPC.Prefault.Response {
+        do {
+            return try await PrismTracing.withResumed(requestID: prefaultMessage.requestID,
+                                                      spanID: prefaultMessage.spanID) {
+                return try await self.ensembleWardenMetrics.reportingXPCMetrics(operationName: "prefault") {
+                    try await handler.onPrefault(ioSurfaces: prefaultMessage.ioSurfaces,
+                                                 requestID: PrismTracing.requestID,
+                                                 spanID: PrismTracing.spanID)
+                    return .success(.init())
+                }
             }
-            return []
+        } catch let error as EnsembleWardenError {
+            return .failure(error)
+        } catch {
+            return .failure(.unexpectedError)
         }
     }
 
     package func handleIncomingRequest(_ message: XPCReceivedMessage) -> (any Encodable)? {
-        self.logger.log("Handling incoming request")
-        let auditToken = message.auditToken
-        guard let secTask = SecTaskCreateWithAuditToken(nil, auditToken) else {
-            logger.error("Unable to create secTask from auditToken")
-            return EnsembleWardenDaemonXPC.Response.error(.invalidEntitlements)
-        }
-
-        var error: Unmanaged<CFError>?
-        let entitlementValue = SecTaskCopyValueForEntitlement(secTask, self.entitlement as CFString, &error)
-
-        if let error {
-            // Error being logged here comes from the XPC world (even though not an XPC API) so is safe to log.
-            logger.error("Error checking entitlement. error=\(error.takeRetainedValue(), privacy: .public)")
-            return EnsembleWardenDaemonXPC.Response.error(.unexpectedFailure)
-        } else if entitlementValue == nil {
-            logger.error("Missing entitlement")
-            return EnsembleWardenDaemonXPC.Response.error(.invalidEntitlements)
-        }
-
-        if message.isSync {
-            do {
-                let decodedMessage = try message.decode(as: EnsembleWardenDaemonXPC.Request.self)
-                switch decodedMessage {
-                case .empty:
-                    logger.log("Daemon prewarmed")
-                    return EnsembleWardenDaemonXPC.Response.success([])
+        Task(priority: .userInitiated) {
+            let decodedMessage = try message.decode(as: EnsembleWardenDaemonXPC.Request.self)
+            let response: any Encodable = switch decodedMessage {
+                case .empty: EnsembleWardenDaemonXPC.Empty.Response.init()
                 case .start(let startMessage):
-                    handler.start(keyEncryptionKey: startMessage.keyEncryptionKey,
-                                  keyID: startMessage.keyID,
-                                  requestID: startMessage.requestID,
-                                  spanID: startMessage.spanID)
-                    return EnsembleWardenDaemonXPC.Response.success([])
-                default:
-                    logger.error("Received sync request with async message type.")
-                    throw EnsembleWardenError.invalidSyncRequest
-                }
-            } catch {
-                logger.error("Error decoding message. error=\(String(reportable: error), privacy: .public)")
-                return EnsembleWardenDaemonXPC.Response.error(.unexpectedFailure)
+                    await handle(startMessage: startMessage)
+                case .publish(let publishMessage):
+                    await handle(publishMessage: publishMessage)
+                case .fetch(let fetchMessage):
+                    await handle(fetchMessage: fetchMessage)
+                case .prefault(let prefaultMessage):
+                    await handle(prefaultMessage: prefaultMessage)
+                case .dropAll(let dropAllMessage):
+                    await handle(dropAllMessage: dropAllMessage)
             }
-        } else {
-            Task(priority: .userInitiated) {
-                let response: EnsembleWardenDaemonXPC.Response
-                do {
-                    self.logger.log("Decoding message")
-                    let decodedMessage = try message.decode(as: EnsembleWardenDaemonXPC.Request.self)
-                    response = .success(try await handle(message: decodedMessage))
-                    logger.log("Successfully handled XPC message")
-                } catch let error as EnsembleWardenDaemonXPC.EnsembleWardenXPCError {
-                    logger.error("Error handling XPC message. error=\(String(reportable: error), privacy: .public)")
-                    response = .error(error)
-                } catch {
-                    logger.error("Unexpected error handling XPC message. error=\(String(reportable: error), privacy: .public)")
-                    response = .error(EnsembleWardenDaemonXPC.EnsembleWardenXPCError.unexpectedFailure)
-                }
-                logger.log("Sending XPC response")
-                message.reply(response)
-            }
-            return nil
+            message.reply(response)
         }
+        return nil
     }
 
     package func handleCancellation(error: XPCRichError) {
@@ -162,7 +165,128 @@ package struct XPCHandler<UserHandler: EnsembleWardenServerHandler & Sendable>: 
         do {
             try handler.onCancellation()
         } catch {
-            logger.error("Error handling cancellation. error=\(String(reportable: error))")
+            logger.error("""
+                Error handling cancellation. \
+                error=\(String(reportable: error), privacy: .public)
+                """)
+        }
+    }
+}
+
+extension XPCHandler {
+    private func handle(
+        publish2Message: EnsembleWardenDaemonXPC.Publish2
+    ) async -> EnsembleWardenDaemonXPC.Publish2.Response {
+        do {
+            return try await self.ensembleWardenMetrics.reportingXPCMetrics(
+                operationName: "publish2") {
+                try await handler.onPublish2(
+                    identifier: publish2Message.identifier,
+                    privateData: publish2Message.privateData,
+                    privateMetadata: publish2Message.privateMetadata,
+                    ttl: publish2Message.ttl,
+                    purpose: .init(xpcPurpose: publish2Message.purpose),
+                    requestID: publish2Message.requestID,
+                    spanID: publish2Message.spanID)
+                return .success(.init())
+            }
+        } catch {
+            return self.handleError(operation: "publish2", error: error) { .failure($0) }
+        }
+    }
+
+    private func handle(
+        fetch2Message: EnsembleWardenDaemonXPC.Fetch2
+    ) async -> EnsembleWardenDaemonXPC.Fetch2.Response {
+        do {
+            return try await  self.ensembleWardenMetrics.reportingXPCMetrics(
+                operationName: "fetch2") {
+                let ioSurface = try await handler.onFetch2(
+                    identifier: fetch2Message.identifier,
+                    range: fetch2Message.range,
+                    host: fetch2Message.host,
+                    requestID: fetch2Message.requestID,
+                    spanID: fetch2Message.spanID)
+                return .success(ioSurface)
+            }
+        } catch {
+            return self.handleError(operation: "fetch2", error: error) { .failure($0) }
+        }
+    }
+
+    private func handle(
+        fetchMetadataMessage: EnsembleWardenDaemonXPC.FetchMetadata
+    ) async -> EnsembleWardenDaemonXPC.FetchMetadata.Response {
+        do {
+            return try await  self.ensembleWardenMetrics.reportingXPCMetrics(
+                operationName: "fetchMetadata") {
+                let ioSurfaces = try await handler.onFetchMetadata(
+                    identifier: fetchMetadataMessage.identifier,
+                    host: fetchMetadataMessage.host,
+                    requestID: fetchMetadataMessage.requestID,
+                    spanID: fetchMetadataMessage.spanID)
+                return .success(ioSurfaces)
+            }
+        } catch {
+            return self.handleError(operation: "fetchMetadata", error: error) { .failure($0) }
+        }
+    }
+
+    private func handle(
+        deleteMessage: EnsembleWardenDaemonXPC.Delete
+    ) async -> EnsembleWardenDaemonXPC.Delete.Response {
+        do {
+            return try await self.ensembleWardenMetrics.reportingXPCMetrics(
+                operationName: "delete") {
+                try await handler.onDelete(
+                    identifier: deleteMessage.identifier,
+                    host: deleteMessage.host,
+                    requestID: deleteMessage.requestID,
+                    spanID: deleteMessage.spanID)
+                return .success(.init())
+            }
+        } catch {
+            return self.handleError(operation: "delete", error: error) { .failure($0) }
+        }
+    }
+
+    private func handle(
+        dropAllMessage: EnsembleWardenDaemonXPC.DropAll
+    ) async -> EnsembleWardenDaemonXPC.DropAll.Response {
+        do {
+            return try await self.ensembleWardenMetrics.reportingXPCMetrics(
+                operationName: "dropAll") {
+                try await handler.onDropAll()
+                return .success(.init())
+            }
+        } catch {
+            return self.handleError(operation: "dropAll", error: error) { .failure($0) }
+        }
+    }
+
+    private func handleError<T>(
+        operation: String,
+        error: Error,
+        failure: (EnsembleWardenError) -> T
+    ) -> T {
+        if let wardenError = error as? EnsembleWardenError {
+            return failure(wardenError)
+        }
+        let errorType = String(describing: type(of: error))
+        logger.error("""
+            External error. \
+            operation=\(operation, privacy: .public) \
+            error=\(String(reportable: error), privacy: .public)
+            """)
+        return failure(.externalError(type: errorType))
+    }
+}
+
+fileprivate extension KVCacheTransferPurpose {
+    init(xpcPurpose: EnsembleWardenDaemonXPC.TransferPurpose) {
+        switch xpcPurpose {
+        case .ftET:
+            self = .ftET
         }
     }
 }

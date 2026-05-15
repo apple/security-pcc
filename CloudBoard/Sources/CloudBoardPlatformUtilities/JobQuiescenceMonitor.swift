@@ -12,13 +12,13 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
+import CloudBoardLogging
 import Foundation
-import os
-
 @_weakLinked import JobQuiescence
+import os
+import Synchronization
 
-public actor JobQuiescenceMonitor: Sendable {
+public final class JobQuiescenceMonitor: Sendable {
     public static let logger: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
         category: "JobQuiescenceMonitor"
@@ -26,54 +26,55 @@ public actor JobQuiescenceMonitor: Sendable {
 
     enum QuiescenceState {
         case notStarted
-        case inProgress
+        case inProgress(JQTask)
         case complete
     }
 
     private let queue: DispatchQueue
     private let lifecycleManager: LifecycleManager
-    private var quiescenceState: QuiescenceState = .notStarted
-    private var task: JQTask? = nil
+    private let quiescenceState: Mutex<QuiescenceState> = .init(.notStarted)
 
     public init(lifecycleManager: LifecycleManager) {
         self.lifecycleManager = lifecycleManager
         self.queue = DispatchQueue(label: "com.apple.cloudos.cloudboardd.JobQuiescenceMonitor", qos: .userInitiated)
     }
 
-    private func quiesce(conn: JQXPCConnection) {
-        if case .notStarted = self.quiescenceState {
-            Self.logger.log("Received quiesce notification")
-
-            self.quiescenceState = .inProgress
-
-            let task = JQTask(conn: conn, description: JQTaskDescriptor(name: "CloudBoardDraining"))
-            do {
-                // Begin job quiescence task to hold off quiesce state until cloudboard drains.
-                try task.begin()
-                self.lifecycleManager.drain()
-            } catch {
-                Self.logger.log("Quiesce encountered error: \(String(unredacted: error), privacy: .public)")
-                task.end()
+    private func quiesce() {
+        self.quiescenceState.withLock { state in
+            if case .notStarted = state {
+                Self.logger.log("Received quiesce notification")
+                let conn = JQXPCConnection()
+                let task = JQTask(conn: conn, description: JQTaskDescriptor(name: "CloudBoardDraining"))
+                state = .inProgress(task)
+                do {
+                    // Begin job quiescence task to hold off quiesce state until cloudboard drains.
+                    try task.begin()
+                    self.lifecycleManager.drain()
+                } catch {
+                    Self.logger.log("Quiesce encountered error: \(String(unredacted: error), privacy: .public)")
+                    /// Treat a failure the same as a completed drain so that the control plane can go ahead
+                    task.end()
+                    state = .complete
+                }
+            } else {
+                let qState = state
+                Self.logger
+                    .log(
+                        "Quiesce signal ignored since quiescence state: \(String(describing: qState), privacy: .public)"
+                    )
             }
-            self.task = task
-        } else {
-            Self.logger
-                .log(
-                    "Quiesce signal ignored since quiescence state: \(String(describing: self.quiescenceState), privacy: .public)"
-                )
         }
     }
 
     public func startQuiescenceMonitor() throws {
         if #_hasSymbol(JQLaunchEventSubscription.self) {
             Self.logger.log("Starting quiescence monitor")
-            let conn = JQXPCConnection()
             let subscription = JQLaunchEventSubscription(
                 subscriptionName: "com.apple.cloudos.cloudboardd.jobquiescence",
                 subscriberName: "cloudboardd"
             )
             try subscription.register(on: self.queue) { _, _ in
-                self.quiesce(conn: conn)
+                self.quiesce()
             }
         } else {
             Self.logger.warning("JobQuiescence framework unavailable, proceeding without monitoring")
@@ -82,13 +83,15 @@ public actor JobQuiescenceMonitor: Sendable {
 
     /// Mark Quiesce as completed. Any further notifications from jobquiescence will be ignored
     public func quiesceCompleted() {
-        self.quiescenceState = .complete
-        if let task {
-            Self.logger.log("Quiesce marked as complete")
-            task.end()
-            self.task = nil
-        } else {
-            Self.logger.warning("Quiesce marked as complete with no active task")
+        self.quiescenceState.withLock { state in
+            switch state {
+            case .inProgress(let task):
+                Self.logger.log("Quiesce marked as complete")
+                task.end()
+                state = .complete
+            case .complete, .notStarted:
+                Self.logger.warning("Quiesce marked as complete with no active task")
+            }
         }
     }
 }

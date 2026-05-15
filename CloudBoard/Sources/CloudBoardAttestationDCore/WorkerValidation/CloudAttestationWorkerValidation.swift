@@ -12,14 +12,14 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import CloudAttestation
 import CloudBoardAttestationDAPI
+import CloudBoardCommon
 import CloudBoardLogging
 import CloudBoardMetrics
 import CryptoKit
 import Foundation
+import InternalSwiftProtobuf
 import os
 
 /// A means to make instances of ``AttestationValidatorProtocol`` for a specific request.
@@ -87,9 +87,24 @@ final class CloudAttestationValidator: AttestationValidatorProtocol, Sendable {
     func validate(rawAttestationBundle: Data) async throws -> ValidatedWorker {
         let attestationBundle = try AttestationBundle(data: rawAttestationBundle)
         let (key, expiration, validatedAttestation) = try await validator.validate(bundle: attestationBundle)
+        let udid = validatedAttestation.udid
         guard case .curve25519(let rawKey) = key else {
             throw CloudAttestationValidatorError.unexpectedPublicKeyType
         }
+        var appDataMap: [String: Data] = [:]
+        do {
+            if let metadata = validatedAttestation.appData?.metadata {
+                if validatedAttestation.appData?.name == "Compute Node" {
+                    let attestationAppData = try AttestationAppData(unpackingAny: metadata)
+                    appDataMap[ComputeNodeAppDataKeys.rackID] = attestationAppData.rackID
+                    appDataMap[ComputeNodeAppDataKeys.bootID] = attestationAppData.bootID
+                    appDataMap[ComputeNodeAppDataKeys.ensembleID] = attestationAppData.ensembleID
+                }
+            }
+        } catch {
+            Self.logger.error("Failed to parse Attestation AppData for compute node: \(error)")
+        }
+
         var releaseDigest = validatedAttestation.releaseDigest?.hexString
         if releaseDigest == nil {
             Self.logger.error("validated attestation does not contain releaseDigest, attempting to parse ourselves")
@@ -103,7 +118,9 @@ final class CloudAttestationValidator: AttestationValidatorProtocol, Sendable {
         return try .init(
             expiration: expiration,
             publicKey: .init(rawRepresentation: rawKey),
-            releaseDigest: releaseDigest
+            releaseDigest: releaseDigest,
+            appData: appDataMap,
+            udid: udid
         )
     }
 

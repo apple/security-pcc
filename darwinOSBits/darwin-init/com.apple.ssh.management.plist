@@ -28,8 +28,6 @@
 	<true/>
 	<key>ProcessType</key>
 	<string>Interactive</string>
-	<key>POSIXSpawnType</key>
-	<string>Interactive</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/usr/libexec/remotectl</string>

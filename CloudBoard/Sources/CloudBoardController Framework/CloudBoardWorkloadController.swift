@@ -12,9 +12,8 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal import CloudBoardCommon
+internal import CloudBoardLogging
 import os
 
 public actor CloudBoardWorkloadController {
@@ -32,8 +31,6 @@ public actor CloudBoardWorkloadController {
 
     private var client: Client
     public let prefs: CloudBoardWorkloadControllerPrefs
-
-    private var updateConfigurationHandler: ((_ config: WorkloadConfig) async throws -> Void)?
     private var shutdownHandler: (() async throws -> Void)?
     private var disconnectHandler: (() async throws -> Void)?
 
@@ -81,9 +78,8 @@ public actor CloudBoardWorkloadController {
         Self.log.log("Connected to cloudboardd")
     }
 
-    public func onUpdateConfiguration(handler: @escaping (_ config: WorkloadConfig) async throws -> Void) {
-        self.updateConfigurationHandler = handler
-    }
+    @available(*, deprecated, message: "Deprecated flow. Remove all usages of this method")
+    public func onUpdateConfiguration(handler _: @escaping (_ config: WorkloadConfig) async throws -> Void) {}
 
     public func onShutdown(handler: @escaping () async throws -> Void) {
         self.shutdownHandler = handler
@@ -93,8 +89,71 @@ public actor CloudBoardWorkloadController {
         self.disconnectHandler = handler
     }
 
+    @available(*, deprecated, message: "Use registerComputeWorkload or registerProxyWorkload instead")
     public func registerWorkload(config: WorkloadConfig, properties: WorkloadProperties) async throws {
-        try await self.waitForClient().registerWorkload(config: config, properties: properties)
+        switch config.workloadType {
+        case .worker:
+            try await self.registerComputeWorkload(
+                config: .init(
+                    maxBatchSize: config.maxBatchSize,
+                    optimalBatchSize: config.optimalBatchSize,
+                    currentBatchSize: config.currentBatchSize,
+                    workloadTags: .init(config.workloadTags)
+                ),
+                properties: properties
+            )
+        case .proxy:
+            // There was never support for providing more than "services" and "routingGroupAliases" proxy metadata this
+            // way, so we can safely move other fields under the new "workload" field for proxy announcements.
+            var workloadTags = config.workloadTags
+
+            let services: [String] = if let serviceTags = workloadTags["services"] {
+                switch serviceTags {
+                case .string(let value):
+                    [value]
+                case .stringList(let list):
+                    list
+                }
+            } else {
+                []
+            }
+
+            // We only check for "routingGroupAliases" tags for backward compatibility. Adopters of
+            // registerProxyWorkload will not be able to provide routing group aliases themselves. Instead, cloudboardd
+            // directly obtains them from secure-config and advertises them accordingly.
+            let routingGroupAliasOverrides: [String]? = if let rgaTags = workloadTags["routingGroupAliases"] {
+                switch rgaTags {
+                case .string(let value):
+                    [value]
+                case .stringList(let list):
+                    list
+                }
+            } else {
+                nil
+            }
+
+            workloadTags.removeValue(forKey: "services")
+            workloadTags.removeValue(forKey: "routingGroupAliases")
+
+            try await self.registerProxyWorkload(
+                config: .init(
+                    maxBatchSize: config.maxBatchSize,
+                    optimalBatchSize: config.optimalBatchSize,
+                    currentBatchSize: config.currentBatchSize,
+                    metadata: .init(services: services, routingGroupAliasOverrides: routingGroupAliasOverrides),
+                    workloadTags: .init(workloadTags),
+                ),
+                properties: properties
+            )
+        }
+    }
+
+    public func registerComputeWorkload(config: ComputeWorkloadConfig, properties: WorkloadProperties) async throws {
+        try await self.waitForClient().registerWorkload(config: .compute(config), properties: properties)
+    }
+
+    public func registerProxyWorkload(config: ProxyWorkloadConfig, properties: WorkloadProperties) async throws {
+        try await self.waitForClient().registerWorkload(config: .proxy(config), properties: properties)
     }
 
     public func updateHealthStatus(status: WorkloadControllerStatus) async throws {
@@ -137,27 +196,9 @@ extension CloudBoardWorkloadController: CloudBoardControllerAPIClientDelegatePro
         do {
             try await handler()
         } catch {
-            Self.log
-                .error(
-                    "Failed to invoke \(#function, privacy: .public) handler: \(String(reportable: error), privacy: .public) (\(error))"
-                )
-        }
-    }
-
-    public func updateConfiguration(config: WorkloadConfig) async throws {
-        Self.log.log("Received 'UpdateConfiguration' from cloudboardd: config=\(config, privacy: .public)")
-        guard let handler = self.updateConfigurationHandler else {
-            Self.log.error("No handler registered for '\(#function, privacy: .public)'")
-            return
-        }
-
-        do {
-            try await handler(config)
-        } catch {
-            Self.log
-                .error(
-                    "Failed to invoke \(#function, privacy: .public) handler: \(String(reportable: error), privacy: .public) (\(error))"
-                )
+            Self.log.error(
+                "Failed to invoke \(#function, privacy: .public) handler: \(String(reportable: error), privacy: .public) (\(error))"
+            )
         }
     }
 
@@ -171,10 +212,22 @@ extension CloudBoardWorkloadController: CloudBoardControllerAPIClientDelegatePro
         do {
             try await handler()
         } catch {
-            Self.log
-                .error(
-                    "Failed to invoke \(#function, privacy: .public) handler: \(String(reportable: error), privacy: .public) (\(error))"
-                )
+            Self.log.error(
+                "Failed to invoke \(#function, privacy: .public) handler: \(String(reportable: error), privacy: .public) (\(error))"
+            )
+        }
+    }
+}
+
+extension [String: RoutingTagValue] {
+    fileprivate init(_ tags: [String: WorkloadConfig.RoutingTagValue]) {
+        self = tags.mapValues { tagValue in
+            switch tagValue {
+            case .string(let value):
+                .string(value)
+            case .stringList(let list):
+                .stringList(list)
+            }
         }
     }
 }

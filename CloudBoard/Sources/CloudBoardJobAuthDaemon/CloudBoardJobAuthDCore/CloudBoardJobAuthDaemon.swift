@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardIdentity
 import CloudBoardJobAuthDAPI
@@ -62,8 +60,8 @@ public struct CloudBoardJobAuthDaemon: Sendable {
     }
 
     public func run() async throws {
-        let nodeInfo = NodeInfo.load()
-        if let isLeader = nodeInfo.isLeader {
+        // we don't want any metrics if we aren't a leader
+        if let isLeader = NodeInfo.isLeader() {
             if !isLeader {
                 Self.logger.log("Not a leader node. Exiting.")
                 Foundation.exit(0)
@@ -72,6 +70,15 @@ public struct CloudBoardJobAuthDaemon: Sendable {
             Self.logger.error("Unable to check if node is a leader. Continuing.")
         }
 
+        try await CloudBoardMetrics.Uptime.withStandardMetrics(
+            processInfo: Metrics.ProcessInfo.self,
+            metrics: self.metrics
+        ) {
+            try await self._run()
+        }
+    }
+
+    private func _run() async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in
             let authTokenSigningKeyProvider: AuthTokenSigningKeyProvider
             if let keyRotationServiceConfig = self.config.keyRotationService {

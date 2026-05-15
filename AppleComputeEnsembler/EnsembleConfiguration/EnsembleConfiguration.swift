@@ -112,16 +112,18 @@ struct EnsembleConfiguration: CustomStringConvertible, Decodable, ReportableStri
 	var backendType: BackendType?
 	var hypercube: Bool?
 	var ensembleID: String?
+	var rackID: String?
 	let nodes: [String: NodeConfiguration]
 
 	// This is OK to log publically because the private fields are obfuscated.
 	var publicDescription: String {
 		var desc = """
 		{
-			backendType: \(String(describing: self.backendType)),
-			hypercube: \(String(describing: self.hypercube)),
-			ensembleID: \(String(describing: self.ensembleID)),
-			nodes: [
+		    backendType: \(String(describing: self.backendType)),
+		    hypercube: \(String(describing: self.hypercube)),
+		    ensembleID: \(String(describing: self.ensembleID)),
+		    rackID: \(String(describing: self.rackID)),
+		    nodes: [
 		"""
 		for (_, value) in self.nodes {
 			desc = """
@@ -137,10 +139,11 @@ struct EnsembleConfiguration: CustomStringConvertible, Decodable, ReportableStri
 	var description: String {
 		var desc = """
 		{
-			backendType: \(String(describing: self.backendType)),
-			hypercube: \(String(describing: self.hypercube)),
-			ensembleID: \(String(describing: self.ensembleID)),
-			nodes: [
+		    backendType: \(String(describing: self.backendType)),
+		    hypercube: \(String(describing: self.hypercube)),
+		    ensembleID: \(String(describing: self.ensembleID)),
+		    rackID: \(String(describing: self.rackID)),
+		    nodes: [
 		"""
 		for (key, value) in self.nodes {
 			desc = """
@@ -157,6 +160,7 @@ struct EnsembleConfiguration: CustomStringConvertible, Decodable, ReportableStri
 		case backendType
 		case hypercube
 		case ensembleID = "ensemble_id"
+		case rackID = "rack_id"
 		case nodes
 	}
 }

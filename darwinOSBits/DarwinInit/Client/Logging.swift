@@ -12,6 +12,10 @@
 // EA1937
 // 10/02/2024
 
+//
+//  Logging.swift
+//  DarwinInitClient
+//
 
 import os
 import System

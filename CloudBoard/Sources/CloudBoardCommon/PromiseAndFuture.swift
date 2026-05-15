@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple Inc. All rights reserved.
-
 import os
 
 final class LockedValueBox<Value: Sendable>: @unchecked Sendable {
@@ -77,10 +75,12 @@ public final class Promise<Value: Sendable, Failure: Error>: Sendable {
 
     private let file: String
     private let line: Int
+    private let autoFailureIfUnfulfilled: Failure?
 
-    public init(file: String = #fileID, line: Int = #line) {
+    public init(file: String = #fileID, line: Int = #line, autoFailureIfUnfulfilled: Failure? = nil) {
         self.file = file
         self.line = line
+        self.autoFailureIfUnfulfilled = autoFailureIfUnfulfilled
     }
 
     private enum LockResult {
@@ -222,11 +222,20 @@ public final class Promise<Value: Sendable, Failure: Error>: Sendable {
     }
 
     deinit {
-        self.state.withLockedValue {
-            switch $0 {
-            case .fulfilled:
-                break
-            case .unfulfilled:
+        // no race here, since this is in deinit
+        let unfulfilled =
+            self.state.withLockedValue {
+                switch $0 {
+                case .fulfilled:
+                    return false
+                case .unfulfilled:
+                    return true
+                }
+            }
+        if unfulfilled {
+            if let autoFailureIfUnfulfilled {
+                self.fail(with: autoFailureIfUnfulfilled)
+            } else {
                 fatalError("unfulfilled Promise leaked at \(file):\(line)")
             }
         }

@@ -16,6 +16,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>com.apple.private.LocalAuthentication.NonDisposableContextPool</key>
+	<true/>
 	<key>com.apple.acdc.cloudmetrics.client</key>
 	<string>cb_jobhelper</string>
 	<key>com.apple.private.cloudos.hotproperties</key>
@@ -25,6 +27,7 @@
 	<key>com.apple.security.exception.iokit-user-client-class</key>
 	<array>
 		<string>AppleKeyStoreUserClient</string>
+		<string>IOSurfaceRootUserClient</string>
 	</array>
 	<key>com.apple.security.exception.shared-preference.read-only</key>
 	<array>
@@ -41,16 +44,26 @@
 		<string>com.apple.acdc.cloudmetricsd</string>
 		<string>com.apple.cloudos.AppleComputeEnsembler.service</string>
 		<string>com.apple.cloudos.cb_attestationd</string>
+		<string>com.apple.cloudos.cb_bridged</string>
 		<string>com.apple.cloudos.NullCloudApp.endpoint</string>
-		<string>com.apple.cloudos.cb_configurationd</string>
+		<string>com.apple.cloudos.ShadowTunnelCloudApp.endpoint</string>
+		<string>com.apple.cloudos.cloudconfigurationd</string>
 		<string>com.apple.cloudos.cb_jobauthd</string>
 		<string>com.apple.trustd</string>
+		<string>com.apple.cloudos.PCCAgentApp.endpoint</string>
+		<string>com.apple.cloudos.PCCAgentWorkerApp.endpoint</string>
+		<string>com.apple.CipherMLSE</string>
+		<string>com.apple.cloudos.ensembleporter.keyproviderclient</string>
 	</array>
 	<key>com.apple.private.sandbox.profile:embedded</key>
 	<string>apple-cloud</string>
 	<key>com.apple.private.cloudos.cloudboardjob</key>
 	<true/>
+	<key>com.apple.private.cloudos.cloudboardjobsupport</key>
+	<true/>
 	<key>com.apple.private.cloudos.cb_attestationd</key>
+	<true/>
+	<key>com.apple.private.cloudos.cb_bridged</key>
 	<true/>
 	<key>com.apple.private.cloudos.cb_attestationd.keyaccess</key>
 	<true/>
@@ -73,6 +86,8 @@
 	<key>com.apple.security.exception.files.absolute-path.read-only</key>
 	<array>
 		<string>/private/var/db/secureconfig/</string>
+		<string>/private/var/CipherMLAssets/</string>
+		<string>/private/var/mobile/assetdownloader/</string>
 	</array>
 	<key>com.apple.private.AppleComputeEnsembler.read</key>
 	<true/>

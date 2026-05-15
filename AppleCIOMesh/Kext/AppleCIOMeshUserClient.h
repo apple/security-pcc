@@ -103,6 +103,7 @@ class AppleCIOMeshUserClient final : public IOUserClient2022
 	IOReturn trapInterruptReceiveBatch();
 	IOReturn trapStartForwardChain(uintptr_t forwardChainId_, uintptr_t elements_);
 	IOReturn trapStopForwardChain();
+    IOReturn trapResetBuffer(uintptr_t bufferId_);
 
 	static const IOExternalMethodDispatch2022 _methods[MUCI::Method::NumMethods];
 	static const IOExternalTrap _traps[MUCI::Trap::NumTraps];

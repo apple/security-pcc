@@ -28,22 +28,20 @@ extension CLI.AttestationCmd {
 
         @OptionGroup var globalOptions: CLI.globalOptions
 
-        @Option(name: [.customLong("input-format"), .customShort("I")],
-                help: "Input format of PCC Attestation Bundle.")
-        var inputFormat: Format = .json
+        @OptionGroup var attestOptions: CLI.AttestationFormatOptions
 
         @Flag(name: [.customLong("detail")],
               help: "Include details in the output.")
         var showDetails: Bool = false
 
-        @Argument(help: "Path to PCC Attestation Bundle to parse.",
+        @Argument(help: "Path to the Apple Intelligence Report, or depending on `--input-format` the PCC Attestation Bundle to parse.",
                   completion: .file())
         var file: String
 
         func run() throws {
             let attestationBundle: AttestationBundle
             do {
-                attestationBundle = try readAttestationBundle(filePath: file, format: inputFormat)
+                attestationBundle = try .init(from: file, format: attestOptions.format, requestIndex: attestOptions.requestIndex, attestationIndex: attestOptions.attestationIndex)
             } catch {
                 throw CLIError("read attestation bundle: \(error)")
             }

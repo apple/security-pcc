@@ -1,0 +1,51 @@
+--maxwidth 120
+
+# Match XCode indentation
+--xcodeindentation enabled
+
+# Make line wrapping consistent
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+
+# Exclude auto-generated files
+--exclude **.grpc.swift
+--exclude **.pb.swift
+
+# Exclude vendored dependencies
+--exclude Vendor
+
+# Rule specific configurations
+
+# Put ACLs on declarations within an extension rather than the extension itself.
+--extensionacl on-declarations
+
+# Don't indent #if blocks
+--ifdef no-indent
+
+# Don't hoist lets to the beginning of expressions
+--patternlet inline
+
+# Require explicit self
+--self insert
+
+# Don't turn Optional<Foo> into Foo?
+--shortoptionals except-properties
+
+# Don't prefer using key paths for trivial closures.
+--disable preferKeyPath
+
+# On multiline if/guard/... statements, don't move { to next line
+--disable wrapMultilineStatementBraces
+
+# Don't remove redundant internal declarations
+--disable redundantInternal
+
+# Don't remove redundant returns
+--disable redundantReturn
+
+# List of functions with async @autoclosure arguments to avoid await hosting
+--asynccapturing XCTAssertEqualAsync
+--asynccapturing XCTAssertThrowsErrorAsync
+--asynccapturing XCTAssertTrueAsync
+--asynccapturing XCTAssertNoThrowAsync

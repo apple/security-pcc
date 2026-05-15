@@ -12,10 +12,9 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardJobAPI
 import CloudBoardJobHelperAPI
 import CloudBoardLogging
@@ -23,8 +22,9 @@ import CloudBoardMetrics
 @_spi(SEP_Curve25519) import CryptoKit
 @_spi(SEP_Curve25519) import CryptoKitPrivate
 import Foundation
-import LocalAuthentication
 internal import ObliviousX
+import CloudBoardDomain
+import LocalAuthentication
 import os
 
 internal let cbSignposter = OSSignposter(subsystem: "com.apple.cloudos.cloudboard", category: "cb_jobhelper")
@@ -40,46 +40,31 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
         category: "CloudBoardMessenger"
     )
 
-    enum CloudBoardMessengerError: Error {
+    public static let tracingLogger: Logger = .init(
+        subsystem: "com.apple.cloudos.cloudboard.tracing",
+        category: "CloudBoardMessenger"
+    )
+
+    enum CloudBoardMessengerError: ReportableError {
         case runNeverCalled
+        case warmupNeverCalled
+        case warmupCalledTwice
+        case supportAppsUninitialized
+
+        var publicDescription: String {
+            switch self {
+            case .runNeverCalled: "runNeverCalled"
+            case .warmupNeverCalled: "warmupNeverCalled"
+            case .warmupCalledTwice: "warmupCalledTwice"
+            case .supportAppsUninitialized: "supportAppsUninitialized"
+            }
+        }
     }
 
     /// The metrics system to use.
     private let metrics: MetricsSystem
-    private let laContext: LAContext
-
-    /// Captures state of retrieving the OHTTP node keys from the attestation daemon allowing the messenger to wait
-    /// for the key to be retrieved from the attestation daemon when it receives workload requests before the keys are
-    /// available
-    private enum OHTTPKeyState {
-        case initialized
-        case available([CachedAttestedKey])
-        case awaitingKeys(Promise<[CachedAttestedKey], Error>)
-    }
-
-    private var ohttpKeyState = OHTTPKeyState.initialized
-    var ohttpKeys: [CachedAttestedKey] {
-        get async throws {
-            switch self.ohttpKeyState {
-            case .initialized:
-                CloudBoardMessengerCheckpoint(
-                    logMetadata: self.logMetadata(spanID: self.spanID),
-                    message: "Waiting for OHTTP keys to become available"
-                ).log(to: Self.logger, level: .default)
-                let promise = Promise<[CachedAttestedKey], Error>()
-                self.ohttpKeyState = .awaitingKeys(promise)
-                return try await Future(promise).valueWithCancellation
-            case .available(let keys):
-                return keys
-            case .awaitingKeys(let promise):
-                CloudBoardMessengerCheckpoint(
-                    logMetadata: self.logMetadata(spanID: self.spanID),
-                    message: "Waiting for OHTTP keys to become available"
-                ).log(to: Self.logger, level: .default)
-                return try await Future(promise).valueWithCancellation
-            }
-        }
-    }
+    private let laContextProvider: LocalAuthContextProvider
+    private var ohttpKeyStateMachine = OHttpKeyStateMachine()
 
     // Why the job helper has been instantiated
     let hostType: JobHelperHostType
@@ -88,6 +73,13 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
     // This responds back to cloudboard as a means to send the response information
     // (i.e. data to send to the parent or direct to the client).
     let server: CloudBoardJobHelperAPIServerToClientProtocol
+
+    let workloadProvider: CloudBoardJobHelperWorkloadProvider
+    let workloadPromise: Promise<(ManagedCloudAppProtocol, [ManagedSupportAppProtocol], [AssetMetadata]), Error>
+    let ensembleKeyDistributor: EnsembleKeyDistributorProtocol
+    let pirHelper: PIRHelperProtocol
+
+    var nodeAppData: [String: Data] = [:]
 
     // Holds request-specific secrets (Data Encryption Key) and provides functionality to operate on it.
     // CloudBoardMessenger uses this to provide the Data Encryption Key to other parts of CloudBoardJobHelper that need
@@ -116,39 +108,157 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
     private var requestParameters: Parameters?
     private var abandoned: Bool = false
     private let jobUUID: UUID
-    private let spanID: String
+    private let spanID: UInt64
+    private var warmupReceived: Bool = false
+    private var supportAppNames: [String]? = nil
+    private let shadowConfigLookup: @Sendable (String) throws -> SecureConfig.ShadowCloudAppConfig
 
     init(
         hostType: JobHelperHostType,
         attestationClient: CloudBoardAttestationAttestationLookupProtocol,
         server: CloudBoardJobHelperAPIServerToClientProtocol,
+        workloadProvider: CloudBoardJobHelperWorkloadProvider,
+        workloadPromise: Promise<(ManagedCloudAppProtocol, [ManagedSupportAppProtocol], [AssetMetadata]), Error>,
+        ensembleKeyDistributor: EnsembleKeyDistributorProtocol,
+        pirHelper: PIRHelperProtocol,
         requestSecrets: RequestSecrets,
         encodedRequestContinuation: AsyncStream<PipelinePayload>.Continuation,
         responseStream: AsyncStream<WorkloadJobManager.OutboundMessage>,
         metrics: MetricsSystem,
         jobUUID: UUID,
-        jobHelperSpanID: String
+        jobHelperSpanID: UInt64,
+        laContextProvider: LocalAuthContextProvider,
+        shadowConfigLookup: @escaping @Sendable (String) throws -> SecureConfig.ShadowCloudAppConfig
     ) {
         self.hostType = hostType
         self.attestationClient = attestationClient
         self.server = server
+        self.workloadProvider = workloadProvider
+        self.workloadPromise = workloadPromise
+        self.ensembleKeyDistributor = ensembleKeyDistributor
+        self.pirHelper = pirHelper
         self.requestSecrets = requestSecrets
         self.encodedRequestContinuation = encodedRequestContinuation
         self.responseStream = responseStream
         self.metrics = metrics
-        self.laContext = cbSignposter.withIntervalSignpost("CB.sep.LAContext") {
-            return LAContext()
-        }
         self.jobUUID = jobUUID
         self.spanID = jobHelperSpanID
+        self.laContextProvider = laContextProvider
+        self.shadowConfigLookup = shadowConfigLookup
     }
 
-    deinit {
-        // There is a chance that ``run`` never gets called from ``CloudBoardJobHelper`` in case an error is thrown
-        // after instantiating ``CloudBoardMessenger`` and starting the XPC server to handle incoming workload requests
-        // from cloudboardd but before ``CloudBoardMessenger.run`` is called.
-        if case .awaitingKeys(let promise) = ohttpKeyState {
-            promise.fail(with: CloudBoardMessengerError.runNeverCalled)
+    func warmup(_ info: WarmupInfo) async throws {
+        do {
+            guard !self.warmupReceived else {
+                throw CloudBoardMessengerError.warmupCalledTwice
+            }
+            CloudBoardMessengerCheckpoint(
+                logMetadata: self.logMetadata(spanID: self.spanID),
+                message: "Received warmup data"
+            ).log(to: Self.tracingLogger, level: .default)
+            self.warmupReceived = true
+            let cloudAppNameToLaunch: String
+            let shadow = try self.shadowConfigLookup(info.cloudAppName)
+            if shadow.enabled, shadow.remoteCloudApps {
+                CloudBoardMessengerCheckpoint(
+                    logMetadata: self.logMetadata(spanID: self.spanID),
+                    message: "ShadowTunnelCloudApp replacing the real one"
+                ).log(to: Self.tracingLogger, level: .default)
+                cloudAppNameToLaunch = "ShadowTunnelCloudApp"
+            } else {
+                cloudAppNameToLaunch = info.cloudAppName
+            }
+            let workload = try self.workloadProvider.getCloudApp(
+                cloudAppName: cloudAppNameToLaunch,
+                requestSecrets: self.requestSecrets,
+                ensembleKeyDistributor: self.ensembleKeyDistributor,
+                pirHelper: self.pirHelper,
+                jobUUID: self.jobUUID,
+                cbJobHelperLogMetadata: self.logMetadata(spanID: self.spanID)
+            )
+
+            if info.assignLAContext {
+                try self.ohttpKeyStateMachine.initialiseLAContext(laContext: self.laContextProvider.getContext())
+            }
+
+            // Determine associated support apps
+            self.supportAppNames = info.supportAppNames
+            let supportApps = try info.supportAppNames.map { name in
+                try self.workloadProvider.getSupportApp(
+                    forCloudApp: info.cloudAppName,
+                    name: name,
+                    requestSecrets: self.requestSecrets,
+                    jobUUID: self.jobUUID,
+                    cbJobHelperLogMetadata: self.logMetadata(spanID: self.spanID)
+                ) { [weak self] cleanTermination in
+                    guard let self else { return }
+                    if !cleanTermination {
+                        await CloudBoardMessengerCheckpoint(
+                            logMetadata: self.logMetadata(spanID: self.spanID),
+                            message: "Support app terminated uncleanly. Tearing down the job."
+                        ).log(to: Self.tracingLogger, level: .error)
+                        await self.teardown()
+                    }
+                }
+            }
+
+            let pirAssetsMetadata = info.assetsMetadata[.pir] ?? []
+            let cloudAppAssetsMetadata = info.assetsMetadata[.cloudApp] ?? []
+
+            self.workloadPromise.succeed(with: (workload, supportApps, pirAssetsMetadata + cloudAppAssetsMetadata))
+            // Warm up cloud app, support apps, and PIR helper
+            try await withThrowingTaskGroup { group in
+                let info = ManagedWarmupInfo(
+                    // we report the cloudApp being operated _for_ here
+                    // This enables the ShadowTunnelCloudApp to do the right things
+                    cloudAppName: info.cloudAppName,
+                    launchdJobInstanceUUID: self.jobUUID,
+                    cloudAppAssetsMetadata: cloudAppAssetsMetadata,
+                    maxApplicationLayerMessageSize: info.maxApplicationLayerMessageSize
+                )
+                group.addTask {
+                    try await workload.warmup(info: info)
+                }
+                for supportApp in supportApps {
+                    group.addTask {
+                        try await supportApp.warmup(info: info)
+                    }
+                }
+                group.addTask {
+                    try await self.pirHelper.warmup(assetsMetadata: pirAssetsMetadata)
+                }
+
+                try await group.waitForAll()
+            }
+        } catch {
+            CloudBoardMessengerCheckpoint(
+                logMetadata: self.logMetadata(spanID: self.spanID),
+                message: "Failed Warmup",
+                error: error
+            ).log(to: Self.tracingLogger, level: .error)
+            throw CloudBoardJobHelperAPIError.failedWarmUp
+        }
+    }
+
+    func assignLAContext() async throws {
+        CloudBoardMessengerCheckpoint(
+            logMetadata: self.logMetadata(spanID: self.spanID),
+            message: "Assigning LA Context"
+        ).log(to: Self.tracingLogger, level: .default)
+
+        do {
+            try self.ohttpKeyStateMachine.initialiseLAContext(laContext: self.laContextProvider.getContext())
+            CloudBoardMessengerCheckpoint(
+                logMetadata: self.logMetadata(spanID: self.spanID),
+                message: "Assigned LA Context"
+            ).log(to: Self.tracingLogger, level: .default)
+        } catch {
+            CloudBoardMessengerCheckpoint(
+                logMetadata: self.logMetadata(spanID: self.spanID),
+                message: "Failed to assign LA Context",
+                error: error
+            ).log(to: Self.tracingLogger, level: .error)
+            throw CloudBoardJobHelperAPIError.failedAssigningLAContext
         }
     }
 
@@ -166,17 +276,15 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                     .workloadParameters[workloadParameterInferenceIDKey]?.first
             ))
             switch request {
-            case .warmup(let warmupData):
-                CloudBoardMessengerCheckpoint(
-                    logMetadata: self.logMetadata(spanID: self.spanID),
-                    message: "Received warmup data"
-                ).log(to: Self.logger, level: .default)
-                self.encodedRequestContinuation.yield(.warmup(warmupData))
             case .requestChunk(let encryptedPayload, let isFinal):
                 CloudBoardMessengerCheckpoint(
                     logMetadata: self.logMetadata(spanID: self.spanID),
                     message: "Received request chunk"
-                ).log(request: .init(chunk: encryptedPayload, isFinal: isFinal), to: Self.logger, level: .default)
+                ).log(
+                    request: .init(chunk: encryptedPayload, isFinal: isFinal),
+                    to: Self.tracingLogger,
+                    level: .default
+                )
                 // check it is reasonable to see the request at all
                 switch self.hostType {
                 case .nack:
@@ -230,17 +338,30 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                     CloudBoardMessengerCheckpoint(
                         logMetadata: self.logMetadata(spanID: self.spanID),
                         message: "Received request parameters"
-                    ).log(to: Self.logger, level: .default)
+                    ).log(to: Self.tracingLogger, level: .default)
                     // We split up the parameters here into:
                     // * metadata to be processed within cb_jobhelper (one-time token)
                     // * data to be forwarded to the cloud app (see ``ParametersData``).
                     // Sending parameters (handled by cloud app) first allows it to get forwarded to the
                     // app while one-time token can be processed by cb_jobhelper in parallel.
-                    self.encodedRequestContinuation.yield(.parameters(.init(parameters)))
+
+                    // Support app names are set during warm up so will always be available at this time
+                    guard let supportAppNames = self.supportAppNames else {
+                        throw CloudBoardMessengerError.supportAppsUninitialized
+                    }
+                    self.encodedRequestContinuation.yield(.parameters(.init(
+                        parameters,
+                        nodeAppData: self.nodeAppData,
+                        launchdJobInstanceUUID: self.jobUUID,
+                        supportApps: supportAppNames
+                    )))
                     self.encodedRequestContinuation.yield(.oneTimeToken(parameters.oneTimeToken))
                     // only required for validation checks in the proxy
                     if self.hostType == .proxy {
-                        self.encodedRequestContinuation.yield(.parametersMetaData(keyID: parameters.encryptedKey.keyID))
+                        self.encodedRequestContinuation.yield(.parametersMetaData(
+                            keyID: parameters.encryptedKey.keyID,
+                            workload: parameters.plaintextMetadata.workloadParameters
+                        ))
                     }
                 }
                 do {
@@ -250,6 +371,20 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                         error: nil,
                         automatedDeviceGroup: parameters.plaintextMetadata.automatedDeviceGroup != ""
                     ))
+                    // At this point we are sure that the LAContext has been used
+                    // and deallocated inside completeHPKEHandshake, hence we
+                    // can indicate to cloudboardd that we have used it.
+                    await self.server.sendWorkloadResponse(JobHelperToCloudBoardDaemonMessage.usedLAContext)
+                    CloudBoardMessengerCheckpoint(
+                        logMetadata: self.logMetadata(spanID: self.spanID),
+                        message: "LAContext marked as used"
+                    ).log(to: Self.tracingLogger, level: .default)
+
+                    // Only proxy nodes or worker nodes NOT in response bypass mode should return
+                    // a REL entry with the assets metadata
+                    if self.hostType == .proxy || parameters.responseBypassMode == .none {
+                        self.encodedRequestContinuation.yield(.readyToSendAssetsMetadataRELEntry)
+                    }
                 } catch {
                     self.metrics.emit(Metrics.Messenger.KeyUnwrapDuration(
                         duration: paramtersReceivedInstant.duration(to: .now),
@@ -260,19 +395,24 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                         logMetadata: self.logMetadata(spanID: self.spanID),
                         message: "HPKE handshake failed",
                         error: error
-                    ).log(to: Self.logger, level: .error)
+                    ).log(to: Self.tracingLogger, level: .error)
                     throw error
                 }
-            case .workerAttestation(let workerAttestationInfo):
+            case .workerNegotiatePick(providedByRopes: let providedByRopes):
+                self.encodedRequestContinuation.yield(.workerNegotiatePick(
+                    providedByRopes: providedByRopes
+                ))
+            case .workerAttestation(let workerAttestationInfo, let workloadParameters):
                 guard let dataEncryptionKey = self.parentOhttpStateMachine.dataEncryptionKey else {
                     // It should be impossible to ever receive a worker attestation without previously having received
                     // the DEK from the client device
                     preconditionFailure("Received worker attestation before receiving DEK")
                 }
 
-                self.encodedRequestContinuation.yield(.workerAttestationAndDEK(
+                self.encodedRequestContinuation.yield(.selectedWorker(
                     info: workerAttestationInfo,
-                    dek: dataEncryptionKey
+                    dek: dataEncryptionKey,
+                    workloadParameters: workloadParameters
                 ))
             case .workerResponseChunk(let workerID, let chunk, isFinal: let isFinal):
                 self.encodedRequestContinuation.yield(.workerResponseChunk(
@@ -301,7 +441,7 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                 logMetadata: self.logMetadata(spanID: self.spanID),
                 message: "invokeWorkloadRequest error",
                 error: error
-            ).log(to: Self.logger, level: .error)
+            ).log(to: Self.tracingLogger, level: .error)
             await self.server.sendWorkloadResponse(.failureReport(error.reason))
             throw error.wrappedError
         } catch {
@@ -309,7 +449,7 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                 logMetadata: self.logMetadata(spanID: self.spanID),
                 message: "invokeWorkloadRequest error",
                 error: error
-            ).log(to: Self.logger, level: .error)
+            ).log(to: Self.tracingLogger, level: .error)
             throw error
         }
     }
@@ -329,7 +469,7 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
             message: message,
             error: error
         )
-        .log(to: Self.logger, level: .error)
+        .log(to: Self.tracingLogger, level: .error)
         return error
     }
 
@@ -343,7 +483,22 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
         let keyID = parameters.encryptedKey.keyID
         let wrappedKey = parameters.encryptedKey.key
         let keyIDEncoded = keyID.base64EncodedString()
-        guard let ohttpKey = try await self.ohttpKeys.first(where: { $0.keyID == keyID }) else {
+
+        let consumeKeyResult = try self.ohttpKeyStateMachine.consumeAttestedKeys()
+        let ohttpKeys: [CachedAttestedKey]
+        switch consumeKeyResult {
+        case .available(let keys):
+            ohttpKeys = keys
+        case .waiting(let promise):
+            CloudBoardMessengerCheckpoint(
+                logMetadata: self.logMetadata(spanID: self.spanID),
+                message: "Waiting for OHTTP keys to become available"
+            ).log(to: Self.tracingLogger, level: .default)
+            ohttpKeys = try await Future(promise).valueWithCancellation
+        }
+
+        guard let ohttpKey = ohttpKeys.first(where: { $0.keyID == keyID })
+        else {
             let error = ReportableJobHelperError(
                 wrappedError: NodeKeyError.unknownKeyID(keyIDEncoded),
                 reason: .unknownKeyID
@@ -352,13 +507,13 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                 logMetadata: self.logMetadata(spanID: self.spanID),
                 message: "No node key found with the provided key ID",
                 error: error
-            ).log(keyID: keyIDEncoded, to: Self.logger, level: .error)
+            ).log(keyID: keyIDEncoded, to: Self.tracingLogger, level: .error)
             throw error
         }
         CloudBoardMessengerCheckpoint(
             logMetadata: self.logMetadata(spanID: self.spanID),
             message: "Found attested key for request"
-        ).log(keyID: keyIDEncoded, to: Self.logger, level: .info)
+        ).log(keyID: keyIDEncoded, to: Self.tracingLogger, level: .info)
 
         guard ohttpKey.expiry >= .now else {
             let error = ReportableJobHelperError(
@@ -370,7 +525,7 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                 logMetadata: self.logMetadata(spanID: self.spanID),
                 message: "Provided key has expired",
                 error: error
-            ).log(keyID: keyIDEncoded, to: Self.logger, level: .error)
+            ).log(keyID: keyIDEncoded, to: Self.tracingLogger, level: .error)
 
             throw error
         }
@@ -404,7 +559,8 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
             // anything
             if self.hostType == .proxy, !parameters.requestedNack {
                 self.encodedRequestContinuation.yield(.parametersMetaData(
-                    keyID: ohttpKey.attestedKey.keyID
+                    keyID: ohttpKey.attestedKey.keyID,
+                    workload: parameters.plaintextMetadata.workloadParameters
                 ))
             }
 
@@ -420,7 +576,12 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
             }
             self.responseEncapsulator = completedHandshake.outboundStream
             if parameters.requestedNack {
-                self.encodedRequestContinuation.yield(.nackAndExit(.init(parameters)))
+                self.encodedRequestContinuation.yield(.nackAndExit(.init(
+                    parameters,
+                    nodeAppData: self.nodeAppData,
+                    launchdJobInstanceUUID: self.jobUUID,
+                    supportApps: []
+                )))
             } else {
                 // Force-unwrap is fine as we know the OHTTP state machine must have unwrapped the key at this point
                 try self.requestSecrets.provide(dataEncryptionKey: self.parentOhttpStateMachine.dataEncryptionKey!)
@@ -448,7 +609,7 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
         return result
     }
 
-    func teardown() async throws {
+    func teardown() async {
         self.encodedRequestContinuation.yield(.teardown)
     }
 
@@ -456,7 +617,7 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
         CloudBoardMessengerCheckpoint(
             logMetadata: self.logMetadata(spanID: self.spanID),
             message: "Received request to abandon job"
-        ).log(to: Self.logger, level: .default)
+        ).log(to: Self.tracingLogger, level: .default)
         self.abandoned = true
         self.encodedRequestContinuation.yield(.abandon)
     }
@@ -464,21 +625,24 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
     public func run() async throws {
         // Obtain initial set of SEP-backed node keys from the attestation daemon
         // the jobhelper is responsible for registering us for key rotation notifications
+        defer {
+            if !self.warmupReceived {
+                self.workloadPromise.fail(with: CloudBoardMessengerError.warmupNeverCalled)
+            }
+        }
         do {
             CloudBoardMessengerCheckpoint(
                 logMetadata: self.logMetadata(spanID: self.spanID),
                 message: "Requesting OHTTP node keys from attestation daemon"
-            ).log(to: Self.logger, level: .default)
+            ).log(to: Self.tracingLogger, level: .default)
             let keySet = try await attestationClient.requestAttestedKeySet()
+            self.nodeAppData = keySet.currentKey.appData
+
             CloudBoardMessengerCheckpoint(
                 logMetadata: self.logMetadata(spanID: self.spanID),
                 message: "Received OHTTP node keys from attestation daemon"
-            ).log(attestedKeySet: keySet, to: Self.logger, level: .default)
-            let keys = try Array(keySet: keySet, laContext: self.laContext)
-            if case .awaitingKeys(let promise) = ohttpKeyState {
-                promise.succeed(with: keys)
-            }
-            self.ohttpKeyState = .available(keys)
+            ).log(attestedKeySet: keySet, to: Self.tracingLogger, level: .default)
+            try self.ohttpKeyStateMachine.updateKeys(keys: keySet)
 
             var bufferedResponses = [FinalizableChunk<Data>]()
             var receivedFinal = false
@@ -521,14 +685,14 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                     CloudBoardMessengerCheckpoint(
                         logMetadata: self.logMetadata(spanID: self.spanID),
                         message: "Received response"
-                    ).log(response: response, to: Self.logger, level: .debug)
+                    ).log(response: response, to: Self.tracingLogger, level: .debug)
                     // If we haven't received the decryption key and with that set up the encapsulator, we have to
                     // buffer responses until we do
                     if self.responseEncapsulator == nil {
                         CloudBoardMessengerCheckpoint(
                             logMetadata: self.logMetadata(spanID: self.spanID),
                             message: "Buffering encoded response until OHTTP encapsulation is set up"
-                        ).log(to: Self.logger, level: .default)
+                        ).log(to: Self.tracingLogger, level: .default)
                         bufferedResponses.append(response)
                         self.metrics.emit(Metrics.Messenger.TotalResponseChunksInBuffer(
                             value: bufferedResponses.count,
@@ -555,7 +719,7 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                             CloudBoardMessengerCheckpoint(
                                 logMetadata: self.logMetadata(spanID: self.spanID),
                                 message: "Sending encapsulated response"
-                            ).log(response: response, to: Self.logger, level: .debug)
+                            ).log(response: response, to: Self.tracingLogger, level: .debug)
                             await self.server.sendWorkloadResponse(.responseChunk(.init(
                                 encryptedPayload: responseMessage,
                                 isFinal: response.isFinal
@@ -580,7 +744,7 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                             inferenceId: inferenceId
                         ))
                     }
-                case .findWorker(let query):
+                case .findWorker(let query, let negotiate):
                     CloudBoardMessengerCheckpoint(
                         logMetadata: self.logMetadata(spanID: query.spanID),
                         message: "Received findWorker request"
@@ -588,15 +752,24 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                         workerID: query.workerID,
                         serviceName: query.serviceName,
                         routingParameters: query.routingParameters,
-                        to: Self.logger,
+                        to: Self.tracingLogger,
                         level: .debug
                     )
-                    await self.server.sendWorkloadResponse(.findWorker(query))
+                    await self.server.sendWorkloadResponse(.findWorker(query: query, negotiate: negotiate))
+                case .workerNegotiatePickResponse(let workerID, let selectableEnsembles):
+                    CloudBoardMessengerCheckpoint(
+                        logMetadata: self.logMetadata(spanID: self.spanID),
+                        message: "Received NegotiatePick response for worker"
+                    ).log(workerID: workerID, to: Self.tracingLogger, level: .debug)
+                    await self.server.sendWorkloadResponse(.workerNegotiatePickResponse(
+                        workerID,
+                        selectableEnsembles: selectableEnsembles
+                    ))
                 case .workerDecryptionKey(let workerID, let keyID, let encapsulatedKey):
                     CloudBoardMessengerCheckpoint(
                         logMetadata: self.logMetadata(spanID: self.spanID),
                         message: "Received decryption key for worker"
-                    ).log(workerID: workerID, to: Self.logger, level: .debug)
+                    ).log(workerID: workerID, to: Self.tracingLogger, level: .debug)
                     await self.server.sendWorkloadResponse(.workerDecryptionKey(
                         workerID,
                         keyID: keyID,
@@ -606,7 +779,7 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                     CloudBoardMessengerCheckpoint(
                         logMetadata: self.logMetadata(spanID: self.spanID),
                         message: "Received worker request message"
-                    ).log(workerID: workerID, to: Self.logger, level: .debug)
+                    ).log(workerID: workerID, to: Self.tracingLogger, level: .debug)
                     await self.server.sendWorkloadResponse(.workerRequestMessage(
                         workerID,
                         message.chunk,
@@ -616,20 +789,26 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                     CloudBoardMessengerCheckpoint(
                         logMetadata: self.logMetadata(spanID: self.spanID),
                         message: "Received worker EOF"
-                    ).log(workerID: workerID, to: Self.logger, level: .debug)
+                    ).log(workerID: workerID, to: Self.tracingLogger, level: .debug)
                     await self.server.sendWorkloadResponse(.workerRequestEOF(workerID))
                 case .workerError(let workerID):
                     CloudBoardMessengerCheckpoint(
                         logMetadata: self.logMetadata(spanID: self.spanID),
                         message: "Received worker error"
-                    ).log(workerID: workerID, to: Self.logger, level: .debug)
+                    ).log(workerID: workerID, to: Self.tracingLogger, level: .debug)
                     await self.server.sendWorkloadResponse(.workerError(workerID))
                 case .jobHelperEOF:
                     CloudBoardMessengerCheckpoint(
                         logMetadata: self.logMetadata(spanID: self.spanID),
                         message: "Received jobHelper EOF"
-                    ).log(to: Self.logger, level: .debug)
+                    ).log(to: Self.tracingLogger, level: .debug)
                     await self.server.sendWorkloadResponse(.jobHelperEOF)
+                case .requestExecutionError(let error):
+                    CloudBoardMessengerCheckpoint(
+                        logMetadata: self.logMetadata(spanID: self.spanID),
+                        message: "Received request execution error"
+                    ).log(to: Self.tracingLogger, level: .debug)
+                    await self.server.sendWorkloadResponse(.requestExecutionError(error))
                 }
             }
 
@@ -640,64 +819,45 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
                 CloudBoardMessengerCheckpoint(
                     logMetadata: self.logMetadata(spanID: self.spanID),
                     message: "Encoded response stream finished without final response chunk"
-                ).log(to: Self.logger, level: .error)
+                ).log(to: Self.tracingLogger, level: .error)
             } else {
                 CloudBoardMessengerCheckpoint(
                     logMetadata: self.logMetadata(spanID: self.spanID),
                     message: "Finished encoded response stream"
-                ).log(to: Self.logger, level: .default)
+                ).log(to: Self.tracingLogger, level: .default)
             }
         } catch {
             CloudBoardMessengerCheckpoint(
                 logMetadata: self.logMetadata(spanID: self.spanID),
                 message: "Error while running CloudBoardMessenger",
                 error: error
-            ).log(to: Self.logger, level: .fault)
-            if case .awaitingKeys(let promise) = ohttpKeyState {
-                promise.fail(with: error)
-            }
+            ).log(to: Self.tracingLogger, level: .fault)
+            self.ohttpKeyStateMachine.failIfWaiting(error: error)
             throw error
         }
     }
 
     func notifyAttestationClientReconnect() async {
-        // Reset the state
-        switch self.ohttpKeyState {
-        case .initialized, .awaitingKeys:
-            // Nothing to do
-            ()
-        case .available:
-            self.ohttpKeyState = .initialized
-        }
+        self.ohttpKeyStateMachine.resetKeys()
 
         // Obtain latest attestation set in case we missed update from cb_attestationd while we were disconnected
         do {
             CloudBoardMessengerCheckpoint(
                 logMetadata: self.logMetadata(spanID: self.spanID),
                 message: "Requesting new attested key set."
-            ).log(to: Self.logger, level: .default)
+            ).log(to: Self.tracingLogger, level: .default)
             let keySet = try await self.attestationClient.requestAttestedKeySet()
             CloudBoardMessengerCheckpoint(
                 logMetadata: self.logMetadata(spanID: self.spanID),
                 message: "Received OHTTP node keys from attestation daemon after disconnect."
-            ).log(attestedKeySet: keySet, to: Self.logger, level: .default)
-            let keys = try Array(keySet: keySet, laContext: self.laContext)
-            switch self.ohttpKeyState {
-            case .initialized:
-                self.ohttpKeyState = .available(keys)
-            case .awaitingKeys(let promise):
-                promise.succeed(with: keys)
-                self.ohttpKeyState = .available(keys)
-            case .available:
-                // Do nothing. We have already received a broadcasted new set of keys in the meantime.
-                ()
-            }
+            ).log(attestedKeySet: keySet, to: Self.tracingLogger, level: .default)
+            try self.ohttpKeyStateMachine.updateKeys(keys: keySet)
         } catch {
             CloudBoardMessengerCheckpoint(
                 logMetadata: self.logMetadata(spanID: self.spanID),
                 message: "Failed to obtain new OHTTP node keys from attestation daemon after disconnect.",
                 error: error
-            ).log(to: Self.logger, level: .fault)
+            ).log(to: Self.tracingLogger, level: .fault)
             // This is not expected to happen.
             // Better to crash at this point and have a new cb_jobhelper instance come up
             fatalError("Failed to obtain new OHTTP node keys from attestation daemon after disconnect.")
@@ -706,17 +866,120 @@ actor CloudBoardMessenger: CloudBoardJobHelperAPIClientToServerProtocol {
 
     func notifyKeyRotated(newKeySet: CloudBoardAttestationDAPI.AttestedKeySet) async throws {
         Self.logger.log("Updating key set to:' \(newKeySet.description, privacy: .public)")
-        self.ohttpKeyState = try .available(Array(keySet: newKeySet, laContext: self.laContext))
+        try self.ohttpKeyStateMachine.updateKeys(keys: newKeySet)
     }
 }
 
 extension CloudBoardMessenger {
-    private func logMetadata(spanID: String? = nil) -> CloudBoardJobHelperLogMetadata {
+    func logMetadata(spanID: UInt64? = nil) -> CloudBoardJobHelperLogMetadata {
         return CloudBoardJobHelperLogMetadata(
             jobID: self.jobUUID,
             requestTrackingID: self.requestParameters?.requestID ?? "",
             spanID: spanID
         )
+    }
+}
+
+package struct OHttpKeyStateMachine: ~Copyable {
+    internal enum OHttpKeyStateMachineError: ReportableError, Equatable {
+        case illegalStateTransition(String)
+        case neverReceivedKeys
+
+        var publicDescription: String {
+            switch self {
+            case .illegalStateTransition(let reason): "illegalStateTransition:\(reason)"
+            case .neverReceivedKeys: "neverReceivedKeys"
+            }
+        }
+    }
+
+    enum OHttpKeyState {
+        case uninitialised(attestedKeys: AttestedKeySet?)
+        case initialised(LAContext)
+        case available([CachedAttestedKey], LAContext)
+        case awaitingKeys(Promise<[CachedAttestedKey], Error>, LAContext)
+        case used
+    }
+
+    enum ConsumeKeyResult {
+        case available([CachedAttestedKey])
+        case waiting(Promise<[CachedAttestedKey], Error>)
+    }
+
+    internal var state = OHttpKeyState.uninitialised(attestedKeys: nil)
+
+    deinit {
+        if case .awaitingKeys(let promise, _) = self.state {
+            promise.fail(with: OHttpKeyStateMachineError.neverReceivedKeys)
+        }
+    }
+
+    mutating func initialiseLAContext(laContext: LAContext) throws {
+        switch self.state {
+        case .uninitialised(let attestedKeySet):
+            if let attestedKeySet {
+                self.state = try .available(Array(keySet: attestedKeySet, laContext: laContext), laContext)
+            } else {
+                self.state = .initialised(laContext)
+            }
+        case .initialised, .awaitingKeys, .available, .used:
+            throw OHttpKeyStateMachineError.illegalStateTransition("LAContext initialised twice.")
+        }
+    }
+
+    mutating func consumeAttestedKeys() throws -> ConsumeKeyResult {
+        switch self.state {
+        case .uninitialised:
+            throw OHttpKeyStateMachineError.illegalStateTransition("Tried to consume key before initialised LAContext.")
+        case .initialised(let laContext):
+            let promise = Promise<[CachedAttestedKey], Error>()
+            self.state = .awaitingKeys(promise, laContext)
+            return .waiting(promise)
+        case .available(let keys, _):
+            self.state = .used
+            return .available(keys)
+        case .awaitingKeys(let promise, _):
+            return .waiting(promise)
+        case .used:
+            throw OHttpKeyStateMachineError.illegalStateTransition("Tried to consume keys after they were used.")
+        }
+    }
+
+    mutating func updateKeys(keys: AttestedKeySet) throws {
+        switch self.state {
+        case .uninitialised:
+            self.state = .uninitialised(attestedKeys: keys)
+        case .initialised(let laContext), .available(_, let laContext):
+            self.state = try .available(Array(keySet: keys, laContext: laContext), laContext)
+        case .awaitingKeys(let promise, let laContext):
+            let keys = try Array(keySet: keys, laContext: laContext)
+            self.state = .used
+            promise.succeed(with: keys)
+        case .used:
+            // ignore any new updates from attestation server, since we are already using
+            // or have used the keys and don't require a new one any more.
+            ()
+        }
+    }
+
+    mutating func resetKeys() {
+        switch self.state {
+        case .initialised, .awaitingKeys, .used:
+            // Do nothing if either we don't have keys yet
+            // or if they are already being used, or have been used.
+            ()
+        case .available(_, let laContext):
+            self.state = .initialised(laContext)
+        case .uninitialised:
+            self.state = .uninitialised(attestedKeys: nil)
+        }
+    }
+
+    mutating func failIfWaiting(error: Error) {
+        if case .awaitingKeys(let promise, _) = self.state {
+            promise.fail(with: error)
+        }
+        self.state = .used
     }
 }
 
@@ -777,7 +1040,7 @@ struct CloudBoardMessengerCheckpoint: RequestCheckpoint {
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
         remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
         request.uuid=\(self.requestID ?? "", privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
@@ -796,7 +1059,7 @@ struct CloudBoardMessengerCheckpoint: RequestCheckpoint {
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
         remotePid=\(String(describing: self.logMetadata.remotePID), privacy: .public)
         request.uuid=\(self.requestID ?? "", privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
@@ -818,7 +1081,7 @@ struct CloudBoardMessengerCheckpoint: RequestCheckpoint {
         remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
         request.uuid=\(self.requestID ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
@@ -838,7 +1101,7 @@ struct CloudBoardMessengerCheckpoint: RequestCheckpoint {
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
         remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
         request.uuid=\(self.requestID ?? "", privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
@@ -860,7 +1123,7 @@ struct CloudBoardMessengerCheckpoint: RequestCheckpoint {
         request.uuid=\(self.requestID ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         status=\(status?.rawValue ?? "", privacy: .public)
@@ -885,7 +1148,7 @@ struct CloudBoardMessengerCheckpoint: RequestCheckpoint {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         status=\(status?.rawValue ?? "", privacy: .public)
         error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
@@ -908,7 +1171,7 @@ struct CloudBoardMessengerCheckpoint: RequestCheckpoint {
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
         remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
         request.uuid=\(self.requestID ?? "", privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
@@ -978,6 +1241,61 @@ extension [CachedAttestedKey] {
 
         for unpublishedKey in keySet.unpublishedKeys {
             try self.append(CachedAttestedKey(unpublishedKey, laContext: laContext))
+        }
+    }
+}
+
+extension CachedAttestedKey: Equatable {
+    static func == (lhs: CachedAttestedKey, rhs: CachedAttestedKey) -> Bool {
+        return lhs.attestedKey == rhs.attestedKey
+    }
+}
+
+extension OHttpKeyStateMachine.OHttpKeyState: Equatable {
+    static func == (lhs: OHttpKeyStateMachine.OHttpKeyState, rhs: OHttpKeyStateMachine.OHttpKeyState) -> Bool {
+        switch lhs {
+        case .uninitialised(let keySet):
+            if case .uninitialised(let otherKeySet) = rhs {
+                return keySet == otherKeySet
+            }
+            return false
+        case .initialised:
+            if case .initialised = rhs {
+                return true
+            }
+            return false
+        case .available(let cachedKeys, _):
+            if case .available(let otherCachedKeys, _) = rhs {
+                return cachedKeys == otherCachedKeys
+            }
+            return false
+        case .awaitingKeys:
+            if case .awaitingKeys = rhs {
+                return true
+            }
+            return false
+        case .used:
+            if case .used = rhs {
+                return true
+            }
+            return false
+        }
+    }
+}
+
+extension OHttpKeyStateMachine.ConsumeKeyResult: Equatable {
+    static func == (lhs: OHttpKeyStateMachine.ConsumeKeyResult, rhs: OHttpKeyStateMachine.ConsumeKeyResult) -> Bool {
+        switch lhs {
+        case .available(let cachedKeys):
+            if case .available(let rhsCachedKeys) = rhs {
+                return cachedKeys == rhsCachedKeys
+            }
+            return false
+        case .waiting:
+            if case .waiting = rhs {
+                return true
+            }
+            return false
         }
     }
 }

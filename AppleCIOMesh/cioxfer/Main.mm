@@ -94,12 +94,12 @@ dispatch_semaphore_t bufferSem[fileTransferBufferCount];
 static void *
 allocateBuffer(uint64_t bufferSize)
 {
-	uint8_t * buffer;
-	if (posix_memalign((void **)&buffer, 1 << 14, bufferSize) != 0) {
-		fprintf(stderr, "failed to allocate memaligned buffer\n");
+	uint8_t * buffer = (uint8_t*)malloc(bufferSize);
+    if (buffer == NULL) {
+        fprintf(stderr, "malloc failed for %llu bytes, errno: %d (%s)\n",
+            bufferSize, errno, strerror(errno));
 		return NULL;
 	};
-
 	// make sure all the memory is present so that the cost of faulting
 	// in the pages isn't paid for by other code.
 	memset(buffer, 0xa5, bufferSize);

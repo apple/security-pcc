@@ -12,39 +12,278 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardJob
 import CloudBoardLogging
 import CloudBoardMetrics
 import os
 
+// Warning: If someone is looking to implement a CloudApp and using this as a template *don't*
+// This app is unusual in several respects:
+// - It uses package level APIs in CloudBoard not shared in the SDK
+// - It does operations that a "reasonable" cloud app wouldn't do like crashing, ignoring input
+// This is a testing tool, but still entirely safe and private as a CloudApp should be.
+// it's not a template to base your real use case on.
+
+/// This is an exhaustive list, there is no dynamic registration
+/// for legacy reasons this is "service name" not "role" and the
+/// string forms are suffixed "App" not role
+enum NullAppServiceName: String {
+    /// used only in failure scenarios
+    case unknown
+
+    // MARK: Compute Roles
+
+    case testApp = "TestApp"
+    case echoApp = "EchoApp"
+
+    // MARK: Proxy Roles
+
+    case proxyApp = "ProxyApp"
+    case proxyScriptApp = "ProxyScriptApp"
+    case multiNodeProxyApp = "MultiNodeProxyApp"
+}
+
+/// The NullCloudApp serves as the 'host' for a single ``NullAppRole`` which may not be known till the
+/// point it runs.
+/// Note: work a bit harder here to give good error messages - this app is used heavily in testing the extra
+/// information provided will save time in the long run
 @main
 actor NullCloudApp: CloudBoardApp {
     static let metricsClientName = "cloudboard_null_app"
 
-    static let log: Logger = .init(
+    /// Allows request specific control of the mode for the compute node,
+    /// either the direct mode initial request, or the makePCCRequests of the proxy will state it
+    static let workloadComputeModeKey: StaticString = "nullapp-compute-mode"
+    /// Allows request specific control of the mode for the proxy node,
+    /// Only legal on the initial request to the proxy nodes
+    static let workloadProxyModeKey: StaticString = "nullapp-proxy-mode"
+
+    /// This is passed to the NullAppRoles where required so that the logging in the null
+    /// app is from a consistent source. this makes it easier to diagnose issues for users
+    private static let log: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
         category: "CloudBoardNullApp"
     )
 
-    var config: NullCloudAppConfig?
+    var _config: NullCloudAppConfig?
+    var config: NullCloudAppConfig {
+        guard let config = self._config else {
+            fatalError("attempt to reference config before a successful warmup")
+        }
+        return config
+    }
 
     let metrics: any MetricsSystem
+    let isProxy: Bool
 
-    public init() {
+    /// The instantiated role from the main run method, available for sub-requests
+    private var currentRole: (any NullAppRole)?
+
+    init() {
         self.metrics = CloudMetricsSystem(clientName: Self.metricsClientName)
+
+        // The null app is not used in mocks which lets us make a simple and safe decisions on secure config
+        // that it is always the real config
+        // Failure to read it is terminal because we rely on it to determine if we are a proxy or not
+        do {
+            Self.log.debug("Loading secure config from SecureConfigDB")
+            let secureConfig = try SecureConfigLoader.real.load()
+            self.isProxy = secureConfig.isProxy
+        } catch {
+            fatalError("Error loading secure config: \(String(unredacted: error))")
+        }
     }
 
     func warmup() throws {
         Self.log.log("NullCloudApp warmup invoked")
-        self.config = try NullCloudAppConfig.fromPreferences()
+        self._config = try NullCloudAppConfig.fromPreferences(logger: Self.log)
         Self.log.log("NullCloudApp preferences loaded")
 
-        if case .some("crashInWarmup") = self.config?.nullAppRole {
-            NullCloudApp.log.log("Crashing as instructed during warmup")
+        // Warmup can only ever know about the configuredRole role (if configured)
+        // this is a very specific edge case just for development testing so it's not a problem
+        if case .some("crashInWarmup") = self.config.nullAppRole {
+            Self.log.log("Crashing as instructed during warmup")
             fatalError("Crashing as instructed during warmup")
+        }
+    }
+
+    /// This returns the final role names
+    /// Full validation they are _legal_ based on the proxy state is dealt with later
+    /// but some illegal values will result in ``NullCloudAppRoleError``
+    /// It can only be called once the config is loaded
+    private func determineRoleNames(
+        workloadParameters: [String: [String]]
+    ) throws -> (ownRoleName: String, makePCCRequestRoleName: String?) {
+        func getRoleNameFromWorkload(_ name: StaticString) throws -> String? {
+            let roleParameter = workloadParameters[name.description]
+            guard let roleParameter else {
+                return nil
+            }
+            // Don't allow an empty/multi values array, this is almost certainly a screw up so fail fast
+            if roleParameter.count == 0 {
+                throw NullCloudAppRoleError.workloadParameterMalformed(
+                    parameterName: name,
+                    reason: "empty array not legal, don't specify it"
+                )
+            }
+            if roleParameter.count != 1 {
+                throw NullCloudAppRoleError.workloadParameterMalformed(
+                    parameterName: name,
+                    reason: "multiple values not legal"
+                )
+            }
+            return roleParameter[0]
+        }
+        let defaultRole: String = if let fromConfig = self.config.nullAppRole {
+            fromConfig
+        } else {
+            // Note: before the addition of runtime selectable roles the default for compute nodes was "echo"
+            // The default is "test" as that's what the tooling using the nulll app for health probes expects
+            // and is likely what most developers/users desire
+            self.isProxy ? "proxy" : "test"
+        }
+
+        let proxyRoleFromWorkload = try getRoleNameFromWorkload(Self.workloadProxyModeKey)
+        let computeRoleFromWorkload = try getRoleNameFromWorkload(Self.workloadComputeModeKey)
+
+        if self.isProxy {
+            guard let proxyRoleFromWorkload else {
+                return (defaultRole, computeRoleFromWorkload)
+            }
+            return (proxyRoleFromWorkload, computeRoleFromWorkload)
+        }
+        guard proxyRoleFromWorkload == nil else {
+            throw NullCloudAppRoleError.specifiedProxyRoleToComputeNode
+        }
+        // compute nodes never make PCC requests
+        let makePCCRequestRoleName: String? = nil
+        guard let computeRoleFromWorkload else {
+            return (defaultRole, makePCCRequestRoleName)
+        }
+        return (computeRoleFromWorkload, makePCCRequestRoleName)
+    }
+
+    /// This knows all possible roles - there is no dynamic loading here - just a simple map from strings
+    /// to constructors.
+    /// This is the final check on legality - if a role is not reasonable to run for some reason this will throw
+    private func instantiateRole(
+        roleName: String,
+        environment: CloudBoardJobCore.CloudAppEnvironment,
+        makePCCRequestRoleName: String?
+    ) throws -> (any NullAppRole, NullAppRole.Type) {
+        let roleType: NullAppRole.Type
+        switch roleName {
+        case "echo":
+            roleType = EchoApp.self
+        case "test":
+            roleType = TestApp.self
+        case "proxy":
+            roleType = ProxyApp.self
+        case "proxy-script":
+            roleType = ScriptedProxy.self
+        case "proxy-multi-node":
+            roleType = MultiNodeProxyApp.self
+        default:
+            roleType = InvalidRole.self
+            Self.log
+                .error(
+                    "Unknown role \(roleName, privacy: .public) - mapping to \(roleType.serviceName.rawValue, privacy: .public) for metrics"
+                )
+        }
+        let serviceName = roleType.serviceName
+        self.metrics.emit(Metrics.LaunchCounter(action: .increment, serviceName: serviceName))
+        func mustBeProxy() throws -> PCCRequestSemantics {
+            guard self.isProxy else {
+                throw NullCloudAppRoleError.notLegalForProxy(role: roleName)
+            }
+            return PCCRequestSemantics(
+                configuration: self.config.proxyConfiguration,
+                environment: environment,
+                requestSpecificComputeWorkload: makePCCRequestRoleName
+            )
+        }
+        func mustBeCompute() throws {
+            guard !self.isProxy else {
+                throw NullCloudAppRoleError.notLegalForCompute(role: roleName)
+            }
+        }
+        // Switch again because the constructors are different
+        // This is nicer than pushing _everything_ through run, and lets the roles themselves
+        // be relatively clean types with well structured init and state
+        let role: any NullAppRole
+        do {
+            switch roleName {
+            // MARK: compute specific
+
+            case "echo":
+                try mustBeCompute()
+                role = EchoApp(log: Self.log)
+            case "test":
+                try mustBeCompute()
+                role = TestApp(log: Self.log)
+
+            // MARK: proxy specific
+            case "proxy":
+                let semantics = try mustBeProxy()
+                role = ProxyApp(log: Self.log, semantics: semantics)
+            case "proxy-script":
+                let semantics = try mustBeProxy()
+                role = ScriptedProxy(log: Self.log, semantics: semantics)
+            case "proxy-multi-node":
+                let semantics = try mustBeProxy()
+                role = MultiNodeProxyApp(log: Self.log, semantics: semantics)
+            default:
+                // role came form config, workload parameter or a static string it's fine to pass back
+                throw NullCloudAppRoleError.unknownRole(role: roleName)
+            }
+            return (role, roleType)
+        } catch {
+            self.metrics.emit(Metrics.OverallErrorCounter.Factory().make(error))
+            // we rethrow any errors - including RequestedCrashError
+            throw error
+        }
+    }
+
+    func run(
+        input: CloudBoardJobCore.InputData,
+        responder: CloudBoardJobCore.ResponseWriter,
+        environment: CloudBoardJobCore.CloudAppEnvironment
+    ) async throws {
+        let (ownRoleName, makePCCRequestRoleName) = try self.determineRoleNames(
+            workloadParameters: environment.plaintextMetadata.workloadParameters
+        )
+        let (role, roleType) = try self.instantiateRole(
+            roleName: ownRoleName,
+            environment: environment,
+            makePCCRequestRoleName: makePCCRequestRoleName
+        )
+
+        // Store the role for potential use in sub-requests
+        self.currentRole = role
+
+        let spanID: UInt64 = TraceContextCache.singletonCache.generateNewSpanID()
+        try await NullAppRequestSummary(
+            app: roleType.serviceName,
+            from: environment,
+            spanID: spanID
+        ).loggingRequestSummary(logger: Self.log) {
+            do {
+                try await role.run(input: input, responder: responder, environment: environment, spanID: spanID)
+            } catch {
+                self.metrics.emit(Metrics.OverallErrorCounter.Factory().make(error))
+                // The semantcs of the current implementation is that all errors in the "run" are swallowed
+                // except for RequestedCrashError (The RequestSummary would still log the errors)
+                // This replicates the semantics of some real cloud apps, which would communicate errors
+                // via the pcc layer/ application layer - generally they should not then throw an error though
+                if error is RequestedCrashError {
+                    // Rethrow
+                    throw error
+                } else {
+                    // It is unlikely the role reported it either, but it's definitely not in the PCC layer now
+                    Self.log.warning("Unhandled error \(error) - not being reported back at PCC layer")
+                }
+            }
         }
     }
 
@@ -52,84 +291,32 @@ actor NullCloudApp: CloudBoardApp {
         Self.log.log("NullCloudApp teardown invoked, exiting")
         exit(0)
     }
-
-    func run(input: InputData, responder: ResponseWriter, environment: CloudAppEnvironment) async throws {
-        switch self.config?.nullAppRole {
-        case .none, .some("echo"):
-            self.metrics.emit(Metrics.LaunchCounter(action: .increment, serviceName: .echoApp))
-            do {
-                try await NullAppRequestSummary(
-                    app: .echoApp,
-                    from: environment,
-                    spanID: TraceContextCache.singletonCache.generateNewSpanID()
-                )
-                .loggingRequestSummary(logger: NullCloudApp.log) {
-                    return try await EchoApp().run(input: input, responder: responder, environment: environment)
-                }
-            } catch {
-                self.metrics.emit(Metrics.OverallErrorCounter.Factory().make(error))
-                if error is RequestedCrashError {
-                    // Rethrow
-                    throw error
-                }
-            }
-        case .some("test"):
-            self.metrics.emit(Metrics.LaunchCounter(action: .increment, serviceName: .testApp))
-            do {
-                try await NullAppRequestSummary(
-                    app: .testApp,
-                    from: environment,
-                    spanID: TraceContextCache.singletonCache.generateNewSpanID()
-                )
-                .loggingRequestSummary(logger: NullCloudApp.log) {
-                    return try await TestApp().run(input: input, responder: responder, environment: environment)
-                }
-            } catch {
-                self.metrics.emit(Metrics.OverallErrorCounter.Factory().make(error))
-                if error is RequestedCrashError {
-                    // Rethrow
-                    throw error
-                }
-            }
-        case .some("proxy"):
-            self.metrics.emit(Metrics.LaunchCounter(action: .increment, serviceName: .testApp))
-            do {
-                let spanID = TraceContextCache.singletonCache.generateNewSpanID()
-                try await NullAppRequestSummary(app: .proxyApp, from: environment, spanID: spanID)
-                    .loggingRequestSummary(logger: NullCloudApp.log) {
-                        return try await ProxyApp(configuration: self.config?.proxyConfiguration).run(
-                            input: input,
-                            responder: responder,
-                            environment: environment,
-                            spanID: spanID
-                        )
-                    }
-            } catch {
-                self.metrics.emit(Metrics.OverallErrorCounter.Factory().make(error))
-                throw error
-            }
-        default:
-            self.metrics.emit(Metrics.LaunchCounter(action: .increment, serviceName: .unknown))
-            let error = NullCloudAppUnknownAppError(role: self.config?.nullAppRole)
-            Self.log.fault("""
-            request.uuid=\(environment.plaintextMetadata.requestID, privacy: .public)
-            error=\(String(reportable: error))
-            """)
-            self.metrics.emit(Metrics.OverallErrorCounter.Factory(action: .increment).make(error))
-        }
-    }
 }
 
-enum NullAppServiceName: String {
-    case testApp = "TestApp"
-    case echoApp = "EchoApp"
-    case proxyApp = "ProxyApp"
-    case unknown
-}
+enum NullCloudAppRoleError: ReportableError {
+    case unknownRole(role: String)
+    case notLegalForProxy(role: String)
+    case notLegalForCompute(role: String)
+    case workloadParameterMalformed(parameterName: StaticString, reason: StaticString)
+    case specifiedProxyRoleToComputeNode
+    case subrequestUnsupportedForRole(role: String)
 
-struct NullCloudAppUnknownAppError: ReportableError {
-    public var role: String?
     var publicDescription: String {
-        "unknownApp \(String(describing: self.role))"
+        switch self {
+        case .unknownRole(let role):
+            return "Unknown role \(role)"
+        case .notLegalForProxy(let role):
+            return "Role \(role) is not legal for proxy"
+        case .notLegalForCompute(let role):
+            return "Role \(role) is not legal for compute"
+        case .workloadParameterMalformed(let parameterName, let reason):
+            return "Role cannot be parsed from  \(parameterName.description) due to \(reason.description)"
+        case .specifiedProxyRoleToComputeNode:
+            // It's legal for proxy to be _told_ the compute role - it passes that on in the makeRequest calls
+            // the other way round strongly implies an error so fail fast
+            return "The compute node should never get a proxy role sepcified in the workload parameters"
+        case .subrequestUnsupportedForRole(let role):
+            return "Subrequests are not supported for role \(role)"
+        }
     }
 }

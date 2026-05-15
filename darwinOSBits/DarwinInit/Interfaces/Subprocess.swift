@@ -20,6 +20,7 @@
 import Foundation
 import os
 import System
+internal import DarwinInitBridging
 
 /// `CStringArray` represents a C null-terminated array of pointers to C strings.
 ///

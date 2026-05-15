@@ -47,7 +47,6 @@ import os
 /// }
 /// ```
 public final class CloudMetrics: Sendable {
-
     /// Track the state of ``CloudMetrics``.
     ///
     /// We expect to only ever go `nonBootstrapped`->`bootstrapping`->`bootstrapped`->`shuttingDown`->`shutdown`
@@ -55,7 +54,7 @@ public final class CloudMetrics: Sendable {
         case nonBootstrapped
         case bootstrapped(CloudMetricsFactory, AsyncStream<CloudMetricsServiceMessages>)
         case running(CloudMetricsFactory)
-        case shuttingDown(Promise<(), Error>)
+        case shuttingDown(Promise<Void, Error>)
         case shutdown
     }
 
@@ -63,12 +62,12 @@ public final class CloudMetrics: Sendable {
     private static let state: OSAllocatedUnfairLock<State> = .init(initialState: .nonBootstrapped)
     // If cloudmetricsd isn't correctly configured and listening we can buffer requests in an async stream.
     // We don't want this to grow unbounded and crash the process linking CloudMetricsFramework.
-    private static let defaultMaxMetricUpdatesToBuffer = 10_000
+    private static let defaultMaxMetricUpdatesToBuffer = 10000
     private static let logger = Logger(subsystem: kCloudMetricsLoggingSubsystem, category: "CloudMetricsFramework")
 
     @available(*, deprecated, renamed: "CloudMetrics.run()", message: "Prefer calling async method CloudMetrics.run()")
-    public static func bootstrap(clientName: String) {
-        bootstrap()
+    public static func bootstrap(clientName _: String) {
+        self.bootstrap()
     }
 
     /// Initialise ``CloudMetrics`` as a global metrics handler.
@@ -76,10 +75,11 @@ public final class CloudMetrics: Sendable {
     /// This should be called by applications precisely once to register ``CloudMetrics`` as a global metrics handler.
     ///
     /// Applications that call ``bootstrap()`` are encouraged to call ``invalidate()`` as part of their
-    /// shutdown to flush metrics to the backend. If applcations omit that call, metrics will be flushed when the application
+    /// shutdown to flush metrics to the backend. If applcations omit that call, metrics will be flushed when the
+    /// application
     /// exits.
     public static func bootstrap() {
-        Self.bootstrap(xpcServiceName: kCloudMetricsXPCServiceName, bootstrapInternal: false)
+        self.bootstrap(xpcServiceName: kCloudMetricsXPCServiceName, bootstrapInternal: false)
         atexit {
             CloudMetrics.invalidate()
         }
@@ -87,30 +87,35 @@ public final class CloudMetrics: Sendable {
 
     /// Package-scoped function for testing.
     package static func bootstrap(xpcServiceName: String, bootstrapInternal: Bool) {
-        logger.log("CloudMetrics beginning bootstrap")
+        self.logger.log("CloudMetrics beginning bootstrap")
         do {
-            try Self.bootstrapForAsync()
+            try self.bootstrapForAsync()
         } catch {
-            logger.critical("Bootstrapping failed. Unable to start metrics")
+            self.logger.critical("Bootstrapping failed. Unable to start metrics")
             return
         }
         // Need an unstructured task here for backwards compatibility.
         // Existing clients are calling .bootstrap and we don't want to break them by forcing them to call .run()
         Task {
             // Run the service. This won't return until the service is shutdown
-            try await Self.run(xpcServiceName: xpcServiceName,
-                               bootstrapInternal: bootstrapInternal)
+            try await Self.run(
+                xpcServiceName: xpcServiceName,
+                bootstrapInternal: bootstrapInternal
+            )
         }
     }
 
     public static func bootstrapForAsync() throws {
-        try Self.bootstrapForAsync(bootstrapInternal: false)
+        try self.bootstrapForAsync(bootstrapInternal: false)
     }
 
     package static func bootstrapForAsync(bootstrapInternal: Bool) throws {
         var validPreference: DarwinBoolean = true
-        var maxUpdatesToBuffer: Int = CFPreferencesGetAppIntegerValue("maxCloudMetricsUpdatesToBuffer" as CFString,
-                                                                      kCFPreferencesCurrentApplication, &validPreference)
+        var maxUpdatesToBuffer: Int = CFPreferencesGetAppIntegerValue(
+            "maxCloudMetricsUpdatesToBuffer" as CFString,
+            kCFPreferencesCurrentApplication,
+            &validPreference
+        )
         if !validPreference.boolValue {
             maxUpdatesToBuffer = Self.defaultMaxMetricUpdatesToBuffer
         }
@@ -118,13 +123,14 @@ public final class CloudMetrics: Sendable {
         // Setup the factory's dependencies.
         // We need an ``AsyncStream`` from which we will receive updates from the sync world
         // and an XPC client with which we will communicate with the daemon.
-        logger.log("Beginning bootstrap of CloudMetrics")
+        self.logger.log("Beginning bootstrap of CloudMetrics")
         try self.state.withLock { state in
             switch (state, bootstrapInternal) {
             case (.nonBootstrapped, _), (_, true):
-                let (metricUpdateStream, metricUpdateContinuation) = AsyncStream<CloudMetricsServiceMessages>.makeStream(
-                    bufferingPolicy: .bufferingOldest(maxUpdatesToBuffer)
-                )
+                let (metricUpdateStream, metricUpdateContinuation) = AsyncStream<CloudMetricsServiceMessages>
+                    .makeStream(
+                        bufferingPolicy: .bufferingOldest(maxUpdatesToBuffer)
+                    )
                 let factory = CloudMetricsFactory(metricUpdateContinuation: metricUpdateContinuation)
                 if bootstrapInternal {
                     MetricsSystem.bootstrapInternal(factory)
@@ -133,7 +139,7 @@ public final class CloudMetrics: Sendable {
                 }
                 state = .bootstrapped(factory, metricUpdateStream)
             default:
-                logger.error("Bootstrap called twice")
+                self.logger.error("Bootstrap called twice")
                 throw CloudMetricsError.bootstrapCalledTwice
             }
         }
@@ -152,15 +158,17 @@ public final class CloudMetrics: Sendable {
 
     public static func run() async throws {
         do {
-            try await Self.run(xpcServiceName: kCloudMetricsXPCServiceName, bootstrapInternal: false)
+            try await self.run(xpcServiceName: kCloudMetricsXPCServiceName, bootstrapInternal: false)
         } catch {
-            logger.error("Unexpected error running CloudMetricsFramework. error=\(error, privacy: .private)")
+            self.logger.error("Unexpected error running CloudMetricsFramework. error=\(error, privacy: .private)")
             throw error
         }
     }
 
-    package static func run(xpcServiceName: String = kCloudMetricsXPCServiceName,
-                            bootstrapInternal: Bool = false) async throws {
+    package static func run(
+        xpcServiceName: String = kCloudMetricsXPCServiceName,
+        bootstrapInternal _: Bool = false
+    ) async throws {
         let metricUpdateStream = try self.state.withLock { state in
             switch state {
             case .nonBootstrapped: throw CloudMetricsError.bootstrapNotCalled
@@ -172,9 +180,9 @@ public final class CloudMetrics: Sendable {
         }
 
         Self.logger.log("""
-            Initialising CloudMetrics XPC client. \
-            xpc_service_name=\(xpcServiceName, privacy: .public)
-            """)
+        Initialising CloudMetrics XPC client. \
+        xpc_service_name=\(xpcServiceName, privacy: .public)
+        """)
         let xpcClient = CloudMetricsXPCClient(xpcServiceName: xpcServiceName)
 
         // When the factory finishes, adjust our state to reflect we're now shutdown.
@@ -193,6 +201,9 @@ public final class CloudMetrics: Sendable {
         // asyncMetricDispatcher.run() returns when its asyncStream is finished
         let asyncMetricDispatcher = AsyncMetricDispatcher(xpcClient: xpcClient, metricUpdateStream: metricUpdateStream)
         try await asyncMetricDispatcher.run()
+
+        // disconnect the xpc client so cloudmetricsd doesnt keep emitting last known value
+        try await xpcClient.disconnect()
     }
 
     public static func invalidate() {
@@ -206,48 +217,50 @@ public final class CloudMetrics: Sendable {
     ///
     /// Adopters should call ``shutdown()`` as part of their application's shutdown routine.
     ///
-    /// When this is called any already-executed metric changes (e.g. counter increments) will be processed. But any future
+    /// When this is called any already-executed metric changes (e.g. counter increments) will be processed. But any
+    /// future
     /// changes will not be executed.
     public static func shutdown() async {
-        logger.log("Beginning shutdown of CloudMetrics")
+        self.logger.log("Beginning shutdown of CloudMetrics")
         let shutdownFuture = Self.state.withLock { state in
-            let future: Future<(), Error>?
+            let future: Future<Void, Error>?
             switch state {
             case .nonBootstrapped:
-                logger.error("CloudMetrics.shutdown called without having called CloudMetrics.run.")
+                self.logger.error("CloudMetrics.shutdown called without having called CloudMetrics.run.")
                 // Still shutdown the client.
                 state = .shutdown
                 future = nil
             case .bootstrapped:
-                logger.warning("CloudMetrics shutdown without having been run")
+                self.logger.warning("CloudMetrics shutdown without having been run")
                 state = .shutdown
                 future = nil
             case .running(let factory):
                 // Finish the continuation to start the process of shutting down the client
                 factory.metricUpdateContinuation.finish()
-                let promise = Promise<(), Error>()
+                let promise = Promise<Void, Error>()
                 state = .shuttingDown(promise)
                 future = .init(promise)
             case .shuttingDown(let promise):
-                logger.log("CloudMetrics.shutdown called whilst already shutting down.")
+                self.logger.log("CloudMetrics.shutdown called whilst already shutting down.")
                 future = .init(promise)
             case .shutdown:
-                // Might not be an error: some users call `invalidate()` themselves and others rely on the `atExit` hook.
-                logger.log("CloudMetrics.shutdown called when already shutdown.")
+                // Might not be an error: some users call `invalidate()` themselves and others rely on the `atExit`
+                // hook.
+                self.logger.log("CloudMetrics.shutdown called when already shutdown.")
                 future = nil
             }
             return future
         }
         do {
-            logger.log("Waiting for CloudMetrics to finish shutdown")
+            self.logger.log("Waiting for CloudMetrics to finish shutdown")
             try await shutdownFuture?.valueWithCancellation
         } catch {
-            logger.error("Error occurred during CloudMetrics shutdown")
+            self.logger.error("Error occurred during CloudMetrics shutdown")
         }
     }
 
     internal static var sharedFactory: CloudMetricsFactory? {
-        Self.state.withLock { state in
+        state.withLock { state in
             switch state {
             case .bootstrapped(let factory, _):
                 return factory

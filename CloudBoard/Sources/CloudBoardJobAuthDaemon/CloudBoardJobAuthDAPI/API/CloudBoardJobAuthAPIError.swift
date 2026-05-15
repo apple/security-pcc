@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 public enum CloudBoardJobAuthAPIError: Error, Codable, Hashable {
     case internalError
     case noDelegateSet

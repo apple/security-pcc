@@ -42,7 +42,7 @@ public enum EnsembleWatchdogService {
 			return
 		}
 		#else
-		self.logger.error("cloudOSWatchdogClient not available (build time)")
+        EnsemblerService.logger.error("cloudOSWatchdogClient not available (build time)")
 		return
 		#endif
 	}

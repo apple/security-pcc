@@ -107,8 +107,9 @@ extension FilePath {
 			logger.debug("\(self) is not a directory!")
 			throw Errno.notDirectory
 		}
+        
 		let fileURLs = try FileManager.default.contentsOfDirectory(
-			at: URL(filePath: self.description, directoryHint: .isDirectory),
+            at: URL(filePath: self.string, directoryHint: .isDirectory),
 			includingPropertiesForKeys: nil,
 			options: .skipsSubdirectoryDescendants)
 		for fileURL in fileURLs {
@@ -127,11 +128,11 @@ extension FilePath {
 		let resourceKeys = Set<URLResourceKey>([.isDirectoryKey])
 
 		guard let enumerator = FileManager.default.enumerator(
-			at: URL(filePath: self.description, directoryHint: .isDirectory),
+			at: URL(filePath: self.string, directoryHint: .isDirectory),
 			includingPropertiesForKeys: Array(resourceKeys),
 			options: .producesRelativePathURLs) else {
 			logger.error("Failed to create directory enumerator")
-			throw Errno.attributeNotFound
+            throw Errno.notRecoverable
 		}
 
 		for case let fileSystemItem as URL in enumerator {
@@ -149,4 +150,25 @@ extension FilePath {
 
 		return values
 	}
+    
+    func isEmptyDirectory() throws -> Bool {
+        if (try? self.directoryExists()) != true {
+            logger.debug("\(self) is not a directory!")
+            throw Errno.notDirectory
+        }
+        
+        guard let enumerator = FileManager.default.enumerator(
+            at: URL(filePath: self.string, directoryHint: .isDirectory),
+            includingPropertiesForKeys: nil,
+            options: .skipsSubdirectoryDescendants) else {
+            logger.error("Failed to create directory enumerator")
+            throw Errno.notRecoverable
+        }
+        
+        for case let fileSystemItem as URL in enumerator {
+            return false
+        }
+        
+        return true
+    }
 }

@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardJobHelperAPI
 import CloudBoardMetrics
@@ -22,6 +20,7 @@ protocol CloudBoardJobHelperInstanceProtocol: Actor {
     func invokeWorkloadRequest(_ request: CloudBoardDaemonToJobHelperMessage) async throws
     func waitForWarmupComplete() async throws
     func waitForExit(returnIfNotUsed: Bool) async throws
+    func laContextUsed() async throws
 }
 
 protocol CloudBoardJobHelperClientProvider: Sendable {
@@ -29,6 +28,8 @@ protocol CloudBoardJobHelperClientProvider: Sendable {
         delegate: CloudBoardJobHelperAPIClientDelegateProtocol,
         _ body: @Sendable (CloudBoardJobHelperInstanceProtocol) async throws -> ReturnValue
     ) async throws -> ReturnValue
+
+    func laContextUsedByClient() async
 }
 
 protocol CloudBoardJobHelperResponseDelegateProvider: Sendable {

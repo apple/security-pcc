@@ -429,6 +429,15 @@ AppleCIOMeshSharedMemory::disassociateAllForwardChain()
 	}
 }
 
+void
+AppleCIOMeshSharedMemory::resetForwardingChains()
+{
+    for (int i = (int)_forwardChains->getCount() - 1; i >= 0; i--) {
+        AppleCIOForwardChain * fChain = (AppleCIOForwardChain *)_forwardChains->getObject((unsigned int)i);
+        fChain->reset();
+    }
+}
+
 bool
 AppleCIOMeshSharedMemory::createAssignment(int64_t offset, MUCI::MeshDirection direction, MCUCI::NodeId node, int64_t size)
 {

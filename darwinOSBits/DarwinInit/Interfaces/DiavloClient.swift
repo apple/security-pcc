@@ -18,6 +18,7 @@
 //
 
 import Foundation
+import os
 
 enum DiavloClientError: Error {
     case invalidBORD

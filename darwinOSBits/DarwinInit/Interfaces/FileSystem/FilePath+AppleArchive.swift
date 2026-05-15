@@ -17,6 +17,7 @@
 //  DarwinInit
 //
 
+import Foundation
 import System
 import AppleArchive
 import CryptoKit
@@ -138,7 +139,7 @@ extension FilePath {
         // decryption spawns additional threads, 12 is sufficient to saturate IO on production hardware
         // i.e. increasing the thread count beyond 12 does not increase decryption speed
         let decryptionThreadCount = 12
-        logger.info("Using thread count: \(decryptionThreadCount) to decrypt cryptex")
+        logger.info("Decryption thread count: \(decryptionThreadCount) (\(self))")
         guard let decryptStream = ArchiveByteStream.decryptionStream(
             readingFrom: archiveStream,
 			encryptionContext: encryptionContext,
@@ -385,6 +386,24 @@ extension FilePath {
 			return nil
 		}
 	}
+    
+    func readAppleEncryptedArchiveIdentifier() throws -> Data? {
+        guard let archiveStream = ArchiveByteStream.fileStream(
+            path: self,
+            mode: .readOnly,
+            options: [],
+            permissions: [.ownerReadWrite, .groupRead, .otherRead]) else {
+            logger.error("Failed to open archive file stream for \(self, privacy: .public)")
+            throw AppleArchiveError.streamOpenFailure
+        }
+        
+        guard let encryptionContext = ArchiveEncryptionContext(from: archiveStream) else {
+            logger.error("Failed to get encryption context for \(self, privacy: .public)")
+            throw AppleArchiveError.encryptionContextFailure
+        }
+        
+        return encryptionContext.archiveIdentifier
+    }
 }
 
 fileprivate func _encodeAppleArchive(toArchiveByteStream stream: ArchiveByteStream, from path: FilePath) throws {

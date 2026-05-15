@@ -35,13 +35,50 @@ fileprivate struct _GeneratedWithProtocGenSwiftVersion: InternalSwiftProtobuf.Pr
   typealias Version = _2
 }
 
-struct Proto_PrivateCloudCompute_PrivateCloudComputeRequest: @unchecked Sendable {
+enum Proto_PrivateCloudCompute_SubrequestExecutionPriority: InternalSwiftProtobuf.Enum, Swift.CaseIterable {
+  typealias RawValue = Int
+  case requestExecutionPriorityUnspecified // = 0
+
+  /// may be discarded, e.g. because of high utilization
+  case requestExecutionPriorityDiscardable // = 1
+  case UNRECOGNIZED(Int)
+
+  init() {
+    self = .requestExecutionPriorityUnspecified
+  }
+
+  init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .requestExecutionPriorityUnspecified
+    case 1: self = .requestExecutionPriorityDiscardable
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  var rawValue: Int {
+    switch self {
+    case .requestExecutionPriorityUnspecified: return 0
+    case .requestExecutionPriorityDiscardable: return 1
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  static let allCases: [Proto_PrivateCloudCompute_SubrequestExecutionPriority] = [
+    .requestExecutionPriorityUnspecified,
+    .requestExecutionPriorityDiscardable,
+  ]
+
+}
+
+struct Proto_PrivateCloudCompute_PrivateCloudComputeRequest: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
   var type: Proto_PrivateCloudCompute_PrivateCloudComputeRequest.OneOf_Type? = nil
 
+  /// Contains user's request data when `OpenRequestPayload.version == 0`.
   var applicationPayload: Data {
     get {
       if case .applicationPayload(let v)? = type {return v}
@@ -51,12 +88,13 @@ struct Proto_PrivateCloudCompute_PrivateCloudComputeRequest: @unchecked Sendable
   }
 
   /// Metadata not passed on to the application service but used by cb_jophelper
-  var authToken: Proto_PrivateCloudCompute_AuthToken {
+  /// Sent once at the outset of the connection (contains fraud-related information)
+  var `open`: Proto_PrivateCloudCompute_OpenRequestPayload {
     get {
-      if case .authToken(let v)? = type {return v}
-      return Proto_PrivateCloudCompute_AuthToken()
+      if case .open(let v)? = type {return v}
+      return Proto_PrivateCloudCompute_OpenRequestPayload()
     }
-    set {type = .authToken(newValue)}
+    set {type = .open(newValue)}
   }
 
   var finalMessage: Proto_PrivateCloudCompute_FinalMessage {
@@ -67,20 +105,87 @@ struct Proto_PrivateCloudCompute_PrivateCloudComputeRequest: @unchecked Sendable
     set {type = .finalMessage(newValue)}
   }
 
+  var payloadChunk: Proto_PrivateCloudCompute_PayloadChunk {
+    get {
+      if case .payloadChunk(let v)? = type {return v}
+      return Proto_PrivateCloudCompute_PayloadChunk()
+    }
+    set {type = .payloadChunk(newValue)}
+  }
+
+  var subOpen: Proto_PrivateCloudCompute_OpenSubrequestPayload {
+    get {
+      if case .subOpen(let v)? = type {return v}
+      return Proto_PrivateCloudCompute_OpenSubrequestPayload()
+    }
+    set {type = .subOpen(newValue)}
+  }
+
+  var subClose: Proto_PrivateCloudCompute_CloseSubrequestPayload {
+    get {
+      if case .subClose(let v)? = type {return v}
+      return Proto_PrivateCloudCompute_CloseSubrequestPayload()
+    }
+    set {type = .subClose(newValue)}
+  }
+
+  /// This is internal to cloudboard for communication between proxy and compute nodes and is sent in place of
+  /// OpenRequestPayload
+  var proxyInvokeOpen: Proto_PrivateCloudCompute_ProxyInvokeOpen {
+    get {
+      if case .proxyInvokeOpen(let v)? = type {return v}
+      return Proto_PrivateCloudCompute_ProxyInvokeOpen()
+    }
+    set {type = .proxyInvokeOpen(newValue)}
+  }
+
+  /// Sent by the client to cancel a subrequest, either due to an error or user action.
+  /// Cancellation can occur at any point in the subrequest's processing. For example, it
+  /// can happen before any payload_chunk is sent, during sending, or after successful
+  /// sending while receiving response. Due to the asynchronous nature of the process,
+  /// the client might even send a cancellation after the server has sent the final
+  /// sub_close and while its transitioning to the client.
+  /// The expectation is that upon receiving sub_cancel, the server will attempt to stop
+  /// the processing of the subrequest.
+  var subCancel: Proto_PrivateCloudCompute_CancelSubrequestPayload {
+    get {
+      if case .subCancel(let v)? = type {return v}
+      return Proto_PrivateCloudCompute_CancelSubrequestPayload()
+    }
+    set {type = .subCancel(newValue)}
+  }
+
   var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
-  enum OneOf_Type: Equatable, @unchecked Sendable {
+  enum OneOf_Type: Equatable, Sendable {
+    /// Contains user's request data when `OpenRequestPayload.version == 0`.
     case applicationPayload(Data)
     /// Metadata not passed on to the application service but used by cb_jophelper
-    case authToken(Proto_PrivateCloudCompute_AuthToken)
+    /// Sent once at the outset of the connection (contains fraud-related information)
+    case `open`(Proto_PrivateCloudCompute_OpenRequestPayload)
     case finalMessage(Proto_PrivateCloudCompute_FinalMessage)
+    case payloadChunk(Proto_PrivateCloudCompute_PayloadChunk)
+    case subOpen(Proto_PrivateCloudCompute_OpenSubrequestPayload)
+    case subClose(Proto_PrivateCloudCompute_CloseSubrequestPayload)
+    /// This is internal to cloudboard for communication between proxy and compute nodes and is sent in place of
+    /// OpenRequestPayload
+    case proxyInvokeOpen(Proto_PrivateCloudCompute_ProxyInvokeOpen)
+    /// Sent by the client to cancel a subrequest, either due to an error or user action.
+    /// Cancellation can occur at any point in the subrequest's processing. For example, it
+    /// can happen before any payload_chunk is sent, during sending, or after successful
+    /// sending while receiving response. Due to the asynchronous nature of the process,
+    /// the client might even send a cancellation after the server has sent the final
+    /// sub_close and while its transitioning to the client.
+    /// The expectation is that upon receiving sub_cancel, the server will attempt to stop
+    /// the processing of the subrequest.
+    case subCancel(Proto_PrivateCloudCompute_CancelSubrequestPayload)
 
   }
 
   init() {}
 }
 
-struct Proto_PrivateCloudCompute_AuthToken: @unchecked Sendable {
+struct Proto_PrivateCloudCompute_OpenRequestPayload: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -90,6 +195,139 @@ struct Proto_PrivateCloudCompute_AuthToken: @unchecked Sendable {
 
   /// Used to verify that the one-time token is derived from the TGT
   var ottSalt: Data = Data()
+
+  /// Protocol version. Used to distinguish between the non-subrequest (v0) and
+  /// subrequest (v1) protocols. I.e. if version is set to 1, CloudBoard expects
+  /// client to send sub_open/payload_chunk/sub_close messages rather than the
+  /// application_payload message.
+  var version: UInt32 = 0
+
+  /// Supported capabilities on the client
+  var capabilities: Proto_PrivateCloudCompute_Capabilities {
+    get {return _capabilities ?? Proto_PrivateCloudCompute_Capabilities()}
+    set {_capabilities = newValue}
+  }
+  /// Returns true if `capabilities` has been explicitly set.
+  var hasCapabilities: Bool {return self._capabilities != nil}
+  /// Clears the value of `capabilities`. Subsequent reads from it will return its default value.
+  mutating func clearCapabilities() {self._capabilities = nil}
+
+  var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _capabilities: Proto_PrivateCloudCompute_Capabilities? = nil
+}
+
+struct Proto_PrivateCloudCompute_Capabilities: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// Supports prefix based chunking at the application data level
+  var applicationDataChunking: Proto_PrivateCloudCompute_Capabilities.ApplicationDataChunking {
+    get {return _applicationDataChunking ?? Proto_PrivateCloudCompute_Capabilities.ApplicationDataChunking()}
+    set {_applicationDataChunking = newValue}
+  }
+  /// Returns true if `applicationDataChunking` has been explicitly set.
+  var hasApplicationDataChunking: Bool {return self._applicationDataChunking != nil}
+  /// Clears the value of `applicationDataChunking`. Subsequent reads from it will return its default value.
+  mutating func clearApplicationDataChunking() {self._applicationDataChunking = nil}
+
+  var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  struct ApplicationDataChunking: Sendable {
+    // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    var size: UInt32 = 0
+
+    var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+    init() {}
+  }
+
+  init() {}
+
+  fileprivate var _applicationDataChunking: Proto_PrivateCloudCompute_Capabilities.ApplicationDataChunking? = nil
+}
+
+struct Proto_PrivateCloudCompute_PayloadChunk: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// id in case we ever want to support simultaneous requests per connection
+  var subrequestID: UInt32 = 0
+
+  var chunkData: Data = Data()
+
+  var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+/// Opaque crypto material provided by client application
+struct Proto_PrivateCloudCompute_OpaqueCryptoMaterial: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// Adopter-provided identifier for the material
+  var id: String = String()
+
+  var material: Data = Data()
+
+  var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+struct Proto_PrivateCloudCompute_OpenSubrequestPayload: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// id in case we ever want to support simultaneous requests per connection
+  var subrequestID: UInt32 = 0
+
+  /// Priority of the subrequest, e.g. whether it is discardable under high utilization
+  var priority: Proto_PrivateCloudCompute_SubrequestExecutionPriority = .requestExecutionPriorityUnspecified
+
+  /// Key material sent alongside application layer requests. The key material is not directly exposed to cloud apps but
+  /// is made available to support apps if entitled appropriately.
+  var opaqueCryptoMaterial: [Proto_PrivateCloudCompute_OpaqueCryptoMaterial] = []
+
+  /// The OTT for this inference;
+  /// in the first payload, this is the same as what ROPES saw
+  var oneTimeToken: Data = Data()
+
+  var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+struct Proto_PrivateCloudCompute_CloseSubrequestPayload: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// id in case we ever want to support simultaneous requests per connection
+  var subrequestID: UInt32 = 0
+
+  var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+struct Proto_PrivateCloudCompute_CancelSubrequestPayload: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// id of the subrequest that is being canceled
+  var subrequestID: UInt32 = 0
 
   var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
@@ -108,7 +346,7 @@ struct Proto_PrivateCloudCompute_FinalMessage: Sendable {
   init() {}
 }
 
-struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: @unchecked Sendable {
+struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -117,6 +355,8 @@ struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: @unchecked Sendabl
 
   /// To be logged on the client and submitted together with input prompt
   /// if agreed to by client (see PostResponseActions).
+  ///
+  /// NOTE: This field was marked as deprecated in the .proto file.
   var responseUuid: Data {
     get {
       if case .responseUuid(let v)? = type {return v}
@@ -125,6 +365,7 @@ struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: @unchecked Sendabl
     set {type = .responseUuid(newValue)}
   }
 
+  /// Used when `OpenRequestPayload.version == 0`.
   var responsePayload: Data {
     get {
       if case .responsePayload(let v)? = type {return v}
@@ -136,10 +377,10 @@ struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: @unchecked Sendabl
   /// Always sent last (guaranteed to come after the final REL entry). The client
   /// can safely close the connection for the sub-stream to the proxy once it has
   /// received this message.
-  var responseSummary: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ResponseSummary {
+  var responseSummary: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePayload {
     get {
       if case .responseSummary(let v)? = type {return v}
-      return Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ResponseSummary()
+      return Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePayload()
     }
     set {type = .responseSummary(newValue)}
   }
@@ -155,21 +396,53 @@ struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: @unchecked Sendabl
     set {type = .requestExecutionLogEntry(newValue)}
   }
 
+  /// Used when `OpenRequestPayload.version == 1`.
+  var payloadChunk: Proto_PrivateCloudCompute_PayloadChunk {
+    get {
+      if case .payloadChunk(let v)? = type {return v}
+      return Proto_PrivateCloudCompute_PayloadChunk()
+    }
+    set {type = .payloadChunk(newValue)}
+  }
+
+  var subOpen: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.OpenSubresponsePayload {
+    get {
+      if case .subOpen(let v)? = type {return v}
+      return Proto_PrivateCloudCompute_PrivateCloudComputeResponse.OpenSubresponsePayload()
+    }
+    set {type = .subOpen(newValue)}
+  }
+
+  var subClose: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload {
+    get {
+      if case .subClose(let v)? = type {return v}
+      return Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload()
+    }
+    set {type = .subClose(newValue)}
+  }
+
   var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
-  enum OneOf_Type: Equatable, @unchecked Sendable {
+  enum OneOf_Type: Equatable, Sendable {
     /// To be logged on the client and submitted together with input prompt
     /// if agreed to by client (see PostResponseActions).
+    ///
+    /// NOTE: This field was marked as deprecated in the .proto file.
     case responseUuid(Data)
+    /// Used when `OpenRequestPayload.version == 0`.
     case responsePayload(Data)
     /// Always sent last (guaranteed to come after the final REL entry). The client
     /// can safely close the connection for the sub-stream to the proxy once it has
     /// received this message.
-    case responseSummary(Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ResponseSummary)
+    case responseSummary(Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePayload)
     /// Individual Request Execution Log entry. The Request Execution Log contains
     /// all nodes a proxy has transitively attested and re-wrapped the client-
     /// provided DEK to.
     case requestExecutionLogEntry(Proto_PrivateCloudCompute_RequestExecutionLogEntry)
+    /// Used when `OpenRequestPayload.version == 1`.
+    case payloadChunk(Proto_PrivateCloudCompute_PayloadChunk)
+    case subOpen(Proto_PrivateCloudCompute_PrivateCloudComputeResponse.OpenSubresponsePayload)
+    case subClose(Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload)
 
   }
 
@@ -225,7 +498,7 @@ struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: @unchecked Sendabl
 
   }
 
-  struct ResponseSummary: Sendable {
+  struct CloseResponsePayload: Sendable {
     // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
     // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
     // methods supported on all messages.
@@ -263,17 +536,88 @@ struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: @unchecked Sendabl
     init() {}
   }
 
+  struct OpenSubresponsePayload: Sendable {
+    // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    /// id in case we ever want to support simultaneous requests per connection
+    var subrequestID: UInt32 = 0
+
+    var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+    init() {}
+  }
+
+  struct CloseSubresponsePayload: Sendable {
+    // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    /// id in case we ever want to support simultaneous requests per connection
+    var subrequestID: UInt32 = 0
+
+    var status: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload.SubresponseStatus = .ok
+
+    var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+    enum SubresponseStatus: InternalSwiftProtobuf.Enum, Swift.CaseIterable {
+      typealias RawValue = Int
+      case ok // = 0
+      case internalError // = 1
+      case invalidRequest // = 2
+      case discarded // = 3
+      case UNRECOGNIZED(Int)
+
+      init() {
+        self = .ok
+      }
+
+      init?(rawValue: Int) {
+        switch rawValue {
+        case 0: self = .ok
+        case 1: self = .internalError
+        case 2: self = .invalidRequest
+        case 3: self = .discarded
+        default: self = .UNRECOGNIZED(rawValue)
+        }
+      }
+
+      var rawValue: Int {
+        switch self {
+        case .ok: return 0
+        case .internalError: return 1
+        case .invalidRequest: return 2
+        case .discarded: return 3
+        case .UNRECOGNIZED(let i): return i
+        }
+      }
+
+      // The compiler won't synthesize support with the UNRECOGNIZED case.
+      static let allCases: [Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload.SubresponseStatus] = [
+        .ok,
+        .internalError,
+        .invalidRequest,
+        .discarded,
+      ]
+
+    }
+
+    init() {}
+  }
+
   init() {}
 }
 
-/// Contains the attestation bundle of a compute node the proxy node has
-/// transitively attested and re-wrapped the client-provided DEK to
-struct Proto_PrivateCloudCompute_RequestExecutionLogEntry: @unchecked Sendable {
+/// Contains information about a security or privacy-relevant event that occured in
+/// the context of the current request
+struct Proto_PrivateCloudCompute_RequestExecutionLogEntry: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Attestation bundle. Optional as the decision whether to attest to additional
+  /// Attestation bundle of a trusted compute node, for which the proxy has re-wrapped
+  /// the DEK. Optional as the decision whether to attest to additional
   /// nodes might be made after the final time the proxy re-wraps the DEK.
   var attestation: Data {
     get {return _attestation ?? Data()}
@@ -284,8 +628,9 @@ struct Proto_PrivateCloudCompute_RequestExecutionLogEntry: @unchecked Sendable {
   /// Clears the value of `attestation`. Subsequent reads from it will return its default value.
   mutating func clearAttestation() {self._attestation = nil}
 
-  /// Used in case the response payload is not streamed back by the proxy node itself. This provides the necessary
+  /// Used when the response payload may not be streamed back by the proxy node itself. This provides the necessary
   /// context for the client to establish a receive-only AEAD context to receive and decrypt the response payload stream.
+  /// from any node.
   var responseContext: Proto_PrivateCloudCompute_ResponseContext {
     get {return _responseContext ?? Proto_PrivateCloudCompute_ResponseContext()}
     set {_responseContext = newValue}
@@ -300,6 +645,9 @@ struct Proto_PrivateCloudCompute_RequestExecutionLogEntry: @unchecked Sendable {
   /// the DEK for any other nodes
   var final: Bool = false
 
+  /// Indicates the potential use of one or more assets in the context of the request
+  var assetMetadata: [Proto_PrivateCloudCompute_AssetMetadata] = []
+
   var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -308,7 +656,31 @@ struct Proto_PrivateCloudCompute_RequestExecutionLogEntry: @unchecked Sendable {
   fileprivate var _responseContext: Proto_PrivateCloudCompute_ResponseContext? = nil
 }
 
-struct Proto_PrivateCloudCompute_ResponseContext: @unchecked Sendable {
+/// Metadata about an asset downloaded at runtime by cloudassetdownloader,
+/// and potentially used in the context of the request.
+struct Proto_PrivateCloudCompute_AssetMetadata: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// Identifier of the application associated with the asset
+  var applicationID: String = String()
+
+  /// Descriptive asset identifier
+  var assetID: String = String()
+
+  /// Version of the asset
+  var version: String = String()
+
+  /// Base64-encoded SHA-256 hash of the asset contents
+  var hash: String = String()
+
+  var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+struct Proto_PrivateCloudCompute_ResponseContext: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -330,16 +702,61 @@ struct Proto_PrivateCloudCompute_ResponseContext: @unchecked Sendable {
   init() {}
 }
 
+/// This is internal to cloudboard for communication between proxy and compute nodes and is sent in place of
+/// OpenRequestPayload
+struct Proto_PrivateCloudCompute_ProxyInvokeOpen: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// Long-term token used for abuse prevention
+  var tokenGrantingToken: Data = Data()
+
+  /// Used to verify that the one-time token is derived from the TGT
+  var ottSalt: Data = Data()
+
+  /// Key material sent alongside application layer requests. The key material is not directly exposed to cloud apps but
+  /// is made available to support apps if entitled appropriately.
+  var opaqueCryptoMaterial: [Proto_PrivateCloudCompute_OpaqueCryptoMaterial] = []
+
+  var capabilities: Proto_PrivateCloudCompute_Capabilities {
+    get {return _capabilities ?? Proto_PrivateCloudCompute_Capabilities()}
+    set {_capabilities = newValue}
+  }
+  /// Returns true if `capabilities` has been explicitly set.
+  var hasCapabilities: Bool {return self._capabilities != nil}
+  /// Clears the value of `capabilities`. Subsequent reads from it will return its default value.
+  mutating func clearCapabilities() {self._capabilities = nil}
+
+  var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _capabilities: Proto_PrivateCloudCompute_Capabilities? = nil
+}
+
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate let _protobuf_package = "com.apple.privatecloudcompute.api.v1"
+
+extension Proto_PrivateCloudCompute_SubrequestExecutionPriority: InternalSwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    0: .same(proto: "REQUEST_EXECUTION_PRIORITY_UNSPECIFIED"),
+    1: .same(proto: "REQUEST_EXECUTION_PRIORITY_DISCARDABLE"),
+  ]
+}
 
 extension Proto_PrivateCloudCompute_PrivateCloudComputeRequest: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PrivateCloudComputeRequest"
   static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
     1: .standard(proto: "application_payload"),
-    3: .standard(proto: "auth_token"),
+    3: .same(proto: "open"),
     4: .standard(proto: "final_message"),
+    5: .standard(proto: "payload_chunk"),
+    6: .standard(proto: "sub_open"),
+    7: .standard(proto: "sub_close"),
+    8: .standard(proto: "proxy_invoke_open"),
+    9: .standard(proto: "sub_cancel"),
   ]
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -357,16 +774,16 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeRequest: InternalSwiftPro
         }
       }()
       case 3: try {
-        var v: Proto_PrivateCloudCompute_AuthToken?
+        var v: Proto_PrivateCloudCompute_OpenRequestPayload?
         var hadOneofValue = false
         if let current = self.type {
           hadOneofValue = true
-          if case .authToken(let m) = current {v = m}
+          if case .open(let m) = current {v = m}
         }
         try decoder.decodeSingularMessageField(value: &v)
         if let v = v {
           if hadOneofValue {try decoder.handleConflictingOneOf()}
-          self.type = .authToken(v)
+          self.type = .open(v)
         }
       }()
       case 4: try {
@@ -380,6 +797,71 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeRequest: InternalSwiftPro
         if let v = v {
           if hadOneofValue {try decoder.handleConflictingOneOf()}
           self.type = .finalMessage(v)
+        }
+      }()
+      case 5: try {
+        var v: Proto_PrivateCloudCompute_PayloadChunk?
+        var hadOneofValue = false
+        if let current = self.type {
+          hadOneofValue = true
+          if case .payloadChunk(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.type = .payloadChunk(v)
+        }
+      }()
+      case 6: try {
+        var v: Proto_PrivateCloudCompute_OpenSubrequestPayload?
+        var hadOneofValue = false
+        if let current = self.type {
+          hadOneofValue = true
+          if case .subOpen(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.type = .subOpen(v)
+        }
+      }()
+      case 7: try {
+        var v: Proto_PrivateCloudCompute_CloseSubrequestPayload?
+        var hadOneofValue = false
+        if let current = self.type {
+          hadOneofValue = true
+          if case .subClose(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.type = .subClose(v)
+        }
+      }()
+      case 8: try {
+        var v: Proto_PrivateCloudCompute_ProxyInvokeOpen?
+        var hadOneofValue = false
+        if let current = self.type {
+          hadOneofValue = true
+          if case .proxyInvokeOpen(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.type = .proxyInvokeOpen(v)
+        }
+      }()
+      case 9: try {
+        var v: Proto_PrivateCloudCompute_CancelSubrequestPayload?
+        var hadOneofValue = false
+        if let current = self.type {
+          hadOneofValue = true
+          if case .subCancel(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.type = .subCancel(v)
         }
       }()
       default: break
@@ -397,13 +879,33 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeRequest: InternalSwiftPro
       guard case .applicationPayload(let v)? = self.type else { preconditionFailure() }
       try visitor.visitSingularBytesField(value: v, fieldNumber: 1)
     }()
-    case .authToken?: try {
-      guard case .authToken(let v)? = self.type else { preconditionFailure() }
+    case .open?: try {
+      guard case .open(let v)? = self.type else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
     }()
     case .finalMessage?: try {
       guard case .finalMessage(let v)? = self.type else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    }()
+    case .payloadChunk?: try {
+      guard case .payloadChunk(let v)? = self.type else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    }()
+    case .subOpen?: try {
+      guard case .subOpen(let v)? = self.type else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
+    }()
+    case .subClose?: try {
+      guard case .subClose(let v)? = self.type else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 7)
+    }()
+    case .proxyInvokeOpen?: try {
+      guard case .proxyInvokeOpen(let v)? = self.type else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
+    }()
+    case .subCancel?: try {
+      guard case .subCancel(let v)? = self.type else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 9)
     }()
     case nil: break
     }
@@ -417,11 +919,13 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeRequest: InternalSwiftPro
   }
 }
 
-extension Proto_PrivateCloudCompute_AuthToken: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".AuthToken"
+extension Proto_PrivateCloudCompute_OpenRequestPayload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".OpenRequestPayload"
   static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
     1: .standard(proto: "token_granting_token"),
     2: .standard(proto: "ott_salt"),
+    3: .same(proto: "version"),
+    4: .same(proto: "capabilities"),
   ]
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -432,24 +936,296 @@ extension Proto_PrivateCloudCompute_AuthToken: InternalSwiftProtobuf.Message, In
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularBytesField(value: &self.tokenGrantingToken) }()
       case 2: try { try decoder.decodeSingularBytesField(value: &self.ottSalt) }()
+      case 3: try { try decoder.decodeSingularUInt32Field(value: &self.version) }()
+      case 4: try { try decoder.decodeSingularMessageField(value: &self._capabilities) }()
       default: break
       }
     }
   }
 
   func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if !self.tokenGrantingToken.isEmpty {
       try visitor.visitSingularBytesField(value: self.tokenGrantingToken, fieldNumber: 1)
     }
     if !self.ottSalt.isEmpty {
       try visitor.visitSingularBytesField(value: self.ottSalt, fieldNumber: 2)
     }
+    if self.version != 0 {
+      try visitor.visitSingularUInt32Field(value: self.version, fieldNumber: 3)
+    }
+    try { if let v = self._capabilities {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_PrivateCloudCompute_AuthToken, rhs: Proto_PrivateCloudCompute_AuthToken) -> Bool {
+  static func ==(lhs: Proto_PrivateCloudCompute_OpenRequestPayload, rhs: Proto_PrivateCloudCompute_OpenRequestPayload) -> Bool {
     if lhs.tokenGrantingToken != rhs.tokenGrantingToken {return false}
     if lhs.ottSalt != rhs.ottSalt {return false}
+    if lhs.version != rhs.version {return false}
+    if lhs._capabilities != rhs._capabilities {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_Capabilities: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".Capabilities"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "application_data_chunking"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._applicationDataChunking) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._applicationDataChunking {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_PrivateCloudCompute_Capabilities, rhs: Proto_PrivateCloudCompute_Capabilities) -> Bool {
+    if lhs._applicationDataChunking != rhs._applicationDataChunking {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_Capabilities.ApplicationDataChunking: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Proto_PrivateCloudCompute_Capabilities.protoMessageName + ".ApplicationDataChunking"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .same(proto: "size"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.size) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.size != 0 {
+      try visitor.visitSingularUInt32Field(value: self.size, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_PrivateCloudCompute_Capabilities.ApplicationDataChunking, rhs: Proto_PrivateCloudCompute_Capabilities.ApplicationDataChunking) -> Bool {
+    if lhs.size != rhs.size {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_PayloadChunk: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".PayloadChunk"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "subrequest_id"),
+    2: .standard(proto: "chunk_data"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.subrequestID) }()
+      case 2: try { try decoder.decodeSingularBytesField(value: &self.chunkData) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.subrequestID != 0 {
+      try visitor.visitSingularUInt32Field(value: self.subrequestID, fieldNumber: 1)
+    }
+    if !self.chunkData.isEmpty {
+      try visitor.visitSingularBytesField(value: self.chunkData, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_PrivateCloudCompute_PayloadChunk, rhs: Proto_PrivateCloudCompute_PayloadChunk) -> Bool {
+    if lhs.subrequestID != rhs.subrequestID {return false}
+    if lhs.chunkData != rhs.chunkData {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_OpaqueCryptoMaterial: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".OpaqueCryptoMaterial"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .same(proto: "id"),
+    2: .same(proto: "material"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      case 2: try { try decoder.decodeSingularBytesField(value: &self.material) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
+    }
+    if !self.material.isEmpty {
+      try visitor.visitSingularBytesField(value: self.material, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_PrivateCloudCompute_OpaqueCryptoMaterial, rhs: Proto_PrivateCloudCompute_OpaqueCryptoMaterial) -> Bool {
+    if lhs.id != rhs.id {return false}
+    if lhs.material != rhs.material {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_OpenSubrequestPayload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".OpenSubrequestPayload"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "subrequest_id"),
+    2: .same(proto: "priority"),
+    3: .standard(proto: "opaque_crypto_material"),
+    4: .standard(proto: "one_time_token"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.subrequestID) }()
+      case 2: try { try decoder.decodeSingularEnumField(value: &self.priority) }()
+      case 3: try { try decoder.decodeRepeatedMessageField(value: &self.opaqueCryptoMaterial) }()
+      case 4: try { try decoder.decodeSingularBytesField(value: &self.oneTimeToken) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.subrequestID != 0 {
+      try visitor.visitSingularUInt32Field(value: self.subrequestID, fieldNumber: 1)
+    }
+    if self.priority != .requestExecutionPriorityUnspecified {
+      try visitor.visitSingularEnumField(value: self.priority, fieldNumber: 2)
+    }
+    if !self.opaqueCryptoMaterial.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.opaqueCryptoMaterial, fieldNumber: 3)
+    }
+    if !self.oneTimeToken.isEmpty {
+      try visitor.visitSingularBytesField(value: self.oneTimeToken, fieldNumber: 4)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_PrivateCloudCompute_OpenSubrequestPayload, rhs: Proto_PrivateCloudCompute_OpenSubrequestPayload) -> Bool {
+    if lhs.subrequestID != rhs.subrequestID {return false}
+    if lhs.priority != rhs.priority {return false}
+    if lhs.opaqueCryptoMaterial != rhs.opaqueCryptoMaterial {return false}
+    if lhs.oneTimeToken != rhs.oneTimeToken {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_CloseSubrequestPayload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".CloseSubrequestPayload"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "subrequest_id"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.subrequestID) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.subrequestID != 0 {
+      try visitor.visitSingularUInt32Field(value: self.subrequestID, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_PrivateCloudCompute_CloseSubrequestPayload, rhs: Proto_PrivateCloudCompute_CloseSubrequestPayload) -> Bool {
+    if lhs.subrequestID != rhs.subrequestID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_CancelSubrequestPayload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".CancelSubrequestPayload"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "subrequest_id"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.subrequestID) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.subrequestID != 0 {
+      try visitor.visitSingularUInt32Field(value: self.subrequestID, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_PrivateCloudCompute_CancelSubrequestPayload, rhs: Proto_PrivateCloudCompute_CancelSubrequestPayload) -> Bool {
+    if lhs.subrequestID != rhs.subrequestID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -481,6 +1257,9 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse: InternalSwiftPr
     2: .standard(proto: "response_payload"),
     3: .standard(proto: "response_summary"),
     4: .standard(proto: "request_execution_log_entry"),
+    5: .standard(proto: "payload_chunk"),
+    6: .standard(proto: "sub_open"),
+    7: .standard(proto: "sub_close"),
   ]
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -506,7 +1285,7 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse: InternalSwiftPr
         }
       }()
       case 3: try {
-        var v: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ResponseSummary?
+        var v: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePayload?
         var hadOneofValue = false
         if let current = self.type {
           hadOneofValue = true
@@ -529,6 +1308,45 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse: InternalSwiftPr
         if let v = v {
           if hadOneofValue {try decoder.handleConflictingOneOf()}
           self.type = .requestExecutionLogEntry(v)
+        }
+      }()
+      case 5: try {
+        var v: Proto_PrivateCloudCompute_PayloadChunk?
+        var hadOneofValue = false
+        if let current = self.type {
+          hadOneofValue = true
+          if case .payloadChunk(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.type = .payloadChunk(v)
+        }
+      }()
+      case 6: try {
+        var v: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.OpenSubresponsePayload?
+        var hadOneofValue = false
+        if let current = self.type {
+          hadOneofValue = true
+          if case .subOpen(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.type = .subOpen(v)
+        }
+      }()
+      case 7: try {
+        var v: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload?
+        var hadOneofValue = false
+        if let current = self.type {
+          hadOneofValue = true
+          if case .subClose(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.type = .subClose(v)
         }
       }()
       default: break
@@ -558,6 +1376,18 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse: InternalSwiftPr
       guard case .requestExecutionLogEntry(let v)? = self.type else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
     }()
+    case .payloadChunk?: try {
+      guard case .payloadChunk(let v)? = self.type else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    }()
+    case .subOpen?: try {
+      guard case .subOpen(let v)? = self.type else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
+    }()
+    case .subClose?: try {
+      guard case .subClose(let v)? = self.type else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 7)
+    }()
     case nil: break
     }
     try unknownFields.traverse(visitor: &visitor)
@@ -581,8 +1411,8 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ResponseStatus: 
   ]
 }
 
-extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ResponseSummary: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = Proto_PrivateCloudCompute_PrivateCloudComputeResponse.protoMessageName + ".ResponseSummary"
+extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePayload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Proto_PrivateCloudCompute_PrivateCloudComputeResponse.protoMessageName + ".CloseResponsePayload"
   static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
     2: .standard(proto: "post_response_actions"),
     3: .standard(proto: "response_status"),
@@ -615,7 +1445,7 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ResponseSummary:
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ResponseSummary, rhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ResponseSummary) -> Bool {
+  static func ==(lhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePayload, rhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePayload) -> Bool {
     if lhs._postResponseActions != rhs._postResponseActions {return false}
     if lhs.responseStatus != rhs.responseStatus {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -655,12 +1485,92 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.PostResponseActi
   }
 }
 
+extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.OpenSubresponsePayload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Proto_PrivateCloudCompute_PrivateCloudComputeResponse.protoMessageName + ".OpenSubresponsePayload"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "subrequest_id"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.subrequestID) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.subrequestID != 0 {
+      try visitor.visitSingularUInt32Field(value: self.subrequestID, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.OpenSubresponsePayload, rhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.OpenSubresponsePayload) -> Bool {
+    if lhs.subrequestID != rhs.subrequestID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = Proto_PrivateCloudCompute_PrivateCloudComputeResponse.protoMessageName + ".CloseSubresponsePayload"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "subrequest_id"),
+    2: .same(proto: "status"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.subrequestID) }()
+      case 2: try { try decoder.decodeSingularEnumField(value: &self.status) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.subrequestID != 0 {
+      try visitor.visitSingularUInt32Field(value: self.subrequestID, fieldNumber: 1)
+    }
+    if self.status != .ok {
+      try visitor.visitSingularEnumField(value: self.status, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload, rhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload) -> Bool {
+    if lhs.subrequestID != rhs.subrequestID {return false}
+    if lhs.status != rhs.status {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload.SubresponseStatus: InternalSwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    0: .same(proto: "OK"),
+    1: .same(proto: "INTERNAL_ERROR"),
+    2: .same(proto: "INVALID_REQUEST"),
+    3: .same(proto: "DISCARDED"),
+  ]
+}
+
 extension Proto_PrivateCloudCompute_RequestExecutionLogEntry: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".RequestExecutionLogEntry"
   static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
     1: .same(proto: "attestation"),
     2: .standard(proto: "response_context"),
     3: .same(proto: "final"),
+    4: .standard(proto: "asset_metadata"),
   ]
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -672,6 +1582,7 @@ extension Proto_PrivateCloudCompute_RequestExecutionLogEntry: InternalSwiftProto
       case 1: try { try decoder.decodeSingularBytesField(value: &self._attestation) }()
       case 2: try { try decoder.decodeSingularMessageField(value: &self._responseContext) }()
       case 3: try { try decoder.decodeSingularBoolField(value: &self.final) }()
+      case 4: try { try decoder.decodeRepeatedMessageField(value: &self.assetMetadata) }()
       default: break
       }
     }
@@ -691,6 +1602,9 @@ extension Proto_PrivateCloudCompute_RequestExecutionLogEntry: InternalSwiftProto
     if self.final != false {
       try visitor.visitSingularBoolField(value: self.final, fieldNumber: 3)
     }
+    if !self.assetMetadata.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.assetMetadata, fieldNumber: 4)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -698,6 +1612,57 @@ extension Proto_PrivateCloudCompute_RequestExecutionLogEntry: InternalSwiftProto
     if lhs._attestation != rhs._attestation {return false}
     if lhs._responseContext != rhs._responseContext {return false}
     if lhs.final != rhs.final {return false}
+    if lhs.assetMetadata != rhs.assetMetadata {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_AssetMetadata: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".AssetMetadata"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "application_id"),
+    2: .standard(proto: "asset_id"),
+    3: .same(proto: "version"),
+    4: .same(proto: "hash"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.applicationID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.assetID) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.version) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.hash) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.applicationID.isEmpty {
+      try visitor.visitSingularStringField(value: self.applicationID, fieldNumber: 1)
+    }
+    if !self.assetID.isEmpty {
+      try visitor.visitSingularStringField(value: self.assetID, fieldNumber: 2)
+    }
+    if !self.version.isEmpty {
+      try visitor.visitSingularStringField(value: self.version, fieldNumber: 3)
+    }
+    if !self.hash.isEmpty {
+      try visitor.visitSingularStringField(value: self.hash, fieldNumber: 4)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_PrivateCloudCompute_AssetMetadata, rhs: Proto_PrivateCloudCompute_AssetMetadata) -> Bool {
+    if lhs.applicationID != rhs.applicationID {return false}
+    if lhs.assetID != rhs.assetID {return false}
+    if lhs.version != rhs.version {return false}
+    if lhs.hash != rhs.hash {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -748,6 +1713,60 @@ extension Proto_PrivateCloudCompute_ResponseContext: InternalSwiftProtobuf.Messa
     if lhs.aeadID != rhs.aeadID {return false}
     if lhs.aeadKey != rhs.aeadKey {return false}
     if lhs.aeadNonce != rhs.aeadNonce {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_ProxyInvokeOpen: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ProxyInvokeOpen"
+  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "token_granting_token"),
+    2: .standard(proto: "ott_salt"),
+    3: .standard(proto: "opaque_crypto_material"),
+    4: .same(proto: "capabilities"),
+  ]
+
+  mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.tokenGrantingToken) }()
+      case 2: try { try decoder.decodeSingularBytesField(value: &self.ottSalt) }()
+      case 3: try { try decoder.decodeRepeatedMessageField(value: &self.opaqueCryptoMaterial) }()
+      case 4: try { try decoder.decodeSingularMessageField(value: &self._capabilities) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.tokenGrantingToken.isEmpty {
+      try visitor.visitSingularBytesField(value: self.tokenGrantingToken, fieldNumber: 1)
+    }
+    if !self.ottSalt.isEmpty {
+      try visitor.visitSingularBytesField(value: self.ottSalt, fieldNumber: 2)
+    }
+    if !self.opaqueCryptoMaterial.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.opaqueCryptoMaterial, fieldNumber: 3)
+    }
+    try { if let v = self._capabilities {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Proto_PrivateCloudCompute_ProxyInvokeOpen, rhs: Proto_PrivateCloudCompute_ProxyInvokeOpen) -> Bool {
+    if lhs.tokenGrantingToken != rhs.tokenGrantingToken {return false}
+    if lhs.ottSalt != rhs.ottSalt {return false}
+    if lhs.opaqueCryptoMaterial != rhs.opaqueCryptoMaterial {return false}
+    if lhs._capabilities != rhs._capabilities {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

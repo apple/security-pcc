@@ -28,17 +28,36 @@ private let logger = tc2Logger(forCategory: .client)
 public final class TrustedCloudComputeClient: Sendable {
 
     /// The underlying client.
-    private let client: TC2Client
+    private let client: any TC2ClientProtocol
     /// The configuration.
     private let configuration: Configuration
+    /// Feature flag checker to use
+    private let featureFlagChecker: any FeatureFlagCheckerProtocol
+    /// Request ID generator for subrequests
+    private let subrequestIdGenerator: @Sendable () -> UInt64
 
     /// Creates a new ``TrustedCloudComputeClient``.
     ///
     /// - Parameters:
     /// - configuration: The configuration to use for the client.
     public init(configuration: Configuration) throws {
-        self.client = TC2Client(userID: configuration.userID)
+        let wrapper = XPCWrapper(userID: configuration.userID)
+        self.client = TC2Client(xpc: wrapper)
         self.configuration = configuration
+        self.featureFlagChecker = FeatureFlagChecker()
+        self.subrequestIdGenerator = randomSubrequestId
+    }
+
+    init(
+        client: any TC2ClientProtocol,
+        featureFlagChecker: any FeatureFlagCheckerProtocol,
+        configuration: Configuration,
+        subrequestIdGenerator: @escaping @Sendable () -> UInt64 = randomSubrequestId
+    ) {
+        self.client = client
+        self.featureFlagChecker = featureFlagChecker
+        self.configuration = configuration
+        self.subrequestIdGenerator = subrequestIdGenerator
     }
 
     /// Executes a trusted request.
@@ -51,9 +70,9 @@ public final class TrustedCloudComputeClient: Sendable {
     ///   - request: The request to execute.
     ///   - body: A closure during which request data can be written and the response data can be consumed.
     /// - Returns: The type that the body closure produced.
-    public func withTrustedRequest<Return>(
+    @concurrent public func withTrustedRequest<Return>(
         _ request: TrustedRequest,
-        _ body: (_ writer: TrustedRequest.Writer, _ response: TrustedRequest.Response) async throws -> Return
+        _ body: @concurrent (_ writer: TrustedRequest.Writer, _ response: TrustedRequest.Response) async throws -> Return
     ) async throws -> Return {
         return try await withTaskCancellationHandler {
             var telemetryEventID: EventIdentifier?
@@ -76,6 +95,7 @@ public final class TrustedCloudComputeClient: Sendable {
                     parameters: request.workloadParameters ?? [:]
                 ).json,
                 requestID: request.id,
+                multiTurn: false,
                 bundleIdentifier: request.bundleIdentifier,
                 originatingBundleIdentifier: request.originatingBundleIdentifier,
                 featureIdentifier: request.featureIdentifier,
@@ -86,32 +106,63 @@ public final class TrustedCloudComputeClient: Sendable {
                 xpcRequestProxy.close()
             }
 
-            let writer = TrustedRequest.Writer(id: request.id, xpcRequestProxy: xpcRequestProxy, telemetryEventID: telemetryEventID)
-            let response = TrustedRequest.Response(id: request.id, xpcRequestProxy: xpcRequestProxy, telemetryEventID: telemetryEventID)
+            let isChunkingEnabled = self.featureFlagChecker.isEnabled(.applicationDataChunking)
+            let writer = TrustedRequest.Writer(id: request.id, xpcRequestProxy: xpcRequestProxy, telemetryEventID: telemetryEventID, isChunkingEnabled: isChunkingEnabled)
+            let response = TrustedRequest.Response(id: request.id, xpcRequestProxy: xpcRequestProxy, telemetryEventID: telemetryEventID, isChunkingEnabled: isChunkingEnabled)
             return try await body(writer, response)
         } onCancel: {
             logger.error("\(request.id) withTrustedRequest cancelled")
         }
     }
 
-    @_spi(TrustedRequestHistory) public func trustedRequestHistory() async throws -> TrustedRequestHistory {
-        guard let requestMetadata = await self.client.requestMetadata() else {
-            throw PrivateCloudComputeError(message: "failed to get request history")
-        }
+    /// Creates and manages a long-lived connection for executing multiple requests.
+    ///
+    /// This method establishes a long-lived connection with the Private Cloud Compute environment that can be used
+    /// to execute multiple requests. The connection remains active for the duration of the `body` closure.
+    ///
+    /// When the `body` closure completes (either successfully or by throwing an error), the connections closes.
+    ///
+    /// - Parameters:
+    ///   - configuration: The connection configuration.
+    ///   - body: An async closure that receives the created connection and can use it to execute multiple requests.
+    ///           The connection parameter provides access to `withRequest(_:_:)` for executing individual requests within the connection.
+    @concurrent public func withConnection(
+        configuration: PrivateCloudComputeConnection.Configuration,
+        _ body: @concurrent (_ connection: PrivateCloudComputeConnection) async throws -> Void
+    ) async throws {
+        let logPrefix = "\(configuration.id):"
+        try await logger.logLifetime("withConnection", logPrefix: logPrefix) {
+            let xpcProxy = try await self.client.xpc.connection(
+                withParameters: Workload(
+                    type: configuration.workloadType,
+                    parameters: configuration.workloadParameters ?? [:]
+                ).json,
+                connectionIdentifier: configuration.id,
+                bundleIdentifier: configuration.bundleIdentifier,
+                originatingBundleIdentifier: configuration.originatingBundleIdentifier,
+                featureIdentifier: configuration.featureIdentifier,
+                sessionIdentifier: configuration.sessionIdentifier
+            )
 
-        var requests: [TrustedRequestHistory.Request] = []
-        for factoryMetadata in requestMetadata.requests {
-            let configuration = Configuration()
-            for requestMetadata in factoryMetadata.requests {
-                requests.append(
-                    .init(
-                        requestMetadata: requestMetadata,
-                        clientConfiguration: configuration)
+            defer {
+                logger.log("\(logPrefix) withConnection xpc proxy closing")
+                xpcProxy.close()
+            }
+
+            try await withTaskCancellationHandler {
+                try await PrivateCloudComputeConnection.run(
+                    configuration: configuration,
+                    xpcProxy: xpcProxy,
+                    logPrefix: logPrefix,
+                    featureFlagChecker: self.featureFlagChecker,
+                    subrequestIdGenerator: self.subrequestIdGenerator,
+                    closure: body
                 )
+            } onCancel: {
+                logger.error("\(logPrefix) withConnection cancelling proxy")
+                xpcProxy.cancel()
             }
         }
-
-        return TrustedRequestHistory(requests: requests)
     }
 
     /// Runs a prefetch for attestations from the server, for the given workload specification.
@@ -120,8 +171,8 @@ public final class TrustedCloudComputeClient: Sendable {
     ///   - workloadType: The workloadType associated with requests to prefetch attestations for
     ///   - workloadParameters: The workloadParameters associated with requests to prefetch attestations for
     /// - Returns: Returns `true` when a successful prefetch occurs, or `false` otherwise.
-    public func prefetchRequest(workloadType: String, workloadParameters: [String: String]) async throws -> Bool {
-        // This is the API TrustedMLClient is calling at the moment, they will switch over to using the new prewarm API
+    @available(*, deprecated, message: "Use `completePrewarm(workloadType:workloadParameters:bundleIdentifierOverride:featureIdentifier)` instead.")
+    @concurrent public func prefetchRequest(workloadType: String, workloadParameters: [String: String]) async throws -> Bool {
         await client.prewarm(
             request: .init(
                 workloadType: workloadType,
@@ -142,8 +193,8 @@ public final class TrustedCloudComputeClient: Sendable {
     ///   - workloadParameters: The workloadParameters associated with requests to prefetch attestations for
     ///   - bundleIdentifierOverride: Optional bundle identifier to override the one automatically determined
     ///   - featureIdentifier: Non optional feature identifier used for rate limiting and analytics
-    public func prewarm(workloadType: String, workloadParameters: [String: String], bundleIdentifierOverride: String?, featureIdentifier: String) async {
-        // This is the API we want TrustedMLClient to use, because ROPES will need bundleIdentifier and featureIdentifier
+    @available(*, deprecated, message: "Use `completePrewarm(workloadType:workloadParameters:bundleIdentifierOverride:featureIdentifier)` instead.")
+    @concurrent public func prewarm(workloadType: String, workloadParameters: [String: String], bundleIdentifierOverride: String?, featureIdentifier: String) async {
         return await client.prewarm(
             request: .init(
                 workloadType: workloadType,
@@ -165,8 +216,7 @@ public final class TrustedCloudComputeClient: Sendable {
     ///   - workloadParameters: The workloadParameters associated with requests to prefetch attestations for
     ///   - bundleIdentifierOverride: Optional bundle identifier to override the one automatically determined
     ///   - featureIdentifier: Non optional feature identifier used for rate limiting and analytics
-    public func completePrewarm(workloadType: String, workloadParameters: [String: String], bundleIdentifierOverride: String?, featureIdentifier: String) async {
-        // This is the API we want TrustedMLClient to use, because ROPES will need bundleIdentifier and featureIdentifier
+    @concurrent public func completePrewarm(workloadType: String, workloadParameters: [String: String], bundleIdentifierOverride: String?, featureIdentifier: String) async {
         return await client.prewarm(
             request: .init(
                 workloadType: workloadType,
@@ -210,57 +260,11 @@ public final class TrustedCloudComputeClient: Sendable {
     ///   - bundleIdentifier: Optional bundle identifier to override the one automatically determined. Can only be passed if you have an entitlement.
     ///   - featureIdentifier: Optional feature identifier. If `nil`, then return all configurations applicable to the bundleID regardless of what feature identifier they are scoped to.
     /// - Returns: Every rate limit known to the system that may apply to the bundle/feature in question.
-    public func knownRateLimits(bundleIdentifier: String? = nil, featureIdentifier: String? = nil) async -> [TrustedCloudComputeRateLimit] {
+    @concurrent public func knownRateLimits(bundleIdentifier: String? = nil, featureIdentifier: String? = nil) async -> [TrustedCloudComputeRateLimit] {
         return await self.client.knownRateLimits(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier, skipFetch: false)
     }
 
-    public func knownRateLimits(bundleIdentifier: String? = nil, featureIdentifier: String? = nil, skipFetch: Bool = false) async -> [TrustedCloudComputeRateLimit] {
+    @concurrent public func knownRateLimits(bundleIdentifier: String? = nil, featureIdentifier: String? = nil, skipFetch: Bool = false) async -> [TrustedCloudComputeRateLimit] {
         return await self.client.knownRateLimits(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier, skipFetch: skipFetch)
-    }
-}
-
-extension TrustedRequestHistory.Request {
-    fileprivate init(
-        requestMetadata: TC2TrustedRequestMetadata,
-        clientConfiguration: TrustedCloudComputeClient.Configuration
-    ) {
-        self.init(
-            request: .init(
-                id: requestMetadata.serverRequestID,
-                workloadType: requestMetadata.workloadName,
-                workloadParameters: requestMetadata.workloadParameters,
-                bundleIdentifier: requestMetadata.bundleIdentifier,
-                featureIdentifier: requestMetadata.featureIdentifier,
-                sessionIdentifier: requestMetadata.sessionIdentifier
-            ),
-            clientConfiguration: clientConfiguration,
-            creationDate: requestMetadata.creationDate,
-            bundleIdentifier: requestMetadata.bundleIdentifier,
-            qos: requestMetadata.qos,
-            state: requestMetadata.state,
-            payloadTransportState: requestMetadata.payloadTransportState,
-            responseState: requestMetadata.responseState,
-            responseCode: requestMetadata.responseCode,
-            environment: requestMetadata.environment,
-            ropesVersion: requestMetadata.ropesVersion,
-            nodes: requestMetadata.endpoints.map { .init(endpointMetadata: $0) })
-    }
-}
-
-extension TrustedRequestHistory.Request.Node {
-    fileprivate init(endpointMetadata: TrustedRequestEndpointMetadata) {
-        self.init(
-            state: endpointMetadata.nodeState,
-            identifier: endpointMetadata.nodeIdentifier,
-            ohttpContext: Int(endpointMetadata.ohttpContext),
-            hasReceivedSummary: endpointMetadata.hasReceivedSummary,
-            dataReceived: Int(endpointMetadata.dataReceived),
-            cloudOSVersion: endpointMetadata.cloudOSVersion,
-            cloudOSReleaseType: endpointMetadata.cloudOSReleaseType,
-            maybeValidatedCellID: endpointMetadata.maybeValidatedCellID,
-            ensembleID: endpointMetadata.ensembleID,
-            isFromCache: endpointMetadata.isFromCache,
-            servedRequest: endpointMetadata.servedRequest,
-        )
     }
 }

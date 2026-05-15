@@ -23,7 +23,7 @@ import OpenAPIURLSession
 import os
 
 /// A concrete implementation of a service protocol that makes HTTP calls to an upstream service.
-public struct HeartbeatHTTPClient {
+public struct HeartbeatHTTPClient: Sendable {
     /// The configuration for this service client.
     private let configuration: ServiceConfiguration
 

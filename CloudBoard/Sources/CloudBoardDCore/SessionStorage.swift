@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import CloudBoardLogging
 import Foundation
 import NIOCore
@@ -288,6 +286,10 @@ final class OnDiskSessionStorage: SessionStorage {
             // so long as we are confident it is not referring to a node key in the valid list
             // If it was a file for a key considered valid that key will then be treated as a failed
             // restore later
+            // It's nice to ignore things we expect though because it makes debugging easier
+            if fileURL.lastPathComponent == "session.lock" {
+                continue
+            }
             guard let (nodeKeyID, status) = self.parseFileName(fileURL: fileURL) else {
                 continue
             }

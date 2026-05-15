@@ -30,7 +30,7 @@ private let logger = tc2Logger(forCategory: .configuration)
         super.init()
     }
 
-    public func selectedEnvironmentName() async throws -> String {
+    @concurrent public func selectedEnvironmentName() async throws -> String {
         // NOTE: These shortcuts prevent xpc calls to pccd, but
         // they require that we are in sync with pccd about the
         // fact that !os_variant_allows_internal_security_policies

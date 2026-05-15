@@ -24,9 +24,7 @@ import InternalSwiftProtobuf
 import CryptoKit
 @preconcurrency import Security
 import Security_Private.SecKeyPriv
-@_weakLinked import SecureConfigDB
 import os.log
-import MSUDataAccessor
 
 /// Implements ``Attestor`` for Apple silicon nodes.
 public struct NodeAttestor: Attestor {
@@ -66,7 +64,7 @@ public struct NodeAttestor: Attestor {
 
     public var preserveSecureConfigs: Bool = false
 
-    static var logger: Logger = Logger(subsystem: "com.apple.CloudAttestation", category: "NodeAttestor")
+    static let logger: Logger = Logger(subsystem: "com.apple.CloudAttestation", category: "NodeAttestor")
 
     static let dcik = SecKeyCopySystemKey(.DCIK, nil)?.takeRetainedValue()
 
@@ -134,7 +132,8 @@ public struct NodeAttestor: Attestor {
         self = .init(transparencyProver: transparencyProver, assetProvider: assetProvider, environment: Environment.current)
     }
 
-    init(
+    @_spi(Private)
+    public init(
         transparencyProver: some TransparencyProver,
         assetProvider: some AttestationAssetProvider,
         environment: Environment

@@ -12,24 +12,113 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
-
 internal import CloudBoardCommon
-internal import CloudBoardLogging
+import CloudBoardDomain
 import CloudBoardJobAPI
+internal import CloudBoardLogging
 import Foundation
 import os
 
-public enum PCCClientError: Error {
+public enum PCCClientError: RequestExecutionErrorProtocol {
     case noHandlerResult
     case illegalTransition
     case usedAfterFinalizedCalled
+    case unknownCryptoMaterial
+    /// Crypto material handles were provided for a PCCClient with missing subrequest context
+    case missingSubrequestContext
+
+    package var errorSource: RequestExecutionErrorSource {
+        return RequestExecutionErrorSource.cloudAppFramework
+    }
+
+    package var staticStringRepresentation: StaticString {
+        switch self {
+        case .noHandlerResult: "noHandlerResult"
+        case .illegalTransition: "illegalTransition"
+        case .usedAfterFinalizedCalled: "usedAfterFinalizedCalled"
+        case .unknownCryptoMaterial: "unknownCryptoMaterial"
+        case .missingSubrequestContext: "missingSubrequestContext"
+        }
+    }
+
+    package var errorCode: UInt32 {
+        switch self {
+        case .noHandlerResult: CloudAppFrameworkErrorCodes.noHandlerResult.rawValue
+        case .illegalTransition: CloudAppFrameworkErrorCodes.illegalTransition.rawValue
+        case .usedAfterFinalizedCalled: CloudAppFrameworkErrorCodes.usedAfterFinalizedCalled.rawValue
+        case .unknownCryptoMaterial: CloudAppFrameworkErrorCodes.unknownCryptoMaterial.rawValue
+        case .missingSubrequestContext: CloudAppFrameworkErrorCodes.missingSubrequestContext.rawValue
+        }
+    }
 }
 
-// Used to make outbound requests to other Private Cloud Compute nodes from a cloud app.
+/// Represents request-related errors due to PCC Gateway
+public enum PCCRequestError: RequestExecutionErrorProtocol {
+    /// The request has been discarded by ROPES, e.g. due to insufficient capacity
+    case requestDiscarded
+
+    package var errorSource: RequestExecutionErrorSource {
+        return RequestExecutionErrorSource.cloudAppFramework
+    }
+
+    package var staticStringRepresentation: StaticString {
+        switch self {
+        case .requestDiscarded: "requestDiscarded"
+        }
+    }
+
+    package var errorCode: UInt32 {
+        switch self {
+        case .requestDiscarded: CloudAppFrameworkErrorCodes.requestDiscarded.rawValue
+        }
+    }
+}
+
+// makePCCRequest config data
+public struct PCCRequestConfiguration: Sendable {
+    public var effort: ExpectedEffort?
+    // if not set, no reuse is possible or reasonable
+    public var reuseTarget: ReuseTarget?
+    public var cryptoMaterialHandles: Set<UUID>
+    public var responseBypass: Bool
+    public var isFinal: Bool
+    public var spanID: UInt64?
+    public var groupID: String?
+    public var isDiscardable: Bool
+
+    public init(
+        effort: ExpectedEffort? = nil,
+        reuseTarget: ReuseTarget? = nil,
+        cryptoMaterialHandles: Set<UUID> = [],
+        responseBypass: Bool = false,
+        isFinal: Bool = false,
+        spanID: UInt64? = nil,
+        groupID: String? = nil,
+        isDiscardable: Bool = false,
+    ) {
+        self.effort = effort
+        self.reuseTarget = reuseTarget
+        self.cryptoMaterialHandles = cryptoMaterialHandles
+        self.responseBypass = responseBypass
+        self.isFinal = isFinal
+        self.spanID = spanID
+        self.groupID = groupID ?? UUID().uuidString
+        self.isDiscardable = isDiscardable
+    }
+}
+
+/// A client for sending requests to other Private Cloud Compute nodes.
+/// This is used only by "proxy" based cloud apps to request "compute" nodes to do work on their behalf.
+/// These a commonly called "sub requests" or "InvokeProxyInitiate" for the ROPES grpc message used to start
+/// them from the proxy node.
 public final class PCCClient: Sendable {
     private static let logger = Logger(
         subsystem: "com.apple.cloudos.cloudboard",
+        category: "PCCClient"
+    )
+
+    private static let tracingLogger = Logger(
+        subsystem: "com.apple.cloudos.cloudboard.tracing",
         category: "PCCClient"
     )
 
@@ -37,23 +126,34 @@ public final class PCCClient: Sendable {
     private let clientRequestID: String
     private let finalized = OSAllocatedUnfairLock(initialState: false)
     private let forwardBypassedRequestChunksToWorker: OSAllocatedUnfairLock<Bool>
+    private let clientSubrequestCapabilites: ClientSubrequestCapabilities?
 
-    init(jobHelperMessenger: JobHelperMessengerProtocol, clientRequestID: String, requestBypassed: Bool) {
+    init(
+        jobHelperMessenger: JobHelperMessengerProtocol,
+        clientRequestID: String,
+        requestBypassed: Bool,
+        clientSubrequestCapabilites: ClientSubrequestCapabilities? = nil
+    ) {
         self.jobHelperMessenger = jobHelperMessenger
         self.clientRequestID = clientRequestID
         self.forwardBypassedRequestChunksToWorker = .init(initialState: requestBypassed)
+        self.clientSubrequestCapabilites = clientSubrequestCapabilites
     }
 
     public enum PCCWorkerResponse: Equatable, Sendable {
         public struct Result: Equatable, Sendable {
-            public enum Status: Equatable, Sendable, CustomStringConvertible {
+            public enum Status: Encodable, Equatable, Sendable, CustomStringConvertible {
                 case ok
                 case failure
+                /// No longer used. When requests are discarded, makePCCRequest will throw
+                /// PCCCRequestError.requestDiscarded.
+                case discarded
 
                 public var description: String {
                     switch self {
                     case .ok: "OK"
                     case .failure: "Failure"
+                    case .discarded: "Discarded"
                     }
                 }
             }
@@ -64,6 +164,7 @@ public final class PCCClient: Sendable {
                 return switch result {
                 case .ok: .init(status: .ok)
                 case .failure: .init(status: .failure)
+                case .discarded: .init(status: .discarded)
                 }
             }
         }
@@ -72,8 +173,8 @@ public final class PCCClient: Sendable {
         case result(Result)
     }
 
-    public struct PCCRequestSession {
-        public struct ResponseData: AsyncSequence {
+    public struct PCCRequestSession: Sendable {
+        public struct ResponseData: AsyncSequence, Sendable {
             public typealias Element = PCCWorkerResponse
             public typealias Failure = Error
             public typealias AsyncIterator = AsyncThrowingStream<Element, Failure>.AsyncIterator
@@ -85,7 +186,7 @@ public final class PCCClient: Sendable {
             }
         }
 
-        public struct RequestWriter {
+        public struct RequestWriter: Sendable {
             fileprivate typealias DataOutputContinuation = AsyncThrowingStream<Data, Error>.Continuation
 
             fileprivate let outputContinuation: DataOutputContinuation
@@ -120,12 +221,13 @@ public final class PCCClient: Sendable {
         }
     }
 
-    enum RequestTaskGroupResult<ReturnType> {
+    enum RequestTaskGroupResult<ReturnType: Sendable> {
         case handlerFinished(ReturnType)
         case handlerError(Error)
         case requestStreamFinished
         case requestStreamError(Error)
         case responseStreamFinished
+        case workerResponseStreamError(Error)
     }
 
     enum PCCRequestCompletionStatus {
@@ -133,74 +235,56 @@ public final class PCCClient: Sendable {
         case allComplete
     }
 
-    /// Establishes a bidirectional request/response stream with another PCC node that matches the provided
-    /// `serviceName` and `routingParameters`. Only usable from a cloud proxy app.
-    ///
-    /// - Parameters:
-    ///   - serviceName: The service name to find a worker node for.
-    ///   - routingParameters: The routing parameters to use when finding a worker node.
-    ///   - responseBypass: If `true` the response stream from the worker will go directly to the initiating client
-    ///   rather than coming back to this instance
-    ///   - isFinal: If `true` CloudBoard sends a final Request Execution Log entry to the initiating client and
-    ///   prevents any further outbound requests
-    ///   - handler: Handler that is provided with a session object that provides a request writer to send request
-    ///   messages to the worker node and a response stream for response messages from the worker. Node that in the case
-    ///   response bypass is enabled, the response stream only ever contains a response summary once the worker request
-    ///   completes.
-    public func makePCCRequest<ReturnType>(
+    // Heavily overloaded function for ABI compatibility
+    /// Request a PCC node for performing some specific computation(S)
+    @preconcurrency
+    public func makePCCRequest<ReturnType: Sendable>(
         serviceName: String,
         routingParameters: [String: [String]],
-        responseBypass: Bool = false,
-        isFinal: Bool = false,
-        handler: @escaping (PCCRequestSession) async throws -> ReturnType
+        configuration: PCCRequestConfiguration,
+        handler: @Sendable @escaping (PCCRequestSession) async throws -> ReturnType
     ) async throws -> ReturnType {
-        return try await self.makePCCRequest(
-            serviceName: serviceName,
-            routingParameters: routingParameters,
-            responseBypass: responseBypass,
-            isFinal: isFinal,
-            handler: handler,
-            spanID: nil
-        )
-    }
-
-    /// Calling `finalize` allows CloudBoard to signal back to the client via the Request Execution Log that for the
-    /// current request no more outbound requests will be made. Once finalized, further calls to `makePCCRequest` will
-    /// fail.
-    ///
-    /// Calling finalize multiple times or after a `makePCCRequest` has been made that was marked as final has no
-    /// effect.
-    public func finalize() async throws {
-        let alreadyFinalized = self.finalized.withLock {
-            let alreadyFinalized = $0
-            $0 = true
-            return alreadyFinalized
-        }
-        if !alreadyFinalized {
-            try await self.jobHelperMessenger.finalizeRequestExecutionLog()
-        }
-    }
-
-    public func makePCCRequest<ReturnType>(
-        serviceName: String,
-        routingParameters: [String: [String]],
-        responseBypass: Bool = false,
-        isFinal: Bool = false,
-        handler: @escaping (PCCRequestSession) async throws -> ReturnType,
-        spanID: String? = nil
-    ) async throws -> ReturnType {
-        let findWorkerSpanID = TraceContextCache.singletonCache.generateNewSpanID()
+        let findWorkerSpanID: UInt64 = TraceContextCache.singletonCache.generateNewSpanID()
         let requestSummary = FindWorkerRequestSummaryProvisioner(
             requestID: self.clientRequestID,
+            clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
             spanID: findWorkerSpanID,
-            parentSpanID: spanID
+            parentSpanID: configuration.spanID
         )
-        try self.finalized.withLock { finalized in
-            if finalized {
-                throw PCCClientError.usedAfterFinalizedCalled
-            } else if isFinal {
-                finalized = true
+        await requestSummary.populate(reuseTarget: configuration.reuseTarget, groupID: configuration.groupID)
+        if !configuration.cryptoMaterialHandles.isEmpty {
+            guard let clientSubrequestCapabilites else {
+                Self.logger.error("Crypto material handles provided for a PCCClient without subrequest context")
+                await requestSummary.populate(error: PCCClientError.missingSubrequestContext)
+                await requestSummary.log(to: Self.tracingLogger)
+                throw PCCClientError.missingSubrequestContext
             }
+
+            for cryptoMaterialHandle in configuration.cryptoMaterialHandles {
+                guard clientSubrequestCapabilites.cryptoMaterialHandles.contains(cryptoMaterialHandle)
+                else {
+                    Self.logger.error("Unknown crypto material handle provided")
+                    await requestSummary.populate(error: PCCClientError.unknownCryptoMaterial)
+                    await requestSummary.log(to: Self.tracingLogger)
+                    throw PCCClientError.unknownCryptoMaterial
+                }
+            }
+        }
+
+        let wasAlreadyFinalized = self.finalized.withLock { finalized in
+            if finalized {
+                return true
+            } else if configuration.isFinal {
+                finalized = true
+                return false
+            } else {
+                return false
+            }
+        }
+        if wasAlreadyFinalized {
+            await requestSummary.populate(error: PCCClientError.usedAfterFinalizedCalled)
+            await requestSummary.log(to: Self.tracingLogger)
+            throw PCCClientError.usedAfterFinalizedCalled
         }
 
         let (requestStream, requestContinuation) = AsyncThrowingStream<Data, Error>.makeStream(of: Data.self)
@@ -210,15 +294,18 @@ public final class PCCClient: Sendable {
 
         PCCClientCheckpoint(
             requestID: self.clientRequestID,
+            clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
             workerID: workerID,
             message: "Received request to find PCC worker",
             spanID: findWorkerSpanID
         ).log(
             serviceName: serviceName,
             routingParameters: routingParameters,
-            responseBypass: responseBypass,
-            isFinal: isFinal,
-            to: Self.logger,
+            reuseTarget: configuration.reuseTarget,
+            groupID: configuration.groupID,
+            responseBypass: configuration.responseBypass,
+            isFinal: configuration.isFinal,
+            to: Self.tracingLogger,
             level: .info
         )
 
@@ -235,11 +322,18 @@ public final class PCCClient: Sendable {
                 workerID: workerID,
                 serviceName: serviceName,
                 routingParameters: routingParameters,
-                responseBypass: responseBypass,
+                effort: configuration.effort,
+                reuseTarget: configuration.reuseTarget.map { ReuseTargetConstraints($0) },
+                responseBypass: configuration.responseBypass,
                 forwardRequestChunks: forwardBypassedRequestChunks,
-                isFinal: isFinal,
-                spanID: requestSummary.requestSummary.spanID ?? ""
-            ), requestSummary: requestSummary
+                isFinal: configuration.isFinal,
+                spanID: findWorkerSpanID,
+                groupID: configuration.groupID,
+                isDiscardable: configuration.isDiscardable
+            ),
+            subrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
+            cryptoMaterialHandles: configuration.cryptoMaterialHandles.map { .init(uuid: $0) },
+            requestSummary: requestSummary
         )
 
         return try await withThrowingTaskGroup(of: RequestTaskGroupResult<ReturnType>.self) { group in
@@ -262,23 +356,41 @@ public final class PCCClient: Sendable {
                 defer {
                     responseContinuation.finish()
                 }
-                for await response in workerResponseStream {
-                    switch response {
-                    case .payload(let data):
-                        responseContinuation.yield(.payload(data))
-                    case .result(let result):
-                        responseContinuation.yield(.result(.from(result)))
-                    @unknown default:
-                        PCCClientCheckpoint(
-                            requestID: self.clientRequestID,
-                            workerID: workerID,
-                            message: "Received worker response message of unknown type. Ignoring.",
-                            spanID: findWorkerSpanID
-                        ).log(to: Self.logger, level: .error)
+                do {
+                    var buffer = try await LengthPrefixBuffer(
+                        maxMessageSize: self.jobHelperMessenger
+                            .getMaxApplicationLayerMessageSize()
+                    )
+                    let chunkingConfig = try await self.jobHelperMessenger.getApplicationDataChunkingConfiguration()
+                    for await response in workerResponseStream {
+                        switch response {
+                        case .payload(let data):
+                            switch chunkingConfig {
+                            case .disabled:
+                                responseContinuation.yield(.payload(data))
+                            case .enabled:
+                                for chunk in try buffer.append(.init(chunk: data)) {
+                                    responseContinuation.yield(.payload(chunk.chunk))
+                                }
+                            }
+                        case .result(let result):
+                            responseContinuation.yield(.result(.from(result)))
+                        @unknown default:
+                            PCCClientCheckpoint(
+                                requestID: self.clientRequestID,
+                                clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
+                                workerID: workerID,
+                                message: "Received worker response message of unknown type. Ignoring.",
+                                spanID: findWorkerSpanID
+                            ).log(to: Self.tracingLogger, level: .error)
+                        }
                     }
-                }
 
-                return .responseStreamFinished
+                    try buffer.validateCompleteDataChunksReceived()
+                    return .responseStreamFinished
+                } catch {
+                    return .workerResponseStreamError(error)
+                }
             }
 
             // Task group to run the cloud app handler
@@ -309,28 +421,26 @@ public final class PCCClient: Sendable {
                         if handlerCompleted {
                             PCCClientCheckpoint(
                                 requestID: self.clientRequestID,
+                                clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
                                 workerID: workerID,
                                 message: "Handler unexpectedly reported to have finished more than once",
                                 error: PCCClientError.illegalTransition,
                                 spanID: findWorkerSpanID
-                            ).log(to: Self.logger, level: .error)
+                            ).log(to: Self.tracingLogger, level: .error)
                             await requestSummary.populate(error: PCCClientError.illegalTransition)
-                            await requestSummary.log(to: Self.logger)
+                            await requestSummary.log(to: Self.tracingLogger)
                             throw PCCClientError.illegalTransition
                         } else {
                             // This can happen due to a race condition which doesn't affect correctness in any way.
                             if !responseStreamCompleted {
                                 PCCClientCheckpoint(
                                     requestID: self.clientRequestID,
+                                    clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
                                     workerID: workerID,
-                                    message: "Handler unexpectedly finished before response stream from worker to cloud app finished",
-                                    error: PCCClientError.illegalTransition,
+                                    message: "Handler finished before response stream from worker to cloud app finished",
                                     spanID: findWorkerSpanID
-                                ).log(to: Self.logger, level: .default)
-                                requestContinuation.finish(throwing: PCCClientError.illegalTransition)
-                                await requestSummary.populate(error: PCCClientError.illegalTransition)
-                                await requestSummary.log(to: Self.logger)
-                                throw PCCClientError.illegalTransition
+                                ).log(to: Self.tracingLogger, level: .default)
+                                responseContinuation.finish()
                             }
 
                             handlerResult = result
@@ -348,26 +458,30 @@ public final class PCCClient: Sendable {
                     case .allComplete:
                         PCCClientCheckpoint(
                             requestID: self.clientRequestID,
+                            clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
                             workerID: workerID,
                             message: "Handler unexpectedly reported to have finished more than once",
                             error: PCCClientError.illegalTransition,
                             spanID: findWorkerSpanID
-                        ).log(to: Self.logger, level: .error)
+                        ).log(to: Self.tracingLogger, level: .error)
                         await requestSummary.populate(error: PCCClientError.illegalTransition)
-                        await requestSummary.log(to: Self.logger)
+                        await requestSummary.log(to: Self.tracingLogger)
                         throw PCCClientError.illegalTransition
                     }
                 case .handlerError(let error):
                     PCCClientCheckpoint(
                         requestID: self.clientRequestID,
+                        clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
                         workerID: workerID,
                         message: "Cloud app failed during outbound request processing",
                         error: error,
                         spanID: findWorkerSpanID
-                    ).log(to: Self.logger, level: .error)
+                    ).log(to: Self.tracingLogger, level: .error)
                     requestContinuation.finish(throwing: error)
                     group.cancelAll()
                     completionStatus = .allComplete
+                    await requestSummary.populate(error: error)
+                    await requestSummary.log(to: Self.logger)
                     throw error
                 case .requestStreamFinished:
                     switch completionStatus {
@@ -375,21 +489,23 @@ public final class PCCClient: Sendable {
                         if requestStreamCompleted {
                             PCCClientCheckpoint(
                                 requestID: self.clientRequestID,
+                                clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
                                 workerID: workerID,
                                 message: "Request stream unexpectedly reported to have finished more than once",
                                 error: PCCClientError.illegalTransition,
                                 spanID: findWorkerSpanID
-                            ).log(to: Self.logger, level: .error)
+                            ).log(to: Self.tracingLogger, level: .error)
                             await requestSummary.populate(error: PCCClientError.illegalTransition)
-                            await requestSummary.log(to: Self.logger)
+                            await requestSummary.log(to: Self.tracingLogger)
                             throw PCCClientError.illegalTransition
                         } else {
                             PCCClientCheckpoint(
                                 requestID: self.clientRequestID,
+                                clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
                                 workerID: workerID,
                                 message: "Request stream finished",
                                 spanID: findWorkerSpanID
-                            ).log(to: Self.logger, level: .debug)
+                            ).log(to: Self.tracingLogger, level: .default)
                             if responseStreamCompleted, handlerCompleted {
                                 completionStatus = .allComplete
                             } else {
@@ -403,23 +519,39 @@ public final class PCCClient: Sendable {
                     case .allComplete:
                         PCCClientCheckpoint(
                             requestID: self.clientRequestID,
+                            clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
                             workerID: workerID,
                             message: "Request stream unexpectedly reported to have finished more than once",
                             error: PCCClientError.illegalTransition,
                             spanID: findWorkerSpanID
-                        ).log(to: Self.logger, level: .error)
+                        ).log(to: Self.tracingLogger, level: .error)
                         await requestSummary.populate(error: PCCClientError.illegalTransition)
-                        await requestSummary.log(to: Self.logger)
+                        await requestSummary.log(to: Self.tracingLogger)
                         throw PCCClientError.illegalTransition
                     }
                 case .requestStreamError(let error):
                     PCCClientCheckpoint(
                         requestID: self.clientRequestID,
+                        clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
                         workerID: workerID,
                         message: "Error while forwarding worker request message from cloud app",
                         error: error,
                         spanID: findWorkerSpanID
-                    ).log(to: Self.logger, level: .error)
+                    ).log(to: Self.tracingLogger, level: .error)
+                    await requestSummary.populate(error: error)
+                    await requestSummary.log(to: Self.logger)
+                    group.cancelAll()
+                    completionStatus = .allComplete
+                    throw error
+                case .workerResponseStreamError(let error):
+                    PCCClientCheckpoint(
+                        requestID: self.clientRequestID,
+                        clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
+                        workerID: workerID,
+                        message: "Error while forwarding worker response message to cloud app",
+                        error: error,
+                        spanID: findWorkerSpanID
+                    ).log(to: Self.tracingLogger, level: .error)
                     await requestSummary.populate(error: error)
                     await requestSummary.log(to: Self.logger)
                     group.cancelAll()
@@ -428,51 +560,31 @@ public final class PCCClient: Sendable {
                 case .responseStreamFinished:
                     switch completionStatus {
                     case .awaiting(let requestStreamCompleted, let responseStreamCompleted, let handlerCompleted):
-                        if handlerCompleted {
+                        if !responseStreamCompleted {
                             PCCClientCheckpoint(
                                 requestID: self.clientRequestID,
-                                workerID: workerID,
-                                message: "Response stream unexpectedly reported to have finished after cloud app handler",
-                                error: PCCClientError.illegalTransition,
-                                spanID: findWorkerSpanID
-                            ).log(to: Self.logger, level: .error)
-                            await requestSummary.populate(error: PCCClientError.illegalTransition)
-                            await requestSummary.log(to: Self.logger)
-                            throw PCCClientError.illegalTransition
-                        } else if !responseStreamCompleted {
-                            PCCClientCheckpoint(
-                                requestID: self.clientRequestID,
+                                clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
                                 workerID: workerID,
                                 message: "Response stream finished",
                                 spanID: findWorkerSpanID
-                            ).log(to: Self.logger, level: .debug)
+                            ).log(to: Self.tracingLogger, level: .default)
                             completionStatus = .awaiting(
                                 requestStreamCompleted: requestStreamCompleted,
                                 responseStreamCompleted: true,
                                 handlerCompleted: handlerCompleted
                             )
-                        } else {
-                            PCCClientCheckpoint(
-                                requestID: self.clientRequestID,
-                                workerID: workerID,
-                                message: "Response stream unexpectedly reported to have finished more than once",
-                                error: PCCClientError.illegalTransition,
-                                spanID: findWorkerSpanID
-                            ).log(to: Self.logger, level: .error)
-                            await requestSummary.populate(error: PCCClientError.illegalTransition)
-                            await requestSummary.log(to: Self.logger)
-                            throw PCCClientError.illegalTransition
                         }
                     case .allComplete:
                         PCCClientCheckpoint(
                             requestID: self.clientRequestID,
+                            clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
                             workerID: workerID,
                             message: "Response stream unexpectedly reported to have finished more than once",
                             error: PCCClientError.illegalTransition,
                             spanID: findWorkerSpanID
-                        ).log(to: Self.logger, level: .error)
+                        ).log(to: Self.tracingLogger, level: .error)
                         await requestSummary.populate(error: PCCClientError.illegalTransition)
-                        await requestSummary.log(to: Self.logger)
+                        await requestSummary.log(to: Self.tracingLogger)
                         throw PCCClientError.illegalTransition
                     }
                 }
@@ -480,11 +592,12 @@ public final class PCCClient: Sendable {
                 if case .allComplete = completionStatus {
                     PCCClientCheckpoint(
                         requestID: self.clientRequestID,
+                        clientSubrequestID: self.clientSubrequestCapabilites?.clientSubrequestID,
                         workerID: workerID,
                         message: "Worker request completed",
                         spanID: findWorkerSpanID
-                    ).log(to: Self.logger, level: .info)
-                    await requestSummary.log(to: Self.logger)
+                    ).log(to: Self.tracingLogger, level: .info)
+                    await requestSummary.log(to: Self.tracingLogger)
                     group.cancelAll()
 
                     precondition(handlerResult != nil, "Handler result should not be nil at this point")
@@ -492,15 +605,201 @@ public final class PCCClient: Sendable {
                 }
             }
 
+            await requestSummary.populate(error: PCCClientError.noHandlerResult)
+            await requestSummary.log(to: Self.tracingLogger)
             throw PCCClientError.noHandlerResult
+        }
+    }
+
+    @preconcurrency
+    public func makePCCRequest<ReturnType: Sendable>(
+        serviceName: String,
+        routingParameters: [String: [String]],
+        effort: ExpectedEffort? = nil,
+        // if not set no reuse is possible or reasonable
+        reuseTarget: ReuseTarget? = nil,
+        cryptoMaterialHandles: Set<UUID> = [],
+        responseBypass: Bool = false,
+        isFinal: Bool = false,
+        spanID: UInt64? = nil,
+        groupID: String? = nil,
+        handler: @Sendable @escaping (PCCRequestSession) async throws -> ReturnType
+    ) async throws -> ReturnType {
+        return try await self.makePCCRequest(
+            serviceName: serviceName,
+            routingParameters: routingParameters,
+            configuration: .init(
+                effort: effort,
+                reuseTarget: reuseTarget,
+                cryptoMaterialHandles: cryptoMaterialHandles,
+                responseBypass: responseBypass,
+                isFinal: isFinal,
+                spanID: spanID,
+                groupID: groupID
+            ),
+            handler: handler
+        )
+    }
+
+    @preconcurrency
+    public func makePCCRequest<ReturnType: Sendable>(
+        serviceName: String,
+        routingParameters: [String: [String]],
+        effort: ExpectedEffort? = nil,
+        // if not set no reuse is possible or reasonable
+        reuseTarget: ReuseTarget? = nil,
+        cryptoMaterialHandles: Set<UUID> = [],
+        responseBypass: Bool = false,
+        isFinal: Bool = false,
+        spanID: UInt64? = nil,
+        handler: @Sendable @escaping (PCCRequestSession) async throws -> ReturnType
+    ) async throws -> ReturnType {
+        return try await self.makePCCRequest(
+            serviceName: serviceName,
+            routingParameters: routingParameters,
+            configuration: .init(
+                effort: effort,
+                reuseTarget: reuseTarget,
+                cryptoMaterialHandles: cryptoMaterialHandles,
+                responseBypass: responseBypass,
+                isFinal: isFinal,
+                spanID: spanID
+            ),
+            handler: handler
+        )
+    }
+
+    // Overloaded function for ABI compatibility
+    @preconcurrency
+    public func makePCCRequest<ReturnType: Sendable>(
+        serviceName: String,
+        routingParameters: [String: [String]],
+        effort _: ExpectedEffort? = nil,
+        // if not set no reuse is possible or reasonable
+        reuseTarget: ReuseTarget? = nil,
+        responseBypass: Bool = false,
+        isFinal: Bool = false,
+        spanID: UInt64? = nil,
+        handler: @Sendable @escaping (PCCRequestSession) async throws -> ReturnType
+    ) async throws -> ReturnType {
+        return try await self.makePCCRequest(
+            serviceName: serviceName,
+            routingParameters: routingParameters,
+            configuration: .init(
+                effort: nil,
+                reuseTarget: reuseTarget,
+                cryptoMaterialHandles: [],
+                responseBypass: responseBypass,
+                isFinal: isFinal,
+                spanID: spanID
+            ),
+            handler: handler
+        )
+    }
+
+    // Overloaded function for ABI compatibility and UInt64 representation of spanID.
+    @preconcurrency
+    public func makePCCRequest<ReturnType: Sendable>(
+        serviceName: String,
+        routingParameters: [String: [String]],
+        responseBypass: Bool = false,
+        isFinal: Bool = false,
+        handler: @Sendable @escaping (PCCRequestSession) async throws -> ReturnType,
+        spanID: UInt64? = nil
+    ) async throws -> ReturnType {
+        return try await self.makePCCRequest(
+            serviceName: serviceName,
+            routingParameters: routingParameters,
+            configuration: .init(
+                effort: nil,
+                reuseTarget: nil,
+                responseBypass: responseBypass,
+                isFinal: isFinal,
+                spanID: spanID
+            ),
+            handler: handler,
+        )
+    }
+
+    // Overloadeded function for ABI compatibility and String representation of spanID.
+    @preconcurrency
+    public func makePCCRequest<ReturnType: Sendable>(
+        serviceName: String,
+        routingParameters: [String: [String]],
+        responseBypass: Bool = false,
+        isFinal: Bool = false,
+        handler: @Sendable @escaping (PCCRequestSession) async throws -> ReturnType,
+        spanID: String? = nil
+    ) async throws -> ReturnType {
+        return try await self.makePCCRequest(
+            serviceName: serviceName,
+            routingParameters: routingParameters,
+            configuration: .init(
+                responseBypass: responseBypass,
+                isFinal: isFinal,
+                spanID: UInt64(spanID ?? "", radix: 16) ?? UInt64.random(in: 0 ..< UInt64.max)
+            ),
+            handler: handler,
+        )
+    }
+
+    /// Establishes a bidirectional request/response stream with another PCC node that matches the provided
+    /// `serviceName` and `routingParameters`. Only usable from a cloud proxy app.
+    ///
+    /// - Parameters:
+    ///   - serviceName: The service name to find a worker node for.
+    ///   - routingParameters: The routing parameters to use when finding a worker node.
+    ///   - responseBypass: If `true` the response stream from the worker will go directly to the initiating client
+    ///   rather than coming back to this instance
+    ///   - isFinal: If `true` CloudBoard sends a final Request Execution Log entry to the initiating client and
+    ///   prevents any further outbound requests
+    ///   - handler: Handler that is provided with a session object that provides a request writer to send request
+    ///   messages to the worker node and a response stream for response messages from the worker. Node that in the case
+    ///   response bypass is enabled, the response stream only ever contains a response summary once the worker request
+    ///   completes.
+    @preconcurrency
+    public func makePCCRequest<ReturnType: Sendable>(
+        serviceName: String,
+        routingParameters: [String: [String]],
+        responseBypass: Bool = false,
+        isFinal: Bool = false,
+        handler: @Sendable @escaping (PCCRequestSession) async throws -> ReturnType,
+    ) async throws -> ReturnType {
+        return try await self.makePCCRequest(
+            serviceName: serviceName,
+            routingParameters: routingParameters,
+            configuration: .init(
+                responseBypass: responseBypass,
+                isFinal: isFinal,
+                spanID: UInt64.random(in: 0 ..< UInt64.max)
+            ),
+            handler: handler,
+        )
+    }
+
+    /// Calling `finalize` allows CloudBoard to signal back to the client via the Request Execution Log that for the
+    /// current request no more outbound requests will be made. Once finalized, further calls to `makePCCRequest` will
+    /// fail.
+    ///
+    /// Calling finalize multiple times or after a `makePCCRequest` has been made that was marked as final has no
+    /// effect.
+    public func finalize() async throws {
+        let alreadyFinalized = self.finalized.withLock {
+            let alreadyFinalized = $0
+            $0 = true
+            return alreadyFinalized
+        }
+        if !alreadyFinalized {
+            try await self.jobHelperMessenger.finalizeRequestExecutionLog()
         }
     }
 }
 
 struct PCCClientCheckpoint: RequestCheckpoint {
     var requestID: String?
+    var clientSubrequestID: UInt32?
     var workerID: UUID
-    var spanID: String?
+    var spanID: UInt64?
     var operationName: StaticString
     // RequestCheckpoint requires serviceName to be a static string but we can only
     // determine the cloud app's process name dynamically
@@ -514,15 +813,17 @@ struct PCCClientCheckpoint: RequestCheckpoint {
     var error: Error?
     var message: StaticString
 
-    public init(
+    init(
         requestID: String,
+        clientSubrequestID: UInt32?,
         workerID: UUID,
         operationName: StaticString = #function,
         message: StaticString,
         error: Error? = nil,
-        spanID: String? = nil
+        spanID: UInt64? = nil
     ) {
         self.requestID = requestID
+        self.clientSubrequestID = clientSubrequestID
         self.workerID = workerID
         self.operationName = operationName
         self.message = message
@@ -530,12 +831,13 @@ struct PCCClientCheckpoint: RequestCheckpoint {
         self.error = error
     }
 
-    public func log(to logger: Logger, level: OSLogType = .default) {
+    func log(to logger: Logger, level: OSLogType = .default) {
         logger.log(level: level, """
         ttl=\(self.type, privacy: .public)
         request.uuid=\(self.requestID!, privacy: .public)
+        client.subrequest_id=\(self.clientSubrequestID?.description ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
-        tracing.span_id=\(self.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         service.name=\(self.cloudAppServiceName, privacy: .public)
@@ -549,9 +851,11 @@ struct PCCClientCheckpoint: RequestCheckpoint {
         """)
     }
 
-    public func log(
+    func log(
         serviceName: String,
         routingParameters: [String: [String]],
+        reuseTarget: ReuseTarget?,
+        groupID: String?,
         responseBypass: Bool,
         isFinal: Bool,
         to logger: Logger,
@@ -562,7 +866,7 @@ struct PCCClientCheckpoint: RequestCheckpoint {
         request.uuid=\(self.requestID ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
-        tracing.span_id=\(self.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
         service.name=\(self.cloudAppServiceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
@@ -576,6 +880,10 @@ struct PCCClientCheckpoint: RequestCheckpoint {
         worker.responseBypass=\(responseBypass, privacy: .public)
         worker.isFinal=\(isFinal, privacy: .public)
         worker.uuid=\(self.workerID, privacy: .public)
+        worker.reuseTarget.ensemble=\(reuseTarget?.ensemble.description ?? "", privacy: .public)
+        worker.reuseTarget.rack=\(reuseTarget?.rack?.description ?? "", privacy: .public)
+        worker.reuseTarget.workloadAdditions=\(reuseTarget?.workloadAdditions ?? [:], privacy: .public)
+        worker.groupID=\(groupID ?? "", privacy: .public)
         """)
     }
 }
@@ -583,12 +891,17 @@ struct PCCClientCheckpoint: RequestCheckpoint {
 package actor FindWorkerRequestSummaryProvisioner {
     public var requestSummary: FindWorkerRequestSummary
 
-    init(requestID: String, spanID: String? = nil, parentSpanID: String? = nil) {
-        self.requestSummary = FindWorkerRequestSummary(requestID: requestID, spanID: spanID, parentSpanID: parentSpanID)
+    init(requestID: String, clientSubrequestID: UInt32?, spanID: UInt64? = nil, parentSpanID: UInt64? = nil) {
+        self.requestSummary = FindWorkerRequestSummary(
+            requestID: requestID,
+            clientSubrequestID: clientSubrequestID,
+            spanID: spanID,
+            parentSpanID: parentSpanID
+        )
         self.requestSummary.startTimeNanos = RequestSummaryClock.now
     }
 
-    func populate(workerID: String, requestTrackingID: String?, spanID: String?, parentSpanID: String?) {
+    func populate(workerID: String, requestTrackingID: String?, spanID: UInt64?, parentSpanID: UInt64?) {
         self.requestSummary.populate(
             workerID: workerID,
             requestTrackingID: requestTrackingID,
@@ -599,6 +912,10 @@ package actor FindWorkerRequestSummaryProvisioner {
 
     func populate(workerID: String) {
         self.requestSummary.populate(workerID: workerID)
+    }
+
+    func populate(reuseTarget: ReuseTarget?, groupID: String?) {
+        self.requestSummary.populate(reuseTarget: reuseTarget, groupID: groupID)
     }
 
     func populate(error: Error) {
@@ -612,20 +929,19 @@ package actor FindWorkerRequestSummaryProvisioner {
 }
 
 package struct FindWorkerRequestSummary: RequestSummary, Sendable {
-    public var serviceName: String =
-        "unused" // RequestCheckpoint requires serviceName to be a static string but we can only determine the cloud
-    // app's process name dynamically
-    var cloudAppServiceName: String {
-        DebugContext.appName ??
-            ProcessInfo.processInfo.processName
+    public var serviceName: String {
+        DebugContext.appName ?? ProcessInfo.processInfo.processName
     }
 
     public var requestID: String?
-    var spanID: String?
-    var parentSpanID: String?
+    public var clientSubrequestID: UInt32?
+    var spanID: UInt64?
+    var parentSpanID: UInt64?
     public let automatedDeviceGroup: String? = nil // No automated device group for FindWorker calls
 
     var workerID: String?
+    var groupID: String?
+    var reuseTarget: ReuseTarget?
     public var startTimeNanos: Int64?
     public var endTimeNanos: Int64?
 
@@ -635,13 +951,14 @@ package struct FindWorkerRequestSummary: RequestSummary, Sendable {
 
     public var error: Error?
 
-    init(requestID: String, spanID: String? = nil, parentSpanID: String? = nil) {
+    init(requestID: String, clientSubrequestID: UInt32? = nil, spanID: UInt64? = nil, parentSpanID: UInt64? = nil) {
         self.spanID = spanID
         self.parentSpanID = parentSpanID
         self.requestID = requestID
+        self.clientSubrequestID = clientSubrequestID
     }
 
-    mutating func populate(workerID: String, requestTrackingID: String?, spanID: String?, parentSpanID: String?) {
+    mutating func populate(workerID: String, requestTrackingID: String?, spanID: UInt64?, parentSpanID: UInt64?) {
         self.workerID = workerID
         self.requestID = requestTrackingID
         self.spanID = spanID
@@ -652,25 +969,35 @@ package struct FindWorkerRequestSummary: RequestSummary, Sendable {
         self.workerID = workerID
     }
 
+    mutating func populate(reuseTarget: ReuseTarget?, groupID: String?) {
+        self.reuseTarget = reuseTarget
+        self.groupID = groupID
+    }
+
     public func log(to logger: Logger) {
         logger.log("""
         ttl=RequestSummary
         request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
+        client.subrequest_id=\(self.clientSubrequestID?.description ?? "UNKNOWN", privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.spanID ?? "", privacy: .public)
-        tracing.parent_span_id=\(self.parentSpanID ?? "", privacy: .public)
+        tracing.span_id=\(self.spanID?.hexEncoded ?? "", privacy: .public)
+        tracing.parent_span_id=\(self.parentSpanID?.hexEncoded ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.start_time_unix_nano=\(self.startTimeNanos ?? 0, privacy: .public)
         tracing.end_time_unix_nano=\(self.endTimeNanos ?? 0, privacy: .public)
         request.duration_ms=\(self.durationMicros.map { String($0 / 1000) } ?? "", privacy: .public)
-        service.name=\(self.cloudAppServiceName, privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         tracing.status=\(status?.rawValue ?? "", privacy: .public)
         error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
         error.description=\(self.error.map { "\(String(reportable: $0))" } ?? "", privacy: .public)
         error.detailed=\(self.error.map { String(describing: $0) } ?? "", privacy: .private)
         worker.uuid=\(self.workerID.map { "\($0)" } ?? "")
+        worker.reuseTarget.ensemble=\(self.reuseTarget?.ensemble.description ?? "", privacy: .public)
+        worker.reuseTarget.rack=\(self.reuseTarget?.rack?.description ?? "", privacy: .public)
+        worker.reuseTarget.workloadAdditions=\(self.reuseTarget?.workloadAdditions ?? [:], privacy: .public)
+        worker.groupID=\(self.groupID ?? "", privacy: .public)
         """)
     }
 }
@@ -681,4 +1008,37 @@ public struct PCCWorkerInfo: Sendable, Equatable {
     /// for the worker encoded identically to how it is advertised in the
     /// service discovery registration
     public var releaseDigest: String
+
+    /// pulled from the attestation
+    public var ensemble: EnsembleInstanceId
+
+    /// pulled from the attestation
+    public var rack: RackId
+
+    /// The workload that was presented to the worker by ropes, including any edits it made such
+    /// as specific run modes, reuse additions etc.
+    /// Note: this will not light up till ROPES supports it - until then it will be empty rather than nil
+    /// since it should always be filled in from the point it is supported (and relied upon)
+    public var workload: [String: [String]]
+
+    // Open question whether we can source this or not.  It would make life simpler for cloud apps if we could
+    // if not remove it
+    package var prcosVersion: String = ""
+
+    internal init(
+        releaseDigest: String,
+        ensemble: EnsembleInstanceId,
+        rack: RackId,
+        workload: [String: [String]]
+    ) {
+        self.releaseDigest = releaseDigest
+        self.ensemble = ensemble
+        self.rack = rack
+        self.workload = workload
+    }
+}
+
+package struct ClientSubrequestCapabilities: Sendable {
+    public let clientSubrequestID: UInt32
+    public let cryptoMaterialHandles: Set<UUID>
 }

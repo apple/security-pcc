@@ -21,6 +21,7 @@
 
 import os.log
 @preconcurrency import Security
+import InternalSwiftProtobuf
 
 public struct MuxValidator: Validator {
     static let logger = Logger(subsystem: "com.apple.CloudAttestation", category: "MuxValidator")

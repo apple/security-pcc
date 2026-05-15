@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal let kAttestationAPIXPCLocalServiceName = "com.apple.cloudos.cb_attestationd"
 internal let kAttestationAPIXPCLocalServiceEntitlement = "com.apple.private.cloudos.cb_attestationd"
 internal let kAttestationAPIXPCLocalServiceKeyAccessEntitlement = "com.apple.private.cloudos.cb_attestationd.keyaccess"

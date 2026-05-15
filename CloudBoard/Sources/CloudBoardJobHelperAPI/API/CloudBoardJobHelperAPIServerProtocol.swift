@@ -12,9 +12,8 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
+package import CloudBoardDomain
 import Foundation
 
 /// Those parts of the JobHelper API relevant for the server to talk to the client

@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple Inc. All rights reserved.
-
 import Atomics
 import CloudBoardCommon
 import CloudBoardLogging
@@ -36,6 +34,10 @@ enum OperationNames {
 public final class RequestSummaryJobHelperTracer: Tracing.Tracer, RequestIDInstrument, Sendable {
     public static let logger: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
+        category: "CloudBoardJobHelperRequestSummary"
+    )
+    public static let tracingLogger: Logger = .init(
+        subsystem: "com.apple.cloudos.cloudboard.tracing",
         category: "CloudBoardJobHelperRequestSummary"
     )
     private let metrics: any MetricsSystem
@@ -66,7 +68,7 @@ public final class RequestSummaryJobHelperTracer: Tracing.Tracer, RequestIDInstr
         line: UInt
     ) -> Span {
         let context = context()
-        let newSpanID = TraceContextCache.singletonCache.generateNewSpanID()
+        let newSpanID: UInt64 = TraceContextCache.singletonCache.generateNewSpanID()
         let parentID = context.spanID
         let requestID = context.requestID ?? "requestID not passed through context"
         var nextContext = context
@@ -123,7 +125,7 @@ public final class RequestSummaryJobHelperTracer: Tracing.Tracer, RequestIDInstr
 
             // Only log invokeWorkload operations for now
             if span.operationName == OperationNames.invokeWorkload {
-                CloudBoardJobHelperRequestSummary(from: trace).log(to: Self.logger)
+                CloudBoardJobHelperRequestSummary(from: trace).log(to: Self.tracingLogger)
                 CloudBoardJobHelperRequestSummary(from: trace).measure(to: self.metrics)
             }
         } else if span.operationName == OperationNames.invokeWorkloadRequest {
@@ -165,8 +167,8 @@ extension RequestSummaryJobHelperTracer {
         let kind: Tracing.SpanKind
 
         let requestID: String
-        let spanID: String
-        let parentID: String?
+        let spanID: UInt64
+        let parentID: UInt64?
 
         let function: String
         let fileID: String
@@ -189,8 +191,8 @@ extension RequestSummaryJobHelperTracer {
             operationName: String,
             kind: Tracing.SpanKind,
             requestID: String,
-            parentID: String?,
-            spanID: String,
+            parentID: UInt64?,
+            spanID: UInt64,
             context: ServiceContext,
             tracer: RequestSummaryJobHelperTracer,
             function: String,
@@ -233,7 +235,7 @@ extension RequestSummaryJobHelperTracer {
                     let requestId = storage.context.requestID ?? ""
                     self.logger?
                         .fault(
-                            "[requestID: \(requestId, privacy: .public), parentID: \(self.parentID ?? "", privacy: .public), spanID: \(self.spanID, privacy: .public)] Reference to unended span dropped"
+                            "[requestID: \(requestId, privacy: .public), parentID: \(self.parentID?.hexEncoded ?? "", privacy: .public), spanID: \(self.spanID.hexEncoded, privacy: .public)] Reference to unended span dropped"
                         )
                 }
             }
@@ -296,7 +298,7 @@ extension RequestSummaryJobHelperTracer {
                     let requestID = storage.context.requestID ?? ""
                     self.logger?
                         .fault(
-                            "[requestID: \(requestID, privacy: .public), parentID: \(self.parentID ?? "", privacy: .public), spanID: \(self.spanID, privacy: .public)] Span already closed"
+                            "[requestID: \(requestID, privacy: .public), parentID: \(self.parentID?.hexEncoded ?? "", privacy: .public), spanID: \(self.spanID.hexEncoded, privacy: .public)] Span already closed"
                         )
                     return nil
                 }
@@ -312,7 +314,7 @@ extension RequestSummaryJobHelperTracer {
                     let requestID = storage.context.requestID ?? ""
                     self.logger?
                         .fault(
-                            "[requestID: \(requestID, privacy: .public), parentID: \(self.parentID ?? "", privacy: .public), spanID: \(self.spanID, privacy: .public)] endTimeNanos queried for closed span"
+                            "[requestID: \(requestID, privacy: .public), parentID: \(self.parentID?.hexEncoded ?? "", privacy: .public), spanID: \(self.spanID.hexEncoded, privacy: .public)] endTimeNanos queried for closed span"
                         )
                     return 0
                 }
@@ -323,22 +325,22 @@ extension RequestSummaryJobHelperTracer {
 }
 
 struct SpanIDKey: ServiceContextKey {
-    typealias Value = String
+    typealias Value = UInt64
     static var nameOverride: String? { "spanID" }
 }
 
 struct ParentSpanIDKey: ServiceContextKey {
-    typealias Value = String
+    typealias Value = UInt64
     static var nameOverride: String? { "parentSpanID" }
 }
 
 extension ServiceContext {
-    public var spanID: String? {
+    public var spanID: UInt64? {
         get { self[SpanIDKey.self] }
         set { self[SpanIDKey.self] = newValue }
     }
 
-    public var parentSpanID: String? {
+    public var parentSpanID: UInt64? {
         get { self[ParentSpanIDKey.self] }
         set { self[ParentSpanIDKey.self] = newValue }
     }

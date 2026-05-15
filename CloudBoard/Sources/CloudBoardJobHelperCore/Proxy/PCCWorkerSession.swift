@@ -12,10 +12,9 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
-
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardJobAPI
 import CloudBoardJobHelperAPI
 import CloudBoardLogging
@@ -23,11 +22,13 @@ import CloudBoardMetrics
 import CryptoKit
 import Foundation
 import HTTPClientStateMachine
+import InternalSwiftProtobuf
 import os
 
 enum PCCWorkerSessionError: Error {
     case failedToDecodeResponse
     case authTokensUnavailable
+    case invalidApplicationDataChunkSize
 }
 
 // Manages a session with a PCC node. This is initiated on behalf of a cloud app when requesting an outbound call to
@@ -37,7 +38,7 @@ enum PCCWorkerSessionError: Error {
 // Request encryption is done here, rather than in CloudboardMessenger because it is worker specific,
 // and there may be many of them. The messenger only concerns itself with the parent/client
 final class PCCWorkerSession: Sendable {
-    public static let logger: Logger = .init(
+    static let logger: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
         category: "PCCWorkerSession"
     )
@@ -46,11 +47,13 @@ final class PCCWorkerSession: Sendable {
     typealias ProtoPrivateCloudComputeResponse = Proto_PrivateCloudCompute_PrivateCloudComputeResponse
 
     private let workerID: UUID
-    public let query: FindWorkerQuery
-    public let responseBypassMode: ResponseBypassMode
-    public let findWorkerDurationMeasurement: OSAllocatedUnfairLock<ContinuousTimeMeasurement>
+    let negotiation: SelectionNegotiation.InitiatedNegotiation
+    let query: FindWorkerQuery
+    let responseBypassMode: ResponseBypassMode
+    let findWorkerDurationMeasurement: OSAllocatedUnfairLock<ContinuousTimeMeasurement>
+    let cryptoMaterials: [InternalCryptoMaterial]
 
-    public let isFinal: Bool
+    let isFinal: Bool
 
     private let stateMachine: OSAllocatedUnfairLock<PCCWorkerSessionStateMachine>
 
@@ -59,15 +62,19 @@ final class PCCWorkerSession: Sendable {
         query: FindWorkerQuery,
         responseBypassMode: ResponseBypassMode,
         isFinal: Bool,
-        findWorkerDurationMeasurement: OSAllocatedUnfairLock<ContinuousTimeMeasurement>
+        findWorkerDurationMeasurement: OSAllocatedUnfairLock<ContinuousTimeMeasurement>,
+        cryptoMaterials: [InternalCryptoMaterial],
+        negotiation: SelectionNegotiation.InitiatedNegotiation
     ) {
         self.workerID = workerID
         self.query = query
+        self.negotiation = negotiation
         self.isFinal = isFinal
         self.responseBypassMode = responseBypassMode
 
         self.stateMachine = .init(uncheckedState: .init())
         self.findWorkerDurationMeasurement = findWorkerDurationMeasurement
+        self.cryptoMaterials = cryptoMaterials
     }
 
     /// Provides the Data Encryption Key to be (re-)wrapped to the worker node. This must be the same key that was sent
@@ -94,13 +101,50 @@ final class PCCWorkerSession: Sendable {
 
     func encapsulateAuthToken(tgt: Data, ottSalt: Data) throws -> Data {
         let authTokenMessage = try ProtoPrivateCloudComputeRequest.serialized(
-            with: .authToken(.with {
+            with: .open(.with {
                 $0.tokenGrantingToken = tgt
                 $0.ottSalt = ottSalt
             })
         )
         return try self.stateMachine.withLock {
             try $0.encapsulateMessage(authTokenMessage, isFinal: false)
+        }
+    }
+
+    func encapsulateProxyInvokeOpen(
+        tgt: Data,
+        ottSalt: Data,
+        chunkingConfig: ApplicationDataChunkingConfiguration
+    ) throws -> Data {
+        let proxyInvokeOpenMessage = try ProtoPrivateCloudComputeRequest.serialized(
+            with: .proxyInvokeOpen(.with {
+                $0.tokenGrantingToken = tgt
+                $0.ottSalt = ottSalt
+                $0.opaqueCryptoMaterial = self.cryptoMaterials.map { cryptoMaterial in
+                    .with {
+                        $0.id = cryptoMaterial.id
+                        $0.material = cryptoMaterial.material
+                    }
+                }
+
+                switch chunkingConfig {
+                case .disabled:
+                    ()
+                case .enabled(let chunkSize):
+                    if let applicationDataChunkSize = UInt32(exactly: chunkSize) {
+                        $0.capabilities = .with { capabilities in
+                            capabilities.applicationDataChunking = .with { chunking in
+                                chunking.size = applicationDataChunkSize
+                            }
+                        }
+                    } else {
+                        throw PCCWorkerSessionError.invalidApplicationDataChunkSize
+                    }
+                }
+            })
+        )
+        return try self.stateMachine.withLock {
+            try $0.encapsulateMessage(proxyInvokeOpenMessage, isFinal: false)
         }
     }
 

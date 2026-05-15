@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
-
 extension Swift.Duration {
     /// The duration represented as nanoseconds, clamped to maximum expressible value.
     public var nanosecondsClamped: Int64 {

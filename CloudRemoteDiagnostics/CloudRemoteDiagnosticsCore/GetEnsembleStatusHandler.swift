@@ -21,7 +21,9 @@
 
 import Foundation
 import os
+#if canImport(AppleComputeEnsembler)
 @_weakLinked import AppleComputeEnsembler
+#endif
 
 private let logger = Logger(subsystem: "cloudremotediagd", category: "ensembled")
 
@@ -71,10 +73,21 @@ let kCIOCableFRU = "miniSAS Cables"
 extension CloudRemoteDiagnosticsHandler {
 
     public func handleGetEnsembleStatus() -> String {
-        guard #_hasSymbol(EnsemblerSession.self) else {
-            return String()
-        }
+        return self.getEnsembleStatus() ?? ""
+    }
 
+    public func handleGetEnsembleHealth() -> String {
+        if let health = self.getEnsembleHealth() {
+            return health
+        }
+        return "{\"healthState\":\"unknown\"}"
+    }
+
+    private func getEnsembleStatus() -> String? {
+#if canImport(AppleComputeEnsembler)
+        guard #_hasSymbol(EnsemblerSession.self) else {
+            return nil
+        }
         var results = TestResults(failedTests: [:],
                                   successTests: [:],
                                   allFRUs: [kNotApplicableFRU, kCIOCableFRU])
@@ -168,9 +181,16 @@ extension CloudRemoteDiagnosticsHandler {
         }
 
         return results.jsonString()
+#else
+        return nil
+#endif
     }
 
-    public func handleGetEnsembleHealth() -> String {
+    public func getEnsembleHealth() -> String? {
+#if canImport(AppleComputeEnsembler)
+        guard #_hasSymbol(EnsemblerSession.self) else {
+            return nil
+        }
         let ensembler: EnsemblerSession
         do {
             ensembler = try EnsemblerSession()
@@ -201,5 +221,8 @@ extension CloudRemoteDiagnosticsHandler {
         }
 
         return toJsonString(from: health)
+#else
+        return nil
+#endif
     }
 }

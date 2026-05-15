@@ -12,8 +12,8 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
+import CloudBoardCommon
+import CloudBoardLogging
 import CloudBoardPlatformUtilities
 import Dispatch
 import Foundation
@@ -253,8 +253,8 @@ private struct CancellationStateMachine: Sendable {
 }
 
 extension CloudBoardDConfiguration {
-    func resolveLocalServiceAddress() async throws -> SocketAddress {
-        if let forceIPv6ResolutionCFPref = self.grpc?.forceIPv6Resolution {
+    func resolveLocalServiceAddress(cloudAppPort: Int?) async throws -> SocketAddress {
+        if self.grpc?.forceIPv6Resolution != nil {
             // os_log doesn't support warnings so let's make this an error to make it more visible.
             LocalIPResolution.logger.error(
                 "Using deprecated GRPC.forceIPv6Resolution CFPref. Use secure-config 'com.apple.cloudboard.grpc.forceIPv6Resolution instead."
@@ -262,7 +262,7 @@ extension CloudBoardDConfiguration {
         }
         return try await LocalIPResolution.preferredLocalGRPCServiceAddress(
             ipAddress: self.grpc?.listeningIP,
-            port: self.grpc?.listeningPort,
+            port: cloudAppPort ?? self.grpc?.listeningPort,
             serviceDiscoveryHostname: self.serviceDiscovery?.targetHost,
             forceIPv6Resolution: self.secureConfig.grpcForceIPv6Resolution ?? self.grpc?.forceIPv6Resolution ?? false
         )

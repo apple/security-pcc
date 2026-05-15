@@ -25,6 +25,10 @@ import Foundation
 // rdar://76969145 (SHA256.Digest is not Constructible)
 struct DInitSHA256Digest {
     private let rawValue: String
+    
+    var string: String {
+        return rawValue
+    }
 }
 
 extension DInitSHA256Digest {

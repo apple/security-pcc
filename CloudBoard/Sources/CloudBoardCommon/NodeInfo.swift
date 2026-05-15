@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 #if canImport(AppleComputeEnsembler)
 @_weakLinked import AppleComputeEnsembler
 #endif
@@ -22,6 +20,7 @@
 @_weakLinked import cloudOSInfo
 #endif
 
+import CloudBoardLogging
 import Foundation
 import os
 
@@ -70,6 +69,11 @@ public struct NodeInfo: Sendable {
         self.ensembleNodeInfo?.ensembleID
     }
 
+    /// The rack location.
+    public var rackID: String? {
+        self.cloudOSNodeInfo?.rackID
+    }
+
     /// If the node is a leader in an ensemble.
     public var isLeader: Bool? {
         self.ensembleNodeInfo?.isLeader
@@ -90,6 +94,7 @@ public struct NodeInfo: Sendable {
         cloudOSReleaseType: String,
         serverOSBuildVersion: String,
         serverOSReleaseType: String,
+        rackID: String?,
         workloadEnabled: Bool,
         machineName: String,
         ensembleID: String,
@@ -100,7 +105,8 @@ public struct NodeInfo: Sendable {
             cloudOSReleaseType: cloudOSReleaseType,
             serverOSReleaseType: serverOSReleaseType,
             serverOSBuildVersion: serverOSBuildVersion,
-            workloadEnabled: workloadEnabled
+            workloadEnabled: workloadEnabled,
+            rackID: rackID
         )
         self.ensembleNodeInfo = .init(
             machineName: machineName,
@@ -133,11 +139,14 @@ struct CloudOSNodeInfo {
 
     /// Whether the workload is enabled.
     let workloadEnabled: Bool
+
+    /// The rack location.
+    let rackID: String?
 }
 
 extension CloudOSNodeInfo: CustomStringConvertible {
     public var description: String {
-        "cloudOSBuildVersion: \(self.cloudOSBuildVersion), cloudOSReleaseType: \(self.cloudOSReleaseType), serverOSBuildVersion: \(self.serverOSBuildVersion), serverOSReleaseType: \(self.serverOSReleaseType), workloadEnabled: \(self.workloadEnabled)"
+        "cloudOSBuildVersion: \(self.cloudOSBuildVersion), cloudOSReleaseType: \(self.cloudOSReleaseType), serverOSBuildVersion: \(self.serverOSBuildVersion), serverOSReleaseType: \(self.serverOSReleaseType), workloadEnabled: \(self.workloadEnabled), rackID: \(String(describing: self.rackID))"
     }
 }
 
@@ -183,8 +192,8 @@ extension NodeInfo {
     /// Returns the node info loaded from the system.
     ///
     /// Load this once at process start, the info does not change.
-    public static func load() -> NodeInfo {
-        let cloudOSNodeInfo = Self.loadCloudOSConfiguration()
+    public static func load(secureConfig: SecureConfig) -> NodeInfo {
+        let cloudOSNodeInfo = Self.loadCloudOSConfiguration(secureConfig: secureConfig)
         let ensembleNodeInfo = Self.loadEnsembleNodeInfo()
 
         return NodeInfo(
@@ -193,10 +202,17 @@ extension NodeInfo {
         )
     }
 
+    /// Fast path to determine if a leader or not
+    public static func isLeader() -> Bool? {
+        return self.loadEnsembleNodeInfo()?.isLeader
+    }
+
     /// Returns the node info loaded from CloudOSInfoProvider.
     ///
     /// Load this once at process start, the info does not change.
-    private static func loadCloudOSConfiguration() -> CloudOSNodeInfo? {
+    private static func loadCloudOSConfiguration(secureConfig: SecureConfig) -> CloudOSNodeInfo? {
+        // RackID comes from an attested secure config key
+        let rackID = secureConfig.parameters.rackID
         #if canImport(cloudOSInfo)
         if #_hasSymbol(CloudOSInfoProvider.self) {
             do {
@@ -206,7 +222,8 @@ extension NodeInfo {
                     cloudOSReleaseType: cloudOSConfiguration.cloudOSReleaseType,
                     serverOSReleaseType: cloudOSConfiguration.serverOSReleaseType,
                     serverOSBuildVersion: cloudOSConfiguration.serverOSBuildVersion,
-                    workloadEnabled: cloudOSConfiguration.tieEnabled
+                    workloadEnabled: cloudOSConfiguration.tieEnabled,
+                    rackID: rackID
                 )
                 self.logger.debug("""
                 Successfully loaded cloudOS node info: \

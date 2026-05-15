@@ -215,8 +215,9 @@ struct ControlPlaneSendCommand: ParsableCommand {
 
         func run() throws {
             let command = ControlPlaneAgentCommand.ModelSwitch(
-                defaultBaseModelCompatibilityVersion: version,
-                modelCatalogResourceBundleIDsToActivate: model)
+                defaultBaseModelVersionMap: [:],
+                inferenceIDsToActivate: model,
+                distributionName: "pccvre-helper")
 
             try ControlPlaneAgentCommand.send(
                 type: .applyProperty(
@@ -250,16 +251,16 @@ struct ControlPlaneSendCommand: ParsableCommand {
 struct ControlPlaneServerCommand: ParsableCommand {
     static var configuration = CommandConfiguration(
         commandName: "server",
-        abstract: "Start the control plane mock server.",
+        abstract: "Start the control plane test server.",
     )
 
     @OptionGroup
     var options: InstanceCommand.Options
 
-    @Flag(help: "Show verbose logs from the mock server")
+    @Flag(help: "Show verbose logs from the test server")
     var verbose: Bool = false
 
-    @Flag(help: "Pass through raw messages from the mock server")
+    @Flag(help: "Pass through raw messages from the test server")
     var raw: Bool = false
 
     func updateAndLogStatus(current raw: [String], last: ControlPlaneAgentStatus?) -> ControlPlaneAgentStatus? {
@@ -365,7 +366,7 @@ struct ControlPlaneServerCommand: ParsableCommand {
 struct ControlPlaneRawServerCommand: ParsableCommand {
     static var configuration = CommandConfiguration(
         commandName: "raw-server",
-        abstract: "Start the mock server with argument passthrough.",
+        abstract: "Start the test server with argument passthrough.",
     )
 
     @OptionGroup

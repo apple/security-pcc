@@ -17,6 +17,8 @@
 //  DarwinInit
 //
 
+import sys_types
+
 struct DInitUserConfig {
     var userName: String
     var uid: uid_t

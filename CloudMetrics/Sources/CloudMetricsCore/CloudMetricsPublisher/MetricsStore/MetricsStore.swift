@@ -119,6 +119,11 @@ internal protocol MetricsStore: Sendable {
         step: Int,
         override: CloudMetricsOverride
     ) async throws
+    
+    func getStoredCounter(
+        label: String,
+        dimensions: [String: String]
+    ) async throws -> CloudMetricsDoubleCounter?
 }
 
 /// ID of an individual metric as recognised by Mosaic.

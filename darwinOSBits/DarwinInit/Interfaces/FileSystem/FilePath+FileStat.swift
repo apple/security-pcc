@@ -34,4 +34,21 @@ extension FilePath {
             Darwin.chmod(self.description, permissions.rawValue)
         }.get()
     }
+
+    /// Query total volume capacity for the filesystem containing this path
+    ///
+    /// - Returns: Total capacity in bytes
+    /// - Throws: Errno if the statfs system call fails
+    func volumeTotalCapacity() throws -> Int64 {
+        var statfsBuf = statfs()
+
+        guard statfs(self.string, &statfsBuf) == 0 else {
+            throw Errno(rawValue: errno)
+        }
+
+        let blockSize = UInt64(statfsBuf.f_bsize)
+        let totalBlocks = UInt64(statfsBuf.f_blocks)
+
+        return Int64(totalBlocks * blockSize)
+    }
 }

@@ -17,8 +17,31 @@
 //  DarwinInit
 //
 
+import Foundation
+
 extension Array {
     subscript(safe index: Index) -> Element? {
         return indices.contains(index) ? self[index] : nil
     }
+}
+
+extension Array where Element == DInitConfig {
+
+    func jsonString(prettyPrinted: Bool = true, redacted: Bool = true) throws -> String {
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            if prettyPrinted {
+                encoder.outputFormatting.insert(.prettyPrinted)
+            }
+            if !redacted {
+                encoder.userInfo[CredentialString.redactionOverrideKey] = true
+            }
+            let data = try encoder.encode(self)
+            return String(decoding: data, as: UTF8.self)
+        } catch {
+            throw DInitError.unableToSerializeConfig([], error)
+        }
+    }
+
 }

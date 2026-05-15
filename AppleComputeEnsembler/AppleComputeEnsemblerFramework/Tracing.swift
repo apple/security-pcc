@@ -102,8 +102,8 @@ func generateSpanId() -> String {
 }
 
 
-struct DistributeDatakeySummary: RequestSummary {
-    let operationName: String = "Distribute data key"
+struct DistributeDataSummary: RequestSummary {
+    let operationName: String
     let type: String = "RequestSummary"
     let requestID: String?
     let spanID: String?
@@ -118,7 +118,8 @@ struct DistributeDatakeySummary: RequestSummary {
            error: Error? = nil,
            requestID: String? = nil,
            spanID: String? = nil,
-           parentSpanID: String? = nil
+           parentSpanID: String? = nil,
+           operationName: String
        ) {
            self.requestID = requestID
            self.spanID = spanID
@@ -127,6 +128,8 @@ struct DistributeDatakeySummary: RequestSummary {
            if let error {
                self.error = error
            }
+            
+           self.operationName = operationName
        }
     
     /// NOTE: This value will be logged as public and therefore must not contain public information

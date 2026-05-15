@@ -1,0 +1,206 @@
+// Copyright © 2025 Apple Inc. All Rights Reserved.
+
+// APPLE INC.
+// PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
+// PLEASE READ THE FOLLOWING PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT (“AGREEMENT”) CAREFULLY BEFORE DOWNLOADING OR USING THE APPLE SOFTWARE ACCOMPANYING THIS AGREEMENT(AS DEFINED BELOW). BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT, DO NOT DOWNLOAD OR USE THE APPLE SOFTWARE. THESE TERMS AND CONDITIONS CONSTITUTE A LEGAL AGREEMENT BETWEEN YOU AND APPLE.
+// IMPORTANT NOTE: BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING ON YOUR OWN BEHALF AND/OR ON BEHALF OF YOUR COMPANY OR ORGANIZATION TO THE TERMS OF THIS AGREEMENT.
+// 1. As used in this Agreement, the term “Apple Software” collectively means and includes all of the Apple Private Cloud Compute materials provided by Apple here, including but not limited to the Apple Private Cloud Compute software, tools, data, files, frameworks, libraries, documentation, logs and other Apple-created materials. In consideration for your agreement to abide by the following terms, conditioned upon your compliance with these terms and subject to these terms, Apple grants you, for a period of ninety (90) days from the date you download the Apple Software, a limited, non-exclusive, non-sublicensable license under Apple’s copyrights in the Apple Software to download, install, compile and run the Apple Software internally within your organization only on a single Apple-branded computer you own or control, for the sole purpose of verifying the security and privacy characteristics of Apple Private Cloud Compute. This Agreement does not allow the Apple Software to exist on more than one Apple-branded computer at a time, and you may not distribute or make the Apple Software available over a network where it could be used by multiple devices at the same time. You may not, directly or indirectly, redistribute the Apple Software or any portions thereof. The Apple Software is only licensed and intended for use as expressly stated above and may not be used for other purposes or in other contexts without Apple's prior written permission. Except as expressly stated in this notice, no other rights or licenses, express or implied, are granted by Apple herein.
+// 2. The Apple Software is provided by Apple on an "AS IS" basis. APPLE MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS, SYSTEMS, OR SERVICES. APPLE DOES NOT WARRANT THAT THE APPLE SOFTWARE WILL MEET YOUR REQUIREMENTS, THAT THE OPERATION OF THE APPLE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, THAT DEFECTS IN THE APPLE SOFTWARE WILL BE CORRECTED, OR THAT THE APPLE SOFTWARE WILL BE COMPATIBLE WITH FUTURE APPLE PRODUCTS, SOFTWARE OR SERVICES. NO ORAL OR WRITTEN INFORMATION OR ADVICE GIVEN BY APPLE OR AN APPLE AUTHORIZED REPRESENTATIVE WILL CREATE A WARRANTY.
+// 3. IN NO EVENT SHALL APPLE BE LIABLE FOR ANY DIRECT, SPECIAL, INDIRECT, INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE, REPRODUCTION, COMPILATION OR OPERATION OF THE APPLE SOFTWARE, HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// 4. This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from Apple if you fail to comply with any term(s) of this Agreement. Upon termination, you agree to cease all use of the Apple Software and destroy all copies, full or partial, of the Apple Software. This Agreement constitutes the entire understanding of the parties with respect to the subject matter contained herein, and supersedes all prior negotiations, representations, or understandings, written or oral. This Agreement will be governed and construed in accordance with the laws of the State of California, without regard to its choice of law rules.
+// You may report security issues about Apple products to product-security@apple.com, as described here: https://www.apple.com/support/security/. Non-security bugs and enhancement requests can be made via https://bugreport.apple.com as described here: https://developer.apple.com/bug-reporting/
+// EA1937
+// 10/02/2024
+
+//
+//  SubrequestMetric.swift
+//  PrivateCloudCompute
+//
+//  Copyright © 2025 Apple Inc. All rights reserved.
+//
+
+import CloudTelemetry
+import PrivateCloudCompute
+
+/// Captures detailed metrics for each individual sub-request within a long-lived connection.
+/// One Subrequest event is emitted each time a sub-request completes, successfully or otherwise.
+struct SubrequestMetric: CloudTelemetryReportable {
+    let name: String = "Subrequest"
+    var fields: [EventName: EventValue]
+    var bundleID: String?
+
+    enum EventName: String {
+        // MARK: - Shared Fields (standard metadata)
+        case eventTime = "eventTime"
+        case environment = "env"
+        case clientInfo = "appleClientInfo"
+        case featureID = "appleFeatureid"
+        case bundleID = "appleBundleid"
+        case originatingBundleID = "originatingBundleID"
+        case locale = "appleLocale"
+
+        // MARK: - Request Identification Fields
+        case clientRequestId = "clientRequestId"
+        case subrequestId = "subrequestId"
+        case requestPriority = "requestPriority"
+
+        // MARK: - Error Fields
+        case remoteResponseStatus = "remoteResponseStatus"
+        case subrequestError = "subrequestError"
+        case authTokenFetchSuccess = "authTokenFetchSuccess"
+        case authTokenFetchError = "authTokenFetchError"
+
+        // MARK: - Sub-Request Timing Fields (ms relative to subrequestTimebaseMs)
+        case subrequestTimebaseMs = "subrequestTimebaseMs"
+        case openSubrequestEnqueuedTimeMs = "openSubrequestEnqueuedTimeMs"
+        case authTokenFetchStartTimeMs = "authTokenFetchStartTimeMs"
+        case authTokenFetchFinishTimeMs = "authTokenFetchFinishTimeMs"
+        case openSubrequestWrittenTimeMs = "openSubrequestWrittenTimeMs"
+        case writeExceededInitialBudget = "writeExceededInitialBudget"
+        case firstSubrequestDataEnqueuedTimeMs = "firstSubrequestDataEnqueuedTimeMs"
+        case firstSubrequestDataWrittenTimeMs = "firstSubrequestDataWrittenTimeMs"
+        case lastSubrequestDataWrittenTimeMs = "lastSubrequestDataWrittenTimeMs"
+        case closeSubrequestWrittenTimeMs = "closeSubrequestWrittenTimeMs"
+
+        // MARK: - Sub-Response Timing Fields (ms relative to subrequestTimebaseMs)
+        case openSubresponseReceivedTimeMs = "openSubresponseReceivedTimeMs"
+        case firstSubresponseDataReceivedMs = "firstSubresponseDataReceivedMs"
+        case lastSubresponseDataReceivedMs = "lastSubresponseDataReceivedMs"
+        case closeSubresponseReceivedTimeMs = "closeSubresponseReceivedTimeMs"
+    }
+
+    init<
+        Clock: _Concurrency.Clock,
+        AttestationStore: AttestationStoreProtocol,
+        SystemInfo: SystemInfoProtocol,
+        BiomeReporter: BiomeReporterProtocol
+    >(
+        eventTime: Date,
+        bundleID: String,
+        environment: String,
+        systemInfo: SystemInfo,
+        featureID: String?,
+        originatingBundleID: String?,
+        locale: Locale,
+        clientRequestId: UUID,
+        subrequestState: RequestMetrics<Clock, AttestationStore, SystemInfo, BiomeReporter>.State.SubrequestState
+    ) {
+        var fields: [EventName: EventValue] = [
+            .eventTime: .int(Int64(eventTime.timeIntervalSince1970)),
+            .bundleID: .string(bundleID),
+            .environment: .string(environment),
+            .clientInfo: .string(systemInfo.osInfoWithDeviceModel),
+            .locale: .string(locale.identifier),
+            .subrequestId: .string(subrequestState.subrequestIdForEventReporting.description),
+            .clientRequestId: .string(clientRequestId.uuidString),
+        ]
+
+        if let featureID {
+            fields[.featureID] = .string(featureID)
+        }
+        if let originatingBundleID {
+            fields[.originatingBundleID] = .string(originatingBundleID)
+        }
+
+        if let priority = subrequestState.priority {
+            fields[.requestPriority] = priority.telemetryString
+        }
+
+        // Emit the timebase (relative to TrustedRequest start)
+        fields[.subrequestTimebaseMs] = .milliseconds(subrequestState.durationFromStartUntilTimebase)
+
+        // Auth token fetch timing (relative to timebase)
+        // Only populated for consecutive subrequests, since first subrequest reuses connection-level token.
+        switch subrequestState.authTokenFetchState {
+        case .notStarted:
+            fields[.authTokenFetchStartTimeMs] = nil
+            fields[.authTokenFetchFinishTimeMs] = nil
+            fields[.authTokenFetchSuccess] = nil
+        case .succeeded(let startTime, let finishTime):
+            fields[.authTokenFetchStartTimeMs] = .milliseconds(startTime)
+            fields[.authTokenFetchFinishTimeMs] = .milliseconds(finishTime)
+            fields[.authTokenFetchSuccess] = .bool(true)
+        case .failed(let startTime, let finishTime, let error):
+            fields[.authTokenFetchStartTimeMs] = .milliseconds(startTime)
+            fields[.authTokenFetchFinishTimeMs] = .milliseconds(finishTime)
+            fields[.authTokenFetchSuccess] = .bool(false)
+            fields[.authTokenFetchError] = .string(error.telemetryString)
+        }
+
+        // Outgoing message timings (relative to timebase)
+        if let duration = subrequestState.durationFromTimebaseUntilOpenEnqueued {
+            fields[.openSubrequestEnqueuedTimeMs] = .milliseconds(duration)
+        }
+        if let duration = subrequestState.durationFromTimebaseUntilOpenWritten {
+            fields[.openSubrequestWrittenTimeMs] = .milliseconds(duration)
+        }
+        if let duration = subrequestState.durationFromTimebaseUntilFirstDataEnqueued {
+            fields[.firstSubrequestDataEnqueuedTimeMs] = .milliseconds(duration)
+        }
+        if let duration = subrequestState.durationFromTimebaseUntilFirstDataWritten {
+            fields[.firstSubrequestDataWrittenTimeMs] = .milliseconds(duration)
+        }
+        if let duration = subrequestState.durationFromTimebaseUntilLastDataWritten {
+            fields[.lastSubrequestDataWrittenTimeMs] = .milliseconds(duration)
+        }
+        if let duration = subrequestState.durationFromTimebaseUntilCloseWritten {
+            fields[.closeSubrequestWrittenTimeMs] = .milliseconds(duration)
+        }
+        if let writeExceededInitialBudget = subrequestState.writeExceededInitialBudget {
+            fields[.writeExceededInitialBudget] = .bool(writeExceededInitialBudget)
+        }
+
+        // Server response timings (relative to timebase)
+        if let duration = subrequestState.durationFromTimebaseUntilOpenResponseReceived {
+            fields[.openSubresponseReceivedTimeMs] = .milliseconds(duration)
+        }
+        if let duration = subrequestState.durationFromTimebaseUntilFirstResponseDataReceived {
+            fields[.firstSubresponseDataReceivedMs] = .milliseconds(duration)
+        }
+        if let duration = subrequestState.durationFromTimebaseUntilLastResponseDataReceived {
+            fields[.lastSubresponseDataReceivedMs] = .milliseconds(duration)
+        }
+        if let duration = subrequestState.durationFromTimebaseUntilCloseResponseReceived {
+            fields[.closeSubresponseReceivedTimeMs] = .milliseconds(duration)
+        }
+        if let status = subrequestState.remoteResponseStatus {
+            fields[.remoteResponseStatus] = status.telemetryString
+        }
+
+        // Subrequest error
+        if let error = subrequestState.subrequestError {
+            fields[.subrequestError] = .string(error.telemetryString)
+        }
+
+        self.fields = fields
+        self.bundleID = bundleID
+    }
+}
+
+extension XPCResponseMessage.SubresponseStatus {
+    var telemetryString: EventValue {
+        switch self {
+        case .ok:
+            .string("ok")
+        case .internalError:
+            .string("internalError")
+        case .invalidRequest:
+            .string("invalidRequest")
+        case .discarded:
+            .string("discarded")
+        case .unrecognized:
+            .string("unrecognized")
+        }
+    }
+}
+
+extension PrivateCloudComputeConnection.Request.Priority {
+    var telemetryString: EventValue {
+        switch self {
+        case .unspecified:
+            .string("unspecified")
+        case .discardable:
+            .string("discardable")
+        }
+    }
+}

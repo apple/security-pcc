@@ -243,6 +243,11 @@
 		472F61412C73C64A00E8A79F /* TransparencyLog+PATLeaf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F613F2C73C64A00E8A79F /* TransparencyLog+PATLeaf.swift */; };
 		472F61422C73C64A00E8A79F /* TransparencyLog+TLTLeaf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F61402C73C64A00E8A79F /* TransparencyLog+TLTLeaf.swift */; };
 		476E901C2C922BE100E19E47 /* TransparencyLogVerifyInclusionCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 476E901B2C922BDA00E19E47 /* TransparencyLogVerifyInclusionCmd.swift */; };
+		70643A312F31349C006D8CA9 /* AttestationParseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70643A302F313487006D8CA9 /* AttestationParseTests.swift */; };
+		70643A362F3147FD006D8CA9 /* CloudAttestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DB9D782C8932C40029A1D7 /* CloudAttestation.swift */; };
+		70643A372F31484E006D8CA9 /* Digest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B90901E02CA357B200BFC48A /* Digest.swift */; };
+		70643C142F31680D006D8CA9 /* Apple_Intelligence_Report_Luckier.json in Resources */ = {isa = PBXBuildFile; fileRef = 70643C132F31680D006D8CA9 /* Apple_Intelligence_Report_Luckier.json */; };
+		70643C162F317D4F006D8CA9 /* Apple_Intelligence_Report_Luckier_E.json in Resources */ = {isa = PBXBuildFile; fileRef = 70643C152F317D4F006D8CA9 /* Apple_Intelligence_Report_Luckier_E.json */; };
 		70D6DACF2C94EB55001DD40F /* TransparencyLogVerifyInclusionCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 476E901B2C922BDA00E19E47 /* TransparencyLogVerifyInclusionCmd.swift */; };
 		991C05D32D66EA4B00C16E9C /* VRE+Instance+Config+Assets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991C05D22D66EA4B00C16E9C /* VRE+Instance+Config+Assets.swift */; };
 		991C05D42D66EA4B00C16E9C /* VRE+Instance+Config+Assets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991C05D22D66EA4B00C16E9C /* VRE+Instance+Config+Assets.swift */; };
@@ -567,6 +572,9 @@
 		472F613F2C73C64A00E8A79F /* TransparencyLog+PATLeaf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TransparencyLog+PATLeaf.swift"; sourceTree = "<group>"; };
 		472F61402C73C64A00E8A79F /* TransparencyLog+TLTLeaf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TransparencyLog+TLTLeaf.swift"; sourceTree = "<group>"; };
 		476E901B2C922BDA00E19E47 /* TransparencyLogVerifyInclusionCmd.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransparencyLogVerifyInclusionCmd.swift; sourceTree = "<group>"; };
+		70643A302F313487006D8CA9 /* AttestationParseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttestationParseTests.swift; sourceTree = "<group>"; };
+		70643C132F31680D006D8CA9 /* Apple_Intelligence_Report_Luckier.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Apple_Intelligence_Report_Luckier.json; sourceTree = "<group>"; };
+		70643C152F317D4F006D8CA9 /* Apple_Intelligence_Report_Luckier_E.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Apple_Intelligence_Report_Luckier_E.json; sourceTree = "<group>"; };
 		991C05D22D66EA4B00C16E9C /* VRE+Instance+Config+Assets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VRE+Instance+Config+Assets.swift"; sourceTree = "<group>"; };
 		991C05D72D66EB8100C16E9C /* VRE+Utilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VRE+Utilities.swift"; sourceTree = "<group>"; };
 		991C05DB2D66EC4D00C16E9C /* Host.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Host.swift; sourceTree = "<group>"; };
@@ -1085,6 +1093,8 @@
 		472F61282C73C53900E8A79F /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				70643A322F3134E8006D8CA9 /* Fixtures */,
+				70643A302F313487006D8CA9 /* AttestationParseTests.swift */,
 				472F612E2C73C55D00E8A79F /* MerkleTreePerformanceTests.swift */,
 				472F612F2C73C55D00E8A79F /* MerkleTreeTests.swift */,
 				996CBD9B2D5EB2140004C11F /* HTTPServerTests.swift */,
@@ -1109,6 +1119,15 @@
 				472F61392C73C63900E8A79F /* Auditor+Delegate.swift */,
 			);
 			path = Auditor;
+			sourceTree = "<group>";
+		};
+		70643A322F3134E8006D8CA9 /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				70643C132F31680D006D8CA9 /* Apple_Intelligence_Report_Luckier.json */,
+				70643C152F317D4F006D8CA9 /* Apple_Intelligence_Report_Luckier_E.json */,
+			);
+			path = Fixtures;
 			sourceTree = "<group>";
 		};
 		B9AA35052CE55D33002C6D9D /* VRE+Instance */ = {
@@ -1278,6 +1297,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				70643C162F317D4F006D8CA9 /* Apple_Intelligence_Report_Luckier_E.json in Resources */,
+				70643C142F31680D006D8CA9 /* Apple_Intelligence_Report_Luckier.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1570,11 +1591,14 @@
 				996CBD9C2D5EB2140004C11F /* HTTPServerTests.swift in Sources */,
 				991C05DA2D66EBAB00C16E9C /* VRE.swift in Sources */,
 				472F61322C73C57300E8A79F /* MerkleTree.swift in Sources */,
+				70643A362F3147FD006D8CA9 /* CloudAttestation.swift in Sources */,
 				991C05D62D66EB5D00C16E9C /* Utils.swift in Sources */,
 				991C05DE2D66EC8800C16E9C /* Host.swift in Sources */,
 				991C05D52D66EAFA00C16E9C /* VRE+Instance+Config.swift in Sources */,
+				70643A372F31484E006D8CA9 /* Digest.swift in Sources */,
 				472F61302C73C55D00E8A79F /* MerkleTreePerformanceTests.swift in Sources */,
 				991C05E22D66ED4100C16E9C /* AppName.swift in Sources */,
+				70643A312F31349C006D8CA9 /* AttestationParseTests.swift in Sources */,
 				472F61312C73C55D00E8A79F /* MerkleTreeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

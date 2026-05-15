@@ -12,8 +12,9 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
 import CloudBoardAttestationDAPI
+import CloudBoardCommon
+import CloudBoardMetrics
 
 // just for the fake attestation support
 internal import HTTPClientStateMachine
@@ -30,18 +31,25 @@ struct InMemoryKeyAttestationProvider: AttestationProviderProtocol {
     // after startup so just make it fixed
     let releaseDigest: String
 
+    let ensembleID: String?
+    let bootID: String?
+    let rackID: String?
+
     let attestationBundleCache: AttestationBundleCache = NoopAttestationBundleCache()
 
     /// Make a provider that knows the releaseSet of itself, and optionaly
     /// will create attestations which indicate it transitively trusts itself
-    init(releaseDigest: String) {
+    init(releaseDigest: String, ensembleID: String? = nil, bootID: String? = nil, rackID: String? = nil) {
         self.releaseDigest = releaseDigest
+        self.ensembleID = ensembleID
+        self.bootID = bootID
+        self.rackID = rackID
     }
 
     func restoreKeysFromDisk(
         attestationCache _: AttestationBundleCache,
         keyExpiryGracePeriod _: TimeInterval
-    ) async -> [AttestedKey] {
+    ) async -> [InternalAttestedKey] {
         /// Already lost the in memory private key, nothing to return
         return []
     }
@@ -57,7 +65,8 @@ struct InMemoryKeyAttestationProvider: AttestationProviderProtocol {
         _ publicKey: Curve25519.KeyAgreement.PublicKey,
         expiration: Date,
         releaseDigest: String,
-        proxiedReleaseDigests: [String]?
+        proxiedReleaseDigests: [String]?,
+        computeNodeAppData: [String: Data]
     ) throws -> Data {
         // For development it's simpler to just define this by fiat
         let kem = HPKE.KEM.Curve25519_HKDF_SHA256
@@ -72,7 +81,7 @@ struct InMemoryKeyAttestationProvider: AttestationProviderProtocol {
         let appData: TestOnlyAttestationInfo.AppData = if let proxiedReleaseDigests, proxiedReleaseDigests.count > 0 {
             .proxy(.init(transitivelyTrustedReleaseDigests: proxiedReleaseDigests))
         } else {
-            .none
+            .compute(.init(metadata: computeNodeAppData))
         }
         let rawBundle = try TestOnlyAttestationBundle.encodeAsNewFormat(
             for: publicKey,
@@ -80,7 +89,8 @@ struct InMemoryKeyAttestationProvider: AttestationProviderProtocol {
             info: TestOnlyAttestationInfo(
                 expiration: expiration,
                 releaseDigest: releaseDigest,
-                appData: appData
+                appData: appData,
+                computeNodeMetadata: computeNodeAppData
             )
         )
         #endif
@@ -88,7 +98,9 @@ struct InMemoryKeyAttestationProvider: AttestationProviderProtocol {
     }
 
     func createAttestedKey(
-        attestationBundleExpiry: Date,
+        clock: any DateAwareClock,
+        attestationLifetime: Duration,
+        keyExpiryGracePeriod: TimeInterval,
         proxiedReleaseDigests: [ReleaseDigestEntry]
     ) async throws -> InternalAttestedKey {
         Self.logger.warning("Using insecure in-memory key. No SEP attestation will be available.")
@@ -97,19 +109,29 @@ struct InMemoryKeyAttestationProvider: AttestationProviderProtocol {
         Self.logger.notice(
             "Created attested in-memory key with public key \(privateKey.publicKey.rawRepresentation.base64EncodedString(), privacy: .public)"
         )
+
+        var appData: [String: Data] = [:]
+        appData[ComputeNodeAppDataKeys.rackID] = self.rackID?.data ?? "dummyRackID".data
+        appData[ComputeNodeAppDataKeys.ensembleID] = self.ensembleID?.data ?? "dummyEnsembleID".data
+        appData[ComputeNodeAppDataKeys.bootID] = self.bootID?.data ?? "dummyBootID".data
+
+        let attestationExpiry = clock.dateNow.advanced(by: attestationLifetime.seconds)
         // We cannot create real attestation bundles for non-SEP keys.
         // we therefore use the fake format.
         let attestationBundle = try Self.createBundleForKey(
             privateKey.publicKey,
-            expiration: attestationBundleExpiry,
+            expiration: attestationExpiry,
             releaseDigest: self.releaseDigest,
-            proxiedReleaseDigests: proxiedReleaseDigests.map { $0.releaseDigestHexString }
+            proxiedReleaseDigests: proxiedReleaseDigests.map { $0.releaseDigestHexString },
+            computeNodeAppData: appData
         )
         return InternalAttestedKey(
             key: .direct(privateKey: privateKey.rawRepresentation),
             attestationBundle: attestationBundle,
             releaseDigest: self.releaseDigest,
-            proxiedReleaseDigests: proxiedReleaseDigests.map { $0.releaseDigestHexString }
+            proxiedReleaseDigests: proxiedReleaseDigests.map { $0.releaseDigestHexString },
+            expiry: attestationExpiry + keyExpiryGracePeriod,
+            appData: appData
         )
     }
 }

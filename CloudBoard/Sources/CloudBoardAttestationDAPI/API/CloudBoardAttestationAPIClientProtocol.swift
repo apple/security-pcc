@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal import CloudBoardAsyncXPC
 import CryptoKit
 import Foundation
@@ -46,36 +44,27 @@ public enum AttestedKeyType: Codable, Sendable, Equatable {
 
 public struct AttestedKey: Codable, Sendable, Equatable {
     public var key: AttestedKeyType
-    /// Attestation bundle containing the key attestation as well as metadata to velidate the it. This bundle also
-    /// encodes the key expiry. Note that this expiry is not equivalent to ``expiry`` which includes an additional grace
-    /// period.
-    public var attestationBundle: Data
+    /// Key ID, used by ROPES as "node identifier". This is the SHA256 sum of the key's attestation bundle allowing the
+    /// client to verify that the "node identifier" has not been modified in-flight. Also used by cb_jobhelper to
+    /// determine which key to use for unwrapping the client's session key material.
+    public var keyID: Data
+
     /// Date after which CloudBoard will reject incoming requests wrapped to this key
     public var expiry: Date
-    /// The sha-256 digest of the release section of the attestation bundle
-    public var releaseDigest: String
-    /// Is the attestation valid to be used even if it is no longer published to the client
-    /// and is still cached by the client
-    public var availableOnNodeOnly: Bool
-    /// The sha-256 digest of the releases of worker nodes which the trusted proxy node with this key can forward
-    /// requests to
-    /// This is empty for a compute node
-    public var proxiedReleaseDigests: [String]
+
+    /// Application specific attestation data
+    public var appData: [String: Data]
 
     public init(
         key: AttestedKeyType,
-        attestationBundle: Data,
+        keyID: Data,
         expiry: Date,
-        releaseDigest: String,
-        availableOnNodeOnly: Bool,
-        proxiedReleaseDigests: [String] = []
+        appData: [String: Data] = [:]
     ) {
         self.key = key
-        self.attestationBundle = attestationBundle
+        self.keyID = keyID
         self.expiry = expiry
-        self.releaseDigest = releaseDigest
-        self.availableOnNodeOnly = availableOnNodeOnly
-        self.proxiedReleaseDigests = proxiedReleaseDigests
+        self.appData = appData
     }
 }
 
@@ -98,18 +87,22 @@ public struct AttestationSet: Codable, Sendable, Equatable {
         /// The sha-256 digest of the releases of nodes which the node with this key can proxy requests to
         public var proxiedReleaseDigests: [String]
 
+        public var appData: [String: Data]
+
         public init(
             attestationBundle: Data,
             expiry: Date,
             releaseDigest: String,
             availableOnNodeOnly: Bool,
-            proxiedReleaseDigests: [String] = []
+            proxiedReleaseDigests: [String] = [],
+            appData: [String: Data] = [:]
         ) {
             self.attestationBundle = attestationBundle
             self.expiry = expiry
             self.releaseDigest = releaseDigest
             self.availableOnNodeOnly = availableOnNodeOnly
             self.proxiedReleaseDigests = proxiedReleaseDigests
+            self.appData = appData
         }
     }
 
@@ -122,27 +115,6 @@ public struct AttestationSet: Codable, Sendable, Equatable {
     public init(currentAttestation: Attestation, unpublishedAttestations: [Attestation]) {
         self.currentAttestation = currentAttestation
         self.unpublishedAttestations = unpublishedAttestations
-    }
-}
-
-extension AttestationSet {
-    public init(keySet: AttestedKeySet) {
-        self = .init(
-            currentAttestation: .init(key: keySet.currentKey),
-            unpublishedAttestations: keySet.unpublishedKeys.map { .init(key: $0) }
-        )
-    }
-}
-
-extension AttestationSet.Attestation {
-    public init(key: AttestedKey) {
-        self = .init(
-            attestationBundle: key.attestationBundle,
-            expiry: key.expiry,
-            releaseDigest: key.releaseDigest,
-            availableOnNodeOnly: key.availableOnNodeOnly,
-            proxiedReleaseDigests: key.proxiedReleaseDigests
-        )
     }
 }
 
@@ -162,26 +134,144 @@ package struct ValidatedWorker: ByteBufferCodable, Sendable {
     /// The SHA256 digest of the release this attestation is for
     public var releaseDigest: String
 
+    /// The application-specific data included in the attestation.
+    public var appData: [String: Data]
+
+    /// The UDID of the worker node
+    public var udid: String?
+
     public init(
         expiration: Date,
         publicKey: Curve25519.KeyAgreement.PublicKey,
-        releaseDigest: String
+        releaseDigest: String,
+        appData: [String: Data],
+        udid: String?
     ) {
         self.expiration = expiration
         self.publicKey = publicKey
         self.releaseDigest = releaseDigest
+        self.appData = appData
+        self.udid = udid
     }
 
     func encode(to buffer: inout ByteBuffer) throws {
         try self.expiration.encode(to: &buffer)
         try PublicKeyEnvelope(self.publicKey).encode(to: &buffer)
         try self.releaseDigest.encode(to: &buffer)
+        try self.appData.encode(to: &buffer)
+        try self.udid.encode(to: &buffer)
     }
 
     init(from buffer: inout ByteBuffer) throws {
         self.expiration = try .init(from: &buffer)
         self.publicKey = try PublicKeyEnvelope(from: &buffer).key
         self.releaseDigest = try .init(from: &buffer)
+        self.appData = try .init(from: &buffer)
+        self.udid = try .init(from: &buffer)
+    }
+}
+
+/// Represents the result of rack validation
+package enum RackValidationResult: Sendable, Equatable {
+    case allowed
+    case blocked(rackValidationError: WorkerRackValidationError)
+}
+
+extension RackValidationResult: ByteBufferCodable {
+    func encode(to buffer: inout ByteBuffer) throws {
+        switch self {
+        case .allowed:
+            buffer.writeInteger(0)
+        case .blocked(let rackValidationError):
+            buffer.writeInteger(1)
+            try rackValidationError.encode(to: &buffer)
+        }
+    }
+
+    init(from buffer: inout ByteBuffer) throws {
+        guard let enumCase: Int = buffer.readInteger() else {
+            throw DecodingError.valueNotFound(
+                Self.self,
+                .init(codingPath: [], debugDescription: "no expected enum case")
+            )
+        }
+        switch enumCase {
+        case 0:
+            self = .allowed
+        case 1:
+            self = try .blocked(rackValidationError: .init(from: &buffer))
+        case let value:
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [ByteBufferCodingKey(Self.self)],
+                debugDescription: "bad result enum case \(value)"
+            ))
+        }
+    }
+}
+
+package enum WorkerRackValidationError: Error, Codable, ByteBufferCodable, Equatable {
+    case rackIdChanged(reason: String, originalRackId: String, blockedUntil: Date, udid: String)
+
+    package var publicDescription: String {
+        switch self {
+        case .rackIdChanged(let reason, let originalRackId, let blockedUntil, let udid):
+            return "Worker with udid: \(udid) blocked due to rack change: \(reason), original rack: \(originalRackId), blocked until: \(blockedUntil)"
+        }
+    }
+
+    func encode(to buffer: inout ByteBuffer) throws {
+        switch self {
+        case .rackIdChanged(let reason, let originalRackId, let blockedUntil, let udid):
+            buffer.writeInteger(0)
+            try reason.encode(to: &buffer)
+            try originalRackId.encode(to: &buffer)
+            try blockedUntil.encode(to: &buffer)
+            try udid.encode(to: &buffer)
+        }
+    }
+
+    init(from buffer: inout ByteBuffer) throws {
+        guard let enumCase: Int = buffer.readInteger() else {
+            throw DecodingError.valueNotFound(
+                Self.self,
+                .init(codingPath: [], debugDescription: "no expected enum case")
+            )
+        }
+        switch enumCase {
+        case 0:
+            self = try .rackIdChanged(
+                reason: .init(from: &buffer),
+                originalRackId: .init(from: &buffer),
+                blockedUntil: .init(from: &buffer),
+                udid: .init(from: &buffer)
+            )
+        case let value:
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [ByteBufferCodingKey(Self.self)],
+                debugDescription: "bad result enum case \(value)"
+            ))
+        }
+    }
+}
+
+/// Combined result of worker attestation validation and rack validation
+package struct WorkerValidationResult: ByteBufferCodable, Sendable {
+    public var validatedWorker: ValidatedWorker
+    public var rackValidation: RackValidationResult
+
+    public init(validatedWorker: ValidatedWorker, rackValidation: RackValidationResult) {
+        self.validatedWorker = validatedWorker
+        self.rackValidation = rackValidation
+    }
+
+    func encode(to buffer: inout ByteBuffer) throws {
+        try self.validatedWorker.encode(to: &buffer)
+        try self.rackValidation.encode(to: &buffer)
+    }
+
+    init(from buffer: inout ByteBuffer) throws {
+        self.validatedWorker = try .init(from: &buffer)
+        self.rackValidation = try .init(from: &buffer)
     }
 }
 
@@ -193,8 +283,9 @@ package protocol CloudBoardAttestationWorkerValidationProtocol: Sendable {
         // This defines which releases are valid implicitly
         proxyAttestationKeyID: Data,
         // The raw attestation bundle to validate and parse
+        // The udid and rackID will be extracted from the validated attestation for rack validation
         rawWorkerAttestationBundle: Data
-    ) async throws -> ValidatedWorker
+    ) async throws -> WorkerValidationResult
 }
 
 package protocol CloudBoardAttestationAttestationLookupProtocol: Actor {
@@ -216,21 +307,11 @@ CloudBoardAttestationAPIServerToClientProtocol {
     func surpriseDisconnect() async
 }
 
-extension AttestedKey {
-    /// Key ID, used by ROPES as "node identifier". This is the SHA256 sum of the key's attestation bundle allowing the
-    /// client to verify that the "node identifier" has not been modified in-flight. Also used by cb_jobhelper to
-    /// determine which key to use for unwrapping the client's session key material.
-    public var keyID: Data {
-        Data(SHA256.hash(data: self.attestationBundle))
-    }
-}
-
 extension AttestedKey: CustomStringConvertible {
     public var description: String {
         """
         key ID \(self.keyID.base64EncodedString()), \
-        expiry \(self.expiry), \
-        proxied releases \(String(describing: self.proxiedReleaseDigests))
+        expiry \(self.expiry)
         """
     }
 }

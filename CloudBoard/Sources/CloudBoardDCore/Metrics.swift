@@ -12,12 +12,9 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
+import CloudBoardLogging
 import CloudBoardMetrics
 import Foundation
-
-private let prefix = "cloudboard"
 
 extension HistogramBuckets {
     fileprivate static let connectTime: Self = [
@@ -298,41 +295,52 @@ extension HistogramBuckets {
 }
 
 enum Metrics {
+    struct ProcessInfo: CloudBoardMetrics.Uptime.ProcessInfo {
+        // Unlike some other daemons this prefix is not "cloudboardd" or "cloudboardd_follower"
+        // which would be the process names.
+        // We could split them that way instead, but for consistency the original structure is retained
+        // these metrics *only* apply to those daemons though
+        static let prefix: String = "cloudboard"
+        static let type = CloudBoardMetrics.Uptime.ProcessType.process
+    }
+
     enum CloudBoardDaemon {
         enum DimensionKey: String, RawRepresentable {
             case activeRequests
+            case cloudApp
         }
 
         struct CBJobHelperExitCounter: ExitCounter {
-            static let label: MetricLabel = "\(prefix)_cb_jobhelper_process_exit"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_cb_jobhelper_process_exit"
             var dimensions: MetricDimensions<DefaultExitDimensionKeys>
             var action: CounterAction
         }
 
         struct DrainCompletionTimeHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_drain_time_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_drain_time_seconds"
             static let buckets: HistogramBuckets = .drainCompletionTime
 
             var dimensions: MetricDimensions<DimensionKey>
             var value: Double
 
-            init(duration: Duration, activeRequests: Int) {
+            init(duration: Duration, activeRequests: Int, cloudApp: String) {
                 self.value = duration.seconds
                 self.dimensions = [
                     .activeRequests: "\(activeRequests)",
+                    .cloudApp: cloudApp,
                 ]
             }
         }
 
         struct DrainStartCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_drain_started_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_drain_started_total"
 
             var action: CounterAction
             var dimensions: MetricDimensions<DimensionKey>
         }
 
         struct ActiveNodeReleaseDigestGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_active_node_release_digest"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_active_node_release_digest"
 
             var value: Int
             var dimensions: MetricDimensions<DimensionKey>
@@ -350,60 +358,104 @@ enum Metrics {
         }
 
         struct PhysicalMemoryFootprintGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_physical_memory_footprint_bytes"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_physical_memory_footprint_bytes"
             var value: Int
         }
 
         struct LifetimeMaxPhysicalMemoryFootprintGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_lifetime_max_physical_memory_footprint_bytes"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_lifetime_max_physical_memory_footprint_bytes"
             var value: Int
         }
     }
 
     enum JobHelperInstance {
         struct CloudAppTerminateFailureCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_cloud_app_terminate_failure"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_cloud_app_terminate_failure"
             var action: CounterAction
+            var dimensions: MetricDimensions<DimensionKey>
+
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
+        }
+
+        struct SupportAppTerminateFailureCounter: Counter {
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_support_app_terminate_failure"
+            var action: CounterAction
+            var dimensions: MetricDimensions<DimensionKey>
+
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+                case supportApp
+            }
+
+            init(action: CounterAction, cloudApp: String, supportApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                    .supportApp: supportApp,
+                ]
+            }
         }
 
         struct CBJobHelperTerminateFailureCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_cb_job_helper_terminate_failure"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_cb_job_helper_terminate_failure"
             var action: CounterAction
+            var dimensions: MetricDimensions<DimensionKey>
+
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
     }
 
     enum HotPropertiesController {
         struct HotPropertiesCanaryValue: Gauge {
-            static let label: MetricLabel = "\(prefix)_hotproperties_canary"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_hotproperties_canary"
             var value: Double
         }
     }
 
     enum ServiceDiscoveryPublisher {
         struct ReconnectCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_service_discovery_re_connect_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_service_discovery_re_connect_total"
             var action: CounterAction
         }
 
         struct ConnectSucceededCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_service_discovery_connect_succeeded_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_service_discovery_connect_succeeded_total"
             var action: CounterAction
         }
 
         struct ConnectFailedCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_service_discovery_connect_failed_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_service_discovery_connect_failed_total"
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
             var action: CounterAction
         }
 
         struct BackoffDurationHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_service_discovery_backoff_duration_in_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_service_discovery_backoff_duration_in_seconds"
             static let buckets: HistogramBuckets = .connectTime
             var value: Double
         }
 
         struct SucceededConnectDuration: Histogram {
-            static let label: MetricLabel = "\(prefix)_service_discovery_connect_succeeded_duration_in_seconds"
+            static let label: MetricLabel =
+                "\(ProcessInfo.prefix)_service_discovery_connect_succeeded_duration_in_seconds"
             static let buckets: HistogramBuckets = .connectTime
             var value: Double
 
@@ -413,7 +465,7 @@ enum Metrics {
         }
 
         struct FailedConnectDuration: ErrorHistogram {
-            static let label: MetricLabel = "\(prefix)_service_discovery_connect_failed_duration_in_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_service_discovery_connect_failed_duration_in_seconds"
             static let buckets: HistogramBuckets = .connectTime
 
             var value: Double
@@ -421,7 +473,7 @@ enum Metrics {
         }
 
         struct RegisteredServices: Gauge {
-            static let label: MetricLabel = "\(prefix)_service_discovery_registered_services"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_service_discovery_registered_services"
 
             var value: Int
 
@@ -433,53 +485,83 @@ enum Metrics {
 
     enum JobHelperInstanceProvider {
         struct PrewarmedInstancesDiedTotal: Counter {
-            static let label: MetricLabel = "\(prefix)_prewarmed_jobhelper_died_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_prewarmed_jobhelper_died_total"
             var action: CounterAction
+            var dimensions: MetricDimensions<DimensionKey>
+
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
 
         struct PrewarmedPoolSizeGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_prewarm_jobhelper_pool_size"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_prewarm_jobhelper_pool_size"
 
             enum DimensionKey: String, RawRepresentable {
+                case cloudApp
                 case configuredSize
             }
 
             var dimensions: MetricDimensions<DimensionKey>
             var value: Int
 
-            init(value: Int, configuredPoolSize: Int) {
+            init(value: Int, cloudApp: String, configuredPoolSize: Int) {
                 self.value = value
                 self.dimensions = [
+                    .cloudApp: cloudApp,
                     .configuredSize: "\(configuredPoolSize)",
                 ]
             }
         }
 
         struct InvokeWarmupErrorTotal: Counter {
-            static let label: MetricLabel = "\(prefix)_invoke_warmup_error_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_invoke_warmup_error_total"
+
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
+            var dimensions: MetricDimensions<DimensionKey>
             var action: CounterAction
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
 
         struct FailedToAllocateTotal: Counter {
-            static let label: MetricLabel = "\(prefix)_failed_to_allocate_jobhelper"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_failed_to_allocate_jobhelper"
             enum DimensionKey: String, RawRepresentable {
+                case cloudApp
                 case retryCount
             }
 
             var dimensions: MetricDimensions<DimensionKey>
             var action: CounterAction
 
-            init(action: CounterAction, retryCount: Int) {
+            init(action: CounterAction, cloudApp: String, retryCount: Int) {
                 self.action = action
                 self.dimensions = [
+                    .cloudApp: cloudApp,
                     .retryCount: "\(retryCount)",
                 ]
             }
         }
 
         struct TimeToAllocateJobHelperInstanceHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_time_to_allocate_jobhelper_histogram"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_time_to_allocate_jobhelper_histogram"
             enum DimensionKey: String, RawRepresentable {
+                case cloudApp
                 case prewarmingEnabled
                 case prewarmedPoolSize
             }
@@ -490,11 +572,13 @@ enum Metrics {
 
             init(
                 duration: Duration,
+                cloudApp: String,
                 prewarmingEnabled: Bool,
                 prewarmedPoolSize: Int
             ) {
                 self.value = duration.seconds
                 self.dimensions = [
+                    .cloudApp: cloudApp,
                     .prewarmingEnabled: "\(prewarmingEnabled)",
                     .prewarmedPoolSize: "\(prewarmedPoolSize)",
                 ]
@@ -502,8 +586,9 @@ enum Metrics {
         }
 
         struct TimeToLaunchJobHelperInstanceHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_time_to_launch_jobhelper_histogram"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_time_to_launch_jobhelper_histogram"
             enum DimensionKey: String, RawRepresentable {
+                case cloudApp
                 case prewarmingEnabled
                 case prewarmedPoolSize
             }
@@ -515,65 +600,140 @@ enum Metrics {
 
             init(
                 duration: Duration,
+                cloudApp: String,
                 prewarmingEnabled: Bool,
                 prewarmedPoolSize: Int
             ) {
                 self.value = duration.seconds
                 self.dimensions = [
+                    .cloudApp: cloudApp,
                     .prewarmingEnabled: "\(prewarmingEnabled)",
                     .prewarmedPoolSize: "\(prewarmedPoolSize)",
                 ]
             }
         }
 
-        struct WaitedForCreationTotal: Counter {
-            static let label: MetricLabel = "\(prefix)_jobhelper_waited_for_creation_total"
+        struct TimeToAssignLAContextJobHelperInstanceHistogram: Histogram {
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_time_to_assign_laContext_jobhelper_histogram"
             enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+                case prewarmingEnabled
                 case prewarmedPoolSize
+            }
+
+            // the same time buckets as used for time to allocate seem appropriate here
+            static let buckets: HistogramBuckets = .jobHelperInstanceAllocationTime
+            var dimensions: MetricDimensions<DimensionKey>
+            var value: Double
+
+            init(
+                duration: Duration,
+                cloudApp: String
+            ) {
+                self.value = duration.seconds
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
+        }
+
+        struct WaitedForCreationTotal: Counter {
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_jobhelper_waited_for_creation_total"
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
             }
 
             var action: CounterAction
             var dimensions: MetricDimensions<DimensionKey>
 
-            init(action: CounterAction, prewarmedPoolSize: Int) {
+            init(action: CounterAction, cloudApp: String) {
                 self.action = action
                 self.dimensions = [
-                    .prewarmedPoolSize: "\(prewarmedPoolSize)",
+                    .cloudApp: cloudApp,
                 ]
             }
         }
 
         struct AttemptsToAllocateJobHelperInstanceHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_attempts_to_allocate_jobhelper_histogram"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_attempts_to_allocate_jobhelper_histogram"
             static let buckets: HistogramBuckets = .prewarmAllocateCount
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
+            var dimensions: MetricDimensions<DimensionKey>
             var value: Int
+
+            init(value: Int, cloudApp: String) {
+                self.value = value
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
 
         struct FailedToCreateTotal: Counter {
-            static let label: MetricLabel = "\(prefix)_jobhelper_create_failed_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_jobhelper_create_failed_total"
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
+            var dimensions: MetricDimensions<DimensionKey>
             var action: CounterAction
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
 
         struct ReclaimedPrewarmedTotal: Counter {
-            static let label: MetricLabel = "\(prefix)_jobhelper_reclaimed_prewarmed_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_jobhelper_reclaimed_prewarmed_total"
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
+            var dimensions: MetricDimensions<DimensionKey>
             var action: CounterAction
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
 
         struct FailedToReclaimTotal: Counter {
-            static let label: MetricLabel = "\(prefix)_jobhelper_reclaim_failed_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_jobhelper_reclaim_failed_total"
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
+            var dimensions: MetricDimensions<DimensionKey>
             var action: CounterAction
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
 
         struct PlaceholderDelegateWorkloadResponseInvoked: Counter {
-            static let label: MetricLabel = "\(prefix)_placeholder_jobhelper_delegate_invoked_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_placeholder_jobhelper_delegate_invoked_total"
             var action: CounterAction
         }
     }
 
     enum CloudBoardProvider {
         struct RequestCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_requests_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_requests_total"
             enum DimensionKey: String, RawRepresentable {
+                case cloudApp
                 case errorDescription
                 case automatedDeviceGroup
             }
@@ -581,17 +741,19 @@ enum Metrics {
             var action: CounterAction
             var dimensions: MetricDimensions<DimensionKey>
 
-            init(action: CounterAction, automatedDeviceGroup: Bool) {
+            init(action: CounterAction, cloudApp: String, automatedDeviceGroup: Bool) {
                 self.action = action
                 self.dimensions = [
+                    .cloudApp: cloudApp,
                     .automatedDeviceGroup: automatedDeviceGroup.description,
                 ]
             }
         }
 
         struct FailedRequestCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_requests_errors_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_requests_errors_total"
             enum DimensionKey: String, RawRepresentable {
+                case cloudApp
                 case errorDescription
                 case automatedDeviceGroup
             }
@@ -599,9 +761,10 @@ enum Metrics {
             var action: CounterAction
             var dimensions: MetricDimensions<DimensionKey>
 
-            init(action: CounterAction, failureReason: some Swift.Error, automatedDeviceGroup: Bool) {
+            init(action: CounterAction, cloudApp: String, failureReason: some Swift.Error, automatedDeviceGroup: Bool) {
                 self.action = action
                 self.dimensions = [
+                    .cloudApp: cloudApp,
                     .errorDescription: String(reportable: failureReason),
                     .automatedDeviceGroup: automatedDeviceGroup.description,
                 ]
@@ -609,22 +772,58 @@ enum Metrics {
         }
 
         struct MaxConcurrentRequestCountExceededTotal: Counter {
-            static let label: MetricLabel = "\(prefix)_max_concurrent_request_count_exceeded_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_max_concurrent_request_count_exceeded_total"
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
             var action: CounterAction
+            var dimensions: MetricDimensions<DimensionKey>
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
 
         struct MaxConcurrentRequestCountRejectedTotal: Counter {
-            static let label: MetricLabel = "\(prefix)_max_concurrent_request_count_rejected_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_max_concurrent_request_count_rejected_total"
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
             var action: CounterAction
+            var dimensions: MetricDimensions<DimensionKey>
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
 
         struct MaxCumulativeRequestSizeExceededTotal: Counter {
-            static let label: MetricLabel = "\(prefix)_max_cumulative_request_size_exceeded_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_max_cumulative_request_size_exceeded_total"
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
             var action: CounterAction
+            var dimensions: MetricDimensions<DimensionKey>
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
 
         struct RequestTimeHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_request_duration_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_request_duration_seconds"
             static let buckets: HistogramBuckets = .requestTime
             var value: Double
             var dimensions: MetricDimensions<DimensionKey>
@@ -644,6 +843,7 @@ enum Metrics {
             }
 
             enum DimensionKey: String, RawRepresentable {
+                case cloudApp
                 case result
                 case errorDescription
                 case featureId
@@ -653,6 +853,7 @@ enum Metrics {
             }
 
             init(
+                cloudApp: String,
                 duration: Duration,
                 featureId: String?,
                 bundleId: String?,
@@ -661,6 +862,7 @@ enum Metrics {
             ) {
                 self.value = duration.seconds
                 self.dimensions = [
+                    .cloudApp: cloudApp,
                     .result: "\(Result.success)",
                     .featureId: featureId ?? "",
                     .bundleId: bundleId ?? "",
@@ -670,6 +872,7 @@ enum Metrics {
             }
 
             init(
+                cloudApp: String,
                 duration: Duration,
                 featureId: String?,
                 bundleId: String?,
@@ -679,6 +882,7 @@ enum Metrics {
             ) {
                 self.value = duration.seconds
                 self.dimensions = [
+                    .cloudApp: cloudApp,
                     .result: "\(Result.error)",
                     .featureId: featureId ?? "",
                     .bundleId: bundleId ?? "",
@@ -690,22 +894,59 @@ enum Metrics {
         }
 
         struct ConcurrentRequests: Gauge {
-            static let label: MetricLabel = "\(prefix)_concurrent_requests"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_concurrent_requests"
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
             var value: Int
+            var dimensions: MetricDimensions<DimensionKey>
+
+            init(value: Int, cloudApp: String) {
+                self.value = value
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
+        }
+
+        struct MaxConcurrentRequests: Gauge {
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_max_concurrent_requests"
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
+            var value: Int
+            var dimensions: MetricDimensions<DimensionKey>
+
+            init(value: Int, cloudApp: String) {
+                self.value = value
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
 
         struct WaitForWarmupCompleteTimeHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_wait_for_warmup_complete_time_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_wait_for_warmup_complete_time_seconds"
             static let buckets: HistogramBuckets = .waitForWarmupCompleteTime
-            var value: Double
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
 
-            init(duration: Duration) {
+            var value: Double
+            var dimensions: MetricDimensions<DimensionKey>
+
+            init(cloudApp: String, duration: Duration) {
                 self.value = duration.seconds
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
             }
         }
 
         struct RequestTimeWithJobHelperExitHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_request_duration_with_jobhelper_exit_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_request_duration_with_jobhelper_exit_seconds"
             static let buckets: HistogramBuckets = .requestTime
             var value: Double
             var dimensions: MetricDimensions<DimensionKey>
@@ -725,25 +966,30 @@ enum Metrics {
             }
 
             enum DimensionKey: String, RawRepresentable {
+                case cloudApp
                 case result
                 case errorDescription
             }
 
             init(
-                duration: Duration,
+                cloudApp: String,
+                duration: Duration
             ) {
                 self.value = duration.seconds
                 self.dimensions = [
+                    .cloudApp: cloudApp,
                     .result: "\(Result.success)",
                 ]
             }
 
             init(
+                cloudApp: String,
                 duration: Duration,
                 failureReason: some Swift.Error
             ) {
                 self.value = duration.seconds
                 self.dimensions = [
+                    .cloudApp: cloudApp,
                     .result: "\(Result.error)",
                     .errorDescription: String(reportable: failureReason),
                 ]
@@ -751,62 +997,119 @@ enum Metrics {
         }
 
         struct FailedWaitForWarmupCompleteTimeHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_failed_wait_for_warmup_complete_time_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_failed_wait_for_warmup_complete_time_seconds"
             static let buckets: HistogramBuckets = .waitForWarmupCompleteTime
-            var value: Double
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
 
-            init(duration: Duration) {
+            var value: Double
+            var dimensions: MetricDimensions<DimensionKey>
+
+            init(cloudApp: String, duration: Duration) {
                 self.value = duration.seconds
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
             }
         }
 
         // Duration between receiving the parameters and sending the decryption key message in the dial back
         struct TrustedProxyParametersToFirstRewrapDurationHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_trusted_proxy_parameters_to_first_rewrap_duration_seconds"
+            static let label: MetricLabel =
+                "\(ProcessInfo.prefix)_trusted_proxy_parameters_to_first_rewrap_duration_seconds"
             static let buckets: HistogramBuckets = .trustedProxyParametersToFirstRewrapDuration
-            var value: Double
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
 
-            init(duration: Duration) {
+            var value: Double
+            var dimensions: MetricDimensions<DimensionKey>
+
+            init(cloudApp: String, duration: Duration) {
                 self.value = duration.seconds
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
             }
         }
 
-        // Duration between asking ROPEs for a worker and receiving the worker attestation in the proxy dial back
+        // Duration between asking ROPES for a worker and receiving the worker attestation in the proxy dial back
         struct FindWorkerDuration: Histogram {
-            static let label: MetricLabel = "\(prefix)_find_worker_duration_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_find_worker_duration_seconds"
             static let buckets: HistogramBuckets = .findWorkerDuration
-            var value: Double
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
 
-            init(duration: Duration) {
+            var value: Double
+            var dimensions: MetricDimensions<DimensionKey>
+
+            init(cloudApp: String, duration: Duration) {
                 self.value = duration.seconds
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
+        }
+
+        /// Number of times ROPES responded to find worker with a NegotiatePick
+        struct NegotiatePickCounter: Counter {
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_trusted_proxy_negotiate_pick_total"
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
+            var action: CounterAction
+            var dimensions: MetricDimensions<DimensionKey>
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
             }
         }
 
         struct TrustedProxyRequestsCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_trusted_proxy_requests_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_trusted_proxy_requests_total"
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+            }
+
             var action: CounterAction
+            var dimensions: MetricDimensions<DimensionKey>
+
+            init(action: CounterAction, cloudApp: String) {
+                self.action = action
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                ]
+            }
         }
 
         struct TrustedProxyRequestsErrorCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_trusted_proxy_requests_failed_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_trusted_proxy_requests_failed_total"
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
             var action: CounterAction
         }
 
         struct TrustedProxyRequestsCloseErrorCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_trusted_proxy_requests_close_failed_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_trusted_proxy_requests_close_failed_total"
             var action: CounterAction
 
             enum DimensionKey: String, RawRepresentable {
+                case cloudApp
                 case grpcStatus
                 case ropesErrorCode
             }
 
             var dimensions: MetricDimensions<DimensionKey>
 
-            init(action: CounterAction, grpcStatus: Int, ropesErrorCode: Int) {
+            init(action: CounterAction, cloudApp: String, grpcStatus: Int, ropesErrorCode: Int) {
                 self.action = action
                 self.dimensions = [
+                    .cloudApp: cloudApp,
                     .grpcStatus: "\(grpcStatus)",
                     .ropesErrorCode: "\(ropesErrorCode)",
                 ]
@@ -816,24 +1119,24 @@ enum Metrics {
 
     enum SessionStore {
         struct SessionAddedCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_session_added_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_session_added_total"
             var action: CounterAction
         }
 
         struct SessionReplayedCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_session_replayed_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_session_replayed_total"
             var action: CounterAction
         }
 
         struct StoredSessions: Gauge {
-            static let label: MetricLabel = "\(prefix)_stored_sessions"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_stored_sessions"
             var value: Int
         }
     }
 
     enum HeartbeatPublisher {
         struct PublishedCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_heartbeat_publish_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_heartbeat_publish_total"
             var action: CounterAction
 
             enum DimensionKey: String, RawRepresentable {
@@ -851,7 +1154,7 @@ enum Metrics {
         }
 
         struct FailedToPublishCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_heartbeat_publish_error_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_heartbeat_publish_error_total"
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
             var action: CounterAction
         }
@@ -859,7 +1162,7 @@ enum Metrics {
 
     enum TLSConfiguration {
         struct TLSVerificationErrorCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_tls_verification_failure_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_tls_verification_failure_total"
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
             var action: CounterAction
 
@@ -876,7 +1179,7 @@ enum Metrics {
 
     enum AttestationProvider {
         struct AttestationTimeToExpiryGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_attestation_time_to_expiry_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_attestation_time_to_expiry_seconds"
             var value: Double
 
             init(expireAt: Date) {

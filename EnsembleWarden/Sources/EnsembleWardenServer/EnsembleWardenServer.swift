@@ -32,16 +32,42 @@ private import Synchronization
 /// to run.
 public final class EnsembleWardenServer<Handler: EnsembleWardenServerHandler & Sendable>: Sendable {
 
+    private let serverImplementation: EnsembleWardenServerImplementation<Handler, OSMetricsBridge>
+
+        public init(handler: Handler, xpcServiceName: String) {
+            self.serverImplementation = EnsembleWardenServerImplementation<Handler, OSMetricsBridge>.init(handler: handler, xpcServiceName: xpcServiceName, metricsFactory: OSMetricsBridge())
+        }
+
+        public func run() async throws {
+            try await self.serverImplementation.run()
+        }
+
+        package func waitForRunning() async {
+            await self.serverImplementation.waitForRunning()
+        }
+
+        public func shutdown() throws {
+            try self.serverImplementation.shutdown()
+        }
+}
+
+package final class EnsembleWardenServerImplementation<Handler: EnsembleWardenServerHandler & Sendable, Factory: MetricsFactory>: Sendable {
     private enum State {
-        case stopped
+        /// Continuations will be resumed when the server is running.
+        case notStarted([CheckedContinuation<Void, Never>])
+        /// Continuations will be resumed when the server is running.
+        case starting([CheckedContinuation<Void, Never>])
+        /// Continuations will be resumed when the server is stopped.
         case running(CheckedContinuation<Void, Never>)
+        case stopped
     }
 
     private let handler: Handler
+    private let ensembleWardenMetrics: EnsembleWardenMetrics<Factory>
     private let xpcServiceName: String
     private let entitlement: String
 
-    private let state = Mutex<State>(.stopped)
+    private let state = Mutex<State>(.notStarted([]))
     private let logger = Logger(subsystem: "com.apple.cloudos.ensemblewardenserver", category: "Server")
 
 
@@ -50,12 +76,13 @@ public final class EnsembleWardenServer<Handler: EnsembleWardenServerHandler & S
     ///   - handler: The callbacks to run when messages are received.
     ///   - xpcServiceName: The name of the XPC service to listen on.
     /// - SeeAlso: ``run()``, which needs to be called after initialisation.
-    public init(handler: Handler, xpcServiceName: String) {
+    package init(handler: Handler, xpcServiceName: String, metricsFactory: Factory) {
         self.handler = handler
         self.xpcServiceName = xpcServiceName
         // Entitlement here is the entitlement that is required to talk ensemblewardend->tie-kvcache-transfer.
         // It is not overridable in the public initialiser.
         self.entitlement = kEnsembleWardenServerEntitlement
+        self.ensembleWardenMetrics = EnsembleWardenMetrics(metricsFactory: metricsFactory)
     }
 
     // In our package-scoped init we allow specifying an entitlement to check.
@@ -63,21 +90,57 @@ public final class EnsembleWardenServer<Handler: EnsembleWardenServerHandler & S
     // that to check for a different entitlement to we check when we're running
     // in tie-kvcache-transfer. This is because we want tie-cloud-app to not
     // have entitlements to direct-talk to tie-kvcache-transfer.
-    package init(handler: Handler, xpcServiceName: String, entitlement: String) {
+    package init(handler: Handler, xpcServiceName: String, entitlement: String, metricsFactory: Factory) {
         self.handler = handler
         self.xpcServiceName = xpcServiceName
         self.entitlement = entitlement
+        self.ensembleWardenMetrics = EnsembleWardenMetrics(metricsFactory: metricsFactory)
+    }
+
+    /// Waits for the server to be running (XPC listener ready to accept connections).
+    ///
+    /// Used in tests since we don't have the launchd magic there.
+    package func waitForRunning() async {
+        await withCheckedContinuation { continuation in
+            self.state.withLock { state in
+                switch state {
+                case .notStarted(var continuations):
+                    continuations.append(continuation)
+                    state = .notStarted(continuations)
+                case .starting(var continuations):
+                    continuations.append(continuation)
+                    state = .starting(continuations)
+                case .running:
+                    continuation.resume()
+                case .stopped:
+                    self.logger.warning("waitForRunning() called but the server already stopped")
+                    continuation.resume()
+                }
+            }
+        }
     }
 
     /// Performs the necessary steps to start listening for XPC requests.
-    public func run() async throws {
+    package func run() async throws {
+        try self.state.withLock { state in
+            switch state {
+            case .notStarted(let continuations):
+                state = .starting(continuations)
+            default:
+                throw EnsembleWardenError.invalidStateTransition
+            }
+        }
+        defer {
+            self.state.withLock { $0 = .stopped }
+        }
         let listener = try XPCListener(
             service: xpcServiceName,
             targetQueue: .init(label: "com.apple.cloudos.ensemblewarden.xpcserver", qos: .userInitiated),
+            requirement: .hasEntitlement(self.entitlement),
         ) { request in
-            self.logger.log("Received XPC request")
             return request.accept { _ in
-                XPCHandler(ensembleWardenHandler: self.handler, entitlement: self.entitlement)
+                XPCHandler(ensembleWardenHandler: self.handler,
+                           ensembleWardenMetrics: self.ensembleWardenMetrics)
             }
         }
         await withThrowingTaskGroup(of: Void.self) { group in
@@ -85,7 +148,25 @@ public final class EnsembleWardenServer<Handler: EnsembleWardenServerHandler & S
             group.addTask {
                 await withTaskCancellationHandler(operation: {
                     await withCheckedContinuation { continuation in
-                        self.state.withLock { $0 = .running(continuation) }
+                        let waitingContinuations = self.state.withLock { state -> [CheckedContinuation<Void, Never>] in
+                            let waiting: [CheckedContinuation<Void, Never>]
+                            switch state {
+                            case .notStarted(let continuations):
+                                assertionFailure("Should not be in not-started state")
+                                waiting = continuations
+                            case .starting(let continuations):
+                                waiting = continuations
+                            case .running:
+                                waiting = []
+                            case .stopped:
+                                assertionFailure("Should not be in stopped state")
+                                waiting = []
+                            }
+                            state = .running(continuation)
+                            return waiting
+                        }
+                        // Resume all waiting continuations now that we're running
+                        waitingContinuations.forEach { $0.resume() }
                         // Need to make sure to retain the listener so it doesn't get
                         // deallocated before it can accept connections.
                         withExtendedLifetime(listener) {}
@@ -99,8 +180,8 @@ public final class EnsembleWardenServer<Handler: EnsembleWardenServerHandler & S
     }
 
     /// Performs the necessary steps to shutdown the server.
-    public func shutdown() throws {
-        logger.log("Shutting down")
+    package func shutdown() throws {
+        logger.log("Shutting down server")
         try self.state.withLock { state in
             switch state {
             case .running(let continuation):

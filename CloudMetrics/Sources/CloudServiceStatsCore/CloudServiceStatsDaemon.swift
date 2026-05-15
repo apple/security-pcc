@@ -14,7 +14,7 @@
 
 //  Copyright © 2024 Apple Inc. All rights reserved.
 
-import SystemStatus
+import DarwinPrivate
 import CloudServiceStatsFramework
 import CloudMetricsFramework
 import os

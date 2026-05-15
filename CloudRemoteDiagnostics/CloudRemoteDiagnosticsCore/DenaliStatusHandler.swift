@@ -19,22 +19,35 @@
 // Created by Marco Magdy on 5/15/24.
 //
 
+#if canImport(DenaliSEDiagnostics)
+@_weakLinked import DenaliSEDiagnostics
+#endif
 import Foundation
-import DenaliSEDiagnostics
-import XPCPrivate
 import os
+import XPCPrivate
 
 private let logger = Logger(subsystem: "cloudremotediagd", category: "denali")
 
 extension CloudRemoteDiagnosticsHandler {
 
     public func handleGetDenaliStatus() -> String {
+#if canImport(DenaliSEDiagnostics)
+        guard #_hasSymbol(DenaliDiagnosticClient.self) else {
+            return ""
+        }
         let client = DenaliDiagnosticClient()
         return client.dumpAll()
+#else
+        return ""
+#endif
     }
 
     public func handleDenaliProtoTrace(sourceIPAddress: String, destinationIPAddress: String, networkProtocol: String,
                                        sourcePort: UInt16, destinationPort: UInt16) -> xpc_object_t? {
+#if canImport(DenaliSEDiagnostics)
+        guard #_hasSymbol(DenaliDiagnosticClient.self) else {
+            return nil
+        }
         let client = DenaliDiagnosticClient()
         let proto = NetworkProtocol(from: networkProtocol)
         let requestParams = DiagnosticsRequestOptionsParam(sourceIPAddress: sourceIPAddress,
@@ -64,6 +77,9 @@ extension CloudRemoteDiagnosticsHandler {
             return nil
         }
         return object
+#else
+        return nil
+#endif
     }
 
     private func validFilepath(_ path: String) -> Bool {
@@ -72,6 +88,7 @@ extension CloudRemoteDiagnosticsHandler {
     }
 }
 
+#if canImport(DenaliSEDiagnostics)
 internal extension NetworkProtocol {
     init(from: String) {
         switch (from) {
@@ -88,3 +105,4 @@ internal extension NetworkProtocol {
         }
     }
 }
+#endif

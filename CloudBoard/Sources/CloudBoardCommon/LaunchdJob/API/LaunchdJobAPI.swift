@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple Inc. All rights reserved.
-
 // This file should *never* import AppServerSupport.OSLaunchdJob
 // it should be kept entirely clean as the public surface of the API to
 // find, create, start, monitor and control the jobs
@@ -23,8 +21,8 @@ import os
 import System
 
 public enum LaunchdJobFinderError: Error {
-    case noCloudAppFound
-    case noApplicableCloudApp
+    case noAppFound
+    case noApplicableApp
     case tooManyManagedJobs(app: String, count: Int)
 }
 
@@ -34,8 +32,16 @@ public enum LaunchdJobFinderError: Error {
 public protocol LaunchdJobFinderProtocol: Sendable {
     /// find the definitions we manage, from which we can create new instances
     func getJobDefinitions(
-        type: CloudBoardJobType
+        type: CloudBoardJobType,
+        name: String?
     ) throws -> [LaunchdJobDefinitionProtocol]
+
+    // Provides exactly one job definition for a job with the provided type and name. If none or more than one job
+    // definitions are found, corresponding errors are thrown.
+    func getJobDefinition(
+        type: CloudBoardJobType,
+        name: String
+    ) throws -> (definition: LaunchdJobDefinitionProtocol, app: String)
 
     /// Find and terminate any jobs related to the jobhelper or cloud app
     /// This is intended for use when the cloudboard daemon restarts,
@@ -70,7 +76,11 @@ public protocol LaunchdJobDefinitionProtocol: Sendable {
 public protocol LaunchdJobInstanceInitiatorProtocol: Sendable {
     var uuid: UUID { get }
 
-    var handle: any LaunchdJobInstanceHandleProtocol { get }
+    /// Launchd job attributes that apply to both the base job and this specific instance
+    var attributes: CloudBoardJobAttributes { get }
+
+    /// Launchd job handle to the launchd job instance (not the base job)
+    var instanceHandleIfCreated: (any LaunchdJobInstanceHandleProtocol)? { get async }
 
     /// This API is a little ugly, the act of *iterating* on the sequence starts the job
     /// We might change that in future
@@ -80,10 +90,10 @@ public protocol LaunchdJobInstanceInitiatorProtocol: Sendable {
     /// by reusing the same UUID for them, since they are different job types
     /// and advertise different XPC services launchd can disambiguate them fine
     /// It means that we can easily terminate one, knowing only the other
-    func findRunningLinkedInstance(
+    func findRunningLinkedInstances(
         type: CloudBoardJobType,
         logger: Logger
-    ) -> (any LaunchdJobInstanceHandleProtocol)?
+    ) -> [any LaunchdJobInstanceHandleProtocol]
 }
 
 /// An instance, whether initiated by us or not, which can be interacted with.
@@ -91,7 +101,7 @@ public protocol LaunchdJobInstanceInitiatorProtocol: Sendable {
 /// in an OO style (instead of static methods which take this as a parameter)
 /// so it can be easily mocked out
 public protocol LaunchdJobInstanceHandleProtocol: Sendable {
-    /// an abstraction over the attributes about the job that are relevant to cloudboard
+    /// An abstraction over the attributes about the job that are relevant to cloudboard.
     /// These are defined on creation and do not change
     var attributes: CloudBoardJobAttributes { get }
 

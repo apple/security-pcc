@@ -12,23 +12,42 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
+import CloudBoardDomain
+import Foundation
 
 /// A helper type that allows the cloud app to interact with the environment around it.
 public struct CloudAppEnvironment: Sendable {
     public var metrics: CloudAppMetrics
     public var plaintextMetadata: PlaintextMetadata
-    // Client to make outbound requests to other PCC nodes. Can only be used when run in a proxy
-    // configuration
+    /// Client to make outbound requests to other PCC nodes. Can only be used when run in a proxy
+    /// configuration
     public var pccClient: PCCClient
-    // Helper to derive keys from client-provided key material. Does not directly expose keys but allows the cloud app
-    // to instruct cb_jobhelper to derive and distribute keys.
+
+    /// Client to make outbound Private Information Retrieval requests
+    public var pirClient: PrivateInformationRetrievalClient
+
+    /// Helper to derive keys from client-provided key material. Does not directly expose keys but allows the cloud app
+    /// to instruct cb_jobhelper to derive and distribute keys.
     public var keyDerivation: KeyDerivationHelper
+
     /// If this is true then the request stream from the client will not be presented to the cloud app
     /// This should only be relevant to proxy app implementations
     public var requestBypassed: Bool
 
     public var traceContext: TraceContext
+
+    public var updatedTraceContext: UpdatedTraceContext
+
+    public var ensembleInstanceID: EnsembleInstanceId
+
+    public var rackID: RackId
+
+    /// Launchd job instance UUID shared across all associated per-request processes. This can be used to connect to
+    /// a support app launched and managed by CloudBoard.
+    public var launchdJobInstanceUUID: UUID
+
+    /// List of all support apps for which an instance is launched and managed by CloudBoard on the cloud app's behalf
+    public var supportApps: [String]
 }
 
 extension CloudAppEnvironment {
@@ -69,6 +88,16 @@ extension CloudAppEnvironment {
         public var spanID: String
 
         internal init(traceID: String, spanID: String) {
+            self.spanID = spanID
+            self.traceID = traceID
+        }
+    }
+
+    public struct UpdatedTraceContext: Sendable, Hashable {
+        public var traceID: String
+        public var spanID: UInt64
+
+        internal init(traceID: String, spanID: UInt64) {
             self.spanID = spanID
             self.traceID = traceID
         }

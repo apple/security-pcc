@@ -44,6 +44,7 @@ OS_ASSUME_NONNULL_BEGIN
 SECURECONFIG_OBJECT_EXPORT_DECL_WITH_C_TYPE(SCDataBase, secure_config_database_t);
 SECURECONFIG_OBJECT_EXPORT_DECL_WITH_C_TYPE(SCSlot, secure_config_slot_t);
 SECURECONFIG_OBJECT_EXPORT_DECL_WITH_C_TYPE(SCEntry, secure_config_entry_t);
+SECURECONFIG_OBJECT_EXPORT_DECL_WITH_C_TYPE(SecureConfigParameters, secure_config_parameters_t);
 
 #if defined(__OBJC__) && __OBJC__
 @interface SecureConfigParameters : NSObject
@@ -51,6 +52,41 @@ SECURECONFIG_OBJECT_EXPORT_DECL_WITH_C_TYPE(SCEntry, secure_config_entry_t);
 + (SecureConfigParameters * _Nullable)loadContentsAndReturnError:(NSError * _Nullable * _Nullable) error NS_WARN_UNUSED_RESULT;
 @end
 #endif // defined(__OBJC__) && __OBJC__
+
+/*!
+ * @function secure_config_parameters_load_with_error
+ * Loads the secure config parameters and creates an object representing its contents.
+ *
+ * @param outError
+ * An error returned if loading or decoding the value of the secure config parameters fails.
+ *
+ * @result
+ * Returns a `secure_config_parameters_t` if loading and decoding the secure
+ * config parameters was successful. If either operation fails, the result is `nil`, and
+ * the `ourError` parameter will be populated with an error value.
+ */
+secure_config_parameters_t _Nullable
+secure_config_parameters_load_with_error(CFErrorRef _Nullable *_Nullable outError);
+
+/*!
+ * @function secure_config_parameters_copy_cryptex_app_identifiers_4libcryptex
+ * Copies the value of the "com.apple.libcryptex.appIdentifiers" key from the secure
+ * config parameters.
+ *
+ * WARNING: This function is SPI that exists for libcryptex. Talk to the SecureConfigDB
+ * team if you want to consume it outside of that context.
+ *
+ * @param parameters
+ * An instance of the loaded secure config parameters.
+ *
+ * @returns
+ * A copy of the value of the "com.apple.libcryptex.appIdentifiers" key from the secure
+ * config parameters, or `nil` if no such value exists. It is the responsibility of the
+ * caller to release this copied value.
+ */
+CF_RETURNS_RETAINED
+CFArrayRef _Nullable
+secure_config_parameters_copy_cryptex_app_identifiers_4libcryptex(secure_config_parameters_t parameters);
 
 OS_ENUM(ratcheting_algorithm, uint32_t,
 	SCDB_ALGO_UNK = 0,

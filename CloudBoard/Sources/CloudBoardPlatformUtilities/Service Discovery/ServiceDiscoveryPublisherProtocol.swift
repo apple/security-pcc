@@ -12,24 +12,41 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
 import CloudBoardController
 
-public struct ServiceDiscoveryWorkloadConfig: CustomStringConvertible {
-    public var workloadType: WorkloadConfig.WorkloadType
-    public var workloadTags: [String: WorkloadConfig.RoutingTagValue]
+package struct ServiceDiscoveryWorkloadConfig: CustomStringConvertible, Sendable {
+    package enum WorkloadType: CustomStringConvertible, Equatable, Sendable {
+        case compute
+        case proxy(ProxyWorkloadConfig.ProxyMetadata)
 
-    public init(workloadType: WorkloadConfig.WorkloadType, workloadTags: [String: WorkloadConfig.RoutingTagValue]) {
+        package var description: String {
+            return switch self {
+            case .compute: "compute"
+            case .proxy(let proxyMetadata): "proxy(\(proxyMetadata))"
+            }
+        }
+    }
+
+    package var workloadType: WorkloadType
+    package var workloadTags: [String: RoutingTagValue]
+
+    package init(workloadType: WorkloadType, workloadTags: [String: RoutingTagValue]) {
         self.workloadType = workloadType
         self.workloadTags = workloadTags
     }
 
-    public init(from workloadConfig: WorkloadConfig) {
-        self.workloadType = workloadConfig.workloadType
-        self.workloadTags = workloadConfig.workloadTags
+    package init(from workloadConfig: InternalWorkloadConfig) {
+        switch workloadConfig {
+        case .compute(let config):
+            self.workloadType = .compute
+            self.workloadTags = config.workloadTags
+        case .proxy(let config):
+            self.workloadType = .proxy(config.metadata)
+            self.workloadTags = config.workloadTags
+        }
     }
 
-    public var description: String {
+    package var description: String {
         """
         \(String(describing: Self.self))(
         workloadType: \(self.workloadType), \
@@ -38,7 +55,7 @@ public struct ServiceDiscoveryWorkloadConfig: CustomStringConvertible {
     }
 }
 
-public protocol ServiceDiscoveryPublisherProtocol {
+package protocol ServiceDiscoveryPublisherProtocol: Sendable {
     func announceService(name: String, workloadConfig: ServiceDiscoveryWorkloadConfig)
     func retractService(name: String)
     func run() async throws

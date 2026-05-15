@@ -21,9 +21,9 @@
 
 import Foundation
 
-// This is copied from TrustedCloudComputeError; it is tied up in the
-// implementation of the RateLimiter and exists in the framework so that
-// it can be used to communicate across XPC.
+// This is tied up in the implementation of the RateLimiter and
+// exists in the framework so that it can be used to communicate
+// across XPC.
 
 package struct RateLimitInfo: Sendable, Codable {
     // filter applied

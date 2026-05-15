@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import CloudBoardAttestationDAPI
 import CloudBoardLogging
 import CloudBoardMetrics
@@ -68,7 +66,7 @@ final class InMemoryAttestationValidatorFactory: AttestationValidatorFactoryProt
         case .version1(_, let info):
             if enableReleaseSetValidation {
                 let proxiedReleaseDigests = switch info.appData {
-                case .none: [String]()
+                case .none, .compute: [String]()
                 case .proxy(let appData): appData.transitivelyTrustedReleaseDigests
                 }
                 return InMemoryAttestationValidator(
@@ -140,13 +138,17 @@ final class InMemoryAttestationValidator: AttestationValidatorProtocol, Sendable
                     // this just makes it explicit
                     expiration: Date.distantFuture,
                     publicKey: publicKey,
-                    releaseDigest: CloudBoardAttestation.neverKnownReleaseDigest
+                    releaseDigest: CloudBoardAttestation.neverKnownReleaseDigest,
+                    appData: [:],
+                    udid: nil
                 )
             case .version1(let publicKey, let info):
                 .init(
                     expiration: info.expiration,
                     publicKey: publicKey,
-                    releaseDigest: info.releaseDigest
+                    releaseDigest: info.releaseDigest,
+                    appData: info.computeNodeMetadata ?? [:],
+                    udid: info.udid
                 )
             }
         // log in detail regardless since this is a test path

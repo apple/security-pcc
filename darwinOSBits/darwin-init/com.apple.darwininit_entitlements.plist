@@ -16,6 +16,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>com.apple.private.storagekitd.destructive</key>
+	<true/>
 	<key>com.apple.private.RemoteServiceDiscovery.device-admin</key>
 	<true/>
 	<key>com.apple.private.MobileGestalt.AllowedProtectedKeys</key>
@@ -38,6 +40,18 @@
 	<key>com.apple.darwininit.config-server.remote</key>
 	<true/>
 	<key>com.apple.private.factory.darwininit.config-server.remote.access</key>
+	<true/>
+	<key>com.apple.private.img4.nonce.cryptex</key>
+	<true/>
+	<key>com.apple.private.img4.nonce.ephemeral-cryptex</key>
+	<true/>
+	<key>com.apple.private.img4.nonce.cryptex1.generic</key>
+	<true/>
+	<key>com.apple.private.img4.nonce.cryptex1.supplemental</key>
+	<true/>
+	<key>com.apple.private.img4.nonce.cryptex1.simulator</key>
+	<true/>
+	<key>com.apple.private.security.AppleImage4.user-client</key>
 	<true/>
 	<key>com.apple.private.logging.preferences</key>
 	<true/>
@@ -66,5 +80,15 @@
 	<true/>
 	<key>com.apple.tailspin.config-apply</key>
 	<true/>
+	<key>com.apple.apfs.wvek</key>
+	<true/>
+	<key>com.apple.keystore.filevault</key>
+	<true/>
+	<key>com.apple.apfs.private.skip-xart</key>
+	<true/>
+	<key>com.apple.private.apfs.volume-cache-key</key>
+	<true/>
+	<key>com.apple.security.iokit-user-client-class</key>
+	<string>AppleAPFSUserClient</string>
 </dict>
 </plist>

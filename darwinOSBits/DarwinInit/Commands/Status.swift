@@ -12,28 +12,48 @@
 // EA1937
 // 10/02/2024
 
-
 import ArgumentParserInternal
-import DarwinInitClient
+import Darwin
+import Foundation
+
+enum OutputFormat: String, ExpressibleByArgument, CaseIterable {
+    case text
+    case json
+}
 
 final class Status: AsyncParsableCommand {
-	struct Failure: Error, CustomStringConvertible {
-		var description: String
+    struct Failure: Error, CustomStringConvertible {
+        var description: String
 
-		init(_ description: String) {
-			self.description = description
-		}
-	}
+        init(_ description: String) {
+            self.description = description
+        }
+    }
 
     static let configuration = CommandConfiguration(
         abstract: "Read status of most recent application of system config"
     )
 
-	func run() async throws {
+    @Option(name: [.short, .long], help: "Output format: text (default) or json")
+    var format: OutputFormat = .text
+
+    func run() async throws {
         let status = try DarwinInitApplyStatus.loadBootStatus()
-        print("Status: \(status)")
+
+        switch format {
+        case .text:
+            print("Status: \(status)")
+        case .json:
+            let statusOutput = try status.toJSON()
+
+            guard let jsonString = String(data: statusOutput, encoding: .utf8) else {
+                throw Failure("Unable to convert status data to UTF-8 format")
+            }
+            print(jsonString)
+        }
+
         guard case .success = status else {
             Darwin.exit(2)
         }
-	}
+    }
 }

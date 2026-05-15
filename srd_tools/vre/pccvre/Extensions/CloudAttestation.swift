@@ -16,17 +16,137 @@
 //
 
 @_spi(Private) import CloudAttestation
-
-extension CloudAttestation.Environment {
-    init(cli string: String) throws {
-        guard let e = Self(rawValue: string) else {
-            throw CLIError("Invalid environment \(string)")
-        }
-        self = e
-    }
-}
+import InternalSwiftProtobuf
 
 extension CloudAttestation.Release {
     // name returns Release digest as simple hex string (unlike description, doesn't include digest algo)
     var name: String { self.digest().bytes.hexString }
+}
+
+extension CloudAttestation.AttestationBundle {
+    init(from file: String, format: AttestationFormat, requestIndex: Int?, attestationIndex: Int?) throws {
+        var fileData: Data
+        if file == "-" {
+            fileData = try FileHandle.standardInput.readToEnd() ?? Data()
+        } else {
+            fileData = try Data(contentsOf: URL(filePath: file))
+        }
+
+        switch format {
+        case .attestationBundle(.json):
+            self = try .init(jsonString: String(decoding: fileData, as: UTF8.self))
+
+        case .attestationBundle(.protobuf):
+            do {
+                self = try .init(data: fileData)
+            } catch {
+                if let fileData = Data(base64Encoded: fileData) {
+                    self = try .init(data: fileData)
+                } else {
+                    throw error
+                }
+            }
+
+        case .appleIntelligenceReport:
+            guard let attestationIndex else {
+                throw Self.Error.invalidArguments(error: "Attestation index must be specified when parsing an Apple Intelligence Report")
+            }
+
+            guard let requestIndex else {
+                throw Self.Error.invalidArguments(error: "Request index must be specified when parsing an Apple Intelligence Report")
+            }
+
+            let decoder = JSONDecoder()
+            let report = try decoder.decode(AppleIntelligenceReport.self, from: fileData)
+
+            guard report.privateCloudComputeRequests.indices.contains(requestIndex) else {
+                throw Self.Error.requestNotFound(index: requestIndex)
+            }
+            let request = report.privateCloudComputeRequests[requestIndex]
+
+            guard request.nodes.indices.contains(attestationIndex) else {
+                throw Self.Error.attestationNotFound(index: attestationIndex)
+            }
+
+            let attestationString = request.nodes[attestationIndex].attestationBundle
+            guard attestationString.count > 0 else {
+                throw Self.Error.invalidArguments(error: "Empty attestation bundle")
+            }
+
+            do {
+                self = try .init(jsonString: attestationString)
+            } catch is JSONDecodingError {
+                guard let attestationData = Data(base64Encoded: attestationString) else {
+                    throw Self.Error.attestationParseFailure
+                }
+
+                self = try .init(data: attestationData)
+            }
+        }
+    }
+
+    enum Error: Swift.Error, Equatable {
+        case invalidArguments(error: String)
+        case requestNotFound(index: Int)
+        case attestationNotFound(index: Int)
+        case attestationParseFailure
+    }
+
+    enum AttestationFormat: CustomStringConvertible {
+        case attestationBundle(AttestationBundleEncoding)
+        case appleIntelligenceReport
+
+        enum AttestationBundleEncoding {
+            case protobuf
+            case json
+        }
+
+        var description: String {
+            switch self {
+            case .attestationBundle(let encoding):
+                switch encoding {
+                case .json:
+                    return "attestation-bundle:json"
+                case .protobuf:
+                    return "attestation-bundle:protobuf"
+                }
+            case .appleIntelligenceReport:
+                return "apple-intelligence-report"
+            }
+        }
+    }
+}
+
+// MARK: - Apple Intelligence Report
+
+struct AppleIntelligenceReport: Codable {
+    var modelRequests: [ModelRequest]
+    var privateCloudComputeRequests: [PrivateCloudComputeRequest]
+}
+
+extension AppleIntelligenceReport {
+    struct ModelRequest: Codable {
+        var timestamp: Double
+        var identifier: String
+        var prompt: String
+        var response: String
+        var model: String
+        var modelVersion: String
+        var clientIdentifier: String
+        var executionEnvironment: String
+    }
+
+    struct PrivateCloudComputeRequest: Codable {
+        var timestamp: Double
+        var requestId: String
+        var pipelineKind: String
+        var pipelineParameters: String
+        var nodes: [Node]
+    }
+
+    struct Node: Codable {
+        var node: String
+        var nodeState: String?
+        var attestationBundle: String
+    }
 }

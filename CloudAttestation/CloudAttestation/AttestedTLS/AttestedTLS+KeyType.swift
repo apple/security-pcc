@@ -19,11 +19,12 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
-@preconcurrency import Security
+import Security
 import Security_Private
 
 extension AttestedTLS {
-    public enum KeyType: Sendable {
+    // TODO: Remove @unchecked when rdar://119557403 (SecKey Sendable annotation) lands
+    public enum KeyType: @unchecked Sendable {
         case p256
         case p384
         case p384PKA

@@ -23,7 +23,46 @@ import IOKit
 #endif
 import os
 
-final class NVRAM {
+internal import DarwinInitBridging
+
+// MARK: - Error
+public enum NVRAMError: Swift.Error {
+    case unableToConnect
+    case unableToGetDataForKey(String, kern_return_t)
+    case unableToSetDataForKey(String, kern_return_t)
+}
+
+extension NVRAMError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .unableToConnect:
+            return "Unable to connect to NVRAM"
+        case let .unableToGetDataForKey(key, rawValue):
+            var description = "Unable to get value for key \(key) from NVRAM"
+            if let cString = mach_error_string(rawValue) {
+                description += ", " + String(cString: cString)
+            }
+            return description
+        case let .unableToSetDataForKey(key, rawValue):
+            var description = "Unable to set value for key \(key) from NVRAM"
+            if let cString = mach_error_string(rawValue) {
+                description += ", " + String(cString: cString)
+            }
+            return description
+        }
+    }
+}
+
+// MARK: - Protocol
+public protocol NVRAM {
+    typealias Error = NVRAMError
+
+    func getData(forKey key: NVRAMVariable) throws -> Data
+    func set(data: Data, forKey key: NVRAMVariable) throws
+}
+
+// MARK: - RealNVRAM
+public final class RealNVRAM: NVRAM {
     let entry: io_registry_entry_t
 
     init() throws {
@@ -41,46 +80,33 @@ final class NVRAM {
         IOObjectRelease(entry)
     }
 
-	func getData(forKey key: String) throws -> Data {
-		guard let data = IORegistryEntryCreateCFProperty(entry, key as CFString, kCFAllocatorDefault, 0)  else {
-			throw Error.unableToGetDataForKey(key, shim_kIOReturnNoResources())
-		}
-		return data.takeRetainedValue() as! Data
+    public func getData(forKey key: NVRAMVariable) throws -> Data {
+        guard let data = IORegistryEntryCreateCFProperty(entry, key.rawValue as CFString, kCFAllocatorDefault, 0)  else {
+            throw Error.unableToGetDataForKey(key.rawValue, shim_kIOReturnNoResources())
+        }
+        return data.takeRetainedValue() as! Data
     }
 
-    func set(data: Data, forKey key: String) throws {
-        let returnValue = IORegistryEntrySetCFProperty(entry, key as CFString, data as CFData)
+    public func set(data: Data, forKey key: NVRAMVariable) throws {
+        let returnValue = IORegistryEntrySetCFProperty(entry, key.rawValue as CFString, data as CFData)
         guard returnValue == KERN_SUCCESS else {
-            throw Error.unableToSetDataForKey(key, returnValue)
+            throw Error.unableToSetDataForKey(key.rawValue, returnValue)
         }
     }
 }
 
-extension NVRAM {
-    enum Error: Swift.Error {
-        case unableToConnect
-        case unableToGetDataForKey(String, kern_return_t)
-        case unableToSetDataForKey(String, kern_return_t)
-    }
-}
+// MARK: - VirtualNVRAM
+public final class VirtuaNVRAM: NVRAM {
+    var _ram: [String: Data] = [:]
 
-extension NVRAM.Error: LocalizedError {
-    var errorDescription: String? {
-        switch self {
-        case .unableToConnect:
-            return "Unable to connect to NVRAM"
-        case let .unableToGetDataForKey(key, rawValue):
-            var description = "Unable to get value for key \(key) from NVRAM"
-            if let cString = mach_error_string(rawValue) {
-                description += ", " + String(cString: cString)
-            }
-            return description
-        case let .unableToSetDataForKey(key, rawValue):
-            var description = "Unable to set value for key \(key) from NVRAM"
-            if let cString = mach_error_string(rawValue) {
-                description += ", " + String(cString: cString)
-            }
-            return description
+    public func getData(forKey key: NVRAMVariable) throws -> Data {
+        guard let data = _ram[key.rawValue] else {
+            throw Error.unableToGetDataForKey(key.rawValue, shim_kIOReturnNoResources())
         }
+        return data
+    }
+
+    public func set(data: Data, forKey key: NVRAMVariable) throws {
+        _ram[key.rawValue] = data
     }
 }

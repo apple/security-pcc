@@ -19,6 +19,7 @@
 
 import Foundation
 import os
+import System
 
 extension Logger {
   init(category: String) {
@@ -51,4 +52,28 @@ extension URL {
 		}
 		return false
 	}
+}
+
+func readBootSessionUUID() throws -> String {
+	var size = 0
+	var ret: Int32
+
+	ret = sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0)
+	guard ret == 0 else {
+		throw Errno(rawValue: Darwin.errno)
+	}
+
+	var buf = [CChar](repeating: 0, count: size)
+
+	ret = sysctlbyname("kern.bootsessionuuid", &buf, &size, nil, 0)
+	guard ret == 0 else {
+		throw Errno(rawValue: Darwin.errno)
+	}
+
+	let uuid = String(cString: buf, encoding: .ascii)
+	guard let uuid else {
+		throw RuntimeError("Failed to convert 'kern.bootsessionuuid' result to String")
+	}
+
+	return uuid
 }

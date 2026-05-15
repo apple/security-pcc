@@ -71,7 +71,7 @@ public struct AttestationPolicyContext: Sendable {
         }
     }
 
-    public subscript(_ key: Key, defaultValue closure: @autoclosure () throws -> (any Sendable)) -> (any Sendable) {
+    public subscript<T: Sendable>(_ key: Key, defaultValue closure: () throws -> T) -> (any Sendable) {
         mutating get throws {
             guard context[key] == nil else {
                 return context[key]

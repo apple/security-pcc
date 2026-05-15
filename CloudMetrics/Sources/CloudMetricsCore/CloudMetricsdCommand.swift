@@ -109,9 +109,13 @@ package final class CloudMetricsdRunner: Sendable {
                 defer {
                     self.logger.log("cloudmetricsd stopped")
                 }
-                let cloudmetricsd = CloudMetricsDaemon(
+                let (osMetricStream, osMetricContinuation) = AsyncStream<OSMetricEvent>.makeStream()
+                let cloudmetricsd = try CloudMetricsDaemon(
                     configuration: configuration,
-                    healthContinuation: self.healthContinuation)
+                    healthContinuation: self.healthContinuation,
+                    osMetricStream: osMetricStream,
+                    osMetricContinuation: osMetricContinuation
+                )
                 self.healthServer.updateHealthState(to: .healthy)
                 try await cloudmetricsd.run()
             }

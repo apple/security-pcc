@@ -29,13 +29,13 @@ import Foundation
     func trustedRequest(
         withParameters parameters: Data,
         requestID: UUID,
+        multiTurn: Bool,
         bundleIdentifier: String?,
         originatingBundleIdentifier: String?,
         featureIdentifier: String?,
         sessionIdentifier: UUID?,
         completion: @escaping @Sendable ((any TC2XPCTrustedRequestProtocol)?, Data?) -> Void
     )
-    func requestMetadata(completion: @escaping @Sendable (Data?) -> Void)
     func prefetchRequest(workloadType: String, workloadParameters: [String: String], completion: @escaping @Sendable (Data?) -> Void)
     func prewarmRequest(workloadType: String, workloadParameters: [String: String], bundleIdentifier: String?, featureIdentifier: String, runOnEventStream: Bool, completion: @escaping @Sendable () -> Void)
     func prefetchCache(completion: @escaping @Sendable ([String]) -> Void)
@@ -53,11 +53,11 @@ import Foundation
 
 @objc package protocol TC2XPCTrustedRequestProtocol: Sendable {
     /// Takes data to send, returns an error data blob (PrivateCloudComputeError), if an error occurs
-    func send(data: Data, isComplete: Bool, completion: @escaping @Sendable (Data?) -> Void)
+    func send(data: XPCRequestMessage.Data, completion: @escaping @Sendable (Data?) -> Void)
 
     /// Asks for more response data, returns data, if successful (first response parameter). Returns an error data blob
     /// (PrivateCloudComputeError, second response parameter), if an error occurs
-    func next(completion: @escaping @Sendable (Data?, Data?) -> Void)
+    func next(completion: @escaping @Sendable (XPCResponseMessage.Data?, Data?) -> Void)
 
     /// Cancel the running request. We need a completion handler here, since we won't receive the cancel call in the
     /// daemon otherwise.
@@ -67,13 +67,24 @@ import Foundation
     /// daemon otherwise.
     func close(completion: @escaping @Sendable () -> Void)
 
+    /// Takes data of the XPCSubrequest, returns an error data blob (PrivateCloudComputeError), if an error occurs
+    func createSubrequest(request: XPCSubrequest.Data, completion: @escaping @Sendable (Data?) -> Void)
+
+    /// Returns next progress update for the request or nil when there will be no more updates.
+    func nextProgress(completion: @escaping @Sendable (PrivateCloudComputeConnection.Progress.Data?) -> Void)
 }
 
 package func interfaceForTC2DaemonProtocol() -> NSXPCInterface {
     let ret = NSXPCInterface(with: (any TC2DaemonProtocol).self)
     ret.setInterface(
-        NSXPCInterface(with: (any TC2XPCTrustedRequestProtocol).self), for: #selector((any TC2DaemonProtocol).trustedRequest(withParameters:requestID:bundleIdentifier:originatingBundleIdentifier:featureIdentifier:sessionIdentifier:completion:)),
+        NSXPCInterface(with: (any TC2XPCTrustedRequestProtocol).self),
+        for: #selector(
+            (any TC2DaemonProtocol).trustedRequest(
+                withParameters:requestID:multiTurn:bundleIdentifier:originatingBundleIdentifier:featureIdentifier:sessionIdentifier:completion:
+            )
+        ),
         argumentIndex: 0,
-        ofReply: true)
+        ofReply: true
+    )
     return ret
 }

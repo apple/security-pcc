@@ -95,7 +95,7 @@ actor Daemon {
     var configURL: URL
 
     /// Optional audit table to check before forwarding logs to Splunk
-    var systemAuditTable: AuditTable?
+    nonisolated let systemAuditTable: AuditTable?
 
     let configMonitor: ConfigurationMonitor
     var offloader: SplunkEventOffloader?
@@ -194,9 +194,11 @@ actor Daemon {
             if let computedAuditTableURL = try computeAuditTableURL(forPassedURL: auditTableURL) {
                 self.systemAuditTable = try AuditTable(at: computedAuditTableURL)
             } else {
+                self.systemAuditTable = nil
                 log.log("Not using audit table, as none required and none passed")
             }
         } catch {
+            self.systemAuditTable = nil
             log.error("Daemon init error while parsing audit table: \(error, privacy: .public)")
             throw error
         }
@@ -368,31 +370,39 @@ extension Daemon: ConfigurationMonitorDelegate {
             return
         }
 
-        logMonitor.activate { [self] in
-            var event: SplunkEvent?
-
+        logMonitor.activate { eventProxy in
             // If an audit table was passed, enforce it on the message
             if let auditTable = self.systemAuditTable {
-                if !auditTable.allows(event: $0) {
+                if !auditTable.allows(event: eventProxy) {
                     Statistics.shared.skippedEvents += 1
                     return
                 }
             }
-            event = $0.formatJsonEvent(forAuditTable: self.systemAuditTable)
 
-            event = addSharedPayloadItems(to: event, index: self.config.index, globalLabels: self.config.globalLabels)
-            guard let event else {
-                Statistics.shared.skippedEvents += 1
-                return
-            }
+            // Transform the event proxy into a `SplunkEvent` so we can
+            // post-process it. The event proxy parameter value is going to
+            // disappear at the end of this block scope.
+            let event = eventProxy.formatJsonEvent(forAuditTable: self.systemAuditTable)
 
-            Statistics.shared.processedEvents += 1
-            if !self.rotatingBuffer.handle(incoming: event) {
-                Statistics.shared.skippedEvents += 1
+            Task {
+                await self.receivedEvent(event)
             }
         }
 
         log.log("Activated stream with predicate: \(predicate, privacy: .public)")
         self.logMonitor = logMonitor
+    }
+
+    private func receivedEvent(_ rawEvent: SplunkEvent?) {
+        let event = addSharedPayloadItems(to: rawEvent, index: self.config.index, globalLabels: self.config.globalLabels)
+        guard let event else {
+            Statistics.shared.skippedEvents += 1
+            return
+        }
+
+        Statistics.shared.processedEvents += 1
+        if !self.rotatingBuffer.handle(incoming: event) {
+            Statistics.shared.skippedEvents += 1
+        }
     }
 }

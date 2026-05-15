@@ -20,22 +20,30 @@
 //
 
 import os.log
-@_weakLinked import Transparency
+#if canImport(Transparency)
+@_weakLinked internal import Transparency
+#endif
+import InternalSwiftProtobuf
 
 public struct SWTransparencyVerifier: TransparencyVerifier {
+    #if canImport(Transparency)
     let softwareTransparency: SoftwareTransparency?
+    #endif
+
     static let logger = Logger(subsystem: "com.apple.CloudAttestation", category: "SWTransparencyVerifier")
 
     public init() {
+        #if canImport(Transparency)
         guard #_hasSymbol(SoftwareTransparency.self) else {
-            // opt for setting the internal state to inoperable, rather than returning nil or throwing here, since that bubbles up the call hierarchy
             self.softwareTransparency = nil
             return
         }
         self.softwareTransparency = SoftwareTransparency(application: .privateCloudCompute)
+        #endif
     }
 
     public func verifyExpiringInclusion(of digest: Data, proofs: TransparencyLogProofs) async throws -> Date {
+        #if canImport(Transparency)
         guard let softwareTransparency else {
             throw Error.notAvailable
         }
@@ -66,5 +74,8 @@ public struct SWTransparencyVerifier: TransparencyVerifier {
         } catch {
             throw TransparencyLogError.unknown(error: error)
         }
+        #else
+        throw Error.notAvailable
+        #endif
     }
 }

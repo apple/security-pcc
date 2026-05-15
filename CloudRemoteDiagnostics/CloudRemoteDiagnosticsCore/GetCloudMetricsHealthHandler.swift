@@ -14,7 +14,9 @@
 
 //  Copyright © 2024 Apple Inc. All rights reserved.
 
-import CloudMetricsHealthFramework
+#if canImport(CloudMetricsHealthFramework)
+@_weakLinked import CloudMetricsHealthFramework
+#endif
 import Foundation
 import os
 
@@ -29,19 +31,8 @@ extension CloudRemoteDiagnosticsHandler {
         queue: DispatchQueue,
         completion: @escaping ((String) -> Void)) {
         Task.detached {
-            let healthState: CloudMetricsHealthState
-            let healthMonitor = CloudMetricsHealthMonitor()
-            await healthMonitor.connect()
-            do {
-                healthState = try await healthMonitor.getHealthState()
-            } catch {
-                healthState = .unknown
-                log.error("Unable to get CloudMetrics health: \(error)")
-            }
-            await healthMonitor.disconnect()
-
-            let result = [
-                kCloudMetricsHealthStateKey: healthState.description.lowercased()]
+            let healthStateString = await self.getCloudMetricsHealth()
+            let result = [kCloudMetricsHealthStateKey: healthStateString]
             guard let jsonOutput = try? JSONEncoder().encode(result) else {
                 log.error("Error encoding CloudMetrics health state to JSON data")
                 let error = "Error encoding CloudMetrics health state to JSON data"
@@ -58,5 +49,30 @@ extension CloudRemoteDiagnosticsHandler {
                 completion(jsonString)
             }
         }
+    }
+
+    private func getCloudMetricsHealth() async -> String {
+        var healthStateString: String = "unknown"
+
+#if canImport(CloudMetricsHealthFramework)
+        guard #_hasSymbol(CloudMetricsHealthMonitor.self) else {
+            return healthStateString
+        }
+
+        let healthState: CloudMetricsHealthState
+        let healthMonitor = CloudMetricsHealthMonitor()
+        await healthMonitor.connect()
+
+        do {
+            healthState = try await healthMonitor.getHealthState()
+        } catch {
+            healthState = .unknown
+            log.error("Unable to get CloudMetrics health: \(error)")
+        }
+        await healthMonitor.disconnect()
+        healthStateString = healthState.description.lowercased()
+#endif
+
+        return healthStateString
     }
 }

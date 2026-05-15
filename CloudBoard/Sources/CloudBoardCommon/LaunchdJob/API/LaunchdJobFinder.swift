@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple Inc. All rights reserved.
-
 internal import AppServerSupport.OSLaunchdJob
 import CloudBoardMetrics
 import Foundation
@@ -30,14 +28,35 @@ public final class LaunchdJobFinder: LaunchdJobFinderProtocol {
     }
 
     public func getJobDefinitions(
-        type: CloudBoardJobType
+        type: CloudBoardJobType,
+        name: String?
     ) throws -> [LaunchdJobDefinitionProtocol] {
         let results = try LaunchdJobHelper.findManagedLaunchdJobs(
             type: type,
+            name: name,
             state: OSLaunchdJobState.neverRan,
             skippingInstances: true
         )
         return results.map { LaunchdJobDefinition($0, metrics: self.metrics) }
+    }
+
+    // Provides exactly one job definition for a job with the provided type and name. If none or more than one job
+    // definitions are found, corresponding errors are thrown.
+    public func getJobDefinition(
+        type: CloudBoardJobType,
+        name: String
+    ) throws -> (definition: LaunchdJobDefinitionProtocol, app: String) {
+        /// first we get everything registered with a matching name and type
+        let definitions = try self.getJobDefinitions(type: type, name: name)
+
+        guard definitions.count >= 1 else {
+            throw LaunchdJobFinderError.noAppFound
+        }
+
+        guard definitions.count == 1 else {
+            throw LaunchdJobFinderError.tooManyManagedJobs(app: name, count: definitions.count)
+        }
+        return (definitions[0], name)
     }
 
     public func cleanupManagedLaunchdJobs(logger: Logger) async {

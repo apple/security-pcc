@@ -12,8 +12,8 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
+import CloudBoardLogging
+import Foundation
 import Security
 
 // rdar://137137722 (SecKey should be Sendable)
@@ -24,3 +24,44 @@ extension SecIdentity: @unchecked @retroactive Sendable {}
 
 // The interactions with SecKeychain in our code are thread-safe, so we bypass the compiler enforcement
 extension SecKeychain: @unchecked @retroactive Sendable {}
+
+extension Data {
+    /// Converts Data to a UTF-8 encoded String.
+    package var utf8String: String? {
+        String(data: self, encoding: .utf8)
+    }
+}
+
+extension String {
+    /// Converts the string to Data using UTF-8 encoding
+    package var data: Data {
+        return Data(self.utf8)
+    }
+}
+
+extension UUID {
+    /// Trace ID string used in tracing logs.
+    package var traceIDString: String {
+        self.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+    }
+}
+
+internal struct WorkloadMergeError: ReportableError {
+    var publicDescription: String
+}
+
+/// Deliberately limited to [String: [String]] for the workload parameters so
+/// logging and errors can safely have rich information
+package extension [String: [String]] {
+    package func mergingWorkloads(_ other: Self) throws -> Self {
+        return try self.merging(other) { _, _ in
+            // report every key violation, not just the triggering one
+            // this just makes it easy to do so lazily and efficiently
+            var message = "merging workloads does not allow key overrides, only additions. Violations:"
+            for collision in Set(self.keys).union(other.keys) {
+                message = "\(message) \(collision): \(self[collision]!) vs \(other[collision]!)"
+            }
+            throw WorkloadMergeError(publicDescription: message)
+        }
+    }
+}

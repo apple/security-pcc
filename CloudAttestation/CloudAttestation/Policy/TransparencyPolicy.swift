@@ -135,7 +135,7 @@ extension TransparencyPolicy {
         case expired
         case unknown(error: any Swift.Error)
 
-        public static var errorDomain = "com.apple.CloudAttestation.TransparencyPolicy"
+        public static let errorDomain = "com.apple.CloudAttestation.TransparencyPolicy"
 
         public var errorCode: Int {
             get {

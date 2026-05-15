@@ -12,33 +12,29 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple Inc. All rights reserved.
-
 internal import AppServerSupport.OSLaunchdJob
 import CloudBoardMetrics
 import Foundation
 import os
 import System
 
-/// very thin wrapper on ``ManagedLaunchdJob``
+/// very thin wrapper on ``OsLaunchdJob``
 internal final class LaunchdJobInstanceHandle: LaunchdJobInstanceHandleProtocol {
-    var attributes: CloudBoardJobAttributes {
-        return self.job.jobAttributes
-    }
+    let job: OSLaunchdJob
+    let attributes: CloudBoardJobAttributes
 
-    let job: ManagedLaunchdJob
-
-    init(_ job: ManagedLaunchdJob) {
+    init(_ job: OSLaunchdJob, attributes: CloudBoardJobAttributes) {
         self.job = job
+        self.attributes = attributes
     }
 
     public func isRunning() -> Bool {
-        return self.job.jobHandle.getCurrentJobInfo()?.state == .running
+        return self.job.getCurrentJobInfo()?.state == .running
     }
 
     func remove(logger: Logger) throws {
         try LaunchdJobHelper.removeManagedLaunchdJob(
-            job: self.job.jobHandle,
+            job: self.job,
             logger: logger
         )
     }

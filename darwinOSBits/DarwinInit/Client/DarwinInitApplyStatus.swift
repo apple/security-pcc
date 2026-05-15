@@ -12,10 +12,12 @@
 // EA1937
 // 10/02/2024
 
+//
+//  DarwinInitApplyStatus.swift
+//  DarwinInitClient
+//
 
-import System
-import Foundation
-
+private import DarwinInit
 
 enum DarwinInitClientFailure: Error, CustomStringConvertible {
     case failedToLoadStatus
@@ -37,37 +39,38 @@ public struct DarwinInitApplyFailureInfo: Codable {
     public init(errorString: String) {
         self.errorString = errorString
     }
+
+    fileprivate init(_ info: DarwinInit.DarwinInitApplyFailureInfo) {
+        self.errorString = info.errorString
+    }
 }
 
 public enum DarwinInitApplyStatus: Codable {
     case failure(info: DarwinInitApplyFailureInfo?)
     case success
 
-    fileprivate static let kDInitStatusFilepath = FilePath("/var/db/.DarwinSetupStatus")
-
-    fileprivate func toJSON() throws -> Data {
-        return try JSONEncoder().encode(self)
-    }
-
-    fileprivate static func fromJSON(_ data: Data) throws -> Self {
-        return try JSONDecoder().decode(Self.self, from: data)
-    }
-
-    // only for use by darwin-init itself
-    @_spi(Private)
-    public func save() throws {
-        try Self.kDInitStatusFilepath.save(self.toJSON())
-    }
-
     /// Collect the most recent status from darwin-init
     /// applying system configuration
     public static func loadBootStatus() throws -> Self {
-        let data: Data
+        let bootStatus: DarwinInit.DarwinInitApplyStatus
+
         do {
-            data = try kDInitStatusFilepath.loadData()
+            bootStatus = try DarwinInit.DarwinInitApplyStatus.loadBootStatus()
+
+            switch bootStatus {
+            case .failure(let info):
+                if let info {
+                    return .failure(info: DarwinInitClient.DarwinInitApplyFailureInfo(info))
+                } else {
+                    return .failure(info: nil)
+                }
+            case .success:
+                return .success
+            default:
+                throw DarwinInitClientFailure.failedToLoadStatus
+            }
         } catch {
             throw DarwinInitClientFailure.failedToLoadStatus
         }
-        return try Self.fromJSON(data)
     }
 }

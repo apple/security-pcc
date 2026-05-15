@@ -12,7 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple Inc. All rights reserved.
 import CloudBoardPlatformUtilities
 
 // The ways we may initialise/define the ServiceDiscoveryPublisher are quite complex as in some cases parts

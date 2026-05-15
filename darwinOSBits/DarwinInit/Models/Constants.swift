@@ -17,13 +17,18 @@
 //  darwin-init
 //
 
-import os
-import System
 import Foundation
+import System
+import os
 
 let kDInitNewUserShell = FilePath("/bin/zsh")
 let kDInitDoneFilepath = FilePath("/var/db/.DarwinSetupDone")
+let kDInitLogFilepath = FilePath("/var/db/.DarwinInitLog")
 let kDInitPersistStorage = FilePath("/var/db/com.apple.darwininit")
+let kDInitStatusFilepath = FilePath("/var/db/.DarwinSetupStatus")
+let kDInitFirewallRulesPath = FilePath("/var/db/darwin-init/firewall/rules.pf")
+let kDInitErrorReportFilepath = FilePath("/var/db/.DarwinErrorReport")
+let kDInitValidatorBundle = "/usr/share/misc/darwin-init_validator_bundle"
 // File loaded by /etc/ssh/sshd_config.d/200-darwininit.conf on tto allow DarwinInit to configure sshd at boot time
 let kDInitSSHConfig = kDInitPersistStorage.appending("darwin-init-ssh.conf")
 /// Memento SSH keys cache expiration time.
@@ -31,21 +36,37 @@ let kDInitSSHConfig = kDInitPersistStorage.appending("darwin-init-ssh.conf")
 let kDInitSSHPublicKeysCacheExpirationTime = TimeInterval(2 * 60 * 60)
 // sshd config which enables PasswordAuthentication when written to kDInitSSHConfig
 let kDInitSSHConfigPWAuthEnabled = """
-PasswordAuthentication yes
-ChallengeResponseAuthentication yes
+    PasswordAuthentication yes
+    ChallengeResponseAuthentication yes
 
-"""
+    """
 // sshd config which disables PasswordAuthentication when written to kDInitSSHConfig
 let kDInitSSHConfigPWAuthDisabled = """
-PasswordAuthentication no
-ChallengeResponseAuthentication no
+    PasswordAuthentication no
+    ChallengeResponseAuthentication no
 
-"""
+    """
 let kDInitSSHConfigEmpty = "\n".data(using: .utf8)!
-let kDInitNVRAMConfigKey = "darwin-init"
+
+/// The name of a known NVRAM variable.
+public struct NVRAMVariable: ExpressibleByStringLiteral, Hashable, Sendable {
+    public let rawValue: String
+
+    public init(stringLiteral value: String) {
+        self.rawValue = value
+    }
+}
+
+extension NVRAMVariable {
+    static let darwinInit: Self = "darwin-init"
+    static let darwinInitSystem: Self = "darwin-init-system"
+}
+
 let kDInitNVRAMConfigLegacyKey = "darwininit"
 /// static URL at which `User Data` from EC2 Instance Metadata Service is reachable
-let kDInitEC2UserDataURL = URL(string: "http://169.254.169.254/latest/user-data/")!
+let kDInitEC2UserDataURL = URL(
+    string: "http://169.254.169.254/latest/user-data/"
+)!
 /// static URL at which IMDSv2 token is reachable
 let kDInitImdsTokenURL = URL(string: "http://169.254.169.254/latest/api/token")!
 /// Header name for IMDSv2 token session ttl when GETing EC2 User Data
@@ -55,13 +76,19 @@ let kDInitImdsTokenHeaderName = "X-aws-ec2-metadata-token"
 /// Default IMDSv2 token ttl
 let kDInitDefaultImdsTokenTtlSeconds = 5
 /// Maximum IMDSv2 token ttl
-let kDInitMaxImdsTokenTtlSeconds = 6*3600
+let kDInitMaxImdsTokenTtlSeconds = 6 * 3600
 let kDInitEC2Prefix = "ec2imds="
 let kDInitDefaultSleepBeforeFailureAction: Duration = .seconds(60)
 let kDInitSleepBeforeFailureActionOnLoadFailure: Duration = .seconds(3600)
 
 /// the URL to get the parameters to apply for prod fused BMCs
-let kDInitDataCenterBootstrapServer = URL(string: "https://dc-bss.apple.com/v1")!
+let kDInitDataCenterBootstrapServer = URL(
+    string: "https://dc-bss.apple.com/v2"
+)!
+
+let kDInitDataCenterBootstrapServerFallback = URL(
+    string: "https://dc-bss.apple.com/v1"
+)!
 
 /// The file to create on disk to enable users in the `admin` group to perform `sudo` operations
 /// without being prompted for a password.
@@ -82,18 +109,20 @@ let kKnoxURLScheme = "knox"
 /// Convenience constant: ``knoxURLScheme`` + "://"
 let kKnoxURLPrefix = "\(kKnoxURLScheme)://"
 
-let kDefaultKnoxURL = URL(string:"https://knox.sd.apple.com")!
+let kDefaultKnoxURL = URL(string: "https://knox.sd.apple.com")!
 
 let kAppleArchiveExtension = "aar"
 
 let kUsageLabelKey = "serverOS-usage-label"
 
-let kCustomerLogPolicyPath = "/private/var/PrivateCloudSupport/opt/audit-lists/customer/"
-let kCarryLogPolicyPath = "/private/var/PrivateCloudSupport/opt/audit-lists/carry/"
+let kCustomerLogPolicyPath =
+    "/private/var/PrivateCloudSupport/opt/audit-lists/customer/"
+let kCarryLogPolicyPath =
+    "/private/var/PrivateCloudSupport/opt/audit-lists/carry/"
 
 // FIXME: remove and use SIOCGIFLINKPARAMS and SIOCSIFLINKPARAMS in Network.swift once rdar://127317411 (Expose vars for getting the values of SIOCGIFLINKPARAMS and SIOCSIFLINKPARAMS) lands
-let kSIOCGIFLINKPARAMS: UInt = 0xc0f06992
-let kSIOCSIFLINKPARAMS: UInt = 0xc0f06991
+let kSIOCGIFLINKPARAMS: UInt = 0xc0f0_6992
+let kSIOCSIFLINKPARAMS: UInt = 0xc0f0_6991
 
 let kUplinkInterfaceAppID = "com.apple.acdc.networking"
 let kUplinkInterfaceKey = "interfaces.uplink.bsdName"
@@ -106,9 +135,40 @@ let kUplinkMTUMin = 1280
 let kUplinkMTUMax = 16384
 
 // Chunk size for making range requests to the CDN in bytes
-let kCDNChunkSize: UInt64 = 16 << 20 // 16 MiB = 16 * 2^(20) bytes
+let kCDNChunkSize: UInt64 = 16 << 20  // 16 MiB = 16 * 2^(20) bytes
 // Max number of active tasks to perform range requests in parallel
 let kMaxActiveTasks: Int = 4
+
+#if os(macOS)
+    let kDarwinInitCacheRootDirectory: FilePath =
+        "/System/Volumes/Preboot/DarwinInitCache"
+#else
+    let kDarwinInitCacheRootDirectory: FilePath =
+        "/private/preboot/DarwinInitCache"
+#endif
+
+#if os(macOS)
+    let kCacheVolumeKeyCacheRootDirectory: FilePath =
+        "/System/Volumes/Preboot/DarwinInitCache/CacheVolumeKeys"
+#else
+    let kCacheVolumeKeyCacheRootDirectory: FilePath =
+        "/private/preboot/DarwinInitCache/CacheVolumeKeys"
+#endif
+
+#if os(watchOS)
+let kDefaultCryptexCacheMaxTotalSize: Int = Int.max / 2
+#else
+let kDefaultCryptexCacheMaxTotalSize: Int = (256 * 1024 * 1024 * 1024)
+#endif
+
+let kDefaultCryptexDownloadRetries: UInt = 5
+let kDefaultCryptexMaxActiveTasks: Int = 4
+
+let kDiavloServerLocation = "https://diavlo.apple.com"
+
+let kDefaultApplyTimeout: Duration = .seconds(60) * 30
+
+let kTailspinDefaultBufferSize: size_t = 50
 
 public let logger = Logger.default
 
@@ -123,9 +183,15 @@ extension Logger {
     static let package = Logger(category: "package")
     static let esc = Logger(category: "esc")
     static let ldap = Logger(category: "ldap")
-	static let cryptexcache = Logger(category: "cryptexcache")
+    static let cryptexcache = Logger(category: "cryptexcache")
+    static let caching = Logger(category: "caching")
     static let knoxClient = Logger(category: "KnoxClient")
-    static let privateCloudOSValidator = Logger(category: "PrivateCloudOSValidator")
+    static let privateCloudOSValidator = Logger(
+        category: "PrivateCloudOSValidator"
+    )
+    static let pccRegoValidator = Logger(
+        category: "PCCRegoValidator"
+    )
 
     init(category: String) {
         self.init(subsystem: Self.subsystem, category: category)

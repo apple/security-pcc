@@ -12,20 +12,24 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import Foundation
 internal import Synchronization
+import os
 
 internal enum TrackedPoolError: Error {
     case empty
     case keyNotFound(any Hashable & Sendable)
+    case capacityExhausted(activeRequests: Int, maxConcurrentRequests: Int)
 }
 
 /// A pool of ``Element``s which can be "used"
-/// Multiple uses of an element at the same time is possible,
+/// Multiple uses of an element at the same time is possible (unless maxConcurrentRequests is set),
 /// hence the elements must be Sendable
 internal final class TrackedPool<Key: Hashable & Sendable, Element: Sendable>: Sendable {
+    private let logger = Logger(
+        subsystem: "com.apple.cloudos.cloudboard",
+        category: "TrackedPool"
+    )
     /// On deinit the tracking usage is "released"
     final class Token: Sendable {
         private let pool: TrackedPool<Key, Element>
@@ -59,16 +63,26 @@ internal final class TrackedPool<Key: Hashable & Sendable, Element: Sendable>: S
         }
     }
 
-    private struct TrackingInfo: Comparable {
+    private struct TrackingInfo: Comparable, Sendable {
         fileprivate let index: Int
         var activeRequests: Int = 0
         var totalRequests: Int = 0
+        // Per-element max concurrent requests (nil means no limit for this element)
+        let maxConcurrentRequests: Int?
 
-        fileprivate init(_ index: Int) {
+        fileprivate init(_ index: Int, maxConcurrentRequests: Int?) {
             self.index = index
+            self.maxConcurrentRequests = maxConcurrentRequests
         }
 
-        mutating func onUse() {
+        mutating func onUse() throws {
+            // Check capacity limit if configured for this element
+            if let maxConcurrentRequests, self.activeRequests >= maxConcurrentRequests {
+                throw TrackedPoolError.capacityExhausted(
+                    activeRequests: self.activeRequests,
+                    maxConcurrentRequests: maxConcurrentRequests
+                )
+            }
             self.activeRequests += 1
             self.totalRequests += 1
         }
@@ -97,18 +111,33 @@ internal final class TrackedPool<Key: Hashable & Sendable, Element: Sendable>: S
     private let elements: [Element]
     private let indexByKey: [Key: Int]
 
-    init(_ values: [Key: Element]) {
+    // Default max concurrent requests used when element doesn't specify its own limit
+    private let defaultMaxConcurrentRequests: Int?
+
+    // Queue manager for notifying waiting requests when nodes become available
+    private let queueManager: ComputeNodeQueueManager?
+
+    init(
+        _ values: [Key: Element],
+        defaultMaxConcurrentRequests: Int? = nil,
+        elementMaxConcurrentRequests: [Key: Int?] = [:],
+        queueManager: ComputeNodeQueueManager? = nil
+    ) {
         var tracking: [TrackingInfo] = []
         var elements: [Element] = []
         var indexByKey: [Key: Int] = [:]
         for (index, (key, value)) in values.enumerated() {
-            tracking.append(.init(index))
+            // Use element-specific limit if provided, otherwise fall back to default
+            let maxConcurrentRequests = elementMaxConcurrentRequests[key] ?? defaultMaxConcurrentRequests
+            tracking.append(.init(index, maxConcurrentRequests: maxConcurrentRequests))
             elements.append(value)
             indexByKey[key] = index
         }
         self.elements = elements
         self.indexByKey = indexByKey
         self.trackedState = .init(tracking)
+        self.defaultMaxConcurrentRequests = defaultMaxConcurrentRequests
+        self.queueManager = queueManager
     }
 
     /// Choose a value using the default selector rules
@@ -116,14 +145,44 @@ internal final class TrackedPool<Key: Hashable & Sendable, Element: Sendable>: S
         guard !self.elements.isEmpty else {
             throw TrackedPoolError.empty
         }
-        return self.trackedState.withLock { tracking in
+        return try self.trackedState.withLock { tracking in
             var best = tracking[0]
             for info in tracking[1...] {
                 if info < best {
                     best = info
                 }
             }
-            tracking[best.index].onUse()
+            try tracking[best.index].onUse()
+            return .init(self, self.elements[best.index], best.index)
+        }
+    }
+
+    /// Choose the least busy value from a specific subset of keys
+    func useLeastBusyFrom(_ keys: [Key]) throws -> Token {
+        guard !keys.isEmpty else {
+            throw TrackedPoolError.empty
+        }
+
+        return try self.trackedState.withLock { tracking in
+            // Convert keys to indices
+            var indices: [Int] = []
+            for key in keys {
+                guard let index = self.indexByKey[key] else {
+                    throw TrackedPoolError.keyNotFound(key)
+                }
+                indices.append(index)
+            }
+
+            // Find the least busy among the specified indices
+            var best = tracking[indices[0]]
+            for index in indices[1...] {
+                let info = tracking[index]
+                if info < best {
+                    best = info
+                }
+            }
+
+            try tracking[best.index].onUse()
             return .init(self, self.elements[best.index], best.index)
         }
     }
@@ -135,14 +194,45 @@ internal final class TrackedPool<Key: Hashable & Sendable, Element: Sendable>: S
             guard let index else {
                 throw TrackedPoolError.keyNotFound(key)
             }
-            values[index].onUse()
+            try values[index].onUse()
             return .init(self, self.elements[index], index)
         }
     }
 
     fileprivate func finishedWith(_ index: Int) {
-        return self.trackedState.withLock { tracking in
+        self.trackedState.withLock { tracking in
             tracking[index].onFinished()
+        }
+
+        let element = self.elements[index]
+
+        // Notify queue manager that this endpoint is now available
+        // This allows queued requests to be notified and attempt to acquire the node
+        if let queueManager = self.queueManager {
+            if let endpoint = element as? PCCHarness.ComputeCloudAppEndpoint {
+                _ = queueManager.notifyAvailable(endpoint: endpoint)
+            }
+        }
+    }
+
+    var allValues: [Element] {
+        return self.elements
+    }
+
+    /// Returns only the elements that have available capacity (not busy)
+    /// Elements without configured limits are always considered available.
+    /// Note: This is a point-in-time snapshot and used as such for test determinism.
+    var availableValues: [Element] {
+        return self.trackedState.withLock { tracking in
+            var available: [Element] = []
+            for (index, state) in tracking.enumerated() {
+                // If element has no max concurrent requests limit, it's always available
+                // Otherwise, check if it's below its limit
+                if state.maxConcurrentRequests == nil || state.activeRequests < state.maxConcurrentRequests! {
+                    available.append(self.elements[index])
+                }
+            }
+            return available
         }
     }
 }

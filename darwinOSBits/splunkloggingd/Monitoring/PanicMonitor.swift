@@ -22,6 +22,7 @@
 import Foundation
 import LoggingSupport
 import os
+import PanicHelper
 
 fileprivate let log = Logger(subsystem: sharedSubsystem, category: "PanicMonitor")
 
@@ -30,10 +31,7 @@ protocol PanicMonitorDelegate: AnyObject, Sendable {
 }
 
 /// Monitor for the creation of panic logs and forward the file if found
-actor PanicMonitor: FileMonitorDelegate {
-    // The PanicMonitor will write the TGT data to this file, if found in the panic report
-    static var TGTOutputPath = URL(filePath: "/var/run/extended_panic_data.json")
-
+actor PanicMonitor {
     // DumpPanic will create this file with 400 perms when it has finished running. If a panic was written, this file will
     // contain the path to the panic file. Otherwise, it will be empty.
     static var defaultBreadCrumbURL: URL = URL(filePath: "/private/var/db/com.apple.DumpPanic.panicLogPathBreadcrumb")
@@ -100,7 +98,7 @@ actor PanicMonitor: FileMonitorDelegate {
         let decoder = PropertyListDecoder()
         let pathDict: [String:String]
         do {
-             pathDict = try decoder.decode([String:String].self, from: contentsData)
+            pathDict = try decoder.decode([String:String].self, from: contentsData)
         } catch {
             log.error("Failed to decode breadcrumb: \(error, privacy: .public)")
             return nil
@@ -136,50 +134,12 @@ actor PanicMonitor: FileMonitorDelegate {
 
     // On failure, we still want to send something to Splunk to denote a panic
     private func fallbackReportData(from reportData: Data, atPath pathString: String) -> [String:Any] {
+        log.error("Failed to extract json from redacted panic report. Sending raw data for path \(pathString, privacy: .public)")
         return ["panicReport": String(decoding: reportData, as: UTF8.self)]
     }
 
-    private func writeTGTLog(for contents: [String:Any]) {
-        guard let data = jsonToData(contents) else {
-            log.error("Unable to convert panic TGT data to json")
-            return
-        }
-        do {
-            try data.write(to: Self.TGTOutputPath)
-        } catch {
-            log.error("Failed to write panic TGT json to file: \(error.localizedDescription, privacy: .private)")
-        }
-    }
-
-    private func redactPanicLog(_ report: [String:Any]) -> [String:Any]? {
-        guard var body = report["body"] as? [String:Any] else {
-            log.error("Unable to parse body from panic report for redaction")
-            return nil
-        }
-
-        let TGTKey = "cloudOSPanicMetadata"
-        guard let data = body[TGTKey] else {
-            return report
-        }
-
-        body.removeValue(forKey: TGTKey)
-        self.writeTGTLog(for: [TGTKey: data])
-
-        var result = report
-        result["body"] = body
-        return result
-    }
-
     private func formatPanicLog(atPath path: String, withContents reportData: Data) -> SplunkEvent? {
-        var event: [String:Any]
-        if let rawReport = extractOSAnalyticsJson(from: reportData),
-           let redactedReport = redactPanicLog(rawReport)
-        {
-            event = redactedReport
-        } else {
-            log.error("Failed to decode panic report. Sending failure breadcrumb for path \(path, privacy: .public)")
-            event = fallbackReportData(from: reportData, atPath: path)
-        }
+        var event: [String:Any] = extractOSAnalyticsJson(from: reportData) ?? fallbackReportData(from: reportData, atPath: path)
 
         if let serialNo = getSerialNo() {
             event["serial"] = serialNo
@@ -201,25 +161,31 @@ actor PanicMonitor: FileMonitorDelegate {
 
     private func handleFoundBreadcrumb() async {
         // If breadcrumb is empty or missing this boot, nothing to do
-        guard let panicPath = await extractPathFromBreadCrumb() else {
+        guard let panicURL = await extractPathFromBreadCrumb() else {
+            return
+        }
+        let stringPath = panicURL.path(percentEncoded: false)
+
+        // Redact the report via DumpPanic's SPI
+        guard let ph = PanicReport(reportPath: panicURL) else {
+            log.error("Failed to initialize Panic Helper at path '\(stringPath, privacy: .public)'")
+            return
+        }
+        ph.prepareReportForSubmission()
+        guard let redactedReportData: Data = ph.reportData else {
+            log.error("Failed to redact panic report at path '\(stringPath, privacy: .public)'")
             return
         }
 
-        let stringPath = panicPath.path(percentEncoded: false)
-        let reportData: Data
-        do {
-            reportData = try Data(contentsOf: panicPath)
-        } catch {
-            log.error("Couldn't read panic at path '\(stringPath, privacy: .public)': \(error.localizedDescription, privacy: .private)")
-            return
-        }
-
-        if let splunkEvent = formatPanicLog(atPath: stringPath, withContents: reportData) {
+        // Now format it with common fields and forward
+        if let splunkEvent = formatPanicLog(atPath: stringPath, withContents: redactedReportData) {
             log.log("Forwarding panic event to Splunk from path \(stringPath, privacy: .public)")
             Task { await self.delegate?.handlePanicEvent(splunkEvent) }
         }
     }
+}
 
+extension PanicMonitor: FileMonitorDelegate {
     // Function called when file is created or modified
     func didObserveChange(FileMonitor: FileMonitor) async {
         log.info("Observed change in \(self.breadCrumbURL.path(), privacy: .public)")

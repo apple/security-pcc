@@ -12,13 +12,15 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-import CloudBoardLogging
+internal import CloudBoardLogging
 package import CloudBoardAsyncXPC
 
 package enum CloudBoardJobHelperAPIError: Error, ByteBufferCodable, Sendable, Hashable {
     case noDelegateSet
     case unexpectedReportableError(String)
+    case failedWarmUp
+    case failedAssigningLAContext
+    case failedReclaimingLAContext
 
     @inlinable
     public func encode(to buffer: inout ByteBuffer) throws {
@@ -27,6 +29,9 @@ package enum CloudBoardJobHelperAPIError: Error, ByteBufferCodable, Sendable, Ha
         case .unexpectedReportableError(let value):
             buffer.writeInteger(1)
             try value.encode(to: &buffer)
+        case .failedWarmUp: buffer.writeInteger(2)
+        case .failedAssigningLAContext: buffer.writeInteger(3)
+        case .failedReclaimingLAContext: buffer.writeInteger(4)
         }
     }
 
@@ -43,6 +48,12 @@ package enum CloudBoardJobHelperAPIError: Error, ByteBufferCodable, Sendable, Ha
         case 1:
             let value = try String(from: &buffer)
             self = .unexpectedReportableError(value)
+        case 2:
+            self = .failedWarmUp
+        case 3:
+            self = .failedAssigningLAContext
+        case 4:
+            self = .failedReclaimingLAContext
         case let value:
             throw DecodingError.dataCorrupted(.init(
                 codingPath: [ByteBufferCodingKey(Self.self)],
@@ -59,6 +70,12 @@ extension CloudBoardJobHelperAPIError: CustomStringConvertible {
             return "No delegate set"
         case .unexpectedReportableError(let reportableDescription):
             return "Unexpected error: \(reportableDescription)"
+        case .failedWarmUp:
+            return "Failed Warm Up"
+        case .failedAssigningLAContext:
+            return "Failed Assigning LA Context"
+        case .failedReclaimingLAContext:
+            return "Failed Reclaiming LA Context"
         }
     }
 }
@@ -70,6 +87,12 @@ extension CloudBoardJobHelperAPIError: ReportableError {
             return "noDelegateSet"
         case .unexpectedReportableError(let reportableDescription):
             return "unexpected:\(reportableDescription)"
+        case .failedWarmUp:
+            return "faieldWarmingUp"
+        case .failedAssigningLAContext:
+            return "failedAssigningLAContext"
+        case .failedReclaimingLAContext:
+            return "failedReclaimingLAContext"
         }
     }
 }

@@ -19,18 +19,7 @@
 
 import ArgumentParserInternal
 
-enum DInitSystemLogPrivacyLevel: String {
-  case `public` = "Public"
-  case `private` = "Private"
-  case sensitive = "Sensitive"
-}
+typealias DInitSystemLogPrivacyLevel = Config.Log.PrivacyLevel
 
 extension DInitSystemLogPrivacyLevel: ExpressibleByArgument { }
-
-extension DInitSystemLogPrivacyLevel: CaseIterable { }
-
-extension DInitSystemLogPrivacyLevel: Decodable { }
-
-extension DInitSystemLogPrivacyLevel: Encodable { }
-
 

@@ -29,6 +29,7 @@ let cryptexSignatureSealedHashSalt: [UInt8] = [
 
 let secureConfigSlotUUID = UUID(uuidString: "FB8BBEC2-BCC6-4ECC-964A-7BEB0C26674A")!
 let cryptexSlotUUID = UUID(uuidString: "5C210D03-972B-433A-AEF7-E68A0249915B")!
+let apCryptexSlotUUID = UUID(uuidString: "C7D3A072-B217-4920-A022-47818D05B1CB")!
 
 let testProvisioningRootCAData = Data(
     base64Encoded:

@@ -12,15 +12,15 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 import CloudBoardLogging
 import CloudBoardMetrics
 import CloudBoardPlatformUtilities
+import os
 
 extension InvokeWorkloadRequestStreamHandler {
     struct CumulativeRequestBytesLimiter {
         var currentCumulativeRequestBytes: Int = 0
+        let cloudApp: String
 
         mutating func enforceLimit(
             _ maxCumulativeRequestBytes: Int,
@@ -40,7 +40,10 @@ extension InvokeWorkloadRequestStreamHandler {
                     .error(
                         "\(logMetadata, privacy: .public) received request byte count exceeds limit: \(maxCumulativeRequestBytes, privacy: .public)"
                     )
-                metrics.emit(Metrics.CloudBoardProvider.MaxCumulativeRequestSizeExceededTotal(action: .increment))
+                metrics.emit(Metrics.CloudBoardProvider.MaxCumulativeRequestSizeExceededTotal(
+                    action: .increment,
+                    cloudApp: self.cloudApp
+                ))
                 throw GRPCTransformableError.maxCumulativeRequestBytesExceeded
             }
             return

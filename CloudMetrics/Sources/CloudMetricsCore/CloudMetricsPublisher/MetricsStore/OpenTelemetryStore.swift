@@ -29,20 +29,6 @@ private import OpenTelemetryProtocolExporterGrpc
 internal import OpenTelemetrySdk
 internal import os
 
-internal final class MetricOverrides: Sendable {
-    private let overrides: OSAllocatedUnfairLock<[MetricID: CloudMetricsOverride]> = .init(initialState: [:])
-    init() {
-    }
-
-    internal func getOverrides() -> [MetricID: CloudMetricsOverride] {
-        self.overrides.withLock { $0 }
-    }
-
-    internal func setOverride(id: MetricID, override: CloudMetricsOverride) {
-        self.overrides.withLock { $0[id] = override }
-    }
-}
-
 internal final class GaugeWrapper: Sendable {
     internal let value: OSAllocatedUnfairLock<Double>
     internal let gauge: ObservableDoubleGauge & Sendable
@@ -56,7 +42,6 @@ internal final class GaugeWrapper: Sendable {
         self.value = valueWithLock
         self.gauge = gauge
     }
-
 }
 
 internal enum OpenTelemetryStoreError: Error {
@@ -67,44 +52,80 @@ internal enum OpenTelemetryStoreError: Error {
     case typeOverflow
 }
 
+extension MeterSdk: @unchecked @retroactive Sendable {}
+
 // swiftlint:disable function_parameter_count force_unwrapping
 internal final class OpenTelemetryStore: MetricsStore, Sendable {
     private let intCounters: OSAllocatedUnfairLock<[MetricID: LongCounter]> = .init(initialState: [:])
-    private let doubleCounters: OSAllocatedUnfairLock<[MetricID: DoubleCounter]> = .init(initialState: [:])
+    private let doubleCounters: OSAllocatedUnfairLock<[MetricID: CloudMetricsDoubleCounter]> = .init(initialState: [:])
     private let gauges: OSAllocatedUnfairLock<[MetricID: GaugeWrapper]> = .init(initialState: [:])
     private let histograms: OSAllocatedUnfairLock<[MetricID: DoubleHistogram]> = .init(initialState: [:])
-    private let timers: OSAllocatedUnfairLock<[MetricID: AnyMeasureMetric<Double>]> = .init(initialState: [:])
-    private let meter: StableMeter
-    private let globalLabels: [String: String]
-    private let metricOverrides: OSAllocatedUnfairLock<MetricOverrides>
+    private let meter: MeterSdk
+    private let _globalLabels: [String: String]
+    private var globalLabels: [String: String] {
+        var labels = self._globalLabels
+        labels["_hostname"] = HostNameFetcher.shared.hostname
+        return labels
+    }
+    private let metricOverrides: MetricOverrides
     private let logger = Logger(subsystem: kCloudMetricsLoggingSubsystem, category: "OpenTelemetryStore")
 
+    private let clients: OSAllocatedUnfairLock<Set<MetricsClient>> = .init(initialState: [])
 
-    internal init(meter: StableMeter, globalLabels: [String: String], metricOverrides: MetricOverrides) {
+    /// name of the client this store belongs to
+    internal let clientName: String
+
+    internal var connectedClients: Set<MetricsClient> {
+        self.clients.withLock { $0 }
+    }
+
+    internal var remoteEndIsAlive: Bool {
+        !self.removable || !self.connectedClients.isEmpty
+    }
+
+    internal let removable: Bool
+
+    internal init(
+        meter: MeterSdk,
+        globalLabels: [String: String],
+        metricOverrides: MetricOverrides,
+        clientName: String,
+        removable: Bool
+    ) {
         self.meter = meter
-        self.globalLabels = globalLabels
-        self.metricOverrides = .init(initialState: metricOverrides)
+        self._globalLabels = globalLabels
+        self.metricOverrides = metricOverrides
+        self.clientName = clientName
+        self.removable = removable
+    }
+
+    public func getStoredCounter(label: String, dimensions: [String: String]) -> CloudMetricsDoubleCounter? {
+        let allDimensions = dimensions.merging(self.globalLabels) { _, other in other }
+        let id = MetricID(label: label, dimensions: allDimensions)
+        return self.doubleCounters.withLock { $0[id] }
     }
 
     internal func counterIncrement(
         label: String,
         dimensions: [String: String],
-        step: Int,
+        step _: Int,
         // swiftlint:disable:next identifier_name
         by: Double,
-        timestamp: Date
+        timestamp _: Date
     ) throws {
-        let allDimensions = dimensions.merging(globalLabels) { _, other in other }
+        let allDimensions = dimensions.merging(self.globalLabels) { _, other in other }
         let id = MetricID(label: label, dimensions: allDimensions)
-        if intCounters.withLock({ $0[id]}) != nil {
+        if self.intCounters.withLock({ $0[id] }) != nil {
             throw OpenTelemetryStoreError.counterTypeMismatch
         }
         self.doubleCounters.withLock { doubleCounters in
-            var counter: DoubleCounter
+            var counter: CloudMetricsDoubleCounter
             if let optionalCounter = doubleCounters[id] {
                 counter = optionalCounter
             } else {
-                counter = meter.counterBuilder(name: label).ofDoubles().build()
+                counter = CloudMetricsDoubleCounter(
+                    counter: self.meter.counterBuilder(name: label).ofDoubles().build()
+                )
             }
             counter.add(value: by, attributes: allDimensions.mapValues { .string($0) })
             doubleCounters[id] = counter
@@ -114,12 +135,12 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
     internal func counterIncrement(
         label: String,
         dimensions: [String: String],
-        step: Int,
+        step _: Int,
         // swiftlint:disable:next identifier_name
         by: Int64,
-        timestamp: Date
+        timestamp _: Date
     ) throws {
-        let allDimensions = dimensions.merging(globalLabels) { _, other in other }
+        let allDimensions = dimensions.merging(self.globalLabels) { _, other in other }
         let id = MetricID(label: label, dimensions: allDimensions)
         try self.doubleCounters.withLock { doubleCounters in
             if doubleCounters[id] != nil {
@@ -131,12 +152,12 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
             if let optionalCounter = intCounters[id] {
                 counter = optionalCounter
             } else {
-                counter = meter.counterBuilder(name: label).build()
+                counter = self.meter.counterBuilder(name: label).build()
             }
             if by > Int.max || by < Int.min {
                 throw OpenTelemetryStoreError.typeOverflow
             }
-            counter.add(value: Int(by), attribute: allDimensions.mapValues { .string($0) })
+            counter.add(value: Int(by), attributes: allDimensions.mapValues { .string($0) })
             intCounters[id] = counter
         }
     }
@@ -145,11 +166,13 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
         label: String,
         dimensions: [String: String]
     ) throws {
-        let allDimensions = dimensions.merging(globalLabels) { _, other in other }
+        let allDimensions = dimensions.merging(self.globalLabels) { _, other in other }
         let id = MetricID(label: label, dimensions: allDimensions)
         let foundDouble = self.doubleCounters.withLock { doubleCounters in
             if doubleCounters[id] != nil {
-                doubleCounters[id] = meter.counterBuilder(name: label).ofDoubles().build()
+                doubleCounters[id] = CloudMetricsDoubleCounter(
+                    counter: self.meter.counterBuilder(name: label).ofDoubles().build()
+                )
                 return true
             }
             return false
@@ -157,7 +180,7 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
         if !foundDouble {
             try self.intCounters.withLock { intCounters in
                 if intCounters[id] != nil {
-                    intCounters[id] = meter.counterBuilder(name: label).build()
+                    intCounters[id] = self.meter.counterBuilder(name: label).build()
                 } else {
                     throw OpenTelemetryStoreError.unknownMetric(label: id.label)
                 }
@@ -166,7 +189,7 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
     }
 
     internal func counterReset(label: String, dimensions: [String: String], initialValue: Double) throws {
-        let allDimensions = dimensions.merging(globalLabels) { _, other in other }
+        let allDimensions = dimensions.merging(self.globalLabels) { _, other in other }
         let id = MetricID(label: label, dimensions: allDimensions)
         try self.intCounters.withLock { intCounters in
             if intCounters[id] != nil {
@@ -174,13 +197,15 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
             }
         }
         self.doubleCounters.withLock { doubleCounters in
-            doubleCounters[id] = meter.counterBuilder(name: label).ofDoubles().build()
+            doubleCounters[id] = CloudMetricsDoubleCounter(
+                counter: self.meter.counterBuilder(name: label).ofDoubles().build()
+            )
             doubleCounters[id]!.add(value: initialValue, attributes: allDimensions.mapValues { .string($0) })
         }
     }
 
     internal func counterReset(label: String, dimensions: [String: String], initialValue: Int64) throws {
-        let allDimensions = dimensions.merging(globalLabels) { _, other in other }
+        let allDimensions = dimensions.merging(self.globalLabels) { _, other in other }
         let id = MetricID(label: label, dimensions: allDimensions)
         try self.doubleCounters.withLock { doubleCounters in
             if doubleCounters[id] != nil {
@@ -188,32 +213,35 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
             }
         }
         try self.intCounters.withLock { intCounters in
-            intCounters[id] = meter.counterBuilder(name: label).build()
+            intCounters[id] = self.meter.counterBuilder(name: label).build()
             if initialValue > Int.max || initialValue < Int.min {
                 throw OpenTelemetryStoreError.typeOverflow
             }
-            intCounters[id]!.add(value: Int(initialValue), attribute: allDimensions.mapValues { .string($0) })
+            intCounters[id]!.add(value: Int(initialValue), attributes: allDimensions.mapValues { .string($0) })
         }
     }
 
     internal func gaugeSet(
         label: String,
         dimensions: [String: String],
-        step: Int,
+        step _: Int,
         value: Double,
-        timestamp: Date
+        timestamp _: Date
     ) throws {
-        let allDimensions = dimensions.merging(globalLabels) { _, other in other }
+        let allDimensions = dimensions.merging(self.globalLabels) { _, other in other }
         let id = MetricID(label: label, dimensions: allDimensions)
         self.gauges.withLock { gauges in
             if let gauge = gauges[id] {
                 gauge.value.withLock { $0 = value }
             } else {
                 let valueWithLock = OSAllocatedUnfairLock<Double>(initialState: value)
-                let gauge = meter.gaugeBuilder(name: label).buildWithCallback { observableDoubleMeasurement in
+                let gauge = self.meter.gaugeBuilder(name: label).buildWithCallback { observableDoubleMeasurement in
                     valueWithLock.withLock { value in
-                        observableDoubleMeasurement.record(value: value,
-                                                           attributes: allDimensions.mapValues { .string($0) })
+                        let dimensions = dimensions.merging(self.globalLabels) { _, other in other }
+                        observableDoubleMeasurement.record(
+                            value: value,
+                            attributes: dimensions.mapValues { .string($0) }
+                        )
                     }
                 }
                 let gaugeWrapper = GaugeWrapper(valueWithLock: valueWithLock, gauge: gauge)
@@ -225,11 +253,11 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
     internal func recorderSet(
         label: String,
         dimensions: [String: String],
-        step: Int,
+        step _: Int,
         value: Double,
-        timestamp: Date
+        timestamp _: Date
     ) throws {
-        let allDimensions = dimensions.merging(globalLabels) { _, other in other }
+        let allDimensions = dimensions.merging(self.globalLabels) { _, other in other }
         let id = MetricID(label: label, dimensions: allDimensions)
         let attributes: [String: AttributeValue] = allDimensions.mapValues { .string($0) }
         self.histograms.withLock { histograms in
@@ -237,58 +265,66 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
                 histograms[id]!.record(value: value, attributes: attributes)
             } else {
                 // Create a new recorder - summary is the default
-                var recorder = meter.histogramBuilder(name: id.label).build()
+                var recorder = self.meter.histogramBuilder(name: id.label).build()
                 recorder.record(value: value, attributes: attributes)
                 histograms[id] = recorder
             }
         }
     }
 
-    internal func histogramSet(label: String,
-                               dimensions: [String: String],
-                               step: Int,
-                               buckets: [Double],
-                               value: Double,
-                               timestamp: Date) throws {
-        try configureHistogramBuckets(label: label, buckets: buckets)
-        try recorderSet(label: label, dimensions: dimensions, step: step, value: value, timestamp: timestamp)
+    internal func histogramSet(
+        label: String,
+        dimensions: [String: String],
+        step: Int,
+        buckets: [Double],
+        value: Double,
+        timestamp: Date
+    ) throws {
+        try self.configureHistogramBuckets(label: label, buckets: buckets)
+        try self.recorderSet(label: label, dimensions: dimensions, step: step, value: value, timestamp: timestamp)
     }
 
-    internal func histogramSetBuckets(label: String,
-                                      dimensions: [String: String],
-                                      step: Int,
-                                      buckets: [Double],
-                                      values: [Int],
-                                      sum: Double,
-                                      count: Int,
-                                      timestamp: Date) async throws {
+    internal func histogramSetBuckets(
+        label _: String,
+        dimensions _: [String: String],
+        step _: Int,
+        buckets _: [Double],
+        values _: [Int],
+        sum _: Double,
+        count _: Int,
+        timestamp _: Date
+    ) throws {
         throw OpenTelemetryStoreError.unimplemented(functionality: "histogramSetBuckets()")
     }
 
-    internal func summarySet(label: String,
-                             dimensions: [String: String],
-                             step: Int,
-                             quantiles _: [Double],
-                             value: Double,
-                             timestamp: Date) async throws {
+    internal func summarySet(
+        label _: String,
+        dimensions _: [String: String],
+        step _: Int,
+        quantiles _: [Double],
+        value _: Double,
+        timestamp _: Date
+    ) throws {
         throw OpenTelemetryStoreError.unimplemented(functionality: "summarySet()")
     }
 
-    internal func summarySetQuantiles(label: String,
-                                      dimensions: [String: String],
-                                      step: Int,
-                                      quantiles: [Double],
-                                      values: [Double],
-                                      sum: Double,
-                                      count: Int,
-                                      timestamp: Date) async throws {
+    internal func summarySetQuantiles(
+        label _: String,
+        dimensions _: [String: String],
+        step _: Int,
+        quantiles _: [Double],
+        values _: [Double],
+        sum _: Double,
+        count _: Int,
+        timestamp _: Date
+    ) throws {
         throw OpenTelemetryStoreError.unimplemented(functionality: "summarySet()")
     }
 
     internal func configureMetric(
         label: String,
         dimensions: [String: String],
-        step: Int,
+        step _: Int,
         override: CloudMetricsOverride
     ) throws {
         let id = MetricID(label: label, dimensions: dimensions)
@@ -298,8 +334,8 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
                 throw MetricsStoreError.metricExists(label: label, dimensions: dimensions)
             }
         }
-        self.metricOverrides.withLock { $0.setOverride(id: id, override: override) }
-        logger.log("Configured metric override. metric_label=\(label, privacy: .public)")
+        self.metricOverrides[id] = override
+        self.logger.log("Configured metric override. metric_label=\(label, privacy: .public)")
     }
 
     internal func collectAllMetrics(producer: MetricProducer) -> [OpenTelemetrySdk.StableMetricData] {
@@ -308,8 +344,7 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
 
     internal func configureHistogramBuckets(label: String, buckets: [Double]) throws {
         let id = MetricID(label: label, dimensions: [:])
-        let overrides = metricOverrides.withLock { $0.getOverrides()}
-        if let override = overrides[id] {
+        if let override = self.metricOverrides[id] {
             switch override {
             case .histogram(buckets: let configuredBuckets):
                 if configuredBuckets != buckets {
@@ -321,6 +356,37 @@ internal final class OpenTelemetryStore: MetricsStore, Sendable {
                 throw MetricsStoreError.metricExists(label: label, dimensions: [:])
             }
         }
-        try configureMetric(label: label, dimensions: [:], step: 0, override: .histogram(buckets: buckets))
+        try self.configureMetric(label: label, dimensions: [:], step: 0, override: .histogram(buckets: buckets))
+    }
+
+    internal func clientConnected(client: MetricsClient) {
+        let _ = self.clients.withLock {
+            $0.insert(client)
+        }
+    }
+
+    internal func clientDisconnected(client: MetricsClient) {
+        let _ = self.clients.withLock { clients in
+            clients.remove(client)
+        }
+    }
+}
+
+struct CloudMetricsDoubleCounter {
+    var counter: DoubleCounter
+    var value: Double
+
+    public init(counter: DoubleCounter) {
+        self.counter = counter
+        self.value = 0
+    }
+
+    public mutating func add(value: Double, attributes: [String: AttributeValue]) {
+        if value < 0 {
+            return
+        }
+
+        self.value += value
+        self.counter.add(value: value, attributes: attributes)
     }
 }

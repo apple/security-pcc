@@ -12,24 +12,25 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple. All rights reserved.
-
-import CloudBoardCommon
+import CloudBoardDomain
 import Foundation
 
 package enum CloudAppResponse: Sendable {
     case chunk(Data)
     case internalError
+    case reportRequestExecutionError(RequestExecutionError)
     /// Cloud app will not send any more response chunks
     case endOfResponse
     /// Job has ended. There will not be any more responses from the cloud app, so we signal that onwards to the caller
     case endJob
     /// App has terminated. If we did not get `.endJob` first, indicates the app terminated uncleanly
     case appTermination(TerminationMetadata)
-    case findWorker(FindWorkerQuery)
+    case findWorker(FindWorkerQuery, UInt32?, [CryptoMaterialHandle])
     case workerRequestMessage(UUID, Data)
     case workerRequestEOF(UUID, Bool)
     case finalizeRequestExecutionLog
+    case subresponsePayload(UInt32, Data)
+    case endOfSubresponse(UInt32, InternalSubresponseStatus)
 }
 
 public struct TerminationMetadata: Sendable {
@@ -49,6 +50,9 @@ extension CloudAppResponse: CustomStringConvertible {
         case .workerRequestEOF: "workerRequestEOF"
         case .finalizeRequestExecutionLog: "finalizeRequestExecutionLog"
         case .internalError: "internalError"
+        case .subresponsePayload: "subresponsePayload"
+        case .endOfSubresponse: "endOfSubresponse"
+        case .reportRequestExecutionError: "reportRequestExecutionError"
         }
     }
 }

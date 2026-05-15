@@ -56,15 +56,15 @@ func getSecIdentity() throws -> sec_identity_t {
 		nil,
 		keyRef
 	) else {
-		throw ClientError.ClientError(mesage: "Error getting self signed cert")
+		throw ClientError.ClientError(message: "Error getting self signed cert")
 	}
 
 	logger.info("self signed cert generated")
 	guard let identity = SecIdentityCreate(kCFAllocatorDefault, certRef, keyRef) else {
-		throw ClientError.ClientError(mesage: "Error getting self signed identity")
+		throw ClientError.ClientError(message: "Error getting self signed identity")
 	}
 	guard let secIdentity = sec_identity_create(identity.takeRetainedValue()) else {
-		throw ClientError.ClientError(mesage: "Error getting self signed identity")
+		throw ClientError.ClientError(message: "Error getting self signed identity")
 	}
 
 	return secIdentity

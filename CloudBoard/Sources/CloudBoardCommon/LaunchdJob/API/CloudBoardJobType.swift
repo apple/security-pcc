@@ -12,11 +12,10 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple Inc. All rights reserved.
-
 /// Supported CloudBoardJobType values for multi instance launchd jobs
 public enum CloudBoardJobType: String, CaseIterable, Decodable, Sendable {
     case cloudBoardApp
+    case cloudBoardSupportApp
     case cbJobHelper
 
     // Custom initialiser to allow case-insensitive decoding of the configured job type

@@ -23,11 +23,19 @@ import Foundation
 @_weakLinked import SecureConfigDB
 import CryptoKit
 import MSUDataAccessor
+#if os(macOS)
+@_implementationOnly import BootPolicy
+#endif
 
 public protocol AttestationAssetProvider: Sendable {
     var apTicket: Data { get throws }
     var provisioningCertificateChain: [Data] { get async throws }
     var sealedHashEntries: [UUID: [SEP.SealedHash.Entry]] { get throws }
+
+    #if os(macOS)
+    var localBootPolicy: Data { get throws }
+    var sfrManifest: Data { get throws }
+    #endif
 }
 
 extension AttestationAssetProvider {
@@ -45,7 +53,7 @@ extension AttestationAssetProvider {
     public var sealedHashEntries: [UUID: [SEP.SealedHash.Entry]] {
         get throws {
             guard #_hasSymbol(SCDataBase.self) else {
-                throw AttestationAssetProviderError.noSecureConfigDB
+                return [:]
             }
 
             let db = SCDataBase()
@@ -68,6 +76,7 @@ extension AttestationAssetProvider {
                         ssrEntry.flags.formUnion(.cryptexMeasurement)
                     }
                     ssrEntry.metadata = entry.metadata
+                    ssrEntry.type = slot.recordType
                     return ssrEntry
                 }
                 if let salt = slot.salt {
@@ -83,6 +92,38 @@ extension AttestationAssetProvider {
             }
         }
     }
+
+    #if os(macOS)
+    public var localBootPolicy: Data {
+        get throws {
+            var policyExists: Bool = false
+            var error = bootpolicy_volume_has_local_policy(bootpolicy_default_policy_volume_path_value, bootpolicy_root_volume_uuid_value, &policyExists)
+            guard error == BOOTPOLICY_SUCCESS else {
+                throw AttestationAssetProviderError.missingLocalBootPolicy
+            }
+
+            var policyBufferPointer: UnsafeMutablePointer<UInt8>?
+            var policyBufferLength: size_t = 0
+            error = bootpolicy_get_booted_local_policy(&policyBufferPointer, &policyBufferLength)
+            guard error == BOOTPOLICY_SUCCESS, let policyBufferPointer else {
+                throw AttestationAssetProviderError.missingLocalBootPolicy
+            }
+
+            return Data(bytesNoCopy: policyBufferPointer, count: policyBufferLength, deallocator: .free)
+        }
+    }
+
+    public var sfrManifest: Data {
+        get throws {
+            do {
+                let sfrManifestPath = try MSUDataAccessor.shared().copyPath(forPersonalizedData: MSUDA_SFR_MANIFEST)
+                return try Data(contentsOf: URL(fileURLWithPath: sfrManifestPath))
+            } catch {
+                throw AttestationAssetProviderError.missingSFRManifest(error: error)
+            }
+        }
+    }
+    #endif
 }
 
 // MARK: - AttestationAssetProvider Error
@@ -92,4 +133,6 @@ public enum AttestationAssetProviderError: Swift.Error {
     case missingProvisioningCertificate
     case invalidProvisioningCertificate
     case missingAPTicket(error: Swift.Error)
+    case missingSFRManifest(error: Swift.Error)
+    case missingLocalBootPolicy
 }

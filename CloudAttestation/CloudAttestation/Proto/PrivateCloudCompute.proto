@@ -85,6 +85,8 @@ message ReleaseMetadata {
     repeated ToolRequirement requirements = 6;
 
     Application application = 7;
+
+    string build_version = 8;
 }
 
 message ProxyNodeMetadata {

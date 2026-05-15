@@ -17,6 +17,7 @@
 //  DarwinInit
 //
 
+import os
 import AppleLDAP
 
 enum LDAP {

@@ -61,9 +61,9 @@ struct RequestSummaryAttributes: SpanAttributeNamespace {
 
             var connectionCancelled: Key<Bool> { "cloudboardd.requestSummary.connection.cancelled" }
 
-            var spanID: Key<String> { "cloudboardd.requestSummary.span_id" }
+            var spanID: Key<UInt64> { "cloudboardd.requestSummary.span_id" }
 
-            var parentSpanID: Key<String> { "cloudboardd.requestSummary.parent_span_id" }
+            var parentSpanID: Key<UInt64> { "cloudboardd.requestSummary.parent_span_id" }
         }
     }
 
@@ -99,15 +99,19 @@ struct RequestSummaryAttributes: SpanAttributeNamespace {
 
             var featureID: Key<String> { "cloudboardd.requestSummary.feature_id" }
 
+            var keyID: Key<String> {
+                "cloudboardd.requestSummary.key_id"
+            }
+
             var automatedDeviceGroup: Key<String> { "cloudboardd.requestSummary.automated_device_group" }
 
             var ropesTerminationCode: Key<Int> { "cloudboardd.requestSummary.connection.termination_code" }
 
             var ropesTerminationReason: Key<String> { "cloudboardd.requestSummary.connection.termination_reason" }
 
-            var spanID: Key<String> { "cloudboardd.requestSummary.span_id" }
+            var spanID: Key<UInt64> { "cloudboardd.requestSummary.span_id" }
 
-            var parentSpanID: Key<String> { "cloudboardd.requestSummary.parent_span_id" }
+            var parentSpanID: Key<UInt64> { "cloudboardd.requestSummary.parent_span_id" }
 
             var isNack: Key<Bool> { "cloudboardd.requestSummary.is_nack" }
         }
@@ -134,9 +138,30 @@ struct RequestSummaryAttributes: SpanAttributeNamespace {
 
             var isFinal: Key<Bool> { "cloudboardd.requestSummary.response_chunk.is_final" }
 
-            var spanID: Key<String> { "cloudboardd.requestSummary.span_id" }
+            var spanID: Key<UInt64> { "cloudboardd.requestSummary.span_id" }
 
-            var parentSpanID: Key<String> { "cloudboardd.requestSummary.parent_span_id" }
+            var parentSpanID: Key<UInt64> { "cloudboardd.requestSummary.parent_span_id" }
+        }
+    }
+
+    // MARK: - RequestExecutionError
+
+    var requestExecutionErrorAttributes: RequestExecutionErrorAttributes {
+        get {
+            .init(attributes: self.attributes)
+        }
+        set {
+            self.attributes = newValue.attributes
+        }
+    }
+
+    struct RequestExecutionErrorAttributes: SpanAttributeNamespace {
+        var attributes: SpanAttributes
+
+        struct NestedSpanAttributes: NestedSpanAttributesProtocol {
+            init() {}
+
+            var errorMessage: Key<String> { "cloudboardd.requestSummary.request_execution_error" }
         }
     }
 
@@ -166,6 +191,12 @@ struct RequestSummaryAttributes: SpanAttributeNamespace {
 
 extension HPACKHeaders: @retroactive SpanAttributeConvertible {
     public func toSpanAttribute() -> Tracing.SpanAttribute {
+        Tracing.SpanAttribute.stringConvertible(self)
+    }
+}
+
+extension UInt64: @retroactive SpanAttributeConvertible {
+    public func toSpanAttribute() -> SpanAttribute {
         Tracing.SpanAttribute.stringConvertible(self)
     }
 }

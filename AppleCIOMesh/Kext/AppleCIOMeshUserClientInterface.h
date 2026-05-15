@@ -167,6 +167,9 @@ class Trap
 		// point.
 		StopForwardChain,
 
+        // Resets a buffer to an initialized/clear state. Takes a shared memory id.
+        ResetBuffer,
+
 		NumTraps
 	};
 };

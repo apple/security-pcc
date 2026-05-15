@@ -30,11 +30,10 @@ package enum StepIdentifier: String {
     case privateCloudComputeRequestInDaemon = "PrivateCloudComputeRequestInDaemon"
 }
 
-package func withAppleIntelligenceEvent<T>(
-    isolation: isolated (any Actor)? = #isolation,
+nonisolated(nonsending) package func withAppleIntelligenceEvent<T>(
     id: UUID,
     step: StepIdentifier,
-    operation: () async throws -> T,
+    operation: @concurrent () async throws -> T,
 ) async rethrows -> T {
     var telemetryEventID: EventIdentifier
     do {

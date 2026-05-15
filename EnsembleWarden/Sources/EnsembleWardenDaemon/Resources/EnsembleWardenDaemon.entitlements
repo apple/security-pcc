@@ -21,12 +21,16 @@
 
     <key>com.apple.acdc.cloudmetrics.client</key>
     <string>com.apple.cloudos.ensemblewardend</string>
-    
+
     <key>com.apple.security.exception.mach-lookup.global-name</key>
     <array>
         <string>com.apple.acdc.cloudmetricsd</string>
         <string>com.apple.thimble.inference.service.tie-kvcache-transfer-ensemblewarden</string>
         <string>com.apple.cloudos.AppleComputeEnsembler.service</string>
+        <string>com.apple.cloudos.ensembleporter</string>
+        <string>com.apple.cloudos.ensembleporter.keyfetcherclient</string>
+        <string>com.apple.cloudos.ensemblefollowerporter</string>
+        <string>com.apple.cloudos.ensembletransport</string>
     </array>
 
     <key>com.apple.security.exception.iokit-user-client-class</key>
@@ -39,7 +43,6 @@
         <string>com.apple.cloudos.ensemblewardend</string>
         <string>com.apple.acdc.cloudmetricsd</string>
         <string>com.apple.cloudos.cloudOSInfo</string>
-
     </array>
 
     <key>com.apple.private.AppleComputeEnsembler.read</key>
@@ -48,8 +51,13 @@
     <key>com.apple.cloudos.ensemblewarden.server</key>
     <true/>
 
+    <key>com.apple.cloudos.ensembleporter.fetch_keys</key>
+    <true/>
+
     <key>com.apple.private.sandbox.profile:embedded</key>
     <string>apple-cloud</string>
 
+    <key>com.apple.kernel.large-file-virtual-addressing</key>
+    <true/>
 </dict>
 </plist>

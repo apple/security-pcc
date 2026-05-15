@@ -227,6 +227,11 @@ class AppleCIOForwardChain : public OSObject
 		return _elementForwardCount;
 	}
 
+    inline void
+    reset() {
+        _startIdx = 0;
+    }
+
   private:
 	MUCI::ForwardChainId _chainId;
 	OSBoundedArray<ForwardActionChainElement, kMaxForwardChainElement> _forwardChain;

@@ -12,13 +12,11 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 package import CloudBoardAsyncXPC
 
-public actor CloudBoardControllerAPIXPCServer {
+package actor CloudBoardControllerAPIXPCServer {
     private let listener: CloudBoardAsyncXPCListener
-    private weak var delegate: CloudBoardControllerAPIClientToServerProtocol?
+    private weak var delegate: CloudBoardControllerAPIServerDelegateProtocol?
 
     internal var endpoint: CloudBoardAsyncXPCEndpoint? {
         get async { await self.listener.endpoint }
@@ -32,7 +30,7 @@ public actor CloudBoardControllerAPIXPCServer {
 }
 
 extension CloudBoardControllerAPIXPCServer {
-    public static func localListener() -> CloudBoardControllerAPIXPCServer {
+    package static func localListener() -> CloudBoardControllerAPIXPCServer {
         self.init(
             listener: CloudBoardAsyncXPCListener(
                 localService: kCloudBoardControllerAPIXPCServiceName,
@@ -43,16 +41,8 @@ extension CloudBoardControllerAPIXPCServer {
 }
 
 extension CloudBoardControllerAPIXPCServer: CloudBoardControllerAPIServerToClientProtocol {
-    public func updateConfiguration(config: WorkloadConfig) async throws {
-        try await self.listener.broadcast(
-            CloudBoardControllerAPIXPCServerToClientMessage.UpdateConfiguration(config: config)
-        )
-    }
-
-    public func shutdown() async throws {
-        try await self.listener.broadcast(
-            CloudBoardControllerAPIXPCServerToClientMessage.Shutdown()
-        )
+    package func shutdown() async throws {
+        await self.listener.broadcast(CloudBoardControllerAPIXPCServerToClientMessage.Shutdown())
     }
 }
 
@@ -67,11 +57,22 @@ extension CloudBoardControllerAPIXPCServer: CloudBoardControllerAPIServerProtoco
     }
 
     internal func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
+        let getConnectionID: @Sendable () throws -> Int = {
+            guard let xpcConnection = CloudBoardAsyncXPCContext.context?.peerConnection else {
+                throw CloudBoardControllerAPIXPCServerError.noXpcConnectionTaskLocal
+            }
+            return xpcConnection.id.hashValue
+        }
+
         handlers.register(CloudBoardControllerAPIXPCClientToServerMessage.UpdateHealthStatus.self) { message in
             guard let delegate = await self.delegate else {
                 preconditionFailure("Received UpdateHealthStatus message with no delegate set")
             }
-            try await delegate.updateHealthStatus(status: message.status)
+
+            try await delegate.updateHealthStatus(
+                connectionIdentifier: getConnectionID(),
+                status: message.status
+            )
             return ExplicitSuccess()
         }
 
@@ -79,7 +80,12 @@ extension CloudBoardControllerAPIXPCServer: CloudBoardControllerAPIServerProtoco
             guard let delegate = await self.delegate else {
                 preconditionFailure("Received RegisterWorkload message with no delegate set")
             }
-            try await delegate.registerWorkload(config: message.config, properties: message.properties)
+
+            try await delegate.registerWorkload(
+                connectionIdentifier: getConnectionID(),
+                config: message.config,
+                properties: message.properties
+            )
             return ExplicitSuccess()
         }
 
@@ -87,8 +93,13 @@ extension CloudBoardControllerAPIXPCServer: CloudBoardControllerAPIServerProtoco
             guard let delegate = await self.delegate else {
                 preconditionFailure("Received RestartPrewarmedInstances message with no delegate set")
             }
-            try await delegate.restartPrewarmedInstances()
+
+            try await delegate.restartPrewarmedInstances(connectionIdentifier: getConnectionID())
             return ExplicitSuccess()
         }
     }
+}
+
+enum CloudBoardControllerAPIXPCServerError: Error {
+    case noXpcConnectionTaskLocal
 }

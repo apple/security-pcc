@@ -12,27 +12,33 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
-internal import CloudBoardAsyncXPC
+import CloudBoardAsyncXPC
 import CloudBoardAttestationDAPI
+import CloudBoardBridgeDAPI
 import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardJobAPI
 import CloudBoardJobAuthDAPI
 import CloudBoardJobHelperAPI
 import CloudBoardLogging
 import CloudBoardMetrics
-import CloudBoardPreferences
+#if canImport(CloudConfigurationPreferences)
+@_weakLinked import CloudConfigurationPreferences
+#endif
 import Foundation
 import os
 import Tracing
 
 enum CloudBoardJobHelperError: ReportableError {
     case unableToFindCloudAppToManage
+    case restrictedChoiceModeInvalid(details: String)
 
     var publicDescription: String {
         let errorType = switch self {
         case .unableToFindCloudAppToManage: "unableToFindCloudAppToManage"
+        case .restrictedChoiceModeInvalid(details: let details):
+            // The details are only about the workload parameter itself, hence are already public
+            "restrictedChoiceModeInvalid(\(details))"
         }
         return "jobHelper.\(errorType)"
     }
@@ -59,28 +65,70 @@ struct CloudBoardJobHelperHotProperties: Decodable, Hashable {
 /// privatecloudcomputed with the request as well as verifying that the OTT provided by the PCC Gateway is derived from
 /// the TGT.
 public actor CloudBoardJobHelper {
-    static let metricsClientName = "cb_jobhelper"
     private let tracer: any Tracer
 
     let hostType: JobHelperHostType
     let server: CloudBoardJobHelperAPIServerProtocol
     let attestationClient: CloudBoardAttestationAPIClientProtocol
     let jobAuthClient: CloudBoardJobAuthAPIClientProtocol?
+    let bridgeClient: CloudBoardBridgeAPIClientProtocol?
     let launchdJobFinder: LaunchdJobFinderProtocol
+    private let shadowConfigLookup: @Sendable (String) throws -> SecureConfig.ShadowCloudAppConfig
     let ensembleKeyDistributor: EnsembleKeyDistributorProtocol
+    let pirHelper: PIRHelperProtocol
     let tgtValidator: TokenGrantingTokenValidatorProtocol?
+    let effortDegrader: PolicyControlledEffortDegrader
     let metrics: any MetricsSystem
+    let laContextProvider: LocalAuthContextProvider
+    let workloadPromise: Promise<(ManagedCloudAppProtocol, [ManagedSupportAppProtocol], [AssetMetadata]), Error> =
+        .init(
+            autoFailureIfUnfulfilled: CloudBoardMessenger
+                .CloudBoardMessengerError.warmupNeverCalled
+        )
     var requestID: String
     var jobUUID: UUID
     var workloadProvider: CloudBoardJobHelperWorkloadProvider
     var hotPropertiesProvider: CloudBoardJobHelperHotPropertiesProvider
-    var config: CBJobHelperConfiguration
+    let config: CBJobHelperConfiguration
+
+    private var managedCloudApp: ManagedCloudAppProtocol {
+        get async throws {
+            try await Future(self.workloadPromise).valueWithCancellation.0
+        }
+    }
+
+    private var managedSupportApps: [ManagedSupportAppProtocol] {
+        get async throws {
+            try await Future(self.workloadPromise).valueWithCancellation.1
+        }
+    }
+
+    private var assetsMetadata: [AssetMetadata] {
+        get async throws {
+            try await Future(self.workloadPromise).valueWithCancellation.2
+        }
+    }
+
+    private var cloudAppRemotePID: Int? {
+        get async {
+            do {
+                return try await self.managedCloudApp.remotePID
+            } catch {
+                return nil
+            }
+        }
+    }
 
     // Useful for tests - true once a real request/nack request is sent to the helper
     internal nonisolated let usedForRequest = OSAllocatedUnfairLock<Bool>(initialState: false)
 
     public static let logger: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
+        category: "cb_jobhelper"
+    )
+
+    public static let tracingLogger: Logger = .init(
+        subsystem: "com.apple.cloudos.cloudboard.tracing",
         category: "cb_jobhelper"
     )
 
@@ -92,12 +140,30 @@ public actor CloudBoardJobHelper {
         self.server = CloudBoardJobHelperAPIXPCServer.localListener()
         self.attestationClient = await CloudBoardAttestationAPIXPCClient.localConnection()
         self.jobAuthClient = nil
-        self.metrics = CloudMetricsSystem(clientName: Self.metricsClientName)
+        self.bridgeClient = await CloudBoardBridgeAPIXPCClient.localConnection()
+        self.metrics = CloudMetricsSystem(clientName: Metrics.ProcessInfo.prefix)
         self.tracer = RequestSummaryJobHelperTracer(metrics: self.metrics)
         self.requestID = ""
         self.launchdJobFinder = LaunchdJobFinder(metrics: self.metrics)
         self.ensembleKeyDistributor = EnsembleKeyDistributor()
+
+        if configuration.enablePIR {
+            #if canImport(CipherMLSE)
+            self.pirHelper = PIRHelper()
+            #else
+            Self.logger.warning("PIR is enabled but CipherMLSE is not available. Using NoOpPIRHelper.")
+            self.pirHelper = NoOpPIRHelper()
+            #endif
+        } else {
+            Self.logger.log("PIR is not enabled. Using NoOpPIRHelper.")
+            self.pirHelper = NoOpPIRHelper()
+        }
+
         self.tgtValidator = nil
+        self.effortDegrader = PolicyControlledEffortDegrader(
+            securityPolicy: configuration.secureConfig.securityPolicy,
+            configuration: configuration.effortPrivacy
+        )
         let myUUID = self.launchdJobFinder.currentJobUUID(logger: Self.logger)
         if myUUID == nil {
             Self.logger.warning("Could not get own job UUID, creating new UUID for app")
@@ -105,38 +171,57 @@ public actor CloudBoardJobHelper {
         self.jobUUID = myUUID ?? UUID()
 
         // Initialize providers
+        let managedAppXPCClientFactory = ManagedAppXPCClientFactory()
         self.workloadProvider = LaunchdWorkloadProvider(
             launchdJobFinder: self.launchdJobFinder,
-            cloudAppClientFactory: CloudAppXPCClientFactory(),
+            cloudAppClientFactory: managedAppXPCClientFactory,
+            supportAppClientFactory: managedAppXPCClientFactory,
             metrics: self.metrics
         )
         self.hotPropertiesProvider = PreferencesUpdatesProvider()
         self.config = configuration
+        self.laContextProvider = DefaultLocalAuthContextProvider()
+        let secureConfig = configuration.secureConfig
+        self.shadowConfigLookup = { cloudAppName in
+            // this performs the needed policy checks if shadow is enabled
+            let config = try secureConfig.cloudAppConfig(cloudApp: cloudAppName)
+            return config.shadow
+        }
     }
 
     // For testing only
     internal init(
         hostType: JobHelperHostType,
+        cloudAppName: String? = nil,
         secureConfig: SecureConfig,
         server: any CloudBoardJobHelperAPIServerProtocol,
         attestationClient: any CloudBoardAttestationAPIClientProtocol,
         jobAuthClient: CloudBoardJobAuthAPIClientProtocol,
+        bridgeClient: CloudBoardBridgeAPIClientProtocol? = nil,
         workloadProvider: CloudBoardJobHelperWorkloadProvider,
         hotPropertiesProvider: CloudBoardJobHelperHotPropertiesProvider,
         launchdJobFinder: LaunchdJobFinderProtocol? = nil,
         ensembleKeyDistributor: EnsembleKeyDistributorProtocol,
+        pirHelper: PIRHelperProtocol,
         tgtValidator: TokenGrantingTokenValidatorProtocol?,
+        effortDegrader: PolicyControlledEffortDegrader? = nil,
         enforceTGTValidation: Bool,
-        metrics: any MetricsSystem
+        metrics: any MetricsSystem,
+        laContextProvider: LocalAuthContextProvider
     ) {
         self.hostType = hostType
         self.server = server
         self.attestationClient = attestationClient
         self.jobAuthClient = jobAuthClient
+        self.bridgeClient = bridgeClient
         self.metrics = metrics
         self.requestID = ""
         self.ensembleKeyDistributor = ensembleKeyDistributor
+        self.pirHelper = pirHelper
         self.tgtValidator = tgtValidator
+        self.effortDegrader = effortDegrader ?? PolicyControlledEffortDegrader(
+            securityPolicy: secureConfig.securityPolicy
+        )
         self.tracer = RequestSummaryJobHelperTracer(metrics: metrics)
 
         let launchdJobFinder = launchdJobFinder ?? LaunchdJobFinder(metrics: metrics)
@@ -163,9 +248,15 @@ public actor CloudBoardJobHelper {
                 "Inconsistent parameters isProxy:\(secureConfig.isProxy) hostType:\(hostType)"
             )
         }
-        var config = CBJobHelperConfiguration(secureConfig: secureConfig)
+        var config = CBJobHelperConfiguration(secureConfig: secureConfig, cloudAppName: cloudAppName)
         config.enforceTGTValidation = enforceTGTValidation
         self.config = config
+        self.laContextProvider = laContextProvider
+        // By disallowing shadow functionality via unit tests we keep the use of it in customer deployed code
+        // gated behind the securityPolicy check in all cases.
+        self.shadowConfigLookup = { _ in
+            return .notShadowed
+        }
     }
 
     /// Emit the launch metrics.
@@ -186,14 +277,23 @@ public actor CloudBoardJobHelper {
     }
 
     public func start() async throws {
-        let jobHelperSpanID = TraceContextCache.singletonCache.generateNewSpanID()
+        return try await CloudBoardMetrics.Uptime.withStandardMetrics(
+            processInfo: Metrics.ProcessInfo.self,
+            metrics: self.metrics,
+            self._start
+        )
+    }
+
+    /// Use ``start()`` to get the standard metrics
+    private func _start() async throws {
+        let jobHelperSpanID: UInt64 = TraceContextCache.singletonCache.generateNewSpanID()
         CloudboardJobHelperCheckpoint(logMetadata: logMetadata(spanID: jobHelperSpanID), message: "Starting")
-            .log(to: Self.logger, level: .default)
+            .log(to: Self.tracingLogger, level: .default)
         defer {
             self.metrics.emit(Metrics.Daemon.TotalExitCounter(action: .increment))
             self.metrics.invalidate()
             CloudboardJobHelperCheckpoint(logMetadata: logMetadata(spanID: jobHelperSpanID), message: "Finished")
-                .log(to: Self.logger, level: .default)
+                .log(to: Self.tracingLogger, level: .default)
         }
         self.emitLaunchMetrics()
 
@@ -215,6 +315,13 @@ public actor CloudBoardJobHelper {
         }
         await jobAuthClient.connect()
 
+        let bridgeClient = if let _bridgeClient = self.bridgeClient {
+            _bridgeClient
+        } else {
+            await CloudBoardBridgeAPIXPCClient.localConnection()
+        }
+        await bridgeClient.connect()
+
         let signingKeySet: AuthTokenKeySet
         do {
             signingKeySet = try await .init(
@@ -227,31 +334,43 @@ public actor CloudBoardJobHelper {
                     logMetadata: self.logMetadata(spanID: jobHelperSpanID),
                     message: "Could not load signing keys from cb_jobauthd. Failing.",
                     error: error
-                ).log(to: Self.logger, level: .fault)
+                ).log(to: Self.tracingLogger, level: .fault)
                 throw error
             } else {
                 CloudboardJobHelperCheckpoint(
                     logMetadata: self.logMetadata(spanID: jobHelperSpanID),
                     message: "Could not load signing keys from cb_jobauthd but enforcement is disabled. Continuing.",
                     error: error
-                ).log(to: Self.logger, level: .error)
+                ).log(to: Self.tracingLogger, level: .error)
                 signingKeySet = .init(ottPublicSigningKeys: [], tgtPublicSigningKeys: [])
             }
         }
 
         let requestSecrets = RequestSecrets()
 
+        let pirHelper = self.pirHelper
         let cloudBoardMessenger = CloudBoardMessenger(
             hostType: self.hostType,
             attestationClient: self.attestationClient,
             server: self.server,
+            workloadProvider: self.workloadProvider,
+            workloadPromise: self.workloadPromise,
+            ensembleKeyDistributor: self.ensembleKeyDistributor,
+            pirHelper: pirHelper,
             requestSecrets: requestSecrets,
             encodedRequestContinuation: wrappedRequestContinuation,
             responseStream: wrappedResponseStream,
             metrics: self.metrics,
             jobUUID: self.jobUUID,
-            jobHelperSpanID: jobHelperSpanID
+            jobHelperSpanID: jobHelperSpanID,
+            laContextProvider: self.laContextProvider,
+            shadowConfigLookup: self.shadowConfigLookup
         )
+
+        pirHelper.setEncryptedRequestHandler { encryptedRequest, traceContext in
+            return try await bridgeClient.makePIREncryptedRequest(encryptedRequest, traceContext: traceContext)
+        }
+
         // We need to register for key rotation events as keys might rotate while cb_jobhelper runs but before we
         // receive a request, in particular with prewarming enabled.
         let attestationClientRouter = await AttestationClientRouter(
@@ -261,7 +380,7 @@ public actor CloudBoardJobHelper {
                 await CloudboardJobHelperCheckpoint(
                     logMetadata: self.logMetadata(spanID: jobHelperSpanID),
                     message: "XPC connection to CloudBoard attestation daemon terminated unexpectedly. Attempting to reconnect."
-                ).log(to: Self.logger, level: .error)
+                ).log(to: Self.tracingLogger, level: .error)
             }
         )
         let tgtValidator = self.tgtValidator ?? TokenGrantingTokenValidator(signingKeys: signingKeySet)
@@ -269,40 +388,20 @@ public actor CloudBoardJobHelper {
         let jobAuthClientDelegate = JobAuthClientDelegate(tgtValidator: tgtValidator)
         await jobAuthClient.set(delegate: jobAuthClientDelegate)
 
-        let workload = try self.workloadProvider.getCloudAppWorkload(
-            cloudAppNameOverride: self.config.cloudAppName,
-            requestSecrets: requestSecrets,
-            ensembleKeyDistributor: self.ensembleKeyDistributor,
-            jobUUID: self.jobUUID,
-            cbJobHelperLogMetadata: CloudBoardJobHelperLogMetadata(
-                jobID: self.jobUUID,
-                requestTrackingID: self.requestID,
-                spanID: jobHelperSpanID
-            )
-        )
-
-        let workloadJobManager = WorkloadJobManager(
-            tgtValidator: tgtValidator,
-            enforceTGTValidation: enforceTGTValidation,
-            isProxy: config.isProxy,
-            requestStream: wrappedRequestStream,
-            maxRequestMessageSize: maxRequestMsgSize,
-            responseContinuation: wrappedResponseContinuation,
-            cloudAppRequestContinuation: cloudAppRequestContinuation,
-            workload: workload,
-            attestationValidator: self.attestationClient,
-            metrics: self.metrics,
-            jobUUID: self.jobUUID,
-            tracer: self.tracer,
-            jobHelperSpanID: jobHelperSpanID
-        )
-
+        let isProxy = self.config.isProxy
+        let secureConfig = self.config.secureConfig
         await self.server.set(delegate: cloudBoardMessenger)
         await self.server.connect()
 
         do {
             try await self.withMetricsUpdates(spanID: jobHelperSpanID) {
                 try await withThrowingTaskGroup(of: Void.self) { group in
+                    let cloudApp = try await self.managedCloudApp
+                    let supportApps = try await self.managedSupportApps
+                    let negotiationRules = try SelectionNegotiationSetup.cloudAppSelectionNegotiationRules(
+                        cloudAppName: cloudApp.cloudAppName, secureConfig: secureConfig
+                    )
+
                     do {
                         group.addTaskWithLogging(
                             operation: "cloudBoardMessenger.run()",
@@ -310,48 +409,122 @@ public actor CloudBoardJobHelper {
                                 metricsSystem: self.metrics,
                                 errorFactory: Metrics.Messenger.OverallErrorCounter.Factory()
                             ),
-                            logger: Self.logger
+                            logger: Self.tracingLogger
                         ) {
                             try await cloudBoardMessenger.run()
                         }
+
                         group.addTaskWithLogging(
                             operation: "workloadJobManager.run()",
                             metrics: .init(
                                 metricsSystem: self.metrics,
                                 errorFactory: Metrics.WorkloadManager.OverallErrorCounter.Factory()
                             ),
-                            logger: Self.logger
+                            logger: Self.tracingLogger
                         ) {
-                            await workloadJobManager.run()
+                            try await WorkloadJobManager(
+                                tgtValidator: tgtValidator,
+                                enforceTGTValidation: enforceTGTValidation,
+                                effortDegrader: self.effortDegrader,
+                                isProxy: isProxy,
+                                requestStream: wrappedRequestStream,
+                                maxRequestMessageSize: maxRequestMsgSize,
+                                responseContinuation: wrappedResponseContinuation,
+                                cloudAppRequestContinuation: cloudAppRequestContinuation,
+                                managedCloudApp: cloudApp,
+                                managedSupportApps: self.managedSupportApps,
+                                assetsMetadata: self.assetsMetadata,
+                                attestationValidator: self.attestationClient,
+                                negotiationRules: negotiationRules,
+                                metrics: self.metrics,
+                                jobUUID: self.jobUUID,
+                                tracer: self.tracer,
+                                jobHelperSpanID: jobHelperSpanID
+                            ).run()
                         }
+
                         group.addTaskWithLogging(
-                            operation: "workload.run()",
+                            operation: "managedCloudApp.run()",
                             metrics: .init(
                                 metricsSystem: self.metrics,
                                 errorFactory: Metrics.Workload.OverallErrorCounter.Factory()
                             ),
-                            logger: Self.logger
-                        ) { try await workload.run() }
+                            logger: Self.tracingLogger
+                        ) {
+                            func teardownSupportApps() async {
+                                await CloudboardJobHelperCheckpoint(
+                                    logMetadata: self.logMetadata(
+                                        withRemotePID: cloudApp.remotePID,
+                                        spanID: jobHelperSpanID
+                                    ),
+                                    message: "Cloud app has terminated, tearing down support apps...",
+                                    operationName: "teardownSupportApps"
+                                ).log(to: Self.logger, level: .info)
+                                await withTaskGroup { group in
+                                    for supportApp in supportApps {
+                                        group.addTask {
+                                            do {
+                                                try await supportApp.teardown()
+                                            } catch {
+                                                await CloudboardJobHelperCheckpoint(
+                                                    logMetadata: self.logMetadata(
+                                                        withRemotePID: supportApp.remotePID,
+                                                        spanID: jobHelperSpanID
+                                                    ),
+                                                    message: "Failed to teardown support app",
+                                                    error: error
+                                                ).log(to: Self.logger, level: .error)
+                                            }
+                                        }
+                                    }
+                                    await group.waitForAll()
+                                }
+                            }
+
+                            do {
+                                try await self.managedCloudApp.run()
+                                // Once the cloud app has terminated, send a teardown signal to the support apps
+                                await teardownSupportApps()
+                            } catch {
+                                // Once the cloud app has terminated, send a teardown signal to the support apps
+                                await teardownSupportApps()
+                                throw error
+                            }
+                        }
+
+                        for supportApp in supportApps {
+                            group.addTaskWithLogging(
+                                operation: "managedSupportApp.run()",
+                                metrics: .init(
+                                    metricsSystem: self.metrics,
+                                    errorFactory: Metrics.Workload.OverallErrorCounter.Factory()
+                                ),
+                                logger: Self.logger
+                            ) {
+                                try await supportApp.run()
+                            }
+                        }
+
                         group.addTaskWithLogging(
                             operation: "cloudAppRequestStream consumer",
                             metrics: .init(
                                 metricsSystem: self.metrics,
                                 errorFactory: Metrics.CloudAppRequestStream.OverallErrorCounter.Factory()
                             ),
-                            logger: Self.logger
+                            logger: Self.tracingLogger
                         ) {
                             for try await request in cloudAppRequestStream {
                                 switch request {
-                                case .warmup(let warmupData):
+                                case .warmup(let info):
                                     await CloudboardJobHelperCheckpoint(
                                         logMetadata: self.logMetadata(
-                                            withRemotePID: workload.remotePID,
+                                            withRemotePID: cloudApp.remotePID,
                                             spanID: jobHelperSpanID
                                         ),
                                         message: "Forwarding warmup message to workload",
                                         operationName: "cloudAppRequestStream"
-                                    ).log(to: Self.logger, level: .info)
-                                    try await workload.warmup(warmupData)
+                                    ).log(to: Self.tracingLogger, level: .info)
+                                    try await cloudApp.warmup(info: info)
                                 case .nackAndExit:
                                     // Do nothing. Nacks are handled in WorkloadJobManager and aren't passed on
                                     // to the application.
@@ -361,126 +534,236 @@ public actor CloudBoardJobHelper {
                                     parametersData.traceContext.spanID = jobHelperSpanID
                                     await CloudboardJobHelperCheckpoint(
                                         logMetadata: self.logMetadata(
-                                            withRemotePID: workload.remotePID,
+                                            withRemotePID: cloudApp.remotePID,
                                             spanID: jobHelperSpanID
                                         ),
                                         message: "Forwarding parameters message to workload",
                                         operationName: "cloudAppRequestStream"
-                                    ).log(to: Self.logger, level: .info)
-                                    try await workload.parameters(parametersData)
+                                    ).log(to: Self.tracingLogger, level: .info)
+                                    let parametersData = parametersData
+                                    try await withThrowingTaskGroup { group in
+                                        for managedApp in [cloudApp] + supportApps {
+                                            group.addTask {
+                                                try await managedApp.parameters(parametersData)
+                                            }
+                                        }
+                                        try await group.waitForAll()
+                                    }
                                 case .chunk(let chunk):
                                     await CloudboardJobHelperCheckpoint(
                                         logMetadata: self.logMetadata(
-                                            withRemotePID: workload.remotePID,
+                                            withRemotePID: cloudApp.remotePID,
                                             spanID: jobHelperSpanID
                                         ),
                                         message: "Forwarding chunk to workload",
                                         operationName: "cloudAppRequestStream"
-                                    ).log(to: Self.logger, level: .info)
-                                    try await workload.provideInput(chunk.chunk, isFinal: chunk.isFinal)
+                                    ).log(to: Self.tracingLogger, level: .info)
+                                    try await cloudApp.provideInput(chunk.chunk)
+                                    if chunk.isFinal {
+                                        try await self.handleEndOfInput(cloudApp: cloudApp, supportApps: supportApps)
+                                    }
+                                case .openClientSubrequest(
+                                    let clientSubrequestId,
+                                    let cryptoMaterialHandles,
+                                    let isDiscardable
+                                ):
+                                    await CloudboardJobHelperCheckpoint(
+                                        logMetadata: self.logMetadata(
+                                            withRemotePID: cloudApp.remotePID,
+                                            spanID: jobHelperSpanID
+                                        ),
+                                        message: "Starting new sub request",
+                                        operationName: "cloudAppRequestStream"
+                                    ).log(to: Self.tracingLogger, level: .info)
+                                    try await cloudApp.openClientSubrequest(
+                                        subrequestId: clientSubrequestId,
+                                        cryptoMaterialHandles: cryptoMaterialHandles,
+                                        isDiscardable: isDiscardable
+                                    )
+                                case .subrequestPayload(let clientSubrequestId, let chunk):
+                                    await CloudboardJobHelperCheckpoint(
+                                        logMetadata: self.logMetadata(
+                                            withRemotePID: cloudApp.remotePID,
+                                            spanID: jobHelperSpanID
+                                        ),
+                                        message: "Forwaring chunk to workload",
+                                        operationName: "cloudAppRequestStream"
+                                    ).log(to: Self.tracingLogger, level: .info)
+                                    try await cloudApp.subrequestPayloadChunk(
+                                        subrequestId: clientSubrequestId,
+                                        chunk: chunk
+                                    )
+                                case .closeSubrequest(let clientSubrequestId):
+                                    await CloudboardJobHelperCheckpoint(
+                                        logMetadata: self.logMetadata(
+                                            withRemotePID: cloudApp.remotePID,
+                                            spanID: jobHelperSpanID
+                                        ),
+                                        message: "Closing sub request",
+                                        operationName: "cloudAppRequestStream"
+                                    ).log(to: Self.tracingLogger, level: .info)
+                                    try await cloudApp.closeClientSubrequest(subrequestId: clientSubrequestId)
+                                case .cancelSubrequest(let clientSubrequestId):
+                                    await CloudboardJobHelperCheckpoint(
+                                        logMetadata: self.logMetadata(
+                                            withRemotePID: cloudApp.remotePID,
+                                            spanID: jobHelperSpanID
+                                        ),
+                                        message: "Cancelling sub request",
+                                        operationName: "cloudAppRequestStream"
+                                    ).log(to: Self.tracingLogger, level: .info)
+                                    try await cloudApp.cancelClientSubrequest(subrequestId: clientSubrequestId)
                                 case .endOfInput:
                                     await CloudboardJobHelperCheckpoint(
                                         logMetadata: self.logMetadata(
-                                            withRemotePID: workload.remotePID,
+                                            withRemotePID: cloudApp.remotePID,
                                             spanID: jobHelperSpanID
                                         ),
                                         message: "Forwarding end of input signal to workload",
                                         operationName: "cloudAppRequestStream"
-                                    ).log(to: Self.logger, level: .info)
-                                    try await workload.endOfInput(error: nil)
+                                    ).log(to: Self.tracingLogger, level: .info)
+                                    try await self.handleEndOfInput(cloudApp: cloudApp, supportApps: supportApps)
                                 case .abandon:
                                     await CloudboardJobHelperCheckpoint(
                                         logMetadata: self.logMetadata(
-                                            withRemotePID: workload.remotePID,
+                                            withRemotePID: cloudApp.remotePID,
                                             spanID: jobHelperSpanID
                                         ),
                                         message: "Abandon requested, tearing down workload",
                                         operationName: "cloudAppRequestStream"
-                                    ).log(to: Self.logger, level: .info)
-                                    try await workload.abandon()
+                                    ).log(to: Self.tracingLogger, level: .info)
+                                    try await withThrowingTaskGroup { group in
+                                        for managedApp in [cloudApp] + supportApps {
+                                            group.addTask {
+                                                try await managedApp.abandon()
+                                            }
+                                        }
+                                        try await group.waitForAll()
+                                    }
                                 case .teardown:
                                     await CloudboardJobHelperCheckpoint(
                                         logMetadata: self.logMetadata(
-                                            withRemotePID: workload.remotePID,
+                                            withRemotePID: cloudApp.remotePID,
                                             spanID: jobHelperSpanID
                                         ),
                                         message: "Forwarding teardown message to workload",
                                         operationName: "cloudAppRequestStream"
-                                    ).log(to: Self.logger, level: .info)
-                                    try await workload.teardown()
+                                    ).log(to: Self.tracingLogger, level: .info)
+                                    try await withThrowingTaskGroup { group in
+                                        for managedApp in [cloudApp] + supportApps {
+                                            group.addTask {
+                                                try await managedApp.teardown()
+                                            }
+                                        }
+                                        try await group.waitForAll()
+                                    }
                                 case .oneTimeToken:
                                     // We don't forward one-time tokens to the cloud app and receiving any in the
                                     // cloudAppRequestStream is unexpected
                                     await CloudboardJobHelperCheckpoint(
                                         logMetadata: self.logMetadata(
-                                            withRemotePID: workload.remotePID,
+                                            withRemotePID: cloudApp.remotePID,
                                             spanID: jobHelperSpanID
                                         ),
                                         message: "Unexpectedly received one-time token to be forwarded to the cloud app. Ignoring.",
                                         operationName: "cloudAppRequestStream"
-                                    ).log(to: Self.logger, level: .fault)
+                                    ).log(to: Self.tracingLogger, level: .fault)
                                 case .parametersMetaData:
                                     // Do nothing. attestations are handled in WorkloadJobManager and aren't passed on
                                     // to the application.
                                     ()
-                                case .workerFound(let workerID, let releaseDigest, let spanID):
-                                    try await workload.workerFound(
+                                case .workerFound(let workerID, let info, let spanID):
+                                    try await cloudApp.workerFound(
                                         workerID: workerID,
-                                        releaseDigest: releaseDigest,
+                                        info: info,
                                         spanID: spanID
                                     )
-                                case .workerAttestationAndDEK:
+                                case .workerNegotiatePick:
+                                    // Do nothing. negotiation is handled in WorkloadJobManager and isn't passed on
+                                    // to the application.
+                                    ()
+                                case .selectedWorker:
                                     // Do nothing. attestations are handled in WorkloadJobManager and aren't passed on
                                     // to the application.
                                     ()
                                 case .workerResponseChunk(let workerID, let chunk):
-                                    try await workload.workerResponseMessage(
+                                    try await cloudApp.workerResponseMessage(
                                         workerID: workerID,
                                         data: chunk.chunk,
                                         isFinal: chunk.isFinal
                                     )
-                                case .workerResponseSummary(let workerID, succeeded: let succeeded):
-                                    try await workload.workerResponseSummary(workerID: workerID, succeeded: succeeded)
+                                case .workerResponseSummary(let workerID, let status):
+                                    try await cloudApp.workerResponseSummary(workerID: workerID, status: status)
                                 case .workerResponseClose:
                                     // Do nothing. workerResponseClose messages are handled in WorkloadJobManager and
                                     // aren't passed on to the application.
                                     ()
                                 case .workerResponseEOF(let workerID):
-                                    try await workload.workerResponseMessage(
+                                    try await cloudApp.workerResponseMessage(
                                         workerID: workerID,
                                         data: nil,
                                         isFinal: true
                                     )
+                                case .applicationDataChunkingConfig(let config):
+                                    try await cloudApp.configureApplicationDataChunking(config: config)
+                                case .readyToSendAssetsMetadataRELEntry:
+                                    // Do nothing. assetsMetadataRELEntry messages are handled in WorkloadJobManager and
+                                    // aren't passed on to the application.
+                                    ()
                                 }
                             }
                             await CloudboardJobHelperCheckpoint(
                                 logMetadata: self.logMetadata(
-                                    withRemotePID: workload.remotePID,
+                                    withRemotePID: cloudApp.remotePID,
                                     spanID: jobHelperSpanID
                                 ),
                                 message: "Request stream finished",
                                 operationName: "cloudAppRequestStream"
-                            ).log(to: Self.logger, level: .default)
-                            if await workload.abandoned == false {
-                                try await workload.provideInput(nil, isFinal: true)
+                            ).log(to: Self.tracingLogger, level: .default)
+                            if await cloudApp.abandoned == false {
+                                try await self.handleEndOfInput(cloudApp: cloudApp, supportApps: supportApps)
                             }
                         }
 
                         try await group.waitForAll()
                         await CloudboardJobHelperCheckpoint(
-                            logMetadata: self.logMetadata(withRemotePID: workload.remotePID, spanID: jobHelperSpanID),
+                            logMetadata: self.logMetadata(
+                                withRemotePID: self.cloudAppRemotePID,
+                                spanID: jobHelperSpanID
+                            ),
                             message: "Completed cloud app request and response handling",
                             operationName: "cloudAppRequestStream"
-                        ).log(to: Self.logger, level: .default)
+                        ).log(to: Self.tracingLogger, level: .default)
                     } catch {
                         await CloudboardJobHelperCheckpoint(
-                            logMetadata: self.logMetadata(withRemotePID: workload.remotePID, spanID: jobHelperSpanID),
+                            logMetadata: self.logMetadata(
+                                withRemotePID: self.cloudAppRemotePID,
+                                spanID: jobHelperSpanID
+                            ),
                             message: "Error while managing cloud app. Attempting to tear down workload.",
                             error: error
-                        ).log(to: Self.logger, level: .error)
+                        ).log(to: Self.tracingLogger, level: .error)
                         // Attempt to cleanly tear down workload
                         // Teardown is idempotent, so it's fine to be called multiple times
-                        try await workload.teardown()
+                        await withTaskGroup { group in
+                            for managedApp in [cloudApp] + supportApps {
+                                group.addTask {
+                                    do {
+                                        try await managedApp.teardown()
+                                    } catch {
+                                        await CloudboardJobHelperCheckpoint(
+                                            logMetadata: self.logMetadata(
+                                                withRemotePID: managedApp.remotePID,
+                                                spanID: jobHelperSpanID
+                                            ),
+                                            message: "Failed to teardown managed app",
+                                            error: error
+                                        ).log(to: Self.logger, level: .error)
+                                    }
+                                }
+                            }
+                            await group.waitForAll()
+                        }
                         // Rethrow error
                         throw error
                     }
@@ -496,14 +779,21 @@ public actor CloudBoardJobHelper {
                 message: "Finished",
                 error: error
             )
-            .log(to: Self.logger, level: .error)
+            .log(to: Self.tracingLogger, level: .error)
         }
 
         withExtendedLifetime(attestationClientRouter) {}
         withExtendedLifetime(jobAuthClientDelegate) {}
     }
 
-    func withMetricsUpdates(spanID: String, body: @escaping @Sendable () async throws -> Void) async throws {
+    func handleEndOfInput(cloudApp: ManagedCloudAppProtocol, supportApps: [ManagedSupportAppProtocol]) async throws {
+        try await cloudApp.endOfInput(error: nil)
+        for supportApp in supportApps {
+            try await supportApp.endOfInput()
+        }
+    }
+
+    func withMetricsUpdates(spanID: UInt64, body: @escaping @Sendable () async throws -> Void) async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in
             let startInstant = ContinuousClock.now
 
@@ -523,7 +813,7 @@ public actor CloudBoardJobHelper {
                         logMetadata: self.logMetadata(spanID: spanID),
                         message: "Update metric task cancelled",
                         error: error
-                    ).log(to: Self.logger, level: .default)
+                    ).log(to: Self.tracingLogger, level: .default)
                 }
             }
 
@@ -595,9 +885,9 @@ public struct CloudBoardJobHelperLogMetadata: CustomStringConvertible, Sendable 
     var jobID: UUID?
     var requestTrackingID: String?
     var remotePID: Int?
-    var spanID: String?
+    var spanID: UInt64?
 
-    public init(jobID: UUID? = nil, requestTrackingID: String? = nil, remotePID: Int? = nil, spanID: String? = nil) {
+    public init(jobID: UUID? = nil, requestTrackingID: String? = nil, remotePID: Int? = nil, spanID: UInt64? = nil) {
         self.jobID = jobID
         self.requestTrackingID = requestTrackingID
         self.remotePID = remotePID
@@ -607,25 +897,22 @@ public struct CloudBoardJobHelperLogMetadata: CustomStringConvertible, Sendable 
     // NOTE: This description is publicly logged and/or included in metric dimensions and therefore MUST not contain
     // sensitive data.
     public var description: String {
-        var text = ""
+        var fields: [String] = []
 
-        text.append("[")
         if let jobID = self.jobID {
-            text.append("jobId=\(jobID) ")
+            fields.append("jobId=\(jobID)")
         }
         if let requestTrackingID = self.requestTrackingID, requestTrackingID != "" {
-            text.append("request.uuid=\(requestTrackingID) ")
+            fields.append("request.uuid=\(requestTrackingID)")
         }
         if let remotePID = self.remotePID {
-            text.append("remotePid=\(remotePID) ")
+            fields.append("remotePid=\(remotePID)")
         }
 
-        text.removeLast(1)
-        if !text.isEmpty {
-            text.append("]")
+        if !fields.isEmpty {
+            return "[\(fields.joined(separator: " "))]"
         }
-
-        return text
+        return ""
     }
 }
 
@@ -654,7 +941,7 @@ extension SecKey {
 extension CloudBoardJobHelper {
     private func logMetadata(
         withRemotePID remotePID: Int? = nil,
-        spanID: String? = nil
+        spanID: UInt64? = nil
     ) -> CloudBoardJobHelperLogMetadata {
         return CloudBoardJobHelperLogMetadata(
             jobID: self.jobUUID,
@@ -688,6 +975,7 @@ protocol CloudBoardJobHelperHotPropertiesProvider: Sendable {
 }
 
 struct PreferencesUpdatesProvider: CloudBoardJobHelperHotPropertiesProvider {
+    #if canImport(CloudConfigurationPreferences)
     let preferencesUpdates: PreferencesUpdates<CloudBoardJobHelperHotProperties>
 
     init() {
@@ -696,9 +984,14 @@ struct PreferencesUpdatesProvider: CloudBoardJobHelperHotPropertiesProvider {
             maximumUpdateDuration: .seconds(1)
         )
     }
+    #endif
 
     func getPreferences() async throws -> CloudBoardJobHelperHotProperties {
+        #if canImport(CloudConfigurationPreferences)
         // force unwrap is safe as we will either get the preferences or throw an error
         return try await self.preferencesUpdates.first(where: { _ in true })!.applyingPreferences { $0 }
+        #else
+        CloudBoardJobHelperHotProperties()
+        #endif
     }
 }

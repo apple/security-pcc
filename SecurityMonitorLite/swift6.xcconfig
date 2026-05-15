@@ -1,4 +1,0 @@
-SWIFT_VERSION = 6
-SWIFT_UPCOMING_FEATURE_6_0 = YES
-SWIFT_STRICT_CONCURRENCY = complete
-OTHER_SWIFT_FLAGS = $(inherited) -Xfrontend -require-explicit-sendable

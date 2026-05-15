@@ -12,7 +12,5 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 internal let kJobAuthAPIXPCLocalServiceName = "com.apple.cloudos.cb_jobauthd"
 internal let kJobAuthAPIXPCLocalServiceEntitlement = "com.apple.private.cloudos.cb_jobauthd"

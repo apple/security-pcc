@@ -75,6 +75,8 @@ public struct PrivateCloudCompute_ReleaseMetadata: @unchecked Sendable {
   /// Clears the value of `application`. Subsequent reads from it will return its default value.
   public mutating func clearApplication() {self._application = nil}
 
+  public var buildVersion: String = String()
+
   public var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
   public enum SchemaVersion: InternalSwiftProtobuf.Enum, Swift.CaseIterable {
@@ -376,6 +378,7 @@ extension PrivateCloudCompute_ReleaseMetadata: InternalSwiftProtobuf.Message, In
     5: .standard(proto: "darwin_init"),
     6: .same(proto: "requirements"),
     7: .same(proto: "application"),
+    8: .standard(proto: "build_version"),
   ]
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -391,6 +394,7 @@ extension PrivateCloudCompute_ReleaseMetadata: InternalSwiftProtobuf.Message, In
       case 5: try { try decoder.decodeSingularMessageField(value: &self._darwinInit) }()
       case 6: try { try decoder.decodeRepeatedMessageField(value: &self.requirements) }()
       case 7: try { try decoder.decodeSingularMessageField(value: &self._application) }()
+      case 8: try { try decoder.decodeSingularStringField(value: &self.buildVersion) }()
       default: break
       }
     }
@@ -422,6 +426,9 @@ extension PrivateCloudCompute_ReleaseMetadata: InternalSwiftProtobuf.Message, In
     try { if let v = self._application {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 7)
     } }()
+    if !self.buildVersion.isEmpty {
+      try visitor.visitSingularStringField(value: self.buildVersion, fieldNumber: 8)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -433,6 +440,7 @@ extension PrivateCloudCompute_ReleaseMetadata: InternalSwiftProtobuf.Message, In
     if lhs._darwinInit != rhs._darwinInit {return false}
     if lhs.requirements != rhs.requirements {return false}
     if lhs._application != rhs._application {return false}
+    if lhs.buildVersion != rhs.buildVersion {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

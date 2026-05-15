@@ -12,12 +12,8 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
-
 import CloudBoardMetrics
 import Foundation
-
-private let prefix = "cb_jobauthd"
 
 extension HistogramBuckets {
     fileprivate static let signingKeyFetchTime: Self = [
@@ -78,6 +74,11 @@ extension HistogramBuckets {
 }
 
 enum Metrics {
+    struct ProcessInfo: CloudBoardMetrics.Uptime.ProcessInfo {
+        static let prefix: String = "cb_jobauthd"
+        static let type = CloudBoardMetrics.Uptime.ProcessType.daemon
+    }
+
     enum KeyRotationService {
         enum DimensionKeys: String, RawRepresentable, Hashable, Sendable {
             case keyType
@@ -89,19 +90,19 @@ enum Metrics {
         }
 
         struct KeyRotationServiceFetchCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_key_rotation_service_fetch_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_key_rotation_service_fetch_total"
             var action: CounterAction
             var dimensions: MetricDimensions<DimensionKeys>
         }
 
         struct KeyRotationServiceFetchErrorCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_key_rotation_service_fetch_failed_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_key_rotation_service_fetch_failed_total"
             var dimensions: MetricDimensions<ErrorDimensionKeys>
             var action: CounterAction
         }
 
         struct KeyRotationServiceFetchDurationHistogram: DurationHistogram {
-            static let label: MetricLabel = "\(prefix)_key_rotation_service_fetch_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_key_rotation_service_fetch_seconds"
             static let buckets: HistogramBuckets = .signingKeyFetchTime
             var value: Double
             var dimensions: MetricDimensions<DimensionKeys>
@@ -109,7 +110,7 @@ enum Metrics {
 
         struct SigningKeyTimeToExpiryGauge: Gauge {
             typealias KeyType = KeyRotationServiceClient.SigningKeyUseCase
-            static let label: MetricLabel = "\(prefix)_signing_key_time_to_expiry_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_signing_key_time_to_expiry_seconds"
 
             var dimensions: MetricDimensions<DimensionKeys>
             var value: Double
@@ -123,12 +124,12 @@ enum Metrics {
 
     enum CloudBoardJobAuthDaemon {
         struct PhysicalMemoryFootprintGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_physical_memory_footprint_bytes"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_physical_memory_footprint_bytes"
             var value: Int
         }
 
         struct LifetimeMaxPhysicalMemoryFootprintGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_lifetime_max_physical_memory_footprint_bytes"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_lifetime_max_physical_memory_footprint_bytes"
             var value: Int
         }
     }

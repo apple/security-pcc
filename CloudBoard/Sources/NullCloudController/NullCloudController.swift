@@ -12,10 +12,10 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardController
+import CloudBoardLogging
+import Foundation
 import NullCloudControllerAPI
 import os
 
@@ -29,14 +29,13 @@ actor NullCloudController {
     private let config: NullCloudControllerConfiguration
     private var connectionID = 0
     private let xpcServer: NullCloudControllerAPIXPCServer
+    private let reregisterEvery: TimeInterval
 
     public init() async throws {
         self.config = try NullCloudControllerConfiguration.fromPreferences()
+        self.reregisterEvery = TimeInterval((self.config.reregisterMinutes ?? 60) * 60)
         self.xpcServer = .init()
         self.controller = try await CloudBoardWorkloadController()
-        await self.controller.onUpdateConfiguration { _ in
-            Self.log.log("Handling updateConfiguration from cloudboardd")
-        }
         await self.controller.onShutdown {
             Self.log.log("Handling shutdown from cloudboardd")
         }
@@ -54,34 +53,35 @@ actor NullCloudController {
             return
         }
 
-        let cloudAppName = self.config.cloudAppName ?? "NullCloudApp"
-
         // Determine if this node is a proxy node
         let isProxy: Bool
-        let routingGroupAliases: [String]
         do {
             Self.log.info("Loading secure config from SecureConfigDB")
             let secureConfig = try SecureConfigLoader.real.load()
             isProxy = secureConfig.isProxy
-            routingGroupAliases = secureConfig.routingGroupAliases
         } catch {
             Self.log.error(
                 "Error loading secure config: \(String(unredacted: error), privacy: .public). Assuming node is not a proxy."
             )
             isProxy = false
-            routingGroupAliases = []
         }
-        let maxBatchSize = await self.controller.prefs.maxBatchSize ?? (isProxy ? 55 : 1000)
 
-        var workloadTags = await self.controller.prefs.workloadTags.mapValues {
+        /// Needed for backward compatibility
+        let cloudAppName = self.config.cloudAppName ?? (isProxy ? "TIEProxyApp" : "NullCloudApp")
+        let maxBatchSize = await self.controller.prefs.maxBatchSize ?? (isProxy ? 25 : 1000)
+
+        let workloadTags = await self.controller.prefs.workloadTags.mapValues {
             switch $0 {
-            case .string(let value): WorkloadConfig.RoutingTagValue.string(value)
-            case .stringList(let value): WorkloadConfig.RoutingTagValue.stringList(value)
+            case .string(let value): RoutingTagValue.string(value)
+            case .stringList(let value): RoutingTagValue.stringList(value)
             }
         }
-        if !routingGroupAliases.isEmpty {
-            workloadTags["routingGroupAliases"] = WorkloadConfig.RoutingTagValue.stringList(routingGroupAliases)
-        }
+
+        let properties = await WorkloadProperties(
+            // Default to the TIE service name as this has traditionally been used for the null app as well
+            workloadName: self.controller.prefs.serviceName ?? "tie-cloudboard-apple-com",
+            cloudAppName: cloudAppName
+        )
 
         while true {
             let connectionID = self.connectionID
@@ -89,20 +89,20 @@ actor NullCloudController {
             await self.xpcServer.start(delegate: self)
 
             Self.log.log("Sending RegisterWorkload...")
-            try await self.controller.registerWorkload(
-                config: WorkloadConfig(
-                    maxBatchSize: maxBatchSize,
-                    optimalBatchSize: self.controller.prefs.optimalBatchSize ?? maxBatchSize,
-                    currentBatchSize: 0,
+            if isProxy {
+                try await self.registerAsProxyWorkload(
                     workloadTags: workloadTags,
-                    workloadType: isProxy ? .proxy : .worker
-                ),
-                properties: WorkloadProperties(
-                    // Default to the TIE service name as this has traditionally been used for the null app as well
-                    workloadName: self.controller.prefs.serviceName ?? "tie-cloudboard-apple-com",
-                    cloudAppName: cloudAppName
+                    maxBatchSize: maxBatchSize,
+                    properties: properties
                 )
-            )
+            } else {
+                try await self.registerAsComputeWorkload(
+                    workloadTags: workloadTags,
+                    maxBatchSize: maxBatchSize,
+                    properties: properties
+                )
+            }
+            let lastRegister = Date.now
 
             Self.log.log("Sending ready status...")
             try await self.controller.updateHealthStatus(
@@ -112,11 +112,76 @@ actor NullCloudController {
             )
 
             while self.connectionID == connectionID {
+                // always wait at least 5 seconds, regardless of how tight reregister is set to
                 try await Task.sleep(for: .seconds(5))
+                if Date.now.timeIntervalSince(lastRegister) > self.reregisterEvery {
+                    Self.log.warning("Scheduled refresh time reached, re-registering")
+                    break
+                }
             }
-
-            Self.log.warning("Detected cloudboardd disconnect, re-registering")
+            if self.connectionID != connectionID {
+                Self.log.warning("Detected cloudboardd disconnect, re-registering")
+            }
         }
+    }
+
+    func registerAsProxyWorkload(
+        workloadTags: [String: RoutingTagValue],
+        maxBatchSize: Int,
+        properties: WorkloadProperties
+    ) async throws {
+        var workloadTags = workloadTags
+        // For backward compatibility, we need to extract configured services from the configured workload tags
+        let services = if let configuredServices = workloadTags["services"] {
+            switch configuredServices {
+            case .string(let serviceName): [serviceName]
+            case .stringList(let serviceNames): serviceNames
+            }
+        } else {
+            [String]()
+        }
+
+        workloadTags.removeValue(forKey: "services")
+
+        // For backward compatibility, we need to read the routingGroupAliases from CFPrefs because it's possible
+        // that the RGAs are only specified in the CFPrefs and not in secure-config (for which cloudboardd reads and
+        // provides them to Service Discovery directly).
+        let routingGroupAliases: [String]? = if let configuredRGAs = workloadTags["routingGroupAliases"] {
+            switch configuredRGAs {
+            case .string(let rga): [rga]
+            case .stringList(let rgas): rgas
+            }
+        } else {
+            nil
+        }
+        workloadTags.removeValue(forKey: "routingGroupAliases")
+
+        try await self.controller.registerProxyWorkload(
+            config: .init(
+                maxBatchSize: maxBatchSize,
+                optimalBatchSize: self.controller.prefs.optimalBatchSize ?? maxBatchSize,
+                currentBatchSize: 0,
+                metadata: .init(services: services, routingGroupAliasOverrides: routingGroupAliases),
+                workloadTags: workloadTags
+            ),
+            properties: properties
+        )
+    }
+
+    func registerAsComputeWorkload(
+        workloadTags: [String: RoutingTagValue],
+        maxBatchSize: Int,
+        properties: WorkloadProperties
+    ) async throws {
+        try await self.controller.registerComputeWorkload(
+            config: .init(
+                maxBatchSize: maxBatchSize,
+                optimalBatchSize: self.controller.prefs.optimalBatchSize ?? maxBatchSize,
+                currentBatchSize: 0,
+                workloadTags: workloadTags
+            ),
+            properties: properties
+        )
     }
 
     private func incrementConnectionID() {

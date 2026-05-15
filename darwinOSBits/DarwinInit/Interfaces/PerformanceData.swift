@@ -21,6 +21,7 @@ import Foundation
 import os
 import perfdata
 import System
+import DarwinPrivate.libproc
 
 enum PerformanceData {
     /// Write perfdata to `/tmp/pdstats`

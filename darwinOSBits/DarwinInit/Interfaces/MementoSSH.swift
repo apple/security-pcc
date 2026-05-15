@@ -20,6 +20,13 @@
 import Foundation
 
 enum MementoSSH {
+
+    struct Config {
+        let users: [String]?
+        let groups: [String]?
+        let ldapServer: String?
+    }
+
     internal static func generateConfig(for user: String, users: [String]?, groups: [String]?, ldapServer: String?) -> String {
         var authorizedKeysCommand = [
             "/usr/bin/darwin-init", "memento-keys"
@@ -53,7 +60,11 @@ Match all
 """
         return config
     }
-    
+
+    static func setup(for user: String, config: Config) -> Bool {
+        self.setup(for: user, users: config.users, groups: config.groups, ldapServer: config.ldapServer)
+    }
+
     static func setup(for user: String, users: [String]?, groups: [String]?, ldapServer: String?) -> Bool {
         guard !(users == nil && groups == nil) else {
             logger.error("users and groups can't be nil at the same time")

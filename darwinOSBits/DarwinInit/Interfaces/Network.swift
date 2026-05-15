@@ -26,6 +26,7 @@ import Darwin
 import DarwinPrivate
 import Darwin.POSIX.sys.socket
 import libnarrativecert
+import CFNetwork_Private.CFNSURLConnection
 import RegexBuilder
 
 enum Network {
@@ -71,12 +72,20 @@ enum Network {
 
     private static var narrativeCredential : URLCredential? = {
         // Try to fetch Narrative cert from key chain for authenticated CDN downloads if acdc actor identity configured
-        let cert = NarrativeCert(domain: .acdc, identityType: .actor)
-        let credential = cert.getCredential()
+        // First we try to use the aquaria-host cert, and if its not available, we fall back to acdc-actor
+        var cert = NarrativeCert(domain: .aquaria, identityType: .host)
+        var credential = cert.getCredential()
+        if credential != nil {
+            logger.log("Successfully created aquaria-host url credential for auth challenge")
+            return credential
+        }
+
+        cert = NarrativeCert(domain: .acdc, identityType: .actor)
+        credential = cert.getCredential()
         if credential == nil {
-            logger.debug("Failed to create URL credential for auth challenge. Narrative identity may not be configured properly.")
+            logger.log("Failed to create URL credential for auth challenge. Narrative identity may not be configured properly.")
         } else {
-            logger.debug("Successfully created URL credential for auth challenge")
+            logger.log("Successfully created acdc-actor url credential for auth challenge")
         }
         return credential
     }()
@@ -293,7 +302,7 @@ enum Network {
         to path: FilePath,
         attempts maxAttempts: Int = 1,
         backoff: BackOff = .linear(.seconds(10), offset: .seconds(5)),
-        background: Bool? = nil
+        background: Bool = false
     ) async throws {
         if !Time.isSynchronized {
             logger.warning("Time is not synced before making network request, continuing")
@@ -364,7 +373,7 @@ enum Network {
         to destinationDirectory: FilePath? = nil,
         attempts: Int = 3,
         backoff: BackOff = .linear(.seconds(10), offset: .seconds(5)),
-        background: Bool? = nil,
+        background: Bool = false,
         maxActiveTasks: Int? = nil,
         chunkSize: UInt64? = nil
     ) async -> FilePath? {
@@ -522,12 +531,13 @@ enum Network {
         additionalHTTPHeaders: [String: String] = [:],
         attempts: Int = 3,
         timeout: Duration = .seconds(10),
-        backoff: BackOff = .linear(.seconds(10), offset: .seconds(5))
+        backoff: BackOff = .linear(.seconds(10), offset: .seconds(5)),
+        useNarrativeAuth: Bool = false
     ) async throws -> Data {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "GET"
         urlRequest.addHeaders(additionalHTTPHeaders: additionalHTTPHeaders)
-        let (data, _) = try await perform(request: urlRequest, attempts: attempts, timeout: timeout, backoff: backoff)
+        let (data, _) = try await perform(request: urlRequest, attempts: attempts, timeout: timeout, backoff: backoff, useNarrativeAuth: useNarrativeAuth)
         return data
     }
     
@@ -585,7 +595,7 @@ enum Network {
         }
         return true
     }
-    
+
     // Configure the bandwidth limit on the Mellanox interface
     static func setUplinkBandwidthLimit(bandwidthLimit: UInt64) -> Bool {
         var bsdName: String
@@ -616,16 +626,13 @@ enum Network {
         }
         
         var iflpr = if_linkparamsreq()
-        var name: (CChar, CChar, CChar, CChar, CChar, CChar, CChar, CChar, CChar, CChar, CChar, CChar, CChar, CChar, CChar, CChar) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-        // convert interface name into a tuple of CChars and set in if_linkparamsreq
-        let capacity = Mirror(reflecting: name).children.count
-        withUnsafeMutablePointer(to: &name) { pointer in
-            pointer.withMemoryRebound(to: CChar.self, capacity: capacity) {
-                let bound = $0 as UnsafeMutablePointer<CChar>
-                bsdName.utf8.enumerated().forEach { (bound + $0.offset).pointee = CChar($0.element) }
-            }
+        let len = withUnsafeMutablePointer(to: &iflpr.iflpr_name) { dest in
+            strlcpy(dest, bsdName, Int(IFNAMSIZ))
         }
-        iflpr.iflpr_name = name
+        guard len < IFNAMSIZ else {
+            logger.error("Interface name '\(bsdName)' is too long for system buffer")
+            return false
+        }
         
         var status = ioctl(sock, kSIOCGIFLINKPARAMS, &iflpr)
         guard status == 0 else {

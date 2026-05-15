@@ -97,15 +97,19 @@ class SplunkloggingdConfigWriter {
         try await Self.listenToHotProperties(config: config, outputFile: outputFile)
     }
 
-    // Check that CloudConfigurationPreferences is in the SDK (will pass for macOS and fail for BMC)
-    #if canImport(CloudConfigurationPreferences)
+    // Check that CloudConfigurationPreferences and cloudOSInfo are in the SDK (will pass for macOS and fail for BMC)
+    #if canImport(CloudConfigurationPreferences) && canImport(cloudOSInfo)
     private static func listenToHotProperties(config: SplunkloggingdConfiguration, outputFile: String) async throws {
-        // Ensure that we can load CloudOSInfoProvider.
-        // If we can't we might be running on macOS.
-        guard #_hasSymbol(CloudOSInfoProvider.self), #_hasSymbol(PreferencesVersionInfo.self) else {
-            logger.fault("CloudOSInfoProvider/CloudBoard not available")
+        guard #_hasSymbol(CloudConfigurationPreferences.PreferencesVersionInfo.self) else {
+            logger.fault("CloudConfigurationPreferences not available")
             return
         }
+
+        guard #_hasSymbol(CloudOSInfoProvider.self) else {
+            logger.fault("CloudOSInfoProvider not available")
+            return
+        }
+
         let cloudOSInfoProvider = CloudOSInfoProvider()
         do {
             guard try cloudOSInfoProvider.cloudOSReleaseType().lowercased().starts(with: "private cloudos") else {
@@ -118,11 +122,6 @@ class SplunkloggingdConfigWriter {
         }
 
         logger.log("Release type is Private cloudOS. Attempting to listen to hot properties.")
-
-        guard #_hasSymbol(CloudConfigurationPreferences.PreferencesVersionInfo.self) else {
-            logger.fault("CloudConfigurationPreferences not available")
-            exit(1)
-        }
 
         // Store predicates from CFPrefs as fallback
         let staticPredicates = config.predicates
@@ -272,21 +271,8 @@ private func readConfig() -> SplunkloggingdConfiguration? {
     }
 
     result.predicates = predicates as! [String]
+    result.observabilityLabels = readObservabilityLabels()
 
-    // Read observability labels
-    #if canImport(cloudOSInfo)
-    guard #_hasSymbol(CloudOSInfoProvider.self) else {
-        logger.error("CloudOSInfoProvider not available. Proceeding without any labels.")
-        return result
-    }
-
-    let cloudOSInfoProvider = CloudOSInfoProvider()
-    do {
-        result.observabilityLabels = try cloudOSInfoProvider.observabilityLabels()
-    } catch {
-        logger.warning("Failed to read observability labels. Proceeding without any labels.")
-    }
-    #endif
     return result
 }
 
@@ -344,23 +330,31 @@ private func readPrismConfig() -> SplunkloggingdConfiguration? {
             return nil
         }
     }
-    result.predicates = predicates as! [String]
 
-    // Read observability labels
+    result.predicates = predicates as! [String]
+    result.observabilityLabels = readObservabilityLabels()
+
+    return result
+}
+
+private func readObservabilityLabels() -> [String: String]? {
+    var observabilityLabels: [String: String]?
+
     #if canImport(cloudOSInfo)
     guard #_hasSymbol(CloudOSInfoProvider.self) else {
-        logger.error("CloudOSInfoProvider not available for Prism configuration. Proceeding without any labels.")
-        return result
+        logger.error("CloudOSInfoProvider not available. Proceeding without any labels.")
+        return observabilityLabels
     }
 
     let cloudOSInfoProvider = CloudOSInfoProvider()
     do {
-        result.observabilityLabels = try cloudOSInfoProvider.observabilityLabels()
+        observabilityLabels = try cloudOSInfoProvider.observabilityLabels()
     } catch {
         logger.warning("Failed to read observability labels. Proceeding without any labels.")
     }
     #endif
-    return result
+
+    return observabilityLabels
 }
 
 internal class SplunkloggingdConfiguration: Encodable {

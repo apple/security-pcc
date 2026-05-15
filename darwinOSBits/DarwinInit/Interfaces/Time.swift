@@ -18,6 +18,7 @@
 //
 
 import RemoteServiceDiscovery_Private
+internal import DarwinInitBridging
 
 enum Time {
 	internal static var isSynchronized: Bool = {

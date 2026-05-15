@@ -48,12 +48,12 @@ message Chunk {
   bool is_final = 2;
 }
 
+
 message Attestation {
   // Bundle bytes.
   bytes attestation_bundle = 1;
 
   // This is the base64-encoded key ID returned by CloudBoard.
-  // Client must verify that is matches the attestation bundle bytes, and drop the attestation if mismatch.
   string node_identifier = 2;
 
   // Not set if attestation is sent for caching purposes only.
@@ -84,6 +84,8 @@ message Capabilities {
   // Deprecated: use HTTP compression instead.
   repeated CompressionAlgorithm compression_algorithm = 1 [deprecated = true];
   bool attestation_streaming = 2;
+  bool trusted_proxy_request_nack = 3;
+  bool trusted_proxy_duplicate_first_request_chunk = 4;
 }
 
 // Deprecated: use attestation streaming instead.
@@ -118,3 +120,44 @@ message ClientTerminate {
   optional string reason = 2;
 }
 
+message DiagnosticInformation {
+  enum DenyReason {
+    UNDEFINED                   = 0;
+    TENANT_BLOCKED              = 1;
+    WORKLOAD_BLOCKED            = 2;
+    FEATUREID_BLOCKED           = 3;
+    SOFTWARE_BLOCKED            = 4;
+    CLIENT_RATE_LIMIT_THROTTLED = 5;
+    SERVER_RATE_LIMIT_THROTTLED = 6;
+  }
+
+  optional DenyReason deny_reason = 1;
+}
+
+// Identifies a specific reboot of an ensemble.
+// Due to ephemeral data mode this changing for an ensemble means it can be
+// considered a totally different instance for many situations.
+message EnsembleInstanceId {
+  // this is not definitive, we could use hostname, or just not bother, 
+  // it's boot_id that matters and that will likely be a uuid anyway
+  // but having the actual ensemble_id or some other thing making it easy to track is very desirable
+  string ensemble_id = 1;
+  string boot_id = 2;
+}
+
+// This message is used to report Cloudboard and cloudApp errors to ROPES
+// Currently it will share application level and PCC protocol layer errors with ROPES(which previously were only shared with device)
+// ROPES will log these errors and emit metrics on them.
+message RequestExecutionError {
+    enum Source{
+        UNDEFINED           = 0;
+        CLOUD_APP           = 1;
+        CLOUD_APP_FRAMEWORK = 2;
+        JOB_HELPER          = 3;
+        CLOUDBOARDD         = 4;
+    }
+
+    Source source         = 1;
+    string error_message  = 2;
+    uint32 error_code     = 3;
+}

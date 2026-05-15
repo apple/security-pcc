@@ -34,6 +34,10 @@ extension AttestedTLS {
         let lifetime: Duration
         let storage: IdentityStorage
 
+        /// An optional callback that is called when a TLS session could not be established due to a certificate or attestation verification failure.
+        /// This can be useful for debugging since you would normally get an opaque "invalid certificate" error from Security/Networking layer.
+        public var errorHandler: (@Sendable (any Swift.Error) -> Void)?
+
         /// Initializes the Configurator, creating an initial Attestation and SecIdentity using the given parameters
         /// - Parameters:
         ///   - keyType: the type of Asymmetric keypair to use. Defaults to P-384
@@ -70,6 +74,7 @@ extension AttestedTLS {
                     logger.debug("SecTrust verification completedly successfully")
                     return true
                 } catch {
+                    self.errorHandler?(error)
                     logger.error("SecTrust verification failed: \(error)")
                     return false
                 }

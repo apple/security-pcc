@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal import CloudBoardAsyncXPC
 import Foundation
 
@@ -66,7 +64,7 @@ internal enum CloudBoardAttestationAPIXPCClientToServerMessages {
 
     /// The inputs needed to validate the attestation for a worker against a specific request
     internal struct RequestValidateWorkerAttestation: CloudBoardAsyncXPCByteBufferMessage {
-        internal typealias Success = ValidatedWorker
+        internal typealias Success = WorkerValidationResult
         internal typealias Failure = CloudBoardAttestationAPIError
 
         package var proxyAttestationKeyID: Data

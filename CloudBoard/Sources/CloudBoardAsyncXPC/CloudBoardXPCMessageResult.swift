@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import XPC
 
 public enum CloudBoardAsyncXPCMessageResult<Success, Failure>: Sendable where Success: Sendable, Failure: Error {

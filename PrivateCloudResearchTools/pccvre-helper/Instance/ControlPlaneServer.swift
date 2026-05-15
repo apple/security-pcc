@@ -86,9 +86,11 @@ struct ControlPlaneAgentCommand {
         case activate
     }
 
+    // See the definition of `TieModelSwitchingConfig`
     struct ModelSwitch: Codable {
-        let defaultBaseModelCompatibilityVersion: Int
-        let modelCatalogResourceBundleIDsToActivate: [String]
+        let defaultBaseModelVersionMap: [String: Int32]
+        let inferenceIDsToActivate: [String]
+        let distributionName: String
 
         static let Key = "ModelSwitchingProperty"
 

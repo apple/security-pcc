@@ -21,20 +21,97 @@ option java_package = "com.apple.privatecloudcompute.api.v1";
 option swift_prefix="Proto_PrivateCloudCompute_";
 
 message PrivateCloudComputeRequest {
-  reserved 2;
+  reserved 2, 2047;
   oneof type {
+    // Contains user's request data when `OpenRequestPayload.version == 0`.
     bytes application_payload = 1;
     // Metadata not passed on to the application service but used by cb_jophelper
-    AuthToken auth_token = 3;
+    // Sent once at the outset of the connection (contains fraud-related information)
+    OpenRequestPayload open = 3;
     FinalMessage final_message = 4;
+    PayloadChunk payload_chunk = 5;
+    OpenSubrequestPayload sub_open = 6;
+    CloseSubrequestPayload sub_close = 7;
+    // This is internal to cloudboard for communication between proxy and compute nodes and is sent in place of
+    // OpenRequestPayload
+    ProxyInvokeOpen proxy_invoke_open = 8;
+      
+    // Sent by the clientX to cancel a subrequest, either due to an error or user action.
+    // Cancellation can occur at any point in the subrequest's processing. For example, it
+    // can happen before any payload_chunk is sent, during sending, or after successful
+    // sending while receiving response. Due to the asynchronous nature of the process,
+    // the client might even send a cancellation after the server has sent the final
+    // sub_close and while its transitioning to the client.
+    // The expectation is that upon receiving sub_cancel, the server will attempt to stop
+    // the processing of the subrequest.
+    CancelSubrequestPayload sub_cancel = 9;
   }
 }
 
-message AuthToken  {
+message OpenRequestPayload {
   // Long-term token used for abuse prevention
   bytes token_granting_token = 1;
   // Used to verify that the one-time token is derived from the TGT
   bytes ott_salt = 2;
+  // Protocol version. Used to distinguish between the non-subrequest (v0) and
+  // subrequest (v1) protocols. I.e. if version is set to 1, CloudBoard expects
+  // client to send sub_open/payload_chunk/sub_close messages rather than the
+  // application_payload message.
+  uint32 version = 3;
+  // Supported capabilities on the client
+  Capabilities capabilities = 4;
+}
+
+message Capabilities {
+  // Supports prefix based chunking at the application data level
+  ApplicationDataChunking application_data_chunking = 1;
+
+  message ApplicationDataChunking {
+    uint32 size = 1;
+  }
+}
+
+message PayloadChunk {
+  // id in case we ever want to support simultaneous requests per connection
+  uint32 subrequest_id = 1;
+  bytes chunk_data = 2;
+}
+
+enum SubrequestExecutionPriority {
+  REQUEST_EXECUTION_PRIORITY_UNSPECIFIED = 0;
+  // may be discarded, e.g. because of high utilization
+  REQUEST_EXECUTION_PRIORITY_DISCARDABLE = 1;
+}
+
+// Opaque crypto material provided by client application
+message OpaqueCryptoMaterial {
+  // Adopter-provided identifier for the material
+  string id = 1;
+  bytes material = 2;
+}
+
+message OpenSubrequestPayload {
+  // id in case we ever want to support simultaneous requests per connection
+  uint32 subrequest_id = 1;
+  // Priority of the subrequest, e.g. whether it is discardable under high utilization
+  SubrequestExecutionPriority priority = 2;
+  // Key material sent alongside application layer requests. The key material is not directly exposed to cloud apps but
+  // is made available to support apps if entitled appropriately.
+  repeated OpaqueCryptoMaterial opaque_crypto_material = 3;
+  // The OTT for this inference;
+  // in the first payload, this is the same as what ROPES saw
+  bytes one_time_token = 4;
+}
+
+message CloseSubrequestPayload {
+  // id in case we ever want to support simultaneous requests per connection
+  uint32 subrequest_id = 1;
+  // currently empty
+}
+
+message CancelSubrequestPayload {
+  // id of the subrequest that is being canceled
+  uint32 subrequest_id = 1;
 }
 
 message FinalMessage {
@@ -46,19 +123,25 @@ message PrivateCloudComputeResponse {
   oneof type {
     // To be logged on the client and submitted together with input prompt
     // if agreed to by client (see PostResponseActions).
-    bytes response_uuid = 1;
+    bytes response_uuid = 1 [deprecated = true];
+    // Used when `OpenRequestPayload.version == 0`.
     bytes response_payload = 2;
     // Always sent last (guaranteed to come after the final REL entry). The client
     // can safely close the connection for the sub-stream to the proxy once it has
     // received this message.
-    ResponseSummary response_summary = 3;
+    CloseResponsePayload response_summary = 3;
     // Individual Request Execution Log entry. The Request Execution Log contains
     // all nodes a proxy has transitively attested and re-wrapped the client-
     // provided DEK to.
     RequestExecutionLogEntry request_execution_log_entry = 4;
+    // Used when `OpenRequestPayload.version == 1`.
+    PayloadChunk payload_chunk = 5;
+    OpenSubresponsePayload sub_open = 6;
+    CloseSubresponsePayload sub_close = 7;
   }
 
-  message ResponseSummary {
+
+  message CloseResponsePayload {
     reserved 1;
     // Metadata not passed on to the client-side application but handled by
     // privatecloudcomputed
@@ -69,6 +152,24 @@ message PrivateCloudComputeResponse {
   message PostResponseActions {
     // Ask the client to submit diagnostic report
     bool request_diagnostics = 1;
+  }
+
+  message OpenSubresponsePayload {
+    // id in case we ever want to support simultaneous requests per connection
+    uint32 subrequest_id = 1;
+  }
+
+  message CloseSubresponsePayload {
+    enum SubresponseStatus {
+      OK = 0;
+      INTERNAL_ERROR = 1;
+      INVALID_REQUEST = 2;
+      DISCARDED = 3;
+    }
+
+    // id in case we ever want to support simultaneous requests per connection
+    uint32 subrequest_id = 1;
+    SubresponseStatus status = 2;
   }
 
   // Since we use length-prefixed protobuf rather than gRPC we include a response
@@ -83,19 +184,36 @@ message PrivateCloudComputeResponse {
   }
 }
 
-// Contains the attestation bundle of a compute node the proxy node has
-// transitively attested and re-wrapped the client-provided DEK to
+// Contains information about a security or privacy-relevant event that occured in
+// the context of the current request
 message RequestExecutionLogEntry {
-  // Attestation bundle. Optional as the decision whether to attest to additional
+  // Attestation bundle of a trusted compute node, for which the proxy has re-wrapped
+  // the DEK. Optional as the decision whether to attest to additional
   // nodes might be made after the final time the proxy re-wraps the DEK.
   optional bytes attestation = 1;
-  // Used in case the response payload is not streamed back by the proxy node itself. This provides the necessary
+  // Used when the response payload may not be streamed back by the proxy node itself. This provides the necessary
   // context for the client to establish a receive-only AEAD context to receive and decrypt the response payload stream.
+  // from any node.
   optional ResponseContext response_context = 2;
   // Indicates whether this is the final entry of the request execution log,
   // indicating that the proxy will not make any further outbound requests/re-wrap
   // the DEK for any other nodes
   bool final = 3;
+  // Indicates the potential use of one or more assets in the context of the request
+  repeated AssetMetadata asset_metadata = 4;
+}
+
+// Metadata about an asset downloaded at runtime by cloudassetdownloader,
+// and potentially used in the context of the request.
+message AssetMetadata {
+  // Identifier of the application associated with the asset
+  string application_id = 1;
+  // Descriptive asset identifier
+  string asset_id = 2;
+  // Version of the asset
+  string version = 3;
+  // Base64-encoded SHA-256 hash of the asset contents
+  string hash = 4;
 }
 
 message ResponseContext {
@@ -107,4 +225,17 @@ message ResponseContext {
   bytes aead_key = 3;
   // AEAD nonce
   bytes aead_nonce = 4;
+}
+
+// This is internal to cloudboard for communication between proxy and compute nodes and is sent in place of
+// OpenRequestPayload
+message ProxyInvokeOpen {
+  // Long-term token used for abuse prevention
+  bytes token_granting_token = 1;
+  // Used to verify that the one-time token is derived from the TGT
+  bytes ott_salt = 2;
+  // Key material sent alongside application layer requests. The key material is not directly exposed to cloud apps but
+  // is made available to support apps if entitled appropriately.
+  repeated OpaqueCryptoMaterial opaque_crypto_material = 3;
+  Capabilities capabilities = 4;
 }

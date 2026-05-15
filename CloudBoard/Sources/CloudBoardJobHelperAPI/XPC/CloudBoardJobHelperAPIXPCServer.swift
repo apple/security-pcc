@@ -12,9 +12,9 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
-package import CloudBoardAsyncXPC
+internal import CloudBoardAsyncXPC
+package import CloudBoardDomain
+internal import CloudBoardLogging
 import os
 
 package actor CloudBoardJobHelperAPIXPCServer {
@@ -104,6 +104,32 @@ extension CloudBoardJobHelperAPIXPCServer: CloudBoardJobHelperAPIServerProtocol 
                 throw error
             } catch {
                 throw CloudBoardJobHelperAPIXPCClientToServerMessages.Abandon.Failure
+                    .unexpectedReportableError(String(reportable: error))
+            }
+            return ExplicitSuccess()
+        }
+        handlers.register(CloudBoardJobHelperAPIXPCClientToServerMessages.Warmup.self) { request in
+            Self.logger.debug("Received Warmup XPC message")
+            let delegate = try await self.ensureDelegate()
+            do {
+                try await delegate.warmup(request.info)
+            } catch let error as CloudBoardJobHelperAPIXPCClientToServerMessages.Warmup.Failure {
+                throw error
+            } catch {
+                throw CloudBoardJobHelperAPIXPCClientToServerMessages.Warmup.Failure
+                    .unexpectedReportableError(String(reportable: error))
+            }
+            return ExplicitSuccess()
+        }
+        handlers.register(CloudBoardJobHelperAPIXPCClientToServerMessages.AssignLAContext.self) { _ in
+            Self.logger.debug("Received Assign LAContext XPC message")
+            let delegate = try await self.ensureDelegate()
+            do {
+                try await delegate.assignLAContext()
+            } catch let error as CloudBoardJobHelperAPIXPCClientToServerMessages.AssignLAContext.Failure {
+                throw error
+            } catch {
+                throw CloudBoardJobHelperAPIXPCClientToServerMessages.AssignLAContext.Failure
                     .unexpectedReportableError(String(reportable: error))
             }
             return ExplicitSuccess()

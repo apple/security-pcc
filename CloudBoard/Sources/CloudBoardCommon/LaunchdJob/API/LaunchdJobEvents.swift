@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple Inc. All rights reserved.
-
 import CloudBoardMetrics
 import Foundation
 import os
@@ -27,7 +25,7 @@ public enum LaunchdJobEvents {
         case exited(ExitStatus)
         // Failed to terminate cleanly and unable to determine exit status of the instance
         case uncleanShutdown
-        // An unexpected unrecoverable launchd error occured
+        // An unexpected unrecoverable launchd error occurred
         case launchdError(Errno)
         // Failed to spawn the instance due to the provided error
         case spawnFailed(Errno)
@@ -67,11 +65,6 @@ public enum LaunchdJobEvents {
         case starting
         /// The launchd job instance is running.
         case running(pid: Int?)
-        /// The launchd job instance has been asked to terminate (by sending a SIGTERM).
-        ///
-        /// Note: There is no guarantee that this state will be entered during the instance's lifetime. This is only
-        /// entered when the instance is terminated via ``MonitredLaunchdJobInstance.terminate``.
-        case terminating
         /// The job instance has terminated with the provided exit status.
         case terminated(TerminationCondition)
         case neverRan
@@ -95,8 +88,6 @@ public enum LaunchdJobEvents {
                 return "Starting"
             case .running:
                 return "Running"
-            case .terminating:
-                return "Terminating"
             case .terminated(let terminationCondition):
                 return "Terminated (\(terminationCondition))"
             case .neverRan:

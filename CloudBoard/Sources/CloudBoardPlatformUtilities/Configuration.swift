@@ -12,13 +12,13 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CFPreferenceCoder
 import CloudBoardCommon
+import CloudBoardLogging
 import Foundation
 import GRPCClientConfiguration
 import InternalGRPC
+import NIOCore
 import os
 
 extension CFPreferences {
@@ -39,7 +39,9 @@ public struct CloudBoardDConfiguration: Codable, Hashable, Sendable {
         case heartbeat = "Heartbeat"
         case lifecycleManager = "LifecycleManager"
         case _prewarming = "Prewarming"
+        case systemServiceMonitor = "SystemServiceMonitor"
         case _load = "Load"
+        case _statusServer = "StatusServer"
         // deliberately *not* serialising _secureConfig
     }
 
@@ -47,6 +49,8 @@ public struct CloudBoardDConfiguration: Codable, Hashable, Sendable {
     public var heartbeat: Heartbeat?
     public var grpc: GRPCConfiguration?
     public var lifecycleManager: LifecycleManager?
+    public var systemServiceMonitor: SystemServiceMonitorConfiguration?
+    private var _statusServer: StatusServerConfiguration?
     private var _load: LoadConfiguration?
     private var _prewarming: PrewarmingConfiguration?
     private var _secureConfig: SecureConfig? = nil
@@ -65,15 +69,19 @@ public struct CloudBoardDConfiguration: Codable, Hashable, Sendable {
         heartbeat: Heartbeat? = nil,
         grpc: GRPCConfiguration? = nil,
         lifecycleManager: LifecycleManager? = nil,
+        systemServiceMonitor: SystemServiceMonitorConfiguration? = nil,
         load: LoadConfiguration? = nil,
-        prewarming: PrewarmingConfiguration? = nil
+        prewarming: PrewarmingConfiguration? = nil,
+        statusServer: StatusServerConfiguration? = nil
     ) {
         self.serviceDiscovery = serviceDiscovery
         self.heartbeat = heartbeat
         self.grpc = grpc
         self.lifecycleManager = lifecycleManager
+        self.systemServiceMonitor = systemServiceMonitor
         self._load = load
         self._prewarming = prewarming
+        self._statusServer = statusServer
     }
 
     /// This is not for direct use except in tests
@@ -84,16 +92,20 @@ public struct CloudBoardDConfiguration: Codable, Hashable, Sendable {
         heartbeat: Heartbeat? = nil,
         grpc: GRPCConfiguration? = nil,
         lifecycleManager: LifecycleManager? = nil,
+        systemServiceMonitor: SystemServiceMonitorConfiguration? = nil,
         load: LoadConfiguration? = nil,
-        prewarming: PrewarmingConfiguration? = nil
+        prewarming: PrewarmingConfiguration? = nil,
+        statusServer: StatusServerConfiguration? = nil
     ) {
         self._secureConfig = secureConfig
         self.serviceDiscovery = serviceDiscovery
         self.heartbeat = heartbeat
         self.grpc = grpc
         self.lifecycleManager = lifecycleManager
+        self.systemServiceMonitor = systemServiceMonitor
         self._load = load
         self._prewarming = prewarming
+        self._statusServer = statusServer
     }
 
     private mutating func applySecureConfig(_ secureConfig: SecureConfig) throws {
@@ -113,7 +125,8 @@ public struct CloudBoardDConfiguration: Codable, Hashable, Sendable {
         grpc: GRPCConfiguration? = nil,
         lifecycleManager: LifecycleManager? = nil,
         load: LoadConfiguration? = nil,
-        prewarming: PrewarmingConfiguration? = nil
+        prewarming: PrewarmingConfiguration? = nil,
+        statusServer: StatusServerConfiguration? = nil
     ) throws -> CloudBoardDConfiguration {
         var config = CloudBoardDConfiguration(
             serviceDiscovery: serviceDiscovery,
@@ -121,7 +134,8 @@ public struct CloudBoardDConfiguration: Codable, Hashable, Sendable {
             grpc: grpc,
             lifecycleManager: lifecycleManager,
             load: load,
-            prewarming: prewarming
+            prewarming: prewarming,
+            statusServer: statusServer
         )
         try config.applySecureConfig(secureConfig)
         return config
@@ -133,6 +147,10 @@ public struct CloudBoardDConfiguration: Codable, Hashable, Sendable {
 
     public var prewarming: PrewarmingConfiguration {
         return self._prewarming ?? .init()
+    }
+
+    public var statusServer: StatusServerConfiguration {
+        self._statusServer ?? .init()
     }
 
     public enum CloudBoardDConfigurationError: Error {
@@ -372,6 +390,35 @@ extension CloudBoardDConfiguration {
 }
 
 extension CloudBoardDConfiguration {
+    public struct SystemServiceMonitorConfiguration: Codable, Hashable, Sendable {
+        enum CodingKeys: String, CodingKey {
+            case _enableSSMStatusReporting = "EnableSSMStatusReporting"
+        }
+
+        // flag to enable SSM status reporting
+        private var _enableSSMStatusReporting: Bool?
+
+        public init(_enableSSMStatusReporting: Bool? = nil) {
+            self._enableSSMStatusReporting = _enableSSMStatusReporting
+        }
+
+        // Disabling SSM reporting by default. Once available broadly, we can change the default.
+        public var enableSSMStatusReporting: Bool {
+            get { self._enableSSMStatusReporting ?? false }
+            set { self._enableSSMStatusReporting = newValue }
+        }
+
+        public var description: String {
+            """
+            SystemServiceMonitorConfiguration(\
+            enableSSMStatusReporting: \(self.enableSSMStatusReporting) \
+            )
+            """
+        }
+    }
+}
+
+extension CloudBoardDConfiguration {
     public struct Keepalive: Codable, Hashable, Sendable {
         enum CodingKeys: String, CodingKey {
             case _timeToFirstPingMS = "TimeToFirstPingMilliseconds"
@@ -598,6 +645,30 @@ extension CloudBoardDConfiguration {
             self._additionalProperties
         }
     }
+
+    public struct StatusServerConfiguration: Codable, Hashable, Sendable, CustomStringConvertible {
+        /// Default status server port
+        public static let defaultPort = 50052
+
+        enum CodingKeys: String, CodingKey {
+            case _port = "Port"
+        }
+
+        private var _port: Int?
+
+        /// Status server port. Defaults to 50052.
+        public var port: Int {
+            self._port ?? Self.defaultPort
+        }
+
+        public init(port: Int? = nil) {
+            self._port = port
+        }
+
+        public var description: String {
+            "StatusServer(port: \(self.port))"
+        }
+    }
 }
 
 extension CloudBoardDConfiguration {
@@ -666,7 +737,7 @@ extension CloudBoardDConfiguration {
         /// active request-handling pairs.
         public var maxProcessCount: Int?
 
-        init(prewarmedPoolSize: Int? = nil, maxProcessCount: Int? = nil) {
+        package init(prewarmedPoolSize: Int? = nil, maxProcessCount: Int? = nil) {
             self.prewarmedPoolSize = prewarmedPoolSize
             self.maxProcessCount = maxProcessCount
         }

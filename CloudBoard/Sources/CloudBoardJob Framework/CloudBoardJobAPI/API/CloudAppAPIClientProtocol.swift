@@ -12,136 +12,66 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 package import CloudBoardAsyncXPC
+package import CloudBoardDomain
 import Foundation
 
 package protocol CloudBoardJobAPIClientToServerProtocol: Actor {
-    func warmup(details: WarmupDetails) async throws
+    func warmup(info: ManagedWarmupInfo) async throws
     func receiveParameters(parametersData: ParametersData) async throws
-    func provideInput(_ data: Data?, isFinal: Bool) async throws
-    func receiveWorkerFoundEvent(workerID: UUID, releaseDigest: String) async throws
+    func provideInput(_ data: Data) async throws
+    func receiveWorkerFoundEvent(workerID: UUID, info: WorkerFoundInfo) async throws
     func receiveWorkerMessage(workerID: UUID, _ response: WorkerResponseMessage) async throws
-    func receiveWorkerResponseSummary(workerID: UUID, succeeded: Bool) async throws
+    func receiveWorkerResponseSummary(workerID: UUID, status: WorkerResponseStatus) async throws
     func receiveWorkerEOF(workerID: UUID) async throws
     func teardown() async throws
+    func openClientSubrequest(
+        subrequestID: UInt32,
+        cryptoMaterialHandles: [CryptoMaterialHandle],
+        isDiscardable: Bool
+    ) async throws
+    func receiveSubrequestPayload(subrequestID: UInt32, payload: Data) async throws
+    func closeClientSubrequest(subrequestID: UInt32) async throws
+    func cancelClientSubrequest(subrequestID: UInt32) async throws
+    func endOfInput() async throws
+    func configureApplicationDataChunking(config: ApplicationDataChunkingConfiguration) async throws
 }
 
-package struct WarmupDetails: Sendable, ByteBufferCodable, Equatable {
-    public init() {}
-
-    package func encode(to _: inout ByteBuffer) throws {}
-
-    package init(from _: inout ByteBuffer) throws {}
-}
-
-/// Parameters message sent from cb_jobhelper to the cloud app
-package struct ParametersData: Sendable, ByteBufferCodable, Hashable, Equatable {
-    package var parametersReceived: Date
-    package var plaintextMetadata: PlaintextMetadata
-    package var requestBypassed: Bool
-    package var traceContext: TraceContext
+/// Info to fill in PCCWorkerInfo but not exposed
+package struct WorkerFoundInfo: ByteBufferCodable, Sendable, Equatable {
+    /// from the attestations
+    package var releaseDigest: String
+    /// from the attestation
+    package var ensemble: EnsembleInstanceId
+    /// from the attestation
+    package var rack: RackId
+    /// comes from ROPES - filled in as empty if not sent for now
+    package var workload: [String: [String]]
 
     package init(
-        parametersReceived: Date,
-        plaintextMetadata: PlaintextMetadata,
-        requestBypassed: Bool,
-        traceContext: TraceContext
+        releaseDigest: String,
+        ensemble: EnsembleInstanceId,
+        rack: RackId,
+        workload: [String: [String]]
     ) {
-        self.parametersReceived = parametersReceived
-        self.plaintextMetadata = plaintextMetadata
-        self.requestBypassed = requestBypassed
-        self.traceContext = traceContext
+        self.ensemble = ensemble
+        self.releaseDigest = releaseDigest
+        self.rack = rack
+        self.workload = workload
     }
 
-    package func encode(to buffer: inout ByteBuffer) throws {
-        try self.plaintextMetadata.encode(to: &buffer)
-        try self.parametersReceived.encode(to: &buffer)
-        try self.requestBypassed.encode(to: &buffer)
-        try self.traceContext.encode(to: &buffer)
+    package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        try self.releaseDigest.encode(to: &buffer)
+        try self.ensemble.encode(to: &buffer)
+        try self.rack.encode(to: &buffer)
+        try self.workload.encode(to: &buffer)
     }
 
-    package init(from buffer: inout ByteBuffer) throws {
-        self.plaintextMetadata = try .init(from: &buffer)
-        self.parametersReceived = try .init(from: &buffer)
-        self.requestBypassed = try .init(from: &buffer)
-        self.traceContext = try .init(from: &buffer)
-    }
-}
-
-extension ParametersData {
-    package struct PlaintextMetadata: ByteBufferCodable, Sendable, Hashable {
-        public var bundleID: String
-        public var bundleVersion: String
-        public var featureID: String
-        public var clientInfo: String
-        public var workloadType: String
-        public var workloadParameters: [String: [String]]
-        public var requestID: String
-        public var automatedDeviceGroup: String
-
-        public init(
-            bundleID: String,
-            bundleVersion: String,
-            featureID: String,
-            clientInfo: String,
-            workloadType: String,
-            workloadParameters: [String: [String]],
-            requestID: String,
-            automatedDeviceGroup: String
-        ) {
-            self.bundleID = bundleID
-            self.bundleVersion = bundleVersion
-            self.featureID = featureID
-            self.clientInfo = clientInfo
-            self.workloadType = workloadType
-            self.workloadParameters = workloadParameters
-            self.requestID = requestID
-            self.automatedDeviceGroup = automatedDeviceGroup
-        }
-
-        package func encode(to buffer: inout ByteBuffer) throws {
-            try self.automatedDeviceGroup.encode(to: &buffer)
-            try self.bundleID.encode(to: &buffer)
-            try self.bundleVersion.encode(to: &buffer)
-            try self.clientInfo.encode(to: &buffer)
-            try self.featureID.encode(to: &buffer)
-            try self.requestID.encode(to: &buffer)
-            try self.workloadType.encode(to: &buffer)
-            try self.workloadParameters.encode(to: &buffer)
-        }
-
-        package init(from buffer: inout ByteBuffer) throws {
-            self.automatedDeviceGroup = try .init(from: &buffer)
-            self.bundleID = try .init(from: &buffer)
-            self.bundleVersion = try .init(from: &buffer)
-            self.clientInfo = try .init(from: &buffer)
-            self.featureID = try .init(from: &buffer)
-            self.requestID = try .init(from: &buffer)
-            self.workloadType = try .init(from: &buffer)
-            self.workloadParameters = try .init(from: &buffer)
-        }
-    }
-
-    package struct TraceContext: ByteBufferCodable, Sendable, Hashable, Equatable {
-        public var traceID: String
-        public var spanID: String
-
-        public init(traceID: String, spanID: String) {
-            self.traceID = traceID
-            self.spanID = spanID
-        }
-
-        package func encode(to buffer: inout ByteBuffer) throws {
-            try self.traceID.encode(to: &buffer)
-            try self.spanID.encode(to: &buffer)
-        }
-
-        public init(from buffer: inout ByteBuffer) throws {
-            self.traceID = try .init(from: &buffer)
-            self.spanID = try .init(from: &buffer)
-        }
+    package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        self.releaseDigest = try .init(from: &buffer)
+        self.ensemble = try .init(from: &buffer)
+        self.rack = try .init(from: &buffer)
+        self.workload = try .init(from: &buffer)
     }
 }
 
@@ -149,6 +79,7 @@ package enum WorkerResponseMessage: ByteBufferCodable, Sendable, Equatable {
     package enum Result: Codable, Sendable {
         case ok
         case failure
+        case discarded
     }
 
     case payload(Data)
@@ -164,6 +95,7 @@ package enum WorkerResponseMessage: ByteBufferCodable, Sendable, Equatable {
             switch result {
             case .ok: buffer.writeInteger(0)
             case .failure: buffer.writeInteger(1)
+            case .discarded: buffer.writeInteger(2)
             }
         }
     }
@@ -189,6 +121,7 @@ package enum WorkerResponseMessage: ByteBufferCodable, Sendable, Equatable {
             switch enumCase {
             case 0: self = .result(.ok)
             case 1: self = .result(.failure)
+            case 2: self = .result(.discarded)
             case let value:
                 throw DecodingError.dataCorrupted(.init(
                     codingPath: [ByteBufferCodingKey(WorkerResponseMessage.Result.self)],

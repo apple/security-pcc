@@ -21,6 +21,8 @@
 
 import Foundation
 import CryptoKit
+@_implementationOnly import Img4
+import InternalSwiftProtobuf
 
 // MARK: - SealedHash Extensions
 extension Proto_SealedHashLedger {
@@ -61,6 +63,8 @@ extension Proto_AttestationBundle: Encodable {
         try container.encodeIfPresent(self.appData.isEmpty ? nil : self.appData, forKey: .appData)
         try container.encodeIfPresent(self.hasKeyExpiration ? self.keyExpiration.date : nil, forKey: .keyExpiration)
         try container.encodeIfPresent(self.hasTransparencyProofs ? self.transparencyProofs : nil, forKey: .transparencyProofs)
+        try container.encodeIfPresent(self.hasLocalPolicy ? self.localPolicy : nil, forKey: .localPolicy)
+        try container.encodeIfPresent(self.sfrManifest.isEmpty ? nil : self.sfrManifest, forKey: .sfrManifest)
     }
 
     enum CodingKeys: CodingKey {
@@ -71,6 +75,35 @@ extension Proto_AttestationBundle: Encodable {
         case appData
         case keyExpiration
         case transparencyProofs
+        case localPolicy
+        case sfrManifest
+    }
+}
+
+extension Proto_LocalPolicy: Encodable {
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(self.policy.isEmpty ? nil : self.policy, forKey: .policy)
+        try container.encodeIfPresent(self.implementation.rawValue != 0 ? self.implementation : nil, forKey: .implementation)
+    }
+
+    enum CodingKeys: CodingKey {
+        case policy
+        case implementation
+    }
+}
+
+extension Proto_LocalPolicy.Implementation: Encodable {
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .unknown:
+            try container.encode("IMPLEMENTATION_UNKNOWN")
+        case .ec384Sha384:
+            try container.encode("IMPLEMENTATION_EC384SHA384")
+        case .UNRECOGNIZED(let int):
+            try container.encode(int)
+        }
     }
 }
 
@@ -348,5 +381,83 @@ extension LogConsistency: Encodable {
 extension Proto_AppData {
     var identifiers: (version: UInt32, domain: String, name: String) {
         return (version, domain, name)
+    }
+}
+
+extension Proto_LocalPolicy {
+    var tbpmDigest: Data {
+        get throws {
+            guard !self.policy.isEmpty else {
+                throw Error.missingLocalPolicy
+            }
+
+            var img4 = Img4()
+            try self.policy.withUnsafeBytes { buffer in
+                let ret = Img4DecodeInit(buffer.baseAddress, buffer.count, &img4)
+                guard ret == DR_Success else {
+                    throw Error.decodeFailed(status: ret.rawValue)
+                }
+            }
+
+            var implementation: Img4DecodeImplementation
+            let digestSize: Int
+            switch self.implementation {
+            case .unknown, .UNRECOGNIZED(_):
+                throw Error.unsupportedImplementation
+            case .ec384Sha384:
+                implementation = kImg4DecodeLocalPolicyEc384Sha384
+                digestSize = 48
+            }
+
+            let ret = Img4DecodePerformTrustEvaluation(UInt32(kImg4Tag_lpol), &img4, { _, _, _, _ in 0 }, &implementation, nil)
+            guard ret == DR_Success else {
+                throw Error.trustEvaluationFailed(status: ret.rawValue)
+            }
+
+            var buffer = Data(repeating: 0, count: digestSize)
+            try buffer.withUnsafeMutableBytes { buffer in
+                let ret = Img4DecodeCopyManifestTrustedBootPolicyMeasurement(&img4, { _, _, _, _ in 0 }, &implementation, buffer.baseAddress, buffer.count)
+                guard ret == DR_Success else {
+                    throw Error.tbpmDigestCalculationFailed(status: ret.rawValue)
+                }
+            }
+
+            return buffer
+        }
+    }
+
+    var nsihDigest: Data {
+        get throws {
+            guard !self.policy.isEmpty else {
+                throw Error.missingLocalPolicy
+            }
+
+            var img4 = Img4()
+            try policy.withUnsafeBytes { buffer in
+                let ret = Img4DecodeInit(buffer.baseAddress, buffer.count, &img4)
+                guard ret == DR_Success else {
+                    throw Error.decodeFailed(status: ret.rawValue)
+                }
+            }
+
+            var size: Int = 0
+            var pointer: UnsafeMutablePointer<UInt8>? = nil
+            let ret = Img4DecodeGetDataFromSection(&img4, UInt32(kImg4ManifestIndex), DERTag(kImg4Tag_nsih), &pointer, &size)
+            guard ret == DR_Success, let pointer else {
+                throw Error.decodeFailed(status: ret.rawValue)
+            }
+
+            return Data(bytesNoCopy: pointer, count: size, deallocator: .none)
+        }
+    }
+}
+
+extension Proto_LocalPolicy {
+    enum Error: Swift.Error {
+        case missingLocalPolicy
+        case decodeFailed(status: Int32)
+        case unsupportedImplementation
+        case trustEvaluationFailed(status: Int32)
+        case tbpmDigestCalculationFailed(status: Int32)
     }
 }

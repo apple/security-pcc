@@ -36,8 +36,13 @@ public protocol EnsemblerInterface {
 	func getStatus() -> EnsemblerStatus
 	func getDraninigStatus() -> Bool
 	func getEnsembleID() -> String?
+    func getRackID() -> String?
 	func getNodeMap() -> [String: EnsembleNodeInfo]
 	func drain()
 	func distributeDataKey(key: Data, type: DistributionType) throws -> SingleUseKeyToken
 	func getDataKey(token: SingleUseKeyToken) throws -> Data?
+    func registerDataCallback(appID: String, callback: @escaping EnsembleDataMessageReceived)
+    func unregisterDataCallback(appID: String)
+	func sendDataAndGetResponse(appID: String,data: Data, destination: Int, timeout: TimeInterval, completion: @escaping (Result<Data, Error>) -> Void)
+	func sendDataToAllFollowers(appID: String, data: Data, timeout: TimeInterval, completion: @escaping (Result<[NodeResponse], Error>) -> Void)
 }

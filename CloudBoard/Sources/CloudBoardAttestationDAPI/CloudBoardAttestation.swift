@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple. All rights reserved.
-
 /// Defines shared constants that are relevant for users of the CloudBoardAttestationDAPI
 public enum CloudBoardAttestation: Sendable {
     public static let keychainAccessGroup = "com.apple.cloudos.cloudboard"

@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 // Message for CloudBoard to configure controller
 public struct WorkloadProperties: Codable, CustomStringConvertible, Sendable {
     public var workloadName: String
@@ -33,7 +31,57 @@ public struct WorkloadProperties: Codable, CustomStringConvertible, Sendable {
     }
 }
 
+/// Internal workload configuration type that can carry information about either compute or proxy workloads across XPC
+/// boundaries
+package enum InternalWorkloadConfig: Codable, CustomStringConvertible, Sendable {
+    case compute(ComputeWorkloadConfig)
+    case proxy(ProxyWorkloadConfig)
+
+    public var description: String {
+        switch self {
+        case .compute(let computeWorkloadConfig):
+            return """
+            compute(
+            \(computeWorkloadConfig)
+            )
+            """
+        case .proxy(let proxyWorkloadConfig):
+            return """
+            proxy(
+            \(proxyWorkloadConfig)
+            )
+            """
+        }
+    }
+
+    package var maxBatchSize: Int {
+        switch self {
+        case .compute(let config): config.maxBatchSize
+        case .proxy(let config): config.maxBatchSize
+        }
+    }
+
+    package var currentBatchSize: Int {
+        switch self {
+        case .compute(let config): config.currentBatchSize
+        case .proxy(let config): config.currentBatchSize
+        }
+    }
+
+    package var optimalBatchSize: Int {
+        switch self {
+        case .compute(let config): config.optimalBatchSize
+        case .proxy(let config): config.optimalBatchSize
+        }
+    }
+}
+
 // Message for Ropes/ServiceDiscovery
+@available(
+    *,
+    deprecated,
+    message: "Use ComputeWorkloadConfig with registerComputeWorkload or ProxyWorkloadConfig with registerProxyWorkload instead"
+)
 public struct WorkloadConfig: Codable, CustomStringConvertible, Sendable {
     public enum WorkloadType: Codable, Sendable {
         case worker
@@ -140,6 +188,124 @@ public struct WorkloadConfig: Codable, CustomStringConvertible, Sendable {
     }
 }
 
+public enum RoutingTagValue: Codable, CustomStringConvertible, Sendable, Equatable, Hashable {
+    case string(String)
+    case stringList([String])
+
+    public var description: String {
+        switch self {
+        case .string(let stringValue):
+            return stringValue
+        case .stringList(let stringValues):
+            return "[" + stringValues.joined(separator: ", ") + "]"
+        }
+    }
+}
+
+/// Compute workload configuration for ROPES/Service Discovery metadata
+public struct ComputeWorkloadConfig: Codable, CustomStringConvertible, Sendable {
+    public var maxBatchSize: Int
+    public var optimalBatchSize: Int
+    public var currentBatchSize: Int
+    public var workloadTags: [String: RoutingTagValue]
+
+    /// Compute node workload configuration
+    /// - Parameters:
+    ///   - maxBatchSize: Maximum number of concurrent requests the workload supports
+    ///   - optimalBatchSize:  Optimal number of concurrent requests the workload supports
+    ///   - currentBatchSize: Current  number of concurrent requests the workload is handling
+    ///   - workloadTags: Metadata to be announced to Service Discovery under the "workload" field
+    public init(
+        maxBatchSize: Int,
+        optimalBatchSize: Int,
+        currentBatchSize: Int,
+        workloadTags: [String: RoutingTagValue]
+    ) {
+        self.maxBatchSize = maxBatchSize
+        self.optimalBatchSize = optimalBatchSize
+        self.currentBatchSize = currentBatchSize
+        self.workloadTags = workloadTags
+    }
+
+    public var description: String {
+        """
+        \(String(describing: Self.self))(
+        maxBatchSize: \(self.maxBatchSize), \
+        optimalBatchSize: \(self.optimalBatchSize), \
+        currentBatchSize: \(self.currentBatchSize), \
+        workloadTags: \(self.workloadTags))
+        """
+    }
+}
+
+/// Proxy workload configuration for ROPES/Service Discovery metadata
+public struct ProxyWorkloadConfig: Codable, CustomStringConvertible, Sendable {
+    public struct ProxyMetadata: Codable, CustomStringConvertible, Equatable, Sendable {
+        /// List of proxied services
+        public var services: [String]
+        /// Internal-only field to carry workload controller provided routing group aliases for backward compatibility.
+        /// Not exposed publicly as RGAs should no longer be managed by workloads themselves. Instead RGAs are
+        /// directly read from secure-config by cloudboardd
+        package var routingGroupAliasOverrides: [String]?
+
+        /// Metadata to be provided to Service Discovery under the "trusted-proxy" field
+        /// - Parameter services: List of proxied services
+        public init(services: [String]) {
+            self.init(services: services, routingGroupAliasOverrides: nil)
+        }
+
+        package init(services: [String], routingGroupAliasOverrides: [String]?) {
+            self.services = services
+            self.routingGroupAliasOverrides = routingGroupAliasOverrides
+        }
+
+        public var description: String {
+            """
+            \(String(describing: Self.self))(
+            services: \(self.services))
+            """
+        }
+    }
+
+    public var maxBatchSize: Int
+    public var optimalBatchSize: Int
+    public var currentBatchSize: Int
+    public var metadata: ProxyMetadata
+    public var workloadTags: [String: RoutingTagValue]
+
+    /// Proxy node workload configuration
+    /// - Parameters:
+    ///   - maxBatchSize: Maximum number of concurrent requests the workload supports
+    ///   - optimalBatchSize:  Optimal number of concurrent requests the workload supports
+    ///   - currentBatchSize: Current  number of concurrent requests the workload is handling
+    ///   - metadata: Metadata to be announced to Service Discovery under the "trusted-proxy" field
+    ///   - workloadTags: Metadata to be announced to Service Discovery under the "workload" field
+    public init(
+        maxBatchSize: Int,
+        optimalBatchSize: Int,
+        currentBatchSize: Int,
+        metadata: ProxyMetadata,
+        workloadTags: [String: RoutingTagValue] = [:]
+    ) {
+        self.maxBatchSize = maxBatchSize
+        self.optimalBatchSize = optimalBatchSize
+        self.currentBatchSize = currentBatchSize
+        self.workloadTags = workloadTags
+        self.metadata = metadata
+    }
+
+    public var description: String {
+        """
+        \(String(describing: Self.self))(
+        maxBatchSize: \(self.maxBatchSize), \
+        optimalBatchSize: \(self.optimalBatchSize), \
+        currentBatchSize: \(self.currentBatchSize), \
+        metadata: \(self.metadata)), \
+        workloadTags: \(self.workloadTags))
+        """
+    }
+}
+
 public enum WorkloadControllerState: Codable, CustomStringConvertible, Sendable {
     case initializing
     case ready
@@ -184,20 +350,18 @@ public struct WorkloadControllerStatus: Codable, CustomStringConvertible, Sendab
     }
 }
 
-public protocol CloudBoardControllerAPIClientToServerProtocol: Actor {
-    func registerWorkload(
-        config: WorkloadConfig, properties: WorkloadProperties
-    ) async throws
+package protocol CloudBoardControllerAPIClientToServerProtocol: Actor {
+    func registerWorkload(config: InternalWorkloadConfig, properties: WorkloadProperties) async throws
     func updateHealthStatus(status: WorkloadControllerStatus) async throws
     func restartPrewarmedInstances() async throws
 }
 
-public protocol CloudBoardControllerAPIClientDelegateProtocol:
+package protocol CloudBoardControllerAPIClientDelegateProtocol:
 AnyObject, Sendable, CloudBoardControllerAPIServerToClientProtocol {
     func disconnected() async
 }
 
-public protocol CloudBoardControllerAPIClientProtocol:
+package protocol CloudBoardControllerAPIClientProtocol:
 CloudBoardControllerAPIClientToServerProtocol {
     func connect(delegate: CloudBoardControllerAPIClientDelegateProtocol) async
 }

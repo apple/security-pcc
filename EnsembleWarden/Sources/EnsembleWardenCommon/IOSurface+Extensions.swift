@@ -55,15 +55,91 @@ extension IOSurface {
         ])
     }
 
-    fileprivate func withLock<R>(_ body: (IOSurface) throws -> R) rethrows -> R {
-        IOSurfaceLock(self, .init(), nil)
-        defer {
-            IOSurfaceUnlock(self, .init(), nil)
+    package convenience init?(testBytesCount count: Int) throws {
+        var dataBytes = Array<UInt8>(repeating: 0, count: count)
+        let a = Character("a").asciiValue!
+        let divisor = Int(Character("z").asciiValue! - a) + 1
+        for byte in 0..<count {
+            dataBytes[byte] = UInt8(Int(a) + byte % divisor)
         }
-        return try body(self)
-
+        try self.init(data: Data(dataBytes))
     }
 
+    package convenience init?(randomBytesCount count: Int) throws {
+        var dataBytes = Array<UInt8>(repeating: 0, count: count)
+        let result = SecRandomCopyBytes(kSecRandomDefault, count, &dataBytes)
+        guard result == errSecSuccess else {
+            throw EnsembleWardenError.failedToGenerateRandomBytes
+        }
+        try self.init(data: Data(dataBytes))
+    }
+
+    package convenience init?(
+        from inSurface: IOSurface,
+        at range: ClosedRange<Int>
+    ) throws {
+        guard range.lowerBound >= 0, range.lowerBound < inSurface.count,
+              range.upperBound >= 0, range.upperBound < inSurface.count else {
+            throw EnsembleWardenError.invalidIOSurfaceRange
+        }
+
+        try self.init(size: range.count)
+
+        self.baseAddress.copyMemory(
+            from: inSurface.baseAddress + range.lowerBound,
+            byteCount: range.count)
+    }
+
+    package static func == (lhs: IOSurface, rhs: IOSurface) -> Bool {
+        if lhs === rhs { return true }
+        if IOSurfaceGetWidth(lhs) != IOSurfaceGetWidth(rhs) { return false }
+        if IOSurfaceGetHeight(lhs) != IOSurfaceGetHeight(rhs) { return false }
+        if IOSurfaceGetBytesPerElement(lhs) !=
+            IOSurfaceGetBytesPerElement(rhs) { return false }
+        if IOSurfaceGetBytesPerRow(lhs) !=
+            IOSurfaceGetBytesPerRow(rhs) { return false }
+        return memcmp(lhs.baseAddress, rhs.baseAddress, lhs.bytesPerRow) == 0
+    }
+
+    package static func != (lhs: IOSurface, rhs: IOSurface) -> Bool {
+        !(lhs == rhs)
+    }
+
+    /// Size of the IOSurface data
+    package var count: Int {
+        IOSurfaceGetWidth(self) *
+        IOSurfaceGetHeight(self) *
+        IOSurfaceGetBytesPerElement(self)
+    }
+
+    /// Hexadecimal string representation of the IOSurface data
+    package var hexString: String {
+        Data(ioSurface: self).hexString
+    }
+
+    package func takeOwnership() throws {
+        var taskIDToken = mach_port_t(MACH_PORT_NULL)
+
+        let kr1 = task_create_identity_token(mach_task_self_, &taskIDToken)
+        guard kr1 == KERN_SUCCESS else {
+            throw EnsembleWardenError.failedToTakeOwnership(kr1)
+        }
+        defer {
+            mach_port_deallocate(mach_task_self_, taskIDToken)
+        }
+
+        let kr2 = IOSurfaceSetOwnershipIdentity(
+            self, taskIDToken, VM_LEDGER_TAG_UNCHANGED, 0)
+        guard kr2 == KERN_SUCCESS else {
+            throw EnsembleWardenError.failedToTakeOwnership(kr2)
+        }
+    }
+
+    package func prefault() throws {
+        guard madvise(self.baseAddress, self.count, MADV_WILLNEED) == 0  else {
+            throw EnsembleWardenError.failedToPrefaultIOSurface
+        }
+    }
 }
 
 extension String {
@@ -75,9 +151,14 @@ extension String {
 
 extension Data {
     package init(ioSurface: IOSurface) {
-        let count = IOSurfaceGetWidth(ioSurface) * IOSurfaceGetHeight(ioSurface) * IOSurfaceGetBytesPerElement(ioSurface)
-        self = ioSurface.withLock { unlocked in
-            Data(bytesNoCopy: unlocked.baseAddress, count: count, deallocator: .none)
-        }
+        self = Data(
+            bytesNoCopy: ioSurface.baseAddress,
+            count: ioSurface.count,
+            deallocator: .none)
+    }
+
+    /// Hexadecimal string representation of the data
+    package var hexString: String {
+        self.map { String(format: "%02hhx", $0) }.joined()
     }
 }

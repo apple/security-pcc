@@ -28,8 +28,12 @@ import Security_Private.SecCertificatePriv
 public struct ProvisioningCertificate: Sendable {
     let certificate: SecCertificate
 
+    // TODO: Remove when Security adopts Swift Concurrency
+    private let _publicKey: SecKey
     /// The public key.
-    public let publicKey: SecKey
+    public var publicKey: SecKey {
+        _publicKey
+    }
     /// The chassis ID.
     public let chassisID: ChassisID?
     /// The device identity.
@@ -47,7 +51,7 @@ public struct ProvisioningCertificate: Sendable {
         }
 
         self.certificate = certificate
-        self.publicKey = publicKey
+        self._publicKey = publicKey
 
         var critical: Bool = false
         if let chassisIDValue = SecCertificateCopyExtensionValue(certificate, ChassisID.objectIdentifier.description as CFString, &critical) as? Data {

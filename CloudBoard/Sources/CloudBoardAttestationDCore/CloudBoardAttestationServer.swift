@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple. All rights reserved.
-
 internal import CloudBoardAsyncXPC
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
@@ -50,12 +48,12 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
     private var waitingTillRunning: [CheckedContinuation<Void, any Error>]? = []
 
     private var stateMachine: AttestationStateMachine
-    private var _unpublishedKeys: [AttestedKey] = []
+    private var _unpublishedKeys: [InternalAttestedKey] = []
     // This is only ever mutated safely on the actor
     // it may be read outside of it though in tests
     private let _proxiedReleases = Mutex<[ReleaseDigestEntry]>([])
 
-    private var activeUnpublishedKeys: [AttestedKey] {
+    private var activeUnpublishedKeys: [InternalAttestedKey] {
         return self._unpublishedKeys.filter { $0.expiry > .now }
     }
 
@@ -84,7 +82,8 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
         maximumValidatedEntryCacheSize: Int,
         isProxy: Bool,
         // abstracted to allow unit testing
-        clock: ClockType
+        clock: ClockType,
+        workerRackIDCacheTTL: Int
     ) {
         self.apiServer = apiServer
         self.attestationProvider = attestationProvider
@@ -100,7 +99,8 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
             enableReleaseSetValidation: enableReleaseSetValidation,
             maximumValidatedEntrySize: maximumValidatedEntryCacheSize,
             metrics: metrics,
-            clock: clock
+            clock: clock,
+            workerRackIDCacheTTLMinutes: workerRackIDCacheTTL
         )
         self.metrics = metrics
         self.clock = clock
@@ -122,7 +122,15 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
         self.logger.info("Received request for attested key set")
         do {
             let activeKey = try await self.obtainAttestedKey()
-            let keySet = AttestedKeySet(currentKey: activeKey, unpublishedKeys: self.activeUnpublishedKeys)
+            let keySet = try AttestedKeySet(
+                currentKey: activeKey
+                    .exportable(
+                        logger: self.logger
+                    ),
+                unpublishedKeys: self.activeUnpublishedKeys.map { try $0.exportable(
+                    logger: self.logger
+                ) }
+            )
             self.logger.log("Returning key set: \(keySet, privacy: .public)")
             return keySet
         } catch {
@@ -156,7 +164,7 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
     func validateWorkerAttestation(
         proxyAttestationKeyID: Data,
         rawWorkerAttestationBundle: Data
-    ) async throws -> CloudBoardAttestationDAPI.ValidatedWorker {
+    ) async throws -> CloudBoardAttestationDAPI.WorkerValidationResult {
         guard self.isProxy else {
             self.logger.error("requested validation of a worker attestation when not a proxy!")
             throw CloudBoardAttestationAPIError.internalError
@@ -167,7 +175,7 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
         )
     }
 
-    private func obtainAttestedKey() async throws -> AttestedKey {
+    private func obtainAttestedKey() async throws -> InternalAttestedKey {
         switch try self.stateMachine.obtainAttestedKey() {
         case .waitForInitialization(let future):
             self.logger.info("Waiting for initialization to complete")
@@ -195,40 +203,60 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
         }
     }
 
-    private func createNewAttestedKey() async throws -> AttestedKey {
-        // Actual key expiry is slightly longer than the advertised key expiry to avoid TOCTOU issues and to
-        // allow for latency between client-side validation and CloudBoard receiving requests
-        let now = self.clock.dateNow
-        let advertisedKeyExpiry = now + self.keyLifetime.timeInterval
-        let keyExpiry = advertisedKeyExpiry + self.keyExpiryGracePeriod.timeInterval
+    private func createNewAttestedKey() async throws -> InternalAttestedKey {
+        // Actual key expiry is slightly longer (by self.keyExpiryGracePeriod) than the advertised key expiry to avoid
+        // TOCTOU issues and to allow for latency between client-side validation and CloudBoard receiving requests
+        let advertisedKeyLifetime = Duration.seconds(self.keyLifetime.timeInterval)
 
         let internalAttestedKey = try await self.attestationProvider
             .createAttestedKey(
-                attestationBundleExpiry: advertisedKeyExpiry,
+                clock: self.clock,
+                attestationLifetime: advertisedKeyLifetime,
+                keyExpiryGracePeriod: self.keyExpiryGracePeriod.timeInterval,
                 proxiedReleaseDigests: self.proxiedReleases
             )
 
-        let exportable = try internalAttestedKey.exportable(
-            logger: self.logger,
-            expiry: keyExpiry,
-            keychain: self.keychain
-        )
+        /// For  a SEP backed key store in the keychain
+        if case .sepKey(let secKey) = internalAttestedKey.key {
+            do {
+                try Keychain.add(
+                    key: secKey,
+                    keyId: Data(SHA256.hash(data: internalAttestedKey.attestationBundle)),
+                    keychain: self.keychain
+                )
+            } catch {
+                self.logger.error(
+                    "Failed to add key to keychain: \(error, privacy: .public)"
+                )
+                throw error
+            }
+        }
+
+        self.logger.log(level: .default, """
+        New attested key created with
+        KeyID=\(internalAttestedKey.keyID.base64EncodedString(), privacy: .public)
+        Expiry=\(internalAttestedKey.expiry, privacy: .public)
+        ProxiedReleaseDigests=\(internalAttestedKey.proxiedReleaseDigests, privacy: .public)
+        ReleaseDigest=\(internalAttestedKey.releaseDigest, privacy: .public)
+        AppData=\(internalAttestedKey.appData.forLogging(), privacy: .public)
+        """)
+
         if self.isProxy {
-            try await self.workerValidationCache.notifyOfNewKey(proxyKey: exportable)
+            try await self.workerValidationCache.notifyOfNewKey(proxyKey: internalAttestedKey)
         }
         do {
             try await self.attestationCache.write(.init(
-                keyId: exportable.keyID,
-                attestationBundle: exportable.attestationBundle
+                keyId: internalAttestedKey.keyID,
+                attestationBundle: internalAttestedKey.attestationBundle
             ))
             self.logger
                 .notice(
-                    "Cached attested key with keyID: \(exportable.keyID.base64EncodedString(), privacy: .public)"
+                    "Cached attested key with keyID: \(internalAttestedKey.keyID.base64EncodedString(), privacy: .public)"
                 )
         } catch {
             self.logger.error("Failed to cache attestation bundle: \(error, privacy: .public)")
         }
-        return exportable
+        return internalAttestedKey
     }
 
     private func initializeFromCache() async throws {
@@ -447,7 +475,7 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
 
             // Remove expired keys from keychain
             // lots of side effects so not appropriate for a filter
-            var keepUnpublishedKeys: [AttestedKey] = []
+            var keepUnpublishedKeys: [InternalAttestedKey] = []
             for key in self._unpublishedKeys {
                 if key.expiry < self.clock.dateNow {
                     self.logger.notice(
@@ -459,8 +487,8 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
                         case .direct:
                             // Nothing to do
                             ()
-                        case .keychain(let persistentKeyRef):
-                            try Keychain.delete(persistentKeyRef: persistentKeyRef, keychain: self.keychain)
+                        case .sepKey(let secKey):
+                            try Keychain.delete(persistentKeyRef: secKey.persistentRef(), keychain: self.keychain)
                         }
                     } catch {
                         self.logger.error(
@@ -481,15 +509,26 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
             self._unpublishedKeys = keepUnpublishedKeys
             // It's possible that we didn't actually rotate the key, but this occurs only on revocations
             // and so we just treat this as having happened, it's not a problem to repeat ourselves
-            let keySet = AttestedKeySet(currentKey: currentKey, unpublishedKeys: self.activeUnpublishedKeys)
+            let keySet = try AttestedKeySet(
+                currentKey: currentKey
+                    .exportable(
+                        logger: self.logger
+                    ),
+                unpublishedKeys: self.activeUnpublishedKeys.map { try $0.exportable(
+                    logger: self.logger
+                ) }
+            )
             self.metrics.emit(Metrics.CloudBoardAttestationServer.KeyRotationCounter(action: .increment(by: 1)))
             self.logger.notice("Broadcasting new attested key set: \(keySet, privacy: .public)")
             try await self.apiServer.keyRotated(newKeySet: keySet)
-            try await self.apiServer.attestationRotated(newAttestationSet: .init(keySet: keySet))
+            try await self.apiServer.attestationRotated(newAttestationSet: .init(
+                currentAttestationKey: currentKey,
+                unpublishedAttestationKeys: self.activeUnpublishedKeys
+            ))
         }
     }
 
-    private func filterKeyForCurrentReleases(_ key: AttestedKey) -> Bool {
+    private func filterKeyForCurrentReleases(_ key: InternalAttestedKey) -> Bool {
         if self.releasesProvider != nil {
             for release in key.proxiedReleaseDigests {
                 if self.proxiedReleases
@@ -521,10 +560,10 @@ private struct AttestationStateMachine {
     }
 
     internal enum AttestationState: CustomStringConvertible {
-        case initializing(Promise<AttestedKey?, Error>)
+        case initializing(Promise<InternalAttestedKey?, Error>)
         case initialized
-        case awaitingAttestedKey(Promise<AttestedKey, Error>)
-        case attestedKeyAvailable(key: AttestedKey)
+        case awaitingAttestedKey(Promise<InternalAttestedKey, Error>)
+        case attestedKeyAvailable(key: InternalAttestedKey)
         case attestedKeyUnavailable(Error)
 
         var description: String {
@@ -547,17 +586,17 @@ private struct AttestationStateMachine {
 
     init(logger: Logger) {
         self.logger = logger
-        self.state = .initializing(Promise<AttestedKey?, Error>())
+        self.state = .initializing(Promise<InternalAttestedKey?, Error>())
     }
 
     enum AttestedKeyAction {
-        case waitForInitialization(Future<AttestedKey?, Error>)
+        case waitForInitialization(Future<InternalAttestedKey?, Error>)
         case createAttestedKey
-        case waitForAttestedKey(Future<AttestedKey, Error>)
-        case continueWithAttestedKey(AttestedKey)
+        case waitForAttestedKey(Future<InternalAttestedKey, Error>)
+        case continueWithAttestedKey(InternalAttestedKey)
     }
 
-    mutating func initialize(cachedKey: AttestedKey? = nil) {
+    mutating func initialize(cachedKey: InternalAttestedKey? = nil) {
         switch self.state {
         case .initializing(let promise):
             promise.succeed(with: cachedKey)
@@ -577,7 +616,7 @@ private struct AttestationStateMachine {
         case .initializing(let promise):
             return .waitForInitialization(Future(promise))
         case .initialized:
-            self.state = .awaitingAttestedKey(Promise<AttestedKey, Error>())
+            self.state = .awaitingAttestedKey(Promise<InternalAttestedKey, Error>())
             return .createAttestedKey
         case .awaitingAttestedKey(let promise):
             return .waitForAttestedKey(Future(promise))
@@ -588,7 +627,7 @@ private struct AttestationStateMachine {
         }
     }
 
-    mutating func attestedKeyReceived(key: AttestedKey) -> AttestedKey {
+    mutating func attestedKeyReceived(key: InternalAttestedKey) -> InternalAttestedKey {
         // We might have gotten additional requests or the key might have rotated and has been updated in the meantime
         switch self.state {
         case .awaitingAttestedKey(let promise):
@@ -607,7 +646,7 @@ private struct AttestationStateMachine {
         }
     }
 
-    mutating func keyRotated(key: AttestedKey) {
+    mutating func keyRotated(key: InternalAttestedKey) {
         switch self.state {
         case .awaitingAttestedKey(let promise):
             promise.succeed(with: key)
@@ -618,7 +657,7 @@ private struct AttestationStateMachine {
         self.state = .attestedKeyAvailable(key: key)
     }
 
-    mutating func keyRequestFailed(error: Error) throws -> AttestedKey {
+    mutating func keyRequestFailed(error: Error) throws -> InternalAttestedKey {
         switch self.state {
         case .awaitingAttestedKey(let promise):
             promise.fail(with: error)
@@ -654,19 +693,16 @@ private struct AttestationStateMachine {
 }
 
 extension InternalAttestedKey {
-    /// Creates AttestedKey from the InternalAttestedKey. For a SEP-backed key this will store the key in the keychain
-    /// and obtain a persistent reference that can be shared across process boundaries.
+    /// Creates AttestedKey from the InternalAttestedKey. For a SEP-backed key this
+    /// will obtain a persistent reference that can be shared across process boundaries.
     func exportable(
         logger: Logger,
-        expiry: Date,
-        keychain: SecKeychain?
     ) throws -> AttestedKey {
         let key: AttestedKeyType
         switch self.key {
         case .direct(let data):
             key = .direct(privateKey: data)
         case .sepKey(let secKey):
-            try Keychain.add(key: secKey, keyId: Data(SHA256.hash(data: self.attestationBundle)), keychain: keychain)
             do {
                 key = try .keychain(persistentKeyReference: secKey.persistentRef())
             } catch {
@@ -678,11 +714,31 @@ extension InternalAttestedKey {
         }
         return AttestedKey(
             key: key,
-            attestationBundle: self.attestationBundle,
-            expiry: expiry,
-            releaseDigest: self.releaseDigest,
-            availableOnNodeOnly: false,
-            proxiedReleaseDigests: self.proxiedReleaseDigests
+            keyID: self.keyID,
+            expiry: self.expiry,
+            appData: self.appData
+        )
+    }
+}
+
+extension AttestationSet.Attestation {
+    init(key: InternalAttestedKey) {
+        self = .init(
+            attestationBundle: key.attestationBundle,
+            expiry: key.expiry,
+            releaseDigest: key.releaseDigest,
+            availableOnNodeOnly: key.availableOnNodeOnly,
+            proxiedReleaseDigests: key.proxiedReleaseDigests,
+            appData: key.appData
+        )
+    }
+}
+
+extension AttestationSet {
+    init(currentAttestationKey: InternalAttestedKey, unpublishedAttestationKeys: [InternalAttestedKey]) {
+        self = .init(
+            currentAttestation: .init(key: currentAttestationKey),
+            unpublishedAttestations: unpublishedAttestationKeys.map { .init(key: $0) }
         )
     }
 }
@@ -696,5 +752,17 @@ extension Duration {
 extension TimeAmount {
     public var timeInterval: TimeInterval {
         return Double(self.nanoseconds) / 1_000_000_000
+    }
+}
+
+/// For logging AppData - in almost all cases it will be a UTF8 string
+extension [String: Data] {
+    func forLogging() -> [String: String] {
+        self.mapValues { data in
+            if let string = data.utf8String {
+                return string
+            }
+            return "base64: \(data.base64EncodedString())"
+        }
     }
 }

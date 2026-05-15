@@ -139,7 +139,7 @@ import os
 	/// available
 	/// - Parameter entry: target SCEntry to write
 	@objc public func append(_ entry: SCEntry) throws {
-		let contentName = String(format: "%03d", self.entries.count)
+		let contentName = String(format: "%03lld", self.entries.count)
 
 		if let slotURL = self.slotURL {
 			let contentURL = slotURL.appendingPathComponent(contentName)

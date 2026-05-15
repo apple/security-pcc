@@ -12,8 +12,8 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-package import CloudBoardAsyncXPC
+internal import CloudBoardAsyncXPC
+package import CloudBoardDomain
 import Foundation
 import os
 
@@ -61,30 +61,26 @@ extension CloudBoardJobAPIXPCServer: CloudBoardJobAPIServerToClientProtocol {
     }
 
     package func internalError() async {
-        await self.listener.broadcast(InternalErrorMessage())
+        await self.listener.broadcast(ManagedAppToJobHelperXPCMessages.InternalError())
+    }
+
+    package func reportRequestExecutionError(_ error: RequestExecutionError) async {
+        await self.listener.broadcast(CloudAppToJobHelperRequestExecutionError(error: error))
     }
 
     package func endJob() async {
-        await self.listener.broadcast(EndJob())
+        await self.listener.broadcast(ManagedAppToJobHelperXPCMessages.EndJob())
     }
 
     package func findWorker(
-        workerID: UUID,
-        serviceName: String,
-        routingParameters: [String: [String]],
-        responseBypass: Bool,
-        forwardRequestChunks: Bool,
-        isFinal: Bool,
-        spanID: String
+        query: FindWorkerQuery,
+        subrequestID: UInt32?,
+        cryptoMaterialHandles: [CryptoMaterialHandle]
     ) async throws {
-        let requestForWorker = WorkerConstraints(
-            workerID: workerID,
-            serviceName: serviceName,
-            routingParameters: routingParameters,
-            responseBypass: responseBypass,
-            forwardRequestChunks: forwardRequestChunks,
-            isFinal: isFinal,
-            spanID: spanID
+        let requestForWorker = FindWorkerMessage(
+            query: query,
+            subrequestID: subrequestID,
+            cryptoMaterialHandles: cryptoMaterialHandles
         )
         await self.listener.broadcast(requestForWorker)
     }
@@ -126,6 +122,21 @@ extension CloudBoardJobAPIXPCServer: CloudBoardJobAPIServerToClientProtocol {
                 distributionType: distributionType
             ))
     }
+
+    package func makePrivateInformationRetrievalRequest(
+        _ request: CloudBoardJobAPIPIRRequest
+    ) async throws -> CloudBoardJobAPIPIRResponse {
+        // We can use sendToAny as we know there is only one listener (cb_jobhelper)
+        return try await self.listener.sendToAny(CloudAppToJobHelperPIRMessage(request: request))
+    }
+
+    package func sendSubresponsePayload(subrequestID: UInt32, payload: Data) async {
+        await self.listener.broadcast(SubresponsePayload(subresponseID: subrequestID, payload: payload))
+    }
+
+    package func sendSubresponseEOF(subrequestID: UInt32, status: InternalSubresponseStatus) async {
+        await self.listener.broadcast(EndOfSubresponse(subresponseID: subrequestID, status: status))
+    }
 }
 
 extension CloudBoardJobAPIXPCServer: CloudBoardJobAPIServerProtocol {
@@ -141,19 +152,19 @@ extension CloudBoardJobAPIXPCServer: CloudBoardJobAPIServerProtocol {
         _ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore
     ) {
         handlers.register(
-            CloudBoardJobAPIXPCClientToServerMessage.Warmup.self
-        ) { warmupMessage in
+            JobHelperToManagedAppXPCMessages.Warmup.self
+        ) { message in
             Self.logger.debug("Received Warmup XPC message")
-            let delegate = try await self.ensureDelegate(for: CloudBoardJobAPIXPCClientToServerMessage.Warmup.self)
-            try await delegate.warmup(details: warmupMessage)
+            let delegate = try await self.ensureDelegate(for: JobHelperToManagedAppXPCMessages.Warmup.self)
+            try await delegate.warmup(info: message.info)
             return ExplicitSuccess()
         }
 
         handlers.register(
-            CloudBoardJobAPIXPCClientToServerMessage.Parameters.self
+            JobHelperToManagedAppXPCMessages.Parameters.self
         ) { parametersMessage in
             Self.logger.debug("Received Parameters XPC message")
-            let delegate = try await self.ensureDelegate(for: CloudBoardJobAPIXPCClientToServerMessage.Warmup.self)
+            let delegate = try await self.ensureDelegate(for: JobHelperToManagedAppXPCMessages.Parameters.self)
             try await delegate.receiveParameters(parametersData: parametersMessage)
             return ExplicitSuccess()
         }
@@ -166,26 +177,45 @@ extension CloudBoardJobAPIXPCServer: CloudBoardJobAPIServerProtocol {
                 .ensureDelegate(for: CloudBoardJobAPIXPCClientToServerMessage.InvokeWorkload.self)
             switch message {
             case .requestChunk(let message):
-                try await delegate.provideInput(message.data, isFinal: message.isFinal)
+                try await delegate.provideInput(message.data)
             case .receiveWorkerFoundEvent(let workerFound):
                 try await delegate.receiveWorkerFoundEvent(
-                    workerID: workerFound.workerID, releaseDigest: workerFound.releaseDigest
+                    workerID: workerFound.workerID, info: workerFound.info
                 )
             case .receiveWorkerMessage(let response):
                 try await delegate.receiveWorkerMessage(workerID: response.workerID, response.message)
             case .receiveWorkerResponseSummary(let summary):
                 try await delegate.receiveWorkerResponseSummary(
                     workerID: summary.workerID,
-                    succeeded: summary.succeeded
+                    status: summary.status
                 )
             case .receiveWorkerEOF(let eof):
                 try await delegate.receiveWorkerEOF(workerID: eof.workerID)
+            case .openClientSubrequest(let subrequest):
+                try await delegate.openClientSubrequest(
+                    subrequestID: subrequest.clientSubrequestID,
+                    cryptoMaterialHandles: subrequest.cryptoMaterialHandles,
+                    isDiscardable: subrequest.isDiscardable
+                )
+            case .subrequestPayloadChunk(let subrequest):
+                try await delegate.receiveSubrequestPayload(
+                    subrequestID: subrequest.clientSubrequestID,
+                    payload: subrequest.chunk
+                )
+            case .closeClientSubrequest(let subrequest):
+                try await delegate.closeClientSubrequest(subrequestID: subrequest.clientSubrequestID)
+            case .cancelClientSubrequest(let subrequest):
+                try await delegate.cancelClientSubrequest(subrequestID: subrequest.clientSubrequestID)
+            case .endOfInput:
+                try await delegate.endOfInput()
+            case .configureApplicationDataChunking(let config):
+                try await delegate.configureApplicationDataChunking(config: config)
             }
             return ExplicitSuccess()
         }
 
-        handlers.register(CloudBoardJobAPIXPCClientToServerMessage.Teardown.self) { _ in
-            let delegate = try await self.ensureDelegate(for: CloudBoardJobAPIXPCClientToServerMessage.Teardown.self)
+        handlers.register(JobHelperToManagedAppXPCMessages.Teardown.self) { _ in
+            let delegate = try await self.ensureDelegate(for: JobHelperToManagedAppXPCMessages.Teardown.self)
             Self.logger.debug("Received Teardown XPC message")
             try await delegate.teardown()
             return ExplicitSuccess()
@@ -197,7 +227,7 @@ extension CloudBoardJobAPIXPCServer: CloudBoardJobAPIServerProtocol {
     ) throws -> CloudBoardJobAPIClientToServerProtocol {
         guard let delegate = self.delegate else {
             Self.logger.fault("Received \(messageType, privacy: .public) message with no delegate set")
-            throw CloudBoardJobAPIError.noDelegateSet
+            throw CloudBoardXPCAPIError.noDelegateSet
         }
 
         return delegate

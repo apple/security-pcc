@@ -17,6 +17,7 @@
 //  DarwinInit
 //
 
+import sys_types
 import ArgumentParserInternal
 
 struct DInitUserOptions {

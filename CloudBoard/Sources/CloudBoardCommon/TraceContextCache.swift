@@ -12,14 +12,12 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import Foundation
 import os
 
 public final class TraceContextCache: Sendable {
     struct CacheValue {
-        let spanID: String
+        let spanID: UInt64
         let timestamp: Date
     }
 
@@ -28,7 +26,7 @@ public final class TraceContextCache: Sendable {
         let spanIdentifier: SpanIdentifier
     }
 
-    let timeToLive: TimeInterval = 15
+    let timeToLive: TimeInterval = 45
     let spanIDs: OSAllocatedUnfairLock<[CacheKey: CacheValue]>
 
     public static let singletonCache = TraceContextCache(requestIdToSpanIdMap: .init(initialState: [:]))
@@ -37,12 +35,12 @@ public final class TraceContextCache: Sendable {
         self.spanIDs = requestIdToSpanIdMap
     }
 
-    public func getSpanID(forKeyWithID id: String, forKeyWithSpanIdentifier spanIdentifier: SpanIdentifier) -> String? {
+    public func getSpanID(forKeyWithID id: String, forKeyWithSpanIdentifier spanIdentifier: SpanIdentifier) -> UInt64? {
         return self.spanIDs.withLock { $0[CacheKey(id: id, spanIdentifier: spanIdentifier)]?.spanID }
     }
 
     public func setSpanID(
-        _ value: String,
+        _ value: UInt64,
         forKeyWithID id: String,
         forKeyWithSpanIdentifier spanIdentifier: SpanIdentifier
     ) {
@@ -53,8 +51,8 @@ public final class TraceContextCache: Sendable {
         ) }
     }
 
-    public func generateNewSpanID() -> String {
-        return String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16))
+    public func generateNewSpanID() -> UInt64 {
+        return UInt64.random(in: 0 ..< UInt64.max)
     }
 
     public func removedExpired() {

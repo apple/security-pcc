@@ -16,8 +16,6 @@
 //  XPCDictionary.swift
 //  XPC-swiftoverlay
 //
-//  Copyright © 2021 Apple. All rights reserved.
-
 import XPC
 import XPCPrivate
 

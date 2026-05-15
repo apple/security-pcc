@@ -19,7 +19,6 @@
 
 import Foundation
 import ArgumentParserInternal
-import secureconfig
 import SecureConfigDB
 
 struct Print: ParsableCommand {

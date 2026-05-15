@@ -136,6 +136,7 @@ class AppleCIOMeshSharedMemory final : public OSObject
 
 	void associateForwardChain(AppleCIOForwardChain * forwardChain);
 	void disassociateAllForwardChain();
+    void resetForwardingChains();
 	bool
 	requiresRuntimePrepare()
 	{

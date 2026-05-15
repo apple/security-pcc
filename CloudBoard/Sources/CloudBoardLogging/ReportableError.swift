@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
-
 public protocol ReportableError: Error {
     /// Description of the error that can safely be logged or emitted as a metric dimension in production and is
     /// guaranteed to not contain privacy-sensitive information

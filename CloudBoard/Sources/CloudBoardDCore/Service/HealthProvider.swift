@@ -12,9 +12,9 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
 import CloudBoardPlatformUtilities
 import InternalGRPC
+import InternalSwiftProtobuf
 
 actor HealthProvider: Grpc_Health_V1_HealthAsyncProvider, Sendable {
     private var currentStatus: ServiceHealthMonitor.Status
@@ -77,7 +77,7 @@ extension Grpc_Health_V1_HealthCheckResponse {
                 $0.status = .notServing
             }
 
-        case .healthy(let metadata):
+        case .healthy:
             self = .with {
                 $0.status = .serving
             }

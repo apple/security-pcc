@@ -29,9 +29,6 @@ package let privateCloudComputeErrorRetryAfterDateKey = "PrivateCloudComputeErro
 package let privateCloudComputeErrorTelemetryStringKey = "PrivateCloudComputeErrorTelemetryString"
 package let privateCloudComputeErrorDebugMessageKey = "PrivateCloudComputeErrorDebugMessage"
 
-// This type replaces TrustedCloudComputeError, and it
-// conforms to AppleIntelligenceError
-
 public struct PrivateCloudComputeError: Error {
     /// The error code for this PrivateCloudComputeError
     public var code: Code
@@ -80,7 +77,6 @@ public struct PrivateCloudComputeError: Error {
 extension PrivateCloudComputeError {
     public enum Code: Int, Sendable, Codable {
         case deniedDueToRateLimit = 32_001
-
         case availabilityError = 32_002  // (unknown reason)
         case unknownWorkload = 32_003
         case noNodesAvailable = 32_004
@@ -89,22 +85,18 @@ extension PrivateCloudComputeError {
         case nodesOverUtilized = 32_007
         case workloadNotFound = 32_008
         case attestationsUnavailable = 32_009
-
         case timeoutError = 32_010  // (unknown reason)
         case setupRequestTimeout = 32_011
         case decryptionKeyTimeout = 32_012
         case maxRequestLifetimeReached = 32_013
         case requestChunkTimeout = 32_014
-
         case invalidRequestError = 32_015  // (unknown reason)
         case invalidWorkload = 32_016
-
         case unauthorizedError = 32_017  // (unknown reason)
         case tenantBlocked = 32_018
         case softwareBlocked = 32_019
         case workloadBlocked = 32_020
         case featureIdBlocked = 32_021
-
         case internalError = 32_022  // (unknown reason)
         case xpcConnectionInterrupted = 32_023
         case failedToLoadKeyData = 32_024
@@ -127,7 +119,6 @@ extension PrivateCloudComputeError {
         case privacyProxyFailed = 32_041
         case failedToValidateAllAttestations = 32_043
         case responseSummaryIndicatesFailure = 32_044
-
         case responseSummaryIndicatesUnauthenticated = 32_045
         case responseSummaryIndicatesInternalError = 32_046
         case responseSummaryIndicatesInvalidRequest = 32_047
@@ -137,97 +128,131 @@ extension PrivateCloudComputeError {
         case invalidAttestationBundle = 32_051
         case routingHintMismatch = 32_052
         case missingResponseBypassContext = 32_053
-
         case expectedResponseOnBypass = 32_054
-        case unexpectedlyReceivedResponseBypassContext = 32_059
         case unexpectedAttestationKind = 32_055
         case attestationKindMismatch = 32_056
-
         case networkFailure = 32_057
-
         case serverError = 32_058  // (unknown reason)
+        case unexpectedlyReceivedResponseBypassContext = 32_059
+        case invalidClientOverrideBuildVersion = 32_060
+        case subrequestResponseIndicatesInternalError = 32_061
+        case subrequestResponseIndicatesInvalidRequest = 32_062
+        case subrequestResponseIndicatesDiscarded = 32_063
+        /// Unrecognized subresponse status.
+        case subrequestResponseIndicatesFailure = 32_064
+        case networkTimedOutSendingRopesRequest = 32_065
+        case unableToAssembleDataChunkTooLarge = 32_066
+        case unableToAssembleDataSizeMismatch = 32_067
+        case unableToAssembleDataExpectedAdditionalChunks = 32_068
+        case unableToChunkDataSizeTooLarge = 32_069
+        /// Applicable to long-lived connections. Thrown to suspended readers of subrequest
+        /// responses if the adopter exits `withConnection` closure before they finish.
+        case connectionNoLongerRunning = 32_070
+
+        /// Thrown for new discardable subrequests if an earlier discardable subrequest
+        /// on this connection reached the server and was discarded.
+        case subrequestDiscardedDueToEarlierDiscard = 32_071
+
+        /// Not enough nodes to satisfy demand
+        case notEnoughNodes = 32_072
     }
 }
 
 extension PrivateCloudComputeError {
     public enum Category: Sendable {
-        case rateLimited
         case availability
-        case timeout
         case clientError
         case forbidden
         case internalError
         case network
+        case rateLimited
         case serverError
+        case timeout
     }
 
     public var errorCategory: Category {
         switch self.code {
-        case .deniedDueToRateLimit: .rateLimited
-
-        case .availabilityError: .availability
-        case .unknownWorkload: .clientError
-        case .noNodesAvailable: .availability
-        case .nodesBusy: .availability
-        case .nodeAttestationChanged: .availability
-        case .nodesOverUtilized: .availability
-        case .workloadNotFound: .clientError
         case .attestationsUnavailable: .availability
+        case .availabilityError: .availability
+        case .nodeAttestationChanged: .availability
+        case .nodesBusy: .availability
+        case .nodesOverUtilized: .availability
+        case .noNodesAvailable: .availability
+        case .notEnoughNodes: .availability
+        case .unknownWorkload: .clientError
+        case .workloadNotFound: .clientError
 
-        case .timeoutError: .timeout
-        case .setupRequestTimeout: .timeout
-        case .decryptionKeyTimeout: .timeout
-        case .maxRequestLifetimeReached: .timeout
-        case .requestChunkTimeout: .timeout
-
+        case .invalidClientOverrideBuildVersion: .clientError
         case .invalidRequestError: .clientError
         case .invalidWorkload: .clientError
 
-        case .unauthorizedError: .forbidden
-        case .tenantBlocked: .forbidden
-        case .softwareBlocked: .forbidden
-        case .workloadBlocked: .forbidden
         case .featureIdBlocked: .forbidden
+        case .softwareBlocked: .forbidden
+        case .tenantBlocked: .forbidden
+        case .unauthorizedError: .forbidden
+        case .workloadBlocked: .forbidden
 
-        case .internalError: .internalError
-        case .xpcConnectionInterrupted: .internalError
+        case .attestationKindMismatch: .internalError
+        case .expectedResponseOnBypass: .internalError
         case .failedToLoadKeyData: .internalError
-        case .privacyProxyPermissionDenied: .internalError
-        case .privacyProxyIpcFailed: .internalError
-        case .privacyProxyInvalidUserTier: .internalError
-        case .privacyProxyInvalidParam: .internalError
+        case .failedToValidateAllAttestations: .internalError
+        case .internalError: .internalError
+        case .invalidAttestationBundle: .internalError
+        case .missingAttestationBundle: .internalError
+        case .missingResponseBypassContext: .internalError
+        case .privacyProxyFailed: .internalError
+        case .privacyProxyFeatureDisabled: .internalError
+        case .privacyProxyInvalidAuthentication: .internalError
         case .privacyProxyInvalidConfigData: .internalError
         case .privacyProxyInvalidConfigDataSign: .internalError
-        case .privacyProxyServerFailure: .internalError
-        case .privacyProxyFeatureDisabled: .internalError
-        case .privacyProxyRateLimited: .rateLimited
-        case .privacyProxyInvalidAuthentication: .internalError
-        case .privacyProxyInvalidRequest: .internalError
-        case .privacyProxyNetworkFailure: .network
-        case .privacyProxyTransparencyFailure: .internalError
         case .privacyProxyInvalidConfigDates: .internalError
-        case .privacyProxyFailed: .internalError
-        case .privacyProxyTDMFailure: .internalError
+        case .privacyProxyInvalidParam: .internalError
+        case .privacyProxyInvalidRequest: .internalError
         case .privacyProxyInvalidResponse: .internalError
-        case .failedToValidateAllAttestations: .internalError
+        case .privacyProxyInvalidUserTier: .internalError
+        case .privacyProxyIpcFailed: .internalError
+        case .privacyProxyNetworkFailure: .network
+        case .privacyProxyPermissionDenied: .internalError
+        case .privacyProxyRateLimited: .rateLimited
+        case .privacyProxyServerFailure: .internalError
+        case .privacyProxyTDMFailure: .internalError
+        case .privacyProxyTransparencyFailure: .internalError
         case .responseSummaryIndicatesFailure: .internalError
-        case .responseSummaryIndicatesUnauthenticated: .internalError
         case .responseSummaryIndicatesInternalError: .internalError
         case .responseSummaryIndicatesInvalidRequest: .internalError
         case .responseSummaryIndicatesProxyFindWorkerError: .internalError
         case .responseSummaryIndicatesProxyWorkerValidationError: .internalError
-        case .missingAttestationBundle: .internalError
-        case .invalidAttestationBundle: .internalError
+        case .responseSummaryIndicatesUnauthenticated: .internalError
         case .routingHintMismatch: .internalError
-        case .missingResponseBypassContext: .internalError
-        case .expectedResponseOnBypass: .internalError
-        case .unexpectedlyReceivedResponseBypassContext: .internalError
         case .unexpectedAttestationKind: .internalError
-        case .attestationKindMismatch: .internalError
+        case .unexpectedlyReceivedResponseBypassContext: .internalError
+        case .xpcConnectionInterrupted: .internalError
 
         case .networkFailure: .network
 
+        case .deniedDueToRateLimit: .rateLimited
+
         case .serverError: .serverError
+
+        case .decryptionKeyTimeout: .timeout
+        case .maxRequestLifetimeReached: .timeout
+        case .requestChunkTimeout: .timeout
+        case .setupRequestTimeout: .timeout
+        case .timeoutError: .timeout
+        case .networkTimedOutSendingRopesRequest: .timeout
+
+        case .subrequestResponseIndicatesDiscarded: .availability
+        case .subrequestResponseIndicatesFailure: .internalError
+        case .subrequestResponseIndicatesInternalError: .internalError
+        case .subrequestResponseIndicatesInvalidRequest: .internalError
+
+        case .unableToAssembleDataChunkTooLarge: .serverError
+        case .unableToAssembleDataSizeMismatch: .serverError
+        case .unableToAssembleDataExpectedAdditionalChunks: .serverError
+        case .unableToChunkDataSizeTooLarge: .clientError
+
+        case .connectionNoLongerRunning: .clientError
+        case .subrequestDiscardedDueToEarlierDiscard: .availability
         }
     }
 }
@@ -310,14 +335,14 @@ extension PrivateCloudComputeError: AppleIntelligenceError {
 
     public var category: AppleIntelligenceErrorCategory {
         switch self.errorCategory {
-        case .rateLimited: return .rateLimited
         case .availability: return .availability
-        case .timeout: return .timeout
         case .clientError: return .clientError
         case .forbidden: return .forbidden
         case .internalError: return .internalError
         case .network: return .network
+        case .rateLimited: return .rateLimited
         case .serverError: return .serverError
+        case .timeout: return .timeout
         }
     }
 }
@@ -330,9 +355,8 @@ extension PrivateCloudComputeError {
 }
 
 extension PrivateCloudComputeError {
-    // This is copied from TrustedCloudComputeError; it is how we build errors
-    // on the basis of error results from ROPES, giving a good mapping for the
-    // debug and telemetry strings.
+    // This is how we build errors on the basis of error results from ROPES,
+    // giving a good mapping for the debug and telemetry strings.
     package init(responseMetadata: RopesResponseMetadata) {
         assert(responseMetadata.isError)
 
@@ -382,54 +406,48 @@ extension PrivateCloudComputeError {
 
         if case .code(let errorCode) = responseMetadata.receivedErrorCode {
             switch errorCode {
-            // deniedDueToRateLimit
-            case .rateLimitReached:
-                self.init(code: .deniedDueToRateLimit, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-
-            // deniedDueToAvailability
-            case .unknownWorkload:
-                self.init(code: .unknownWorkload, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-            case .nodesNotAvailable:
-                self.init(code: .noNodesAvailable, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-            case .nodesBusy:
-                self.init(code: .nodesBusy, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-            case .nodeAttestationChanged:
-                self.init(code: .nodeAttestationChanged, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-            case .nodesOverUtilized:
-                self.init(code: .nodesOverUtilized, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-            case .workloadNotFound:
-                self.init(code: .workloadNotFound, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
             case .attestationsUnavailable:
                 self.init(code: .attestationsUnavailable, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-            case .cloudboardResourceExhausted:
-                self.init(code: .availabilityError, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-
-            // unauthorizedError
-            case .tenantBlocked:
-                self.init(code: .tenantBlocked, debugMessage: debugMessage)
-            case .softwareBlocked:
-                self.init(code: .softwareBlocked, debugMessage: debugMessage)
-            case .featureIdBlocked:
-                self.init(code: .featureIdBlocked, debugMessage: debugMessage)
-            case .workloadBlocked:
-                self.init(code: .workloadBlocked, debugMessage: debugMessage)
-
-            // timeoutError
-            case .setupRequestTimeout:
-                self.init(code: .setupRequestTimeout, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-            case .decryptionKeyTimeout:
-                self.init(code: .decryptionKeyTimeout, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-            case .maxRequestLifetimeReached:
-                self.init(code: .maxRequestLifetimeReached, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-            case .requestChunkTimeout:
-                self.init(code: .requestChunkTimeout, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
             case .cloudboardDeadlineExceeded:
                 self.init(code: .timeoutError, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
-
-            // invalidRequestError
+            case .cloudboardResourceExhausted:
+                self.init(code: .availabilityError, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .decryptionKeyTimeout:
+                self.init(code: .decryptionKeyTimeout, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .featureIdBlocked:
+                self.init(code: .featureIdBlocked, debugMessage: debugMessage)
+            case .invalidClientOverrideBuildVersion:
+                self.init(code: .invalidClientOverrideBuildVersion, debugMessage: debugMessage)
             case .invalidWorkload:
                 self.init(code: .invalidWorkload, debugMessage: debugMessage)
-
+            case .maxRequestLifetimeReached:
+                self.init(code: .maxRequestLifetimeReached, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .nodeAttestationChanged:
+                self.init(code: .nodeAttestationChanged, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .nodesBusy:
+                self.init(code: .nodesBusy, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .nodesNotAvailable:
+                self.init(code: .noNodesAvailable, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .nodesOverUtilized:
+                self.init(code: .nodesOverUtilized, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .notEnoughNodes:
+                self.init(code: .notEnoughNodes, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .rateLimitReached:
+                self.init(code: .deniedDueToRateLimit, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .requestChunkTimeout:
+                self.init(code: .requestChunkTimeout, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .setupRequestTimeout:
+                self.init(code: .setupRequestTimeout, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .softwareBlocked:
+                self.init(code: .softwareBlocked, debugMessage: debugMessage)
+            case .tenantBlocked:
+                self.init(code: .tenantBlocked, debugMessage: debugMessage)
+            case .unknownWorkload:
+                self.init(code: .unknownWorkload, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .workloadBlocked:
+                self.init(code: .workloadBlocked, debugMessage: debugMessage)
+            case .workloadNotFound:
+                self.init(code: .workloadNotFound, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
             default:
                 self.init(code: .serverError, telemetrySuffix: telemetrySuffix, debugMessage: debugMessage)
             }

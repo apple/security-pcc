@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardIdentity
 import CloudBoardLogging
@@ -21,6 +19,9 @@ import CloudBoardMetrics
 import CloudBoardPlatformUtilities
 import Foundation
 import os
+#if canImport(SystemServiceMonitor)
+@_weakLinked import SystemServiceMonitor
+#endif
 
 /// Long-lived daemon only running on follower nodes in distributed inferencing ensembles, responsible for reporting
 /// health of the node back to the the Control Plane Health Service
@@ -34,16 +35,18 @@ public actor CloudBoardFollowerDaemon {
     private let healthMonitor: ServiceHealthMonitor
     private let healthServer: HealthServer?
     private let lifecycleManager: LifecycleManager
-    private let workloadController: WorkloadController
+    private let workloadControllerServer: WorkloadControllerServer
     private let metricsSystem: any MetricsSystem
     private let hotProperties: HotPropertiesController
     private let heartbeatPublisher: HeartbeatPublisher?
     static let metricsClientName = "cloudboardd_follower"
     private static let watchdogProcessName = "cloudboardd_follower"
     private let watchdogService: CloudBoardWatchdogService
+    private let healthReporter: (any RunnableHealthReporter)?
 
     public init() throws {
-        let nodeInfo = NodeInfo.load()
+        let config = try CloudBoardDFollowerConfiguration.fromPreferences()
+        let nodeInfo = NodeInfo.load(secureConfig: config.secureConfig)
         if let isLeader = nodeInfo.isLeader {
             if isLeader {
                 CloudBoardFollowerDaemon.logger.log("Node is a leader, exiting...")
@@ -54,7 +57,6 @@ public actor CloudBoardFollowerDaemon {
             Foundation.exit(0)
         }
 
-        let config = try CloudBoardDFollowerConfiguration.fromPreferences()
         let leaderConfig = try CloudBoardDConfiguration.fromPreferences()
         let hotProperties = HotPropertiesController()
         let metricsSystem = CloudMetricsSystem(clientName: CloudBoardFollowerDaemon.metricsClientName)
@@ -76,11 +78,12 @@ public actor CloudBoardFollowerDaemon {
     ) throws {
         self.config = config
 
-        self.healthMonitor = ServiceHealthMonitor()
-        self.healthServer = HealthServer()
+        self.healthMonitor = ServiceHealthMonitor(cloudApp: WorkloadControllerServer.kFollowerAppName)
+        self.healthReporter = Self.initializeHealthReporter(config: leaderConfig)
+        self.healthServer = HealthServer(healthReporter: self.healthReporter)
 
         if let heartbeat = leaderConfig.heartbeat {
-            CloudBoardFollowerDaemon.logger.error("Heartbeat publisher was successfully configured")
+            CloudBoardFollowerDaemon.logger.info("Heartbeat publisher was successfully configured")
             self.heartbeatPublisher = try HeartbeatPublisher(
                 configuration: heartbeat,
                 nodeInfo: nodeInfo,
@@ -99,10 +102,29 @@ public actor CloudBoardFollowerDaemon {
             config: .init(timeout: lifecycleManagerConfig.drainTimeout)
         )
 
-        self.workloadController = WorkloadController(
-            healthPublisher: self.healthMonitor,
+        self.workloadControllerServer = WorkloadControllerServer(
+            isLeader: false,
             metrics: metricsSystem
         )
+    }
+
+    nonisolated static func initializeHealthReporter(config: CloudBoardDConfiguration) -> RunnableHealthReporter? {
+        #if canImport(SystemServiceMonitor)
+        if #available(iOS 26.0, macOS 15.6, *), #_hasSymbol(ReportClient.self) {
+            let enableSSMStatusReportingFlag = config.systemServiceMonitor?
+                .enableSSMStatusReporting ?? CloudBoardDConfiguration.SystemServiceMonitorConfiguration()
+                .enableSSMStatusReporting
+            guard enableSSMStatusReportingFlag else {
+                CloudBoardFollowerDaemon.logger.info("SystemServiceMonitor disabled")
+                return nil
+            }
+
+            return SystemServiceMonitorHealthReporter()
+        }
+        #endif
+
+        CloudBoardFollowerDaemon.logger.debug("SystemServiceMonitor is not available")
+        return nil
     }
 
     public func run() async throws {
@@ -111,7 +133,7 @@ public actor CloudBoardFollowerDaemon {
         CloudBoardFollowerDaemon.logger.log("Hello from cloudboard follower!")
 
         let jobQuiescenceMonitor = JobQuiescenceMonitor(lifecycleManager: self.lifecycleManager)
-        try await jobQuiescenceMonitor.startQuiescenceMonitor()
+        try jobQuiescenceMonitor.startQuiescenceMonitor()
 
         try await self.lifecycleManager.managed {
             let identityManager = IdentityManager(
@@ -152,19 +174,22 @@ public actor CloudBoardFollowerDaemon {
                     }
 
                     if let healthServer {
+                        if let healthReporter = self.healthReporter {
+                            await healthReporter.run()
+                        }
                         group.addTaskWithLogging(
                             operation: "healthServer", sensitiveError: false
                         ) {
-                            await healthServer.run(healthPublisher: self.healthMonitor)
+                            await healthServer.run(healthPublishers: [self.healthMonitor])
                         }
                     }
 
                     group.addTaskWithLogging(operation: "workloadController", sensitiveError: false) {
                         try await withLifecycleManagementHandlers(label: "workloadController") {
-                            try await self.workloadController.runInFollowerMode()
+                            try await self.workloadControllerServer.runAsFollower(healthPublisher: self.healthMonitor)
                         } onDrain: {
                             do {
-                                try await self.workloadController.shutdown()
+                                try await self.workloadControllerServer.shutdown()
                             } catch {
                                 CloudBoardFollowerDaemon.logger
                                     .error(
@@ -175,6 +200,7 @@ public actor CloudBoardFollowerDaemon {
                     }
 
                     // When any of these tasks exit, they all do.
+                    await self.workloadControllerServer.start()
                     _ = try await group.next()
                     group.cancelAll()
                 }

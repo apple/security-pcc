@@ -14,7 +14,7 @@
 
 //
 //  CloudMetricsXPCServer.swift
-//  
+//
 //
 //  Created by Andrea Guzzo on 8/24/22.
 //
@@ -22,13 +22,22 @@
 internal import CloudMetricsAsyncXPC
 internal import CloudMetricsConstants
 import Foundation
+import os
 
-package actor CloudMetricsXPCServer {
+package actor CloudMetricsXPCServer: Sendable {
+    private struct CloudMetricsXPCClient {
+        var connection: CloudMetricsAsyncXPCConnection
+        var clientName: String
+    }
+
     private let listener: CloudMetricsAsyncXPCListener
-    private weak var delegate: (CloudMetricsServerProtocol & Sendable)?
+    private let delegate: CloudMetricsServerProtocol & Sendable
+    private let logger: Logger = .init(subsystem: "CloudMetricsXPCServer", category: "ClientB")
+
+    private let connectedClients: OSAllocatedUnfairLock<[CloudMetricsXPCClient]> = .init(initialState: [])
 
     internal var endpoint: CloudMetricsAsyncXPCEndpoint? {
-        get async { await listener.endpoint }
+        get async { await self.listener.endpoint }
     }
 
     internal init(
@@ -39,7 +48,7 @@ package actor CloudMetricsXPCServer {
         self.delegate = delegate
     }
 
-    private func wrapError(_ error: any Error) throws -> CloudMetricsServiceSuccess{
+    private func wrapError(_ error: any Error) throws -> CloudMetricsServiceSuccess {
         switch error {
         case let err as CloudMetricsServiceError:
             switch err {
@@ -53,213 +62,214 @@ package actor CloudMetricsXPCServer {
         }
     }
 
+    private func newHandler<Message: CloudMetricsAsyncXPCMessage>(
+        _ handlers: inout CloudMetricsAsyncXPCConnection.MessageHandlerStore,
+        message: Message.Type,
+        fn: @escaping (Message, MetricsClient) async throws -> Void
+    ) {
+        handlers.register(message) { message in
+            do {
+                guard let context = CloudMetricsAsyncXPCContext.context else {
+                    throw CloudMetricsServiceError.internalError
+                }
+                guard let clientName = await context.peerConnection
+                    .getEntitlementStringValue(kCloudMetricsXPCServiceEntitlement) else {
+                    throw CloudMetricsServiceError.entitlementMissing
+                }
+
+                let metricsClient = MetricsClient(name: clientName, remoteProcess: context.peerConnection.name)
+                try await fn(message, metricsClient)
+            } catch {
+                return try await self.wrapError(error) as! Message.Success
+            }
+            return CloudMetricsServiceSuccess.success as! Message.Success
+        }
+    }
+
     private func checkEntitlement() async throws -> String {
         guard let context = CloudMetricsAsyncXPCContext.context else {
             throw CloudMetricsServiceError.internalError
         }
-        guard let client = await context.peerConnection.getEntitlementStringValue(kCloudMetricsXPCServiceEntitlement) else {
+        guard let client = await context.peerConnection.getEntitlementStringValue(kCloudMetricsXPCServiceEntitlement)
+        else {
             throw CloudMetricsServiceError.entitlementMissing
         }
         return client
     }
 
     internal func configureHandlers(_ handlers: inout CloudMetricsAsyncXPCConnection.MessageHandlerStore) {
-        handlers.register(CloudMetricsServiceMessages.SetConfiguration.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.setConfiguration(message.configuration, client: client)
-            } catch {
-                return try await self.wrapError(error)
-            }
-            return CloudMetricsServiceSuccess.success
+        self.newHandler(&handlers, message: CloudMetricsServiceMessages.SetConfiguration.self) { message, client in
+            try self.delegate.setConfiguration(message.configuration, client: client)
         }
 
-        handlers.register(CloudMetricsServiceMessages.IncrementCounter.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.incrementCounter(message.counter,
-                                                          by: message.amount,
-                                                          epoch: message.epoch,
-                                                          client: client)
-            } catch {
-                return try await self.wrapError(error)
-            }
-            return CloudMetricsServiceSuccess.success
+        self.newHandler(&handlers, message: CloudMetricsServiceMessages.IncrementCounter.self) { message, client in
+            try self.delegate.incrementCounter(
+                message.counter,
+                by: message.amount,
+                epoch: message.epoch,
+                client: client
+            )
         }
 
-        handlers.register(CloudMetricsServiceMessages.IncrementFloatingPointCounter.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.incrementCounter(message.counter,
-                                                          by: message.amount,
-                                                          epoch: message.epoch,
-                                                          client: client)
-            } catch {
-                return try await self.wrapError(error)
+        self
+            .newHandler(
+                &handlers,
+                message: CloudMetricsServiceMessages.IncrementFloatingPointCounter.self
+            ) { message, client in
+                try self.delegate.incrementCounter(
+                    message.counter,
+                    by: message.amount,
+                    epoch: message.epoch,
+                    client: client
+                )
             }
-            return CloudMetricsServiceSuccess.success
+
+        self.newHandler(&handlers, message: CloudMetricsServiceMessages.ResetCounter.self) { message, client in
+            try self.delegate.resetCounter(message.counter, epoch: message.epoch, client: client)
         }
 
-        handlers.register(CloudMetricsServiceMessages.ResetCounter.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.resetCounter(message.counter, epoch: message.epoch, client: client)
-            } catch {
-                return try await self.wrapError(error)
+        self
+            .newHandler(
+                &handlers,
+                message: CloudMetricsServiceMessages.ResetCounterWithDoubleValue.self
+            ) { message, client in
+                try self.delegate.resetCounter(
+                    message.counter,
+                    initialValue: message.value,
+                    epoch: message.epoch,
+                    client: client
+                )
             }
-            return CloudMetricsServiceSuccess.success
+
+        self
+            .newHandler(
+                &handlers,
+                message: CloudMetricsServiceMessages.ResetCounterWithIntValue.self
+            ) { message, client in
+                try self.delegate.resetCounter(
+                    message.counter,
+                    initialValue: message.value,
+                    epoch: message.epoch,
+                    client: client
+                )
+            }
+
+        self.newHandler(&handlers, message: CloudMetricsServiceMessages.RecordDouble.self) { message, client in
+            try self.delegate.recordDouble(
+                recorder: message.recorder,
+                value: message.value,
+                epoch: message.epoch,
+                client: client
+            )
         }
 
-        handlers.register(CloudMetricsServiceMessages.ResetCounterWithDoubleValue.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.resetCounter(message.counter, initialValue: message.value, epoch: message.epoch, client: client)
-            } catch {
-                return try await self.wrapError(error)
-            }
-            return CloudMetricsServiceSuccess.success
+        self.newHandler(&handlers, message: CloudMetricsServiceMessages.RecordInteger.self) { message, client in
+            try self.delegate.recordInteger(
+                recorder: message.recorder,
+                value: message.value,
+                epoch: message.epoch,
+                client: client
+            )
         }
 
-        handlers.register(CloudMetricsServiceMessages.ResetCounterWithIntValue.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.resetCounter(message.counter, initialValue: message.value, epoch: message.epoch, client: client)
-            } catch {
-                return try await self.wrapError(error)
-            }
-            return CloudMetricsServiceSuccess.success
+        self.newHandler(&handlers, message: CloudMetricsServiceMessages.RecordNanoseconds.self) { message, client in
+            try self.delegate.recordNanoseconds(
+                timer: message.timer,
+                duration: message.duration,
+                epoch: message.epoch,
+                client: client
+            )
         }
 
-        handlers.register(CloudMetricsServiceMessages.RecordDouble.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.recordDouble(recorder: message.recorder,
-                                                      value: message.value,
-                                                      epoch: message.epoch,
-                                                      client: client)
-            } catch {
-                return try await self.wrapError(error)
-            }
-            return CloudMetricsServiceSuccess.success
+        self.newHandler(&handlers, message: CloudMetricsServiceMessages.RecordHistogramDouble.self) { message, client in
+            try self.delegate.recordDouble(
+                histogram: message.histogram,
+                buckets: message.buckets,
+                value: message.value,
+                epoch: message.epoch,
+                client: client
+            )
         }
 
-        handlers.register(CloudMetricsServiceMessages.RecordInteger.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.recordInteger(recorder: message.recorder,
-                                                       value: message.value,
-                                                       epoch: message.epoch,
-                                                       client: client)
-            } catch {
-                return try await self.wrapError(error)
+        self
+            .newHandler(
+                &handlers,
+                message: CloudMetricsServiceMessages.RecordHistogramInteger.self
+            ) { message, client in
+                try self.delegate.recordInteger(
+                    histogram: message.histogram,
+                    buckets: message.buckets,
+                    value: message.value,
+                    epoch: message.epoch,
+                    client: client
+                )
             }
-            return CloudMetricsServiceSuccess.success
+
+        self
+            .newHandler(
+                &handlers,
+                message: CloudMetricsServiceMessages.RecordHistogramBuckets.self
+            ) { message, client in
+                try self.delegate.recordBuckets(
+                    histogram: message.histogram,
+                    buckets: message.buckets,
+                    bucketValues: message.values,
+                    sum: message.sum,
+                    count: message.count,
+                    epoch: message.epoch,
+                    client: client
+                )
+            }
+
+        self.newHandler(&handlers, message: CloudMetricsServiceMessages.RecordSummaryDouble.self) { message, client in
+            try self.delegate.recordDouble(
+                summary: message.summary,
+                quantiles: message.quantiles,
+                value: message.value,
+                epoch: message.epoch,
+                client: client
+            )
         }
 
-        handlers.register(CloudMetricsServiceMessages.RecordNanoseconds.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.recordNanoseconds(timer: message.timer,
-                                                           duration: message.duration,
-                                                           epoch: message.epoch,
-                                                           client: client)
-            } catch {
-                return try await self.wrapError(error)
-            }
-            return CloudMetricsServiceSuccess.success
+        self.newHandler(&handlers, message: CloudMetricsServiceMessages.RecordSummaryInteger.self) { message, client in
+            try self.delegate.recordInteger(
+                summary: message.summary,
+                quantiles: message.quantiles,
+                value: message.value,
+                epoch: message.epoch,
+                client: client
+            )
         }
 
-        handlers.register(CloudMetricsServiceMessages.RecordHistogramDouble.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.recordDouble(histogram: message.histogram,
-                                                      buckets: message.buckets,
-                                                      value: message.value,
-                                                      epoch: message.epoch,
-                                                      client: client)
-            } catch {
-                return try await self.wrapError(error)
+        self
+            .newHandler(
+                &handlers,
+                message: CloudMetricsServiceMessages.RecordSummaryQuantiles.self
+            ) { message, client in
+                try self.delegate.recordQuantiles(
+                    summary: message.summary,
+                    quantiles: message.quantiles,
+                    quantileValues: message.values,
+                    sum: message.sum,
+                    count: message.count,
+                    epoch: message.epoch,
+                    client: client
+                )
             }
-            return CloudMetricsServiceSuccess.success
-        }
-
-        handlers.register(CloudMetricsServiceMessages.RecordHistogramInteger.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.recordInteger(histogram: message.histogram,
-                                                       buckets: message.buckets,
-                                                       value: message.value,
-                                                       epoch: message.epoch,
-                                                       client: client)
-            } catch {
-                return try await self.wrapError(error)
-            }
-            return CloudMetricsServiceSuccess.success
-        }
-
-        handlers.register(CloudMetricsServiceMessages.RecordHistogramBuckets.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.recordBuckets(histogram: message.histogram,
-                                                       buckets: message.buckets,
-                                                       bucketValues: message.values,
-                                                       sum: message.sum,
-                                                       count: message.count,
-                                                       epoch: message.epoch,
-                                                       client: client)
-            } catch {
-                return try await self.wrapError(error)
-            }
-            return CloudMetricsServiceSuccess.success
-        }
-
-        handlers.register(CloudMetricsServiceMessages.RecordSummaryDouble.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.recordDouble(summary: message.summary,
-                                                      quantiles: message.quantiles,
-                                                      value: message.value,
-                                                      epoch: message.epoch,
-                                                      client: client)
-            } catch {
-                return try await self.wrapError(error)
-            }
-            return CloudMetricsServiceSuccess.success
-        }
-
-        handlers.register(CloudMetricsServiceMessages.RecordSummaryInteger.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.recordInteger(summary: message.summary,
-                                                       quantiles: message.quantiles,
-                                                       value: message.value,
-                                                       epoch: message.epoch,
-                                                       client: client)
-            } catch {
-                return try await self.wrapError(error)
-            }
-            return CloudMetricsServiceSuccess.success
-        }
-
-        handlers.register(CloudMetricsServiceMessages.RecordSummaryQuantiles.self) { message in
-            do {
-                let client = try await self.checkEntitlement()
-                try await self.delegate?.recordQuantiles(summary: message.summary,
-                                                         quantiles: message.quantiles,
-                                                         quantileValues: message.values,
-                                                         sum: message.sum,
-                                                         count: message.count,
-                                                         epoch: message.epoch,
-                                                         client: client)
-            } catch {
-                return try await self.wrapError(error)
-            }
-            return CloudMetricsServiceSuccess.success
-        }
     }
 
-    package func listen() async {
-        await self.listener.listen(buildMessageHandlerStore: configureHandlers)
+    package func run() async throws {
+        await self.listener.set(delegate: self)
+        await self.listener.listen(buildMessageHandlerStore: self.configureHandlers)
+        do {
+            // Wait for task cancellation
+            while true {
+                try await Task.sleep(for: .seconds(60 * 60))
+            }
+        } catch {
+            await self.listener.cancel()
+            throw error
+        }
     }
 }
 
@@ -271,7 +281,10 @@ extension CloudMetricsXPCServer {
         )
     }
 
-    package static func localListener(delegate: CloudMetricsServerProtocol & Sendable, xpcServiceName: String) -> CloudMetricsXPCServer {
+    package static func localListener(
+        delegate: CloudMetricsServerProtocol & Sendable,
+        xpcServiceName: String
+    ) -> CloudMetricsXPCServer {
         self.init(
             listener: CloudMetricsAsyncXPCListener(
                 localService: xpcServiceName,
@@ -279,5 +292,49 @@ extension CloudMetricsXPCServer {
             ),
             delegate: delegate
         )
+    }
+}
+
+extension CloudMetricsXPCServer: CloudMetricsAsyncXPCListenerDelegate {
+    func clientConnected(_ connection: CloudMetricsAsyncXPC.CloudMetricsAsyncXPCConnection) async {
+        guard let clientName = await connection.getEntitlementStringValue(kCloudMetricsXPCServiceEntitlement) else {
+            self.logger.error(
+                """
+                Connection denied due to missing entitlement. \
+                connnection_name=\(connection.name, privacy: .public). \
+                entitlement=\(kCloudMetricsXPCServiceEntitlement, privacy: .public)
+                """
+            )
+            await connection.cancel()
+            return
+        }
+        self.logger.log("Client connected. client=\(clientName)")
+
+        let cloudMetricsXPCClient = CloudMetricsXPCClient(connection: connection, clientName: clientName)
+        self.connectedClients.withLock { clients in
+            clients.append(cloudMetricsXPCClient)
+        }
+
+        self.delegate.clientConnected(client: .init(name: clientName, remoteProcess: connection.name))
+    }
+
+    func clientDisconnected(_ connection: CloudMetricsAsyncXPC.CloudMetricsAsyncXPCConnection) async {
+        self.connectedClients.withLock { clients in
+            if let index = clients.firstIndex(where: { $0.connection.name == connection.name }) {
+                let client = clients.remove(at: index)
+                self.logger.log("Client disconnected. client=\(client.clientName)")
+                self.delegate.clientDisconnected(client: .init(
+                    name: client.clientName,
+                    remoteProcess: client.connection.name
+                ))
+            } else {
+                self.logger.error(
+                    """
+                    Client disconnected but was not being tracked. \
+                    connection_name=\(connection.name, privacy: .public)
+                    """
+                )
+            }
+        }
     }
 }

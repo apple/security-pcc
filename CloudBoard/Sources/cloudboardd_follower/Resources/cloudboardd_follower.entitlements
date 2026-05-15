@@ -47,9 +47,10 @@
 	<array>
 		<string>com.apple.jobquiescence</string>
 		<string>com.apple.acdc.cloudmetricsd</string>
-		<string>com.apple.cloudos.cb_configurationd</string>
+		<string>com.apple.cloudos.cloudconfigurationd</string>
 		<string>com.apple.cloudos.cloudboardd_follower.watchdog</string>
 		<string>com.apple.cloudos.AppleComputeEnsembler.service</string>
+        <string>com.apple.systemservicemonitor.request.xpc</string>
 	</array>
 	<key>com.apple.security.exception.mach-register.global-name</key>
 	<array>
@@ -63,5 +64,7 @@
 	<array>
 		<string>/private/var/db/secureconfig/</string>
 	</array>
+    <key>com.apple.ssm.monitored-service-identifier</key>
+    <string>com.apple.cloudos.cloudboarddhealth</string>
 </dict>
 </plist>

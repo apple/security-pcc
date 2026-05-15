@@ -17,6 +17,7 @@
 //  DarwinInit
 //
 
+import Foundation
 import Darwin.POSIX
 import System
 
@@ -75,13 +76,15 @@ extension FileStat {
     var creationTime: Date {
         Date(timeIntervalSince1970: Double(rawValue.st_birthtimespec.tv_sec) + Double(rawValue.st_birthtimespec.tv_nsec) / 1E9);
     }
+    
+    var numberOfHardLinks: UInt16 { UInt16(rawValue.st_nlink) }
 }
 
 extension FileStat {
     init(_ path: FilePath) throws {
         rawValue = stat()
         try nothingOrErrno(retryOnInterrupt: true) {
-            stat(path.description, &rawValue)
+            stat(path.string, &rawValue)
         }.get()
     }
 }

@@ -18,6 +18,7 @@
 //
 
 import System
+internal import DarwinInitBridging
 
 extension FilePath {
     private enum ArchiveError: Error {
@@ -62,7 +63,7 @@ extension FilePath {
         } catch ArchiveError.endOfArchive { }
     }
 
-    func extract(to path: FilePath) throws {
+    func extractUsingLibarchive(to path: FilePath) throws {
         logger.debug("Extracting item at \(self) into \(path)")
 
         let archive = archive_read_new()
@@ -77,7 +78,12 @@ extension FilePath {
         ARCHIVE_EXTRACT_TIME |
         ARCHIVE_EXTRACT_PERM |
         ARCHIVE_EXTRACT_ACL |
-        ARCHIVE_EXTRACT_FFLAGS
+        ARCHIVE_EXTRACT_FFLAGS |
+        ARCHIVE_EXTRACT_NO_OVERWRITE |
+        ARCHIVE_EXTRACT_SECURE_NODOTDOT |
+        ARCHIVE_EXTRACT_SECURE_SYMLINKS |
+        ARCHIVE_EXTRACT_SECURE_NOABSOLUTEPATHS
+        
         try call(extract) { archive_write_disk_set_options($0, options) }
         try call(extract) { archive_write_disk_set_standard_lookup($0) }
 
@@ -102,5 +108,52 @@ extension FilePath {
                 }
             }
         } catch ArchiveError.endOfArchive { }
+    }
+    
+    func extract(to path: FilePath, using aeaDecryptionParameters: AEADecryptionParameters?) throws {
+        logger.log("Extracting \(self) to \(path)")
+        
+        let archiveMagic: FilePath.ArchiveType?
+        
+        do {
+            archiveMagic = try self.readArchiveMagic()
+        } catch {
+            logger.error("Failed to read archive magic for \(self): \(error)")
+            throw error
+        }
+        
+        do {
+            switch archiveMagic {
+            case .UncompressedAppleArchive:
+                try self.extractUncompressedAppleArchive(to: path)
+            case .AppleEncryptedArchive:
+                guard let aeaDecryptionParameters = aeaDecryptionParameters else {
+                    logger.error("AEA decryption parameters unset for Apple Encrypted Archive. Unable to extract.")
+                    throw Errno.invalidArgument
+                }
+                try self.extractAppleEncryptedArchive(
+                    to: path,
+                    using: aeaDecryptionParameters.decryptionKey,
+                    expectingArchiveIdentifier: aeaDecryptionParameters.archiveID)
+            default:
+                try self.extractUsingLibarchive(to: path)
+            }
+        } catch {
+            logger.log("Failed to extract: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+        
+        if (try? path.directoryExists()) != true {
+            logger.warning("Nothing extracted to \(path, privacy: .public)")
+        }
+        
+        logger.log("Successfully extracted to \(path)")
+        
+        do {
+            let extractedContents = try path.performDeepEnumerationOfFiles()
+            logger.info("Extracted \(self) with contents: \(extractedContents)")
+        } catch {
+            logger.error("Failed to enumerate the contents of \(path): \(error)")
+        }
     }
 }

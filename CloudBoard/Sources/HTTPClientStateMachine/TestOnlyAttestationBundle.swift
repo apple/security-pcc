@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 // A brief explanation for why this exists here.
 //
 // When testing (never in customer) it is not always tenable to get a proper SEP backed key and associated
@@ -53,6 +51,11 @@ package struct TestOnlyAttestationInfo: Codable, Sendable {
     /// The SHA256 digest of the release this attestation is for
     public var releaseDigest: String
 
+    public var computeNodeMetadata: [String: Data]?
+
+    /// The UDID of the device
+    public var udid: String?
+
     package struct ProxyAppData: Codable, Sendable {
         /// The SHA256 digests of the releases this attestation transitively trusts
         package var transitivelyTrustedReleaseDigests: [String]
@@ -62,10 +65,20 @@ package struct TestOnlyAttestationInfo: Codable, Sendable {
         }
     }
 
+    package struct ComputeAppData: Codable, Sendable {
+        /// Metadata associated with the compute node app data
+        package var metadata: [String: Data]
+
+        package init(metadata: [String: Data]) {
+            self.metadata = metadata
+        }
+    }
+
     // Application specific data contained in the
     package enum AppData: Codable, Sendable {
         case none
         case proxy(ProxyAppData)
+        case compute(ComputeAppData)
     }
 
     /// Application-specific data such as the trusted release set for proxy node attestations
@@ -74,11 +87,15 @@ package struct TestOnlyAttestationInfo: Codable, Sendable {
     public init(
         expiration: Date,
         releaseDigest: String,
-        appData: AppData
+        appData: AppData,
+        computeNodeMetadata: [String: Data],
+        udid: String? = nil
     ) {
         self.expiration = expiration
         self.releaseDigest = releaseDigest
         self.appData = appData
+        self.computeNodeMetadata = computeNodeMetadata
+        self.udid = udid
     }
 }
 

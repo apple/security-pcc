@@ -26,8 +26,11 @@ import FeatureFlags
 
 /// Defines an ``AttestationPolicy`` that evaluates the loaded sequence of Cryptexes on a device.
 public struct CryptexPolicy: AttestationPolicy {
-    /// The well-known Sealed Software Hash Slot UUID for cryptexes.
+    /// The well-known Sealed Software Hash Slot UUID for SEP measured cryptexes.
     public static let slot: UUID = cryptexSlotUUID
+    /// The well-known Sealed Software Hash Slot UUID for AP-only measured cryptexes.
+    public static let apSlot: UUID = apCryptexSlotUUID
+
     static let logger: Logger = Logger(subsystem: "com.apple.CloudAttestation", category: "CryptexPolicy")
 
     let sealedHashesLoader: SealedHashesLoader

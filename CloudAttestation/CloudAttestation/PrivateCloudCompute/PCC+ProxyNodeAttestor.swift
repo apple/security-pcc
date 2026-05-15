@@ -19,6 +19,8 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
+import InternalSwiftProtobuf
+
 extension PCC {
     public struct ProxyNodeAttestor: Attestor {
         public var attestingKey: SecKey {
@@ -77,17 +79,23 @@ extension PCC {
             self.proxiedReleases = proxiedReleases
         }
 
+        /// Creates a new ``ProxyNodeAttestor``.
+        /// - Parameter proxiedReleases: An array of SHA256 digests of releases this proxy handles.
+        /// - Parameter transparencyProver: A transparency prover to use.
+        /// - Parameter assetProvider: An asset providerto use.
+        /// - Parameter environment: The environment for the attestation.
+        @_spi(Private)
+        public init(proxiedReleases: [Data], transparencyProver: some TransparencyProver, assetProvider: some AttestationAssetProvider, environment: Environment) {
+            self.inner = NodeAttestor(transparencyProver: transparencyProver, assetProvider: assetProvider, environment: environment)
+            self.proxiedReleases = proxiedReleases
+        }
+
         public func attest(key: SecKey, using attestingKey: SecKey, expiration: Date, nonce: Data?) async throws -> AttestationBundle {
             guard nonce == nil else {
                 throw NodeAttestor.Error.nonceProvided
             }
 
-            var releaseProofs = [Data: TransparencyLogProofs]()
-            for proxiedRelease in proxiedReleases {
-                let proofs = try await transparencyProver.proveInclusion(of: proxiedRelease)
-                try proofs.verify(expiration: expiration)
-                releaseProofs[proxiedRelease] = proofs
-            }
+            let releaseProofs = try await transparencyProver.proveInclusion(of: proxiedReleases)
 
             let appData = try Proto_AppData.with {
                 $0.domain = "com.apple.PrivateCloudCompute"
@@ -95,9 +103,14 @@ extension PCC {
                 $0.version = 1
                 $0.metadata = try .init(
                     message: PrivateCloudCompute_ProxyNodeMetadata.with { metadata in
-                        metadata.proxiedRelease = releaseProofs.map { (identifier, proofs) in
-                            PrivateCloudCompute_ProxyNodeMetadata.ProxiedRelease.with { release in
-                                release.digest = identifier
+                        metadata.proxiedRelease = try releaseProofs.map { proofs in
+                            try proofs.verify(expiration: expiration)
+                            guard let digest = proofs.digest else {
+                                throw TransparencyLogError.invalidProof
+                            }
+
+                            return PrivateCloudCompute_ProxyNodeMetadata.ProxiedRelease.with { release in
+                                release.digest = digest
                                 release.transparencyProofs = Proto_TransparencyProofs.with {
                                     $0.proofs = proofs.proofs
                                 }

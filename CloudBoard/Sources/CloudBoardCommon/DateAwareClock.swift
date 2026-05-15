@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import Foundation
 
 /// This adds an abstraction on ``Date.now`` to the existing clock abstraction
@@ -32,7 +30,7 @@ extension ContinuousClock: DateAwareClock {
 
 /// Cover the common use cases.
 /// In some cases this replaces a property with a function
-package extension Date {
+extension Date {
     package func timeIntervalSinceNow(_ currentTime: some DateAwareClock) -> TimeInterval {
         return self.timeIntervalSince(currentTime.dateNow)
     }

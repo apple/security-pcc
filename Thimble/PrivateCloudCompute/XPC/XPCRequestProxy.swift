@@ -19,21 +19,35 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
+import os.log
+
 // We require that XPCRequestProxyProtocol are also Sendable because
 // they are used from onCancel blocks, which are Sendable.
-protocol XPCRequestProxyProtocol: Sendable {
+package protocol XPCRequestProxyProtocol: Sendable {
     func cancel()
     func close()
     func send(data: Data, isComplete: Bool) async throws
     func next() async throws -> Data?
+
+    func send(message: XPCRequestMessage) async throws
+    func next() async throws -> XPCResponseMessage?
+
+    func createSubrequest(_ subrequest: XPCSubrequest) async throws
+
+    func nextProgress() async throws -> PrivateCloudComputeConnection.Progress?
 }
 
-struct XPCRequestProxy: XPCRequestProxyProtocol {
-    private let connectionID: Int
-    private let proxy: any TC2XPCTrustedRequestProtocol
-    private let wrapper: XPCWrapper
+private let logger = tc2Logger(forCategory: .client)
 
-    init(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol, wrapper: XPCWrapper) {
+struct XPCRequestProxy<
+    Proxy: TC2XPCTrustedRequestProtocol,
+    Wrapper: XPCWrapperProtocol
+>: XPCRequestProxyProtocol where Wrapper.RequestProxy == Proxy {
+    private let connectionID: Int
+    private let proxy: Proxy
+    private let wrapper: Wrapper
+
+    init(connectionID: Int, proxy: Proxy, wrapper: Wrapper) {
         self.connectionID = connectionID
         self.proxy = proxy
         self.wrapper = wrapper
@@ -51,11 +65,41 @@ struct XPCRequestProxy: XPCRequestProxyProtocol {
         }
     }
 
+    /// Used for non multi-turn requests.
     func send(data: Data, isComplete: Bool) async throws {
-        try await self.wrapper.send(connectionID: self.connectionID, proxy: self.proxy, data: data, isComplete: isComplete)
+        try await self.wrapper.send(connectionID: self.connectionID, proxy: self.proxy, message: .data(data, isComplete))
     }
 
+    /// Used for non multi-turn requests.
     func next() async throws -> Data? {
+        while let message = try await self.wrapper.next(connectionID: self.connectionID, proxy: self.proxy) {
+            switch message {
+            case .openSubresponse, .closeSubresponse, .subresponseData:
+                // These messages shouldn't be received for non multi-turn requests.
+                logger.error("Unexpectedly received a multi-turn message, ignoring. message=\(String(describing: message))")
+                break
+            case .data(let data):
+                return data
+            }
+        }
+
+        return nil
+    }
+
+    func send(message: XPCRequestMessage) async throws {
+        try await self.wrapper.send(connectionID: self.connectionID, proxy: self.proxy, message: message)
+    }
+
+    func createSubrequest(_ subrequest: XPCSubrequest) async throws {
+        try await self.wrapper.createSubrequest(connectionID: self.connectionID, proxy: self.proxy, subrequest: subrequest)
+    }
+
+    /// Used for multi-turn requests.
+    func next() async throws -> XPCResponseMessage? {
         try await self.wrapper.next(connectionID: self.connectionID, proxy: self.proxy)
+    }
+
+    func nextProgress() async throws -> PrivateCloudComputeConnection.Progress? {
+        try await self.wrapper.nextProgress(connectionID: self.connectionID, proxy: self.proxy)
     }
 }

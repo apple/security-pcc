@@ -19,6 +19,7 @@
 
 import CryptoKit
 import System
+import Darwin
 
 extension SHA256.Digest {
     init(_ path: FilePath) throws {

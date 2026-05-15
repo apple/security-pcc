@@ -28,80 +28,18 @@ enum LibCryptex {
     static let logger = Logger.libcryptex
     private static let cryptexctl = URL(fileURLWithPath: "/usr/bin/cryptexctl")
 
-    static func setUpExtractedPath() -> FilePath? {
-        let extractedPath = FilePath("/var/tmp/darwin-init/cryptex/").appending(UUID().uuidString)
-        try? extractedPath.remove()
-        do {
-            try extractedPath.createDirectory(intermediateDirectories: true)
-        } catch {
-            logger.error("Unable to create temp directory for cryptex extraction: \(error.localizedDescription, privacy: .public)")
-            return nil
+    // e.g.: cryptexctl personalize -H -V "Release" --copy-personalized-manifest <path>/ticket com.apple.cryptex-nginx.cxbd
+    // Returns FilePath to personaliztion ticket for the given cryptex
+    static func personalizeCryptex(at cryptex: FilePath, ticketPath: FilePath?, withVariant variant: String?, usingAuthorizationService authorizationService: DInitAuthorizationService?, locatedAt serverURL: String?, usingAppleConnect: Bool, ginfPath: String?) -> FilePath? {
+        let outputPath: FilePath
+        if let ticketPath {
+            outputPath = ticketPath
+        } else {
+            outputPath = cryptex.appending(extension: "ticket")
         }
-        return extractedPath
-    }
+        logger.log("Writing personalization ticket to output Directory: \(outputPath) using cryptex: \(cryptex)")
 
-    static func extractCryptex(at archivePath: FilePath, to extractedPath: FilePath, url: URL?, dawToken: String?, wgUsername: String?, wgToken: String?, altCDN: String?, retries: UInt?, aeaDecryptionParams: DInitAEADecryptionParams?) async -> Bool {
-        logger.log("Extracting \(archivePath) to \(extractedPath)")
-        
-        let archiveMagic: FilePath.ArchiveType?
-        
         do {
-            archiveMagic = try archivePath.readArchiveMagic()
-        } catch {
-            logger.error("Failed to read archive magic for \(archivePath): \(error)")
-            return false
-        }
-        
-        do {
-            switch archiveMagic {
-            case .UncompressedAppleArchive:
-                try archivePath.extractUncompressedAppleArchive(to: extractedPath)
-            case .AppleEncryptedArchive:
-                guard let components = await DInitCryptexConfig.resolveDecryptionComponents(url: url, dawToken: dawToken, wgUsername: wgUsername, wgToken: wgToken, altCDN: altCDN, retries: retries, aeaDecryptionParams: aeaDecryptionParams) else {
-                    logger.error("Failed to resolve AEA asset decryption components. Unable to extract cryptex.")
-                    return false
-                }
-                try archivePath.extractAppleEncryptedArchive(to: extractedPath, using: components.key, expectingArchiveIdentifier: components.archiveID)
-            default:
-                try archivePath.extract(to: extractedPath)
-            }
-        } catch {
-            logger.log("Unable to extract cryptex: \(error.localizedDescription, privacy: .public)")
-            return false
-        }
-        
-        guard (try? extractedPath.directoryExists()) ?? false else {
-            logger.error("Extraction didn't yield cryptex at \(extractedPath, privacy: .public)")
-            return false
-        }
-        
-        logger.log("Successfully extracted to \(extractedPath)")
-        
-        do {
-            let extractedContents = try extractedPath.performDeepEnumerationOfFiles()
-            logger.info("Extracted \(archivePath) with contents: \(extractedContents)")
-        } catch {
-            logger.error("Failed to enumerate the contents of \(extractedPath): \(error)")
-        }
-        
-        return true
-    }
-
-    static func extractCryptex(at archivePath: FilePath, url: URL?, dawToken: String?, wgUsername: String?, wgToken: String?, altCDN: String?, retries: UInt?, aeaDecryptionParams: DInitAEADecryptionParams?) async -> FilePath? {
-        // Set up path to extract cryptex to
-        guard let extractedPath = setUpExtractedPath() else {
-            return nil
-        }
-
-        return await extractCryptex(at: archivePath, to: extractedPath, url: url, dawToken: dawToken, wgUsername: wgUsername, wgToken: wgToken, altCDN: altCDN, retries: retries, aeaDecryptionParams: aeaDecryptionParams) ? extractedPath : nil
-    }
-
-    // e.g.: cryptexctl personalize -H -V "Release" com.apple.cryptex-nginx.cxbd
-    static func personalizeCryptex(at cryptex: FilePath, withVariant variant: String?, usingAuthorizationService authorizationService: DInitAuthorizationService?, locatedAt serverURL: String?, usingAppleConnect: Bool) -> FilePath? {
-        do {
-            let outputPath = cryptex.removingLastComponent()
-            logger.log("Personalized output Directory: \(outputPath)")
-
             var arguments = [CustomStringConvertible]()
             if let serverURL = serverURL {
                 arguments += ["--signing-url", serverURL]
@@ -117,10 +55,14 @@ enum LibCryptex {
             if let variant = variant {
                 arguments += ["--variant", variant]
             }
+
+            if let ginfPath {
+                arguments += ["--write-ginf", ginfPath]
+            }
+
             arguments += [
-                "--replace",
                 "--host-identity",
-                "--output-directory", outputPath,
+                "--copy-personalized-manifest", outputPath,
                 cryptex
             ]
             _ = try Subprocess.run(
@@ -131,18 +73,17 @@ enum LibCryptex {
             return nil
         }
 
-        let personalizedPath = cryptex.appending(extension: "signed")
-        guard (try? personalizedPath.directoryExists()) ?? false else {
-            logger.error("Personalization didn't produce signed cryptex at \(personalizedPath)")
+        guard (try? outputPath.fileExists()) ?? false else {
+            logger.error("Personalization didn't produce personalization ticket at \(outputPath)")
             return nil
         }
 
-        logger.log("Successfully personalized to \(personalizedPath)")
-        return personalizedPath
+        logger.log("Successfully wrote personalization ticket to \(outputPath)")
+        return outputPath
     }
 
     // e.g.: cryptexctl install -p -V "Release" com.apple.cryptex-nginx.cxbd.signed
-    static func installCryptex(at cryptexPath: FilePath, withVariant variant: String?, usingAuthorizationService authorizationService: DInitAuthorizationService?, locatedAt serverURL: String?, limitLoadToREM rem: Bool?) -> Bool {
+    static func installCryptex(at cryptexPath: FilePath, ticketAt ticketURL: FilePath, withVariant variant: String?, usingAuthorizationService authorizationService: DInitAuthorizationService?, locatedAt serverURL: String?, limitLoadToREM rem: Bool?, readWrite: Bool?, jetsamPropertiesVariant: String?) -> Bool {
         do {
             var arguments = [CustomStringConvertible]()
             if let serverURL = serverURL {
@@ -152,7 +93,7 @@ enum LibCryptex {
                 arguments += ["--signing-environment", authorizationService.rawValue]
             }
             arguments += ["install"]
-            
+
             if let variant = variant {
                 arguments += ["--variant", variant]
             }
@@ -162,8 +103,19 @@ enum LibCryptex {
                     arguments += ["--limit-load-to-rem"]
                 }
             }
+
+            if let readWrite = readWrite {
+                if (readWrite) {
+                    arguments += ["--readwrite"]
+                }
+            }
+
+            if let jetsamPropertiesVariant = jetsamPropertiesVariant {
+                arguments += ["--jetsam-properties-variant", jetsamPropertiesVariant]
+            }
+
             arguments += [
-                "--print-info",
+                "--ticket-path", ticketURL.string,
                 cryptexPath
             ]
             _ = try Subprocess.run(

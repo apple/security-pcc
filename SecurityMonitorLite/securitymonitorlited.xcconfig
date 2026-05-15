@@ -1,4 +1,0 @@
-#include "common-swift6.xcconfig"
-
-CODE_SIGN_ENTITLEMENTS = $(SRCROOT)/securitymonitorlited/SupportingFiles/securitymonitorlited.entitlements
-INSTALL_PATH = /usr/libexec

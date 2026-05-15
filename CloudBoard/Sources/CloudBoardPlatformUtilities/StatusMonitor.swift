@@ -12,11 +12,10 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
 import CloudBoardMetrics
 import os
 
-public enum DaemonStatus: Equatable, Hashable {
+public enum DaemonStatus: Equatable, Hashable, Sendable {
     case uninitialized
     case initializing
     case waitingForFirstAttestationFetch
@@ -31,7 +30,7 @@ public enum DaemonStatus: Equatable, Hashable {
     case daemonExitingOnError
 }
 
-public struct Components: OptionSet, Equatable, Hashable {
+public struct Components: OptionSet, Equatable, Hashable, Sendable {
     public let rawValue: Int
 
     static let serviceDiscoveryPublisher = Components(rawValue: 1 << 0)
@@ -642,6 +641,16 @@ extension StatusMonitor {
 
         for watcher in watchers {
             watcher.continuation.finish()
+        }
+    }
+
+    /// Returns the current daemon status synchronously.
+    ///
+    /// This method directly accesses the stored status without creating a stream,
+    /// making it suitable for one-shot status queries like the gRPC check endpoint.
+    public func currentStatus() -> DaemonStatus {
+        self.currentState.withLock { state in
+            state.lastStatus
         }
     }
 

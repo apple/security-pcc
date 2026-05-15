@@ -25,7 +25,6 @@ import os.log
 
 /// Defines an ``AttestationPolicy`` that evaluates a signed Secure Enclave Attestation Blob.
 public struct SEPAttestationPolicy: AttestationPolicy {
-    @usableFromInline
     let signerLoader: SignerLoader
 
     @usableFromInline
@@ -109,6 +108,15 @@ public struct SEPAttestationPolicy: AttestationPolicy {
         do {
             let attestation = try SEP.Attestation(from: bundle.proto.sepAttestation, signer: signer)
             Self.logger.log("AttestationBundle passed SEPAttestationPolicy: SEP attestation signed by trusted authority")
+
+            // check that the deviceIdentity in the cert (if present) matches the attestation's deviceIdentity
+            if let certDeviceIdentity = context.validatedCert?.deviceIdentity {
+                guard certDeviceIdentity.identity == attestation.identity?.string else {
+                    Self.logger.error("Certificate DeviceIdentity \(certDeviceIdentity.identity) != \(attestation.identity?.string ?? "<nil>")")
+                    throw Error.invalidIdentity
+                }
+            }
+
             context[Self.validatedAttestationKey] = attestation
 
             if let body = self.body {
@@ -126,7 +134,6 @@ public struct SEPAttestationPolicy: AttestationPolicy {
 
 // MARK: - Signer Loader
 extension SEPAttestationPolicy {
-    @usableFromInline
     enum SignerLoader: Sendable {
         case immediate(SecKey)
         case lazy
@@ -155,5 +162,6 @@ extension SEPAttestationPolicy {
         case untrusted
         case missingSigningKey
         case unknown(underlying: Swift.Error)
+        case invalidIdentity
     }
 }

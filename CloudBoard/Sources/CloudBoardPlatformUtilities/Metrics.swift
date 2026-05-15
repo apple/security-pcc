@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardMetrics
 
 private let prefix = "cloudboard"
@@ -21,7 +19,7 @@ private let prefix = "cloudboard"
 enum Metrics {
     enum HotPropertiesController {
         struct HotPropertiesCanaryValue: Gauge {
-            static var label: MetricLabel = "\(prefix)_hotproperties_canary"
+            static let label: MetricLabel = "\(prefix)_hotproperties_canary"
             var value: Double
         }
     }

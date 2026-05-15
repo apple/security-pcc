@@ -38,6 +38,7 @@ template <typename T> class ScopeGuard
 	{
 		other._active = false;
 	}
+
 	ScopeGuard &
 	operator=(ScopeGuard && other)
 	{
@@ -45,6 +46,12 @@ template <typename T> class ScopeGuard
 		_active       = other._active;
 		other._active = false;
 		return *this;
+	}
+
+	void
+	dismiss()
+	{
+		_active = false;
 	}
 };
 

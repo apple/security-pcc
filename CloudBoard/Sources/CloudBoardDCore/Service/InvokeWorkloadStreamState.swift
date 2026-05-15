@@ -12,37 +12,38 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
 import CloudBoardLogging
 import InternalGRPC
 import InternalSwiftProtobuf
 import os
+import Synchronization
 
-struct InvokeWorkloadStreamState {
+final class InvokeWorkloadStreamState: Sendable, CustomStringConvertible {
     private static let logger: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
         category: "InvokeWorkloadStreamState"
     )
 
-    private var state: State
+    private let state: Mutex<State>
     private let isProxy: Bool
+
+    var description: String {
+        return "\(self.state.withLock { $0 })"
+    }
 
     init(isProxy: Bool) {
         self.isProxy = isProxy
-        self.state = .awaitingSetup
+        self.state = .init(.awaitingSetup)
     }
 
-    mutating func receiveMessage(_ message: Com_Apple_Cloudboard_Api_V1_InvokeWorkloadRequest) throws {
+    func receiveMessage(_ message: Com_Apple_Cloudboard_Api_V1_InvokeWorkloadRequest) throws {
         switch message.type {
         case .setup:
             try self.receiveSetup()
         case .parameters(let parameters):
             try self.receiveParameters(requestBypass: parameters.requestBypassed, nackRequest: parameters.requestNack)
         case .requestChunk(let chunk):
-            try self.receiveChunk()
-            if chunk.isFinal {
-                try self.receiveFinalChunk()
-            }
+            try self.receiveChunk(isFinal: chunk.isFinal)
         case .terminate:
             try self.receiveTerminationNotification()
         case .none:
@@ -50,33 +51,34 @@ struct InvokeWorkloadStreamState {
         }
     }
 
-    mutating func receiveEOF() throws {
-        try self.state.receivedEOF()
+    func receiveEOF() throws {
+        try self.state.withLock { try $0.receivedEOF() }
     }
 
-    private mutating func receiveSetup() throws {
-        try self.state.receiveSetup()
+    private func receiveSetup() throws {
+        try self.state.withLock { try $0.receiveSetup() }
     }
 
-    private mutating func receiveParameters(requestBypass: Bool, nackRequest: Bool) throws {
-        try self.state.receiveParameters(requestBypass: requestBypass, nackRequest: nackRequest)
+    private func receiveParameters(requestBypass: Bool, nackRequest: Bool) throws {
+        try self.state.withLock { try $0.receiveParameters(requestBypass: requestBypass, nackRequest: nackRequest) }
     }
 
-    private mutating func receiveChunk() throws {
-        try self.state.receiveChunk()
+    private func receiveChunk(isFinal: Bool) throws {
+        try self.state.withLock {
+            try $0.receiveChunk()
+            if isFinal {
+                try $0.receiveFinalChunk()
+            }
+        }
     }
 
-    private mutating func receiveFinalChunk() throws {
-        try self.state.receiveFinalChunk()
-    }
-
-    private mutating func receiveTerminationNotification() throws {
-        try self.state.receiveTerminationNotification()
+    private func receiveTerminationNotification() throws {
+        try self.state.withLock { try $0.receiveTerminationNotification() }
     }
 }
 
 extension InvokeWorkloadStreamState {
-    private enum State {
+    private enum State: CustomStringConvertible {
         case awaitingSetup
         case awaitingParameters
         /// this may or may not have actually received them yet
@@ -87,6 +89,18 @@ extension InvokeWorkloadStreamState {
         case requestBypassAwaitingAuthToken
         /// Due to request bypass we aren't expecting anything else after receiving the auth token except termination
         case requestBypass
+
+        var description: String {
+            switch self {
+            case .awaitingSetup: "awaiting setup"
+            case .awaitingParameters: "awaiting parameters"
+            case .receivingChunks: "receiving chunks"
+            case .receivedFinalChunk: "received final chunk"
+            case .receivedTerminationNotification: "received termination notification"
+            case .requestBypassAwaitingAuthToken: "request bypass awaiting auth token"
+            case .requestBypass: "request bypass"
+            }
+        }
 
         mutating func receiveSetup() throws {
             switch self {

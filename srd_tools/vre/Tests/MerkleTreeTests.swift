@@ -19,6 +19,7 @@ import Testing
 import Foundation
 import CryptoKit
 
+@Suite
 struct MerkleTreeTests {
     
     @Test
@@ -50,7 +51,7 @@ struct MerkleTreeTests {
         let singlePathProof = tree.proveInclusion(of: foo)
         #expect(singlePathProof!.path.map { $0.hexString } == ["485904129bdda5d1b5fbc6bc4a82959ecfb9042db44dc08fe87e360b0a3f2501"])
         #expect(singlePathProof!.index == 0)
-        #expect(try tree.verifyInclusion(of: foo, with: singlePathProof!) == true)
+        #expect(tree.verifyInclusion(of: foo, with: singlePathProof!) == true)
     }
 
     @Test("Different Trees", arguments: [
@@ -65,7 +66,7 @@ struct MerkleTreeTests {
             let itemData = item.data(using: .utf8)!
             let proof = tree.proveInclusion(of: itemData)
             #expect(proof != nil)
-            #expect(try tree.verifyInclusion(of: itemData, with: proof!) == true)
+            #expect(tree.verifyInclusion(of: itemData, with: proof!) == true)
         }
     }
 }

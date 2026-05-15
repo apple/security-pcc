@@ -20,28 +20,33 @@
 //
 
 internal import CloudMetricsConstants
-// libnarrartivecert doesn't exist on macOS. By weak linking here we can still run on macOS and not use this functionality.
+
+// libnarrartivecert doesn't exist on macOS. By weak linking here we can still run on macOS and not use this
+// functionality.
 @_weakLinked internal import libnarrativecert
 package import GRPC
 internal import NIOSSL
 private import notify
 internal import os
 
-/// Provides an `AsyncSequence` of ``GRPCTLSConfiguration`` that will yield every time the narrative certs need reloading.
+/// Provides an `AsyncSequence` of ``GRPCTLSConfiguration`` that will yield every time the narrative certs need
+/// reloading.
 package final class NICCertExpiryHandler: Sendable {
     // We have one continuation for each subscriber to the events
-    private let subscribeContinuations: OSAllocatedUnfairLock<[AsyncStream<GRPCTLSConfiguration?>.Continuation]> = .init(initialState: [])
+    private let subscribeContinuations: OSAllocatedUnfairLock<[AsyncStream<GRPCTLSConfiguration?>.Continuation]> =
+        .init(initialState: [])
     private let logger = Logger(subsystem: kCloudMetricsLoggingSubsystem, category: "NarrativeHelper")
     private let generateTestConfigs: Bool
 
     /// Creates a handler
-    /// - Parameter generateTestConfigs: When set we generate empty configs. On macOS we can't generate actual actor certs but need to test our code works.
+    /// - Parameter generateTestConfigs: When set we generate empty configs. On macOS we can't generate actual actor
+    /// certs but need to test our code works.
     package init(generateTestConfigs: Bool = false) {
         self.generateTestConfigs = generateTestConfigs
     }
 
-    package func run() async {
-        logger.log("Registering for updates to narrative identity")
+    package func run() async throws {
+        self.logger.log("Registering for updates to narrative identity")
 
         let (newCertStream, newCertContinuation) = AsyncStream<Void>.makeStream()
         let notifyToken = self.registerCertRenewalNotification(newCertContinuation: newCertContinuation)
@@ -53,7 +58,7 @@ package final class NICCertExpiryHandler: Sendable {
         for await _ in newCertStream {
             self.logger.log("NICCertExpiryHandler refreshed notification")
             let tlsConfig: GRPCTLSConfiguration?
-            if generateTestConfigs {
+            if self.generateTestConfigs {
                 tlsConfig = nil
             } else {
                 do {
@@ -68,6 +73,7 @@ package final class NICCertExpiryHandler: Sendable {
                 continuation.yield(tlsConfig)
             }
         }
+        try Task.checkCancellation()
     }
 
     /// Register a callback to execute whenever certs rotate
@@ -83,7 +89,11 @@ package final class NICCertExpiryHandler: Sendable {
     private func registerCertRenewalNotification(newCertContinuation: AsyncStream<Void>.Continuation) -> Int32 {
         // TODO: replace with acdcActorCert.refreshedNotificationName once the changes are in laetst OS SDK
         var token = Int32(0)
-        notify_register_dispatch("com.apple.narrativecertd.acdc.actor.notification.refreshed", &token, DispatchQueue.global(qos: .utility)) { _ in
+        notify_register_dispatch(
+            "com.apple.narrativecertd.acdc.actor.notification.refreshed",
+            &token,
+            DispatchQueue.global(qos: .utility)
+        ) { _ in
             self.logger.log("Narrative cert refresh token received")
             newCertContinuation.yield()
         }
@@ -99,16 +109,14 @@ extension NICCertExpiryHandler: AsyncSequence {
     }
 
     package struct AsyncIterator: AsyncIteratorProtocol {
-
         private var iterator: AsyncStream<GRPCTLSConfiguration?>.Iterator
 
         fileprivate init(stream: AsyncStream<GRPCTLSConfiguration?>) {
             self.iterator = stream.makeAsyncIterator()
         }
 
-        mutating package func next() async -> GRPCTLSConfiguration?? {
-            await iterator.next()
+        package mutating func next() async -> GRPCTLSConfiguration?? {
+            await self.iterator.next()
         }
-
     }
 }

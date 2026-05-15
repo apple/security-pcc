@@ -26,7 +26,6 @@ internal import os
 internal final class CloudMetricsAggregation: Aggregation, Sendable {
     private let defaultHistogramBuckets: [Double]
     private let defaultHistogramAggregator: Aggregation
-    private let customHistogramsAggregators: OSAllocatedUnfairLock<[String:Aggregation]> = .init(uncheckedState: [:])
     private let metricOverrides: MetricOverrides
     private let logger = Logger(subsystem: kCloudMetricsLoggingSubsystem, category: "CloudMetricsAggregation")
     internal init(histogramBuckets: [Double], metricOverrides: MetricOverrides) {
@@ -39,12 +38,15 @@ internal final class CloudMetricsAggregation: Aggregation, Sendable {
         }
     }
 
-    package func createAggregator(descriptor: InstrumentDescriptor, exemplarFilter: ExemplarFilter) -> any StableAggregator {
-        resolve(for: descriptor).createAggregator(descriptor: descriptor, exemplarFilter: exemplarFilter)
+    package func createAggregator(
+        descriptor: InstrumentDescriptor,
+        exemplarFilter: ExemplarFilter
+    ) -> any Aggregator {
+        self.resolve(for: descriptor).createAggregator(descriptor: descriptor, exemplarFilter: exemplarFilter)
     }
 
     package func isCompatible(with descriptor: InstrumentDescriptor) -> Bool {
-        resolve(for: descriptor).isCompatible(with: descriptor)
+        self.resolve(for: descriptor).isCompatible(with: descriptor)
     }
 
     private func resolve(for instrument: InstrumentDescriptor) -> Aggregation {
@@ -52,31 +54,21 @@ internal final class CloudMetricsAggregation: Aggregation, Sendable {
         case .counter, .upDownCounter, .observableCounter, .observableUpDownCounter:
             return SumAggregation.instance
         case .histogram:
-            if let aggregator = (customHistogramsAggregators.withLock{$0[instrument.name]}) {
-                return aggregator
-            }
-            var aggregator = defaultHistogramAggregator
+            var aggregator = self.defaultHistogramAggregator
             // check if we have bucket overrides for this instrument
-            let overrides = metricOverrides.getOverrides()
-            if !overrides.isEmpty {
-                let metricId = MetricID(label: instrument.name, dimensions: [:])
-                if let override = overrides[metricId] {
-                    logger.info("Override found for \(instrument.name, privacy: .public))")
-                    switch override {
-                    case .histogram(buckets: let buckets):
-                        // let's create a custom aggregator honoring the overrides.
-                        aggregator = Aggregations.explicitBucketHistogram(buckets: buckets)
-                    default:
-                        logger.error("Non histogram override found")
-                    }
+            let metricID = MetricID(label: instrument.name, dimensions: [:])
+            if let override = self.metricOverrides[metricID] {
+                self.logger.log("Override found intrument_name=\(instrument.name, privacy: .public))")
+                switch override {
+                case .histogram(buckets: let buckets):
+                    // let's create a custom aggregator honoring the overrides.
+                    aggregator = Aggregations.explicitBucketHistogram(buckets: buckets)
+                default:
+                    self.logger.error("Non histogram override found")
                 }
             }
-            // cache the aggregator so we don't need to check overrides again
-            // at publish time
-            let resolvedAggregator = aggregator
-            customHistogramsAggregators.withLock { $0[instrument.name] = resolvedAggregator }
             return aggregator
-        case .observableGauge:
+        case .observableGauge, .gauge:
             return LastValueAggregation.instance
         }
     }

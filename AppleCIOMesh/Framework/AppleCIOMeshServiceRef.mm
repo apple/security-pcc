@@ -848,4 +848,22 @@ fail:
 	return NO;
 }
 
+- (BOOL)resetBuffer:(uint64_t)bufferId
+{
+    kern_return_t ret;
+    require([self open], fail);
+
+    ret = IOConnectTrap1(_connection, MUCI::Trap::ResetBuffer, (uintptr_t)bufferId);
+
+    if (ret != KERN_SUCCESS) {
+        LogError("failed to call ResetBuffer trap %u\n", ret);
+        return NO;
+    }
+
+    return YES;
+
+fail:
+    return NO;
+}
+
 @end

@@ -12,9 +12,8 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple Inc. All rights reserved.
-
 internal import AppServerSupport.OSLaunchdJob
+import CloudBoardLogging
 import Foundation
 import os
 import System
@@ -33,6 +32,7 @@ internal enum LaunchdJobHelper {
         fromJob launchdJob: OSLaunchdJob,
         withState state: OSLaunchdJobState? = nil,
         ofType type: CloudBoardJobType? = nil,
+        withName name: String? = nil,
         skippingInstances: Bool = false,
         logger: Logger
     ) -> CloudBoardJobAttributes? {
@@ -80,6 +80,11 @@ internal enum LaunchdJobHelper {
             return nil
         }
 
+        // If we are looking for a specific job name, return here if the name doesn't match
+        if let name, name != jobName {
+            return nil
+        }
+
         guard let machServiceName = XPCDictionary(additionalProperties)[LaunchdPropertyKeys.machServiceName] as String?
         else {
             logger.error("discovered job missing \(LaunchdPropertyKeys.machServiceName, privacy: .public)")
@@ -103,6 +108,7 @@ internal enum LaunchdJobHelper {
     // (all types if none was specified).
     internal static func findManagedLaunchdJobs(
         type: CloudBoardJobType? = nil,
+        name: String? = nil,
         state: OSLaunchdJobState? = nil,
         skippingInstances: Bool = false
     ) throws -> [ManagedLaunchdJob] {
@@ -113,6 +119,7 @@ internal enum LaunchdJobHelper {
                 fromJob: launchdJob,
                 withState: state,
                 ofType: type,
+                withName: name,
                 skippingInstances: skippingInstances,
                 logger: logger
             ) {
@@ -274,30 +281,6 @@ internal enum LaunchdJobHelper {
                 """)
                 throw error
             }
-        }
-    }
-
-    public static func sendTerminationSignal(
-        pid: pid_t,
-        signal: TerminationSignal,
-        logger: Logger
-    ) {
-        let signalValue: Int32 = switch signal {
-        case .sigterm: SIGTERM
-        case .sigkill: SIGKILL
-        }
-
-        logger.log("Sending \(signal, privacy: .public) to process \(pid, privacy: .public)")
-        if kill(pid, signalValue) != 0 {
-            guard errno != ESRCH else {
-                logger.info("Process \(pid, privacy: .public) no longer exists")
-                return
-            }
-            logger.error("""
-            Failed to send \(signal, privacy: .public) to process \
-            \(pid, privacy: .public), error=\
-            \(Errno(rawValue: errno).description, privacy: .public)
-            """)
         }
     }
 

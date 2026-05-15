@@ -22,14 +22,11 @@
 import Foundation
 import ArgumentParserInternal
 
-extension URL: @retroactive ExpressibleByArgument {
-    public init?(argument: String) {
-        self.init(string: argument)
-    }
-}
-
-extension UUID: @retroactive ExpressibleByArgument {
-    public init?(argument: String) {
-        self.init(uuidString: argument)
+extension URL {
+    internal init(validating argument: String) throws {
+        guard let url = URL(string: argument) else {
+            throw ValidationError("Invalid URL: '\(argument)'")
+        }
+        self = url
     }
 }

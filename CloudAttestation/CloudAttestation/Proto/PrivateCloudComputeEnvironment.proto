@@ -25,6 +25,8 @@ enum Environment {
     PERF = 5;
     EPHEMERAL = 6;
     DEV = 7;
+    LIVEON = 8;
+    QUARANTINE = 9;
 
     QA1_PRIMARY = 96;
     QA1_INTERNAL = 97;

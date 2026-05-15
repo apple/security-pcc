@@ -12,20 +12,23 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
+internal import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardJobAPI
-import CloudBoardOSActivity
+internal import CloudBoardLogging
+internal import CloudBoardOSActivity
+internal import CloudBoardCommon
+internal import Synchronization
+import CloudBoardDomain
 import Foundation
 import os
-internal import Synchronization
 
 private let log: Logger = .init(
     subsystem: "com.apple.cloudos.cloudboard",
     category: "CloudBoardJob"
 )
 
-public struct InputData: AsyncSequence {
+public struct InputData: AsyncSequence, Sendable {
     let dataInputStream: AsyncStream<Data>
     public typealias Element = Data
 
@@ -43,14 +46,12 @@ public struct InputData: AsyncSequence {
 }
 
 private typealias DataOutputContinuation = AsyncStream<Data>.Continuation
-
 /// This exists solely to retain ABI compatibility on ``ResponseWriter`` which was declared a struct,
 /// but should have reference semantics, and which needs to be properly Sendable
 package final class ResponseWriterRef: Sendable {
     private let (outputStream, outputContinuation) = AsyncStream<Data>.makeStream()
     private let xpcMessenger: JobHelperMessenger
     private let finished = Mutex<Bool>(false)
-
     init(messenger: JobHelperMessenger) {
         self.xpcMessenger = messenger
     }
@@ -73,6 +74,11 @@ package final class ResponseWriterRef: Sendable {
         self.outputContinuation.finish()
     }
 
+    public func finish(_ error: CloudAppRequestExecutionError) async {
+        await self.xpcMessenger.reportCloudAppRequestExecutionError(error: error)
+        self.finish()
+    }
+
     package func forceFinished() async {
         let treatAsError = self.finished.withLock { !$0 }
         // It's important to get the endOfResponse message out before the finish.
@@ -86,6 +92,24 @@ package final class ResponseWriterRef: Sendable {
         }
         self.finish()
     }
+}
+
+/// Information available at warmup.
+/// Some is duplicated in '``CloudAppEnvironment`` and is guaranteed to not change
+public struct WarmupEnvironment: Sendable {
+    /// In most cases a CloudApp already knows it's name, but when being replaced by
+    /// the ``ShadowTunnelCloudApp`` it helps to know it
+    package var cloudAppName: String
+
+    // Additional properties could be added for little cost, such as ensembleInstanceID
+    // and rackID but we only add the things needed right now
+
+    /// Launchd job instance UUID shared across all associated per-request processes.
+    /// This can be used to connect to a support app launched and managed by CloudBoard.
+    public var launchdJobInstanceUUID: UUID
+
+    /// The metadata of all assets that are available to the cloud app.
+    public var assetsMetadata: [AssetMetadata]
 }
 
 /// Despite being a struct this has reference semantics
@@ -107,13 +131,24 @@ public struct ResponseWriter: Sendable {
     public func finish() throws {
         self.ref.finish()
     }
+
+    public func finish(_ error: CloudAppRequestExecutionError) async {
+        await self.ref.finish(error)
+    }
 }
 
-public protocol CloudBoardApp {
+@preconcurrency
+public protocol CloudBoardApp: Sendable {
     init()
     /// If there is expensive work which can be deferred till after init, but which must be done before
     /// ``run(input:responder:environment:)`` it can be done here
+    /// If a cloud app wants to implement this they only need to implement one, and should prefer
+    /// to override the ``warmup(environment:)`` implementation.
+    @available(*, deprecated, renamed: "warmup(environment:)", message: "Please move to the new signature")
     func warmup() async throws
+    /// If there is expensive work which can be deferred till after init, but which must be done before
+    /// ``run(input:responder:environment:)`` it can be done here
+    func warmup(environment: WarmupEnvironment) async throws
     /// Performs any necessary teardown work.
     /// Returning from this function signals acknowledgement of the
     /// teardown request. The run() routine will be cancelled after this function
@@ -139,6 +174,12 @@ public protocol CloudBoardApp {
 extension CloudBoardApp {
     public func warmup() async throws {
         // Can be overridden by implementing type...
+    }
+
+    public func warmup(environment _: WarmupEnvironment) async throws {
+        // Can be overridden by implementing type,
+        // if they only overrode the overload without the environment keep that path working
+        try await self.warmup()
     }
 
     public func teardown() async throws {
@@ -168,10 +209,7 @@ package enum CloudBoardAppRunner {
         server: CloudBoardJobAPIServerProtocol,
         metricsBuilder: CloudAppMetrics.Builder
     ) async throws {
-        // Create the stream and associated InputData to wrap input
-        let (inputStream, inputStreamContinuation) = AsyncStream<Data>.makeStream()
-        let inputData = InputData(dataInputStream: inputStream)
-
+        let (subrequestStream, subrequestContinuation) = AsyncStream<SubrequestExecution>.makeStream()
         // Create the stream and associated continuation to forward teardown requests
         let (teardownRequestStream, teardownRequestStreamContinuation) = AsyncStream<Void>.makeStream()
 
@@ -180,99 +218,39 @@ package enum CloudBoardAppRunner {
 
         let xpcMessenger = await JobHelperMessenger(
             server: server,
-            inputContinuation: inputStreamContinuation,
+            subrequestContinuation: subrequestContinuation,
             teardownContinuation: teardownRequestStreamContinuation,
             log: log,
             appInstance: appInstance,
             metricsBuilder: metricsBuilder
         )
 
-        let responseWriter = ResponseWriter(messenger: xpcMessenger)
-
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
-                try await withThrowingTaskGroup(of: Void.self) { subGroup in
-                    subGroup.addTask {
-                        try await responseWriter.run()
-                    }
-                    subGroup.addTask {
-                        try await xpcMessenger.waitForWarmupComplete()
+                let parameters: ParametersData
+                do {
+                    try await xpcMessenger.waitForWarmupComplete()
+                    parameters = try await xpcMessenger.waitForParameters()
+                } catch {
+                    try await xpcMessenger.endJob()
+                    throw error
+                }
 
-                        let parameters = try await xpcMessenger.waitForParameters()
-                        let metrics = await xpcMessenger.buildMetrics()
-                        do {
-                            let environment = CloudAppEnvironment(
-                                metrics: metrics,
-                                plaintextMetadata: .init(parameters.plaintextMetadata),
-                                pccClient: PCCClient(
-                                    jobHelperMessenger: xpcMessenger,
-                                    clientRequestID: parameters.plaintextMetadata.requestID,
-                                    requestBypassed: parameters.requestBypassed
-                                ),
-                                keyDerivation: KeyDerivationHelper(
-                                    jobHelperMessenger: xpcMessenger,
-                                    clientRequestID: parameters.plaintextMetadata.requestID
-                                ),
-                                requestBypassed: parameters.requestBypassed,
-                                traceContext: .init(parameters.traceContext)
-                            )
-                            // Here we provide the positive semantics of request bypass:
-                            // the InputData stream terminates immediately.
-                            // The negative aspect (there is no payload data before this) is enforced
-                            // inside cloudboard daemon
-                            if parameters.requestBypassed {
-                                inputStreamContinuation.finish()
-                            }
-                            log.debug("""
-                            CloudBoardJob invoked with: \
-                            request.uuid=\(environment.plaintextMetadata.requestID, privacy: .public)
-                            bundleID=\(environment.plaintextMetadata.bundleID, privacy: .public)
-                            bundleVersion=\(environment.plaintextMetadata.bundleVersion, privacy: .public)
-                            featureID=\(environment.plaintextMetadata.featureID, privacy: .public)
-                            automatedDeviceGroup=\(environment.plaintextMetadata.automatedDeviceGroup, privacy: .public)
-                            clientInfo=\(environment.plaintextMetadata.clientInfo, privacy: .public)
-                            requestBypassed=\(environment.requestBypassed, privacy: .public)
-                            traceID=\(environment.traceContext.traceID, privacy: .public)
-                            spanID=\(environment.traceContext.spanID, privacy: .public)
-                            """)
-                            try await appInstance.run(
-                                input: inputData,
-                                responder: responseWriter,
-                                environment: environment
-                            )
-                            // We need to ensure the responseWriter is finished.
-                            // It is the job of the real CloudApp to do this properly for the request
-                            // to be considered a success,
-                            // If this forceFinished will trigger finish it first sends the
-                            // internalError message to ensure that arrives first
-                            await responseWriter.ref.forceFinished()
-                        } catch {
-                            // if the response to the client was completed this cannot change that
-                            // but having it enhances observability, and potentially can be passed upwards
-                            // to ROPES in future
-                            await xpcMessenger.internalError()
-                            // we need to terminate the response writer run loop to make progress
-                            responseWriter.ref.finish()
-                            log.error("""
-                            Cloud app failed with error: \
-                            \(String(reportable: error), privacy: .public) \
-                            (\(error))
-                            """)
-                            throw error
-                        }
-                    }
-                    var endJobCalled = false
-                    do {
-                        try await subGroup.waitForAll()
-                        endJobCalled = true
-                        try await xpcMessenger.endJob()
-                    } catch {
-                        // No point in calling `endJob` again if that threw earlier and got us here in the first place
-                        if !endJobCalled {
-                            try await xpcMessenger.endJob()
-                        }
-                        throw error
-                    }
+                if let subrequestProxyInstance = appInstance as? SubrequestProxyApp {
+                    try await Self.runSubrequestProxyApp(
+                        subrequestProxyInstance: subrequestProxyInstance,
+                        xpcMessenger: xpcMessenger,
+                        parameters: parameters,
+                        subrequestStream: subrequestStream
+                    )
+                } else {
+                    try await Self.runCloudApp(
+                        appInstance: appInstance,
+                        xpcMessenger: xpcMessenger,
+                        parameters: parameters,
+                        subrequestStream: subrequestStream,
+                        subrequestContinuation: subrequestContinuation
+                    )
                 }
             }
 
@@ -290,6 +268,204 @@ package enum CloudBoardAppRunner {
             await xpcMessenger.cancel()
             group.cancelAll()
         }
+    }
+
+    private static func runSubrequestProxyApp(
+        subrequestProxyInstance: SubrequestProxyApp,
+        xpcMessenger: JobHelperMessenger,
+        parameters: ParametersData,
+        subrequestStream: AsyncStream<SubrequestExecution>
+    ) async throws {
+        let environment = await Self.createProxyAppEnvironment(
+            parameters: parameters,
+            xpcMessenger: xpcMessenger
+        )
+        logMessage("CloudBoardJob invoked", environment: environment)
+
+        do {
+            try await subrequestProxyInstance.run(
+                subrequestExecutionStream: .init(requestInputStream: subrequestStream),
+                environment: environment
+            )
+        } catch {
+            await self.handleError(error: error, xpcMessenger: xpcMessenger, environment: environment)
+            try await xpcMessenger.endJob()
+            throw error
+        }
+        try await xpcMessenger.endJob()
+    }
+
+    private static func handleError(
+        error: Error,
+        xpcMessenger: JobHelperMessenger,
+        environment: LoggableEnvironment
+    ) async {
+        logError(error, environment: environment)
+
+        if let requestExecutionError = error as? RequestExecutionErrorProtocol {
+            await xpcMessenger.reportRequestExecutionError(error: requestExecutionError)
+        }
+        await xpcMessenger.internalError()
+    }
+
+    private static func runCloudApp(
+        appInstance: CloudBoardApp,
+        xpcMessenger: JobHelperMessenger,
+        parameters: ParametersData,
+        subrequestStream: AsyncStream<SubrequestExecution>,
+        subrequestContinuation: AsyncStream<SubrequestExecution>.Continuation
+    ) async throws {
+        /// Fabricate a sub request for CloudBoardApps
+        /// which don't implement SubrequestProxyApp
+        try await xpcMessenger.fabricateClientSubrequest()
+        subrequestContinuation.finish()
+
+        try await withThrowingTaskGroup(of: Void.self) { subrequestGroup in
+            /// We expect to receive only one sub request here
+            if let subrequestExecution = await subrequestStream.first(where: { _ in true }) {
+                let (inputStream, inputContinuation) = AsyncStream<Data>.makeStream()
+                let responseWriter = ResponseWriter(messenger: xpcMessenger)
+                if parameters.requestBypassed {
+                    inputContinuation.finish()
+                } else {
+                    subrequestGroup.addTask {
+                        for try await event in subrequestExecution.events {
+                            switch event {
+                            case .subrequestStart, .subrequestEnd, .subrequestCancellation:
+                                // We ignore these for old-style run implementations
+                                ()
+                            case .subrequestPayload(let payload):
+                                inputContinuation.yield(payload.data)
+                            }
+                        }
+                        inputContinuation.finish()
+                    }
+                }
+                subrequestGroup.addTask {
+                    try await responseWriter.run()
+                }
+
+                subrequestGroup.addTask {
+                    let environment = await Self.createCloudAppEnvironment(
+                        parameters: parameters,
+                        xpcMessenger: xpcMessenger,
+                        pccClient: subrequestExecution.pccClient
+                    )
+                    do {
+                        logMessage("CloudBoardJob invoked", environment: environment)
+                        try await appInstance.run(
+                            input: .init(dataInputStream: inputStream),
+                            responder: responseWriter,
+                            environment: environment
+                        )
+                        // We need to ensure the responseWriter is finished.
+                        // It is the job of the real CloudApp to do this properly for the request
+                        // to be considered a success,
+                        // If this forceFinished will trigger finish it first sends the
+                        // internalError message to ensure that arrives first
+                        await responseWriter.ref.forceFinished()
+                    } catch {
+                        // if the response to the client was completed this cannot change that
+                        // but having it enhances observability, and potentially can be passed upwards
+                        // to ROPES in future
+                        // we need to terminate the response writer run loop to make progress
+                        await self.handleError(error: error, xpcMessenger: xpcMessenger, environment: environment)
+                        responseWriter.ref.finish()
+                        throw error
+                    }
+                }
+            }
+            var endJobCalled = false
+            do {
+                try await subrequestGroup.waitForAll()
+                endJobCalled = true
+                try await xpcMessenger.endJob()
+            } catch {
+                if !endJobCalled {
+                    try await xpcMessenger.endJob()
+                }
+                throw error
+            }
+        }
+    }
+
+    private static func createCloudAppEnvironment(
+        parameters: ParametersData,
+        xpcMessenger: JobHelperMessenger,
+        pccClient: PCCClient
+    ) async -> CloudAppEnvironment {
+        let metrics = await xpcMessenger.buildMetrics()
+        let keyDerivationHelper = KeyDerivationHelper(
+            jobHelperMessenger: xpcMessenger,
+            clientRequestID: parameters.plaintextMetadata.requestID
+        )
+        let appData = parameters.nodeAppData
+        // EnsembleId, bootId and rackId need to default to empty string for now, we can
+        // eliminate optionals
+        // once we're certain these values won't be empty and are being populated 100% of the
+        // time.
+        let ensembleInstanceID = EnsembleInstanceId(
+            ensembleId: appData.ensembleID?.utf8String ?? "",
+            bootId: appData.bootID?.utf8String ?? ""
+        )
+        let rackID = RackId(appData.rackID?.utf8String ?? "")
+        return CloudAppEnvironment(
+            metrics: metrics,
+            plaintextMetadata: .init(parameters.plaintextMetadata),
+            pccClient: pccClient,
+            pirClient: PrivateInformationRetrievalClient(
+                jobHelperMessenger: xpcMessenger,
+                pccServerRequestID: parameters.plaintextMetadata.requestID,
+                traceID: UUID(uuidString: parameters.traceContext.traceID) ?? UUID(),
+                defaultParentSpanID: parameters.traceContext.spanID
+            ),
+            keyDerivation: keyDerivationHelper,
+            requestBypassed: parameters.requestBypassed,
+            traceContext: .init(parameters.traceContext),
+            updatedTraceContext: .init(parameters.traceContext),
+            ensembleInstanceID: ensembleInstanceID,
+            rackID: rackID,
+            launchdJobInstanceUUID: parameters.launchdJobInstanceUUID,
+            supportApps: parameters.supportApps
+        )
+    }
+
+    private static func createProxyAppEnvironment(
+        parameters: ParametersData,
+        xpcMessenger: JobHelperMessenger
+    ) async -> ProxyAppEnvironment {
+        let metrics = await xpcMessenger.buildMetrics()
+        let keyDerivationHelper = KeyDerivationHelper(
+            jobHelperMessenger: xpcMessenger,
+            clientRequestID: parameters.plaintextMetadata.requestID
+        )
+        let appData = parameters.nodeAppData
+        // EnsembleId, bootId and rackId need to default to empty string for now, we can
+        // eliminate optionals
+        // once we're certain these values won't be empty and are being populated 100% of the
+        // time.
+        let ensembleInstanceID = EnsembleInstanceId(
+            ensembleId: appData.ensembleID?.utf8String ?? "",
+            bootId: appData.bootID?.utf8String ?? ""
+        )
+        let rackID = RackId(appData.rackID?.utf8String ?? "")
+        return ProxyAppEnvironment(
+            metrics: metrics,
+            plaintextMetadata: .init(parameters.plaintextMetadata),
+            pirClient: PrivateInformationRetrievalClient(
+                jobHelperMessenger: xpcMessenger,
+                pccServerRequestID: parameters.plaintextMetadata.requestID,
+                traceID: UUID(uuidString: parameters.traceContext.traceID) ?? UUID(),
+                defaultParentSpanID: parameters.traceContext.spanID
+            ),
+            keyDerivation: keyDerivationHelper,
+            requestBypassed: parameters.requestBypassed,
+            updatedTraceContext: .init(parameters.traceContext),
+            ensembleInstanceID: ensembleInstanceID,
+            rackID: rackID,
+            launchdJobInstanceUUID: parameters.launchdJobInstanceUUID,
+            supportApps: parameters.supportApps
+        )
     }
 }
 
@@ -321,12 +497,13 @@ extension CloudAppEnvironment.PlaintextMetadata {
     }
 }
 
+// Trace Context with String representation of spanID
 extension CloudAppEnvironment.TraceContext {
-    init(_ receivedData: ParametersData.TraceContext?) {
+    init(_ receivedData: CloudBoardTraceContext?) {
         if let receivedData {
             self.init(
                 traceID: receivedData.traceID,
-                spanID: receivedData.spanID
+                spanID: receivedData.spanID.hexEncoded
             )
         } else {
             self.init(
@@ -337,6 +514,66 @@ extension CloudAppEnvironment.TraceContext {
     }
 }
 
-enum CloudAppError: Error {
-    case unsupported
+// Trace Context with UInt64 representation of spanID
+extension CloudAppEnvironment.UpdatedTraceContext {
+    init(_ receivedData: CloudBoardTraceContext?) {
+        if let receivedData {
+            self.init(
+                traceID: receivedData.traceID,
+                spanID: receivedData.spanID
+            )
+        } else {
+            self.init(
+                traceID: "",
+                spanID: UInt64.random(in: 0 ..< UInt64.max)
+            )
+        }
+    }
+}
+
+private protocol LoggableEnvironment {
+    var plaintextMetadata: CloudAppEnvironment.PlaintextMetadata { get }
+    var requestBypassed: Bool { get }
+    var updatedTraceContext: CloudAppEnvironment.UpdatedTraceContext { get }
+}
+
+extension CloudAppEnvironment: LoggableEnvironment {}
+extension ProxyAppEnvironment: LoggableEnvironment {}
+
+extension CloudBoardAppRunner {
+    private static func logMessage(_ message: StaticString, environment: some LoggableEnvironment) {
+        log.log("""
+        message=\(message, privacy: .public)
+        request.uuid=\(environment.plaintextMetadata.requestID, privacy: .public)
+        bundleID=\(environment.plaintextMetadata.bundleID, privacy: .public)
+        bundleVersion=\(environment.plaintextMetadata.bundleVersion, privacy: .public)
+        featureID=\(environment.plaintextMetadata.featureID, privacy: .public)
+        automatedDeviceGroup=\(
+            environment.plaintextMetadata.automatedDeviceGroup,
+            privacy: .public
+        )
+        clientInfo=\(environment.plaintextMetadata.clientInfo, privacy: .public)
+        requestBypassed=\(environment.requestBypassed, privacy: .public)
+        traceID=\(environment.updatedTraceContext.traceID, privacy: .public)
+        spanID=\(environment.updatedTraceContext.spanID, privacy: .public)
+        """)
+    }
+
+    private static func logError(_ error: Error, environment: some LoggableEnvironment) {
+        log.error("""
+        Cloud app failed with error=\(String(reportable: error), privacy: .public)
+        request.uuid=\(environment.plaintextMetadata.requestID, privacy: .public)
+        bundleID=\(environment.plaintextMetadata.bundleID, privacy: .public)
+        bundleVersion=\(environment.plaintextMetadata.bundleVersion, privacy: .public)
+        featureID=\(environment.plaintextMetadata.featureID, privacy: .public)
+        automatedDeviceGroup=\(
+            environment.plaintextMetadata.automatedDeviceGroup,
+            privacy: .public
+        )
+        clientInfo=\(environment.plaintextMetadata.clientInfo, privacy: .public)
+        requestBypassed=\(environment.requestBypassed, privacy: .public)
+        traceID=\(environment.updatedTraceContext.traceID, privacy: .public)
+        spanID=\(environment.updatedTraceContext.spanID, privacy: .public)
+        """)
+    }
 }

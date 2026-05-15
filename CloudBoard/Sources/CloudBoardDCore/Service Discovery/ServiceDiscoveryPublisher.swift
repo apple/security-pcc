@@ -12,14 +12,14 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardController
+import CloudBoardLogging
 import CloudBoardMetrics
 import CloudBoardPlatformUtilities
 import Foundation
 import GRPCClientConfiguration
+import InternalSwiftProtobuf
 import Logging
 import NIOCore
 import os
@@ -32,9 +32,10 @@ enum ServiceDiscovery {
     typealias Response = Com_Apple_Ase_Traffic_Servicediscovery_Api_V1_RegistrationResponse
 
     struct ServiceDetails: CustomStringConvertible {
-        var workloadType: WorkloadConfig.WorkloadType
-        var workloadTags: [String: WorkloadConfig.RoutingTagValue]
+        var workloadType: ServiceDiscoveryWorkloadConfig.WorkloadType
+        var workloadTags: [String: RoutingTagValue]
         var retractionPromise: Promise<Void, Never>
+        var deregistrationCompletedPromise: Promise<Void, Never>
 
         var description: String {
             "ServiceDetails: type=\(self.workloadType) tags=\(self.workloadTags)"
@@ -54,10 +55,11 @@ enum ServiceDiscovery {
     }
 
     /// Abstraction on the ``GRPCAsyncBidirectionalStreamingCall<Request, Response>``
-    struct Announcement {
-        let responseStream: any AsyncSequence<Response, Swift.Error>
-        let send: (Request) async throws -> Void
-        let finish: () -> Void
+    struct Announcement: Sendable {
+        typealias ResponseStream = AsyncSequence<Response, Swift.Error> & Sendable
+        let responseStream: any ResponseStream
+        let send: @Sendable (Request) async throws -> Void
+        let finish: @Sendable () -> Void
     }
 }
 
@@ -80,6 +82,9 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
     private let registeredServiceCount = OSAllocatedUnfairLock(initialState: 0)
     private let statusMonitor: StatusMonitor
     private let nodeReleaseDigest: String
+    private let routingGroupAliases: [String]?
+    private let bootID: String?
+    private let dependencyHealthChecker: ServiceDependencyHealthChecker?
 
     private struct State {
         var serviceUpdateContinuation: AsyncStream<ServiceDiscovery.ServiceUpdate>.Continuation?
@@ -100,7 +105,10 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
         nodeInfo: NodeInfo? = nil,
         cellID: String? = nil,
         metrics: any MetricsSystem,
-        nodeReleaseDigest: String
+        nodeReleaseDigest: String,
+        routingGroupAliases: [String]?,
+        bootID: String?,
+        dependencyHealthChecker: ServiceDependencyHealthChecker? = nil
     ) throws {
         self.serviceDiscoveryComms = serviceDiscoveryComms
         self.serviceAddress = serviceAddress
@@ -114,6 +122,9 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
         self.statusMonitor = statusMonitor
         self.metrics = metrics
         self.nodeReleaseDigest = nodeReleaseDigest
+        self.routingGroupAliases = routingGroupAliases
+        self.bootID = bootID
+        self.dependencyHealthChecker = dependencyHealthChecker
     }
 
     convenience init(
@@ -125,7 +136,10 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
         cellID: String?,
         statusMonitor: StatusMonitor,
         metrics: any MetricsSystem,
-        nodeReleaseDigest: String
+        nodeReleaseDigest: String,
+        routingGroupAliases: [String]?,
+        bootID: String?,
+        dependencyHealthChecker: ServiceDependencyHealthChecker?
     ) throws {
         try self.init(
             serviceDiscoveryComms: serviceDiscoveryComms,
@@ -141,11 +155,20 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
             nodeInfo: nodeInfo,
             cellID: cellID,
             metrics: metrics,
-            nodeReleaseDigest: nodeReleaseDigest
+            nodeReleaseDigest: nodeReleaseDigest,
+            routingGroupAliases: routingGroupAliases,
+            bootID: bootID,
+            dependencyHealthChecker: dependencyHealthChecker
         )
     }
 
     func run() async throws {
+        if let dependencyHealthChecker = self.dependencyHealthChecker {
+            Self.logger.info("Waiting for control plane(BMC-node) to report healthy status")
+            try await dependencyHealthChecker.waitForHealthyState()
+            Self.logger.info("Control plane(BMC-node) healthy")
+        }
+
         Self.logger.log("Publishing initial service state")
         let serviceUpdateStream: AsyncStream<ServiceDiscovery.ServiceUpdate> =
             self.state.withLock { state in
@@ -169,32 +192,37 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
                 return serviceUpdateStream
             }
 
-        try await withLifecycleManagementHandlers(label: "serviceDiscoveryPublisher") {
-            do {
-                try await withThrowingDiscardingTaskGroup { group in
-                    for await update in serviceUpdateStream {
-                        group.addTaskWithLogging(
-                            operation: "serviceDiscoveryPublisher-\(update.name)",
-                            sensitiveError: false,
-                            logger: Self.logger
-                        ) {
-                            try await self.publishService(update)
+        try await withLifecycleManagementHandlers(
+            label: "serviceDiscoveryPublisher",
+            operation: {
+                do {
+                    try await withThrowingDiscardingTaskGroup { group in
+                        for await update in serviceUpdateStream {
+                            group.addTaskWithLogging(
+                                operation: "serviceDiscoveryPublisher-\(update.name)",
+                                sensitiveError: false,
+                                logger: Self.logger
+                            ) {
+                                try await self.publishService(update)
+                            }
                         }
                     }
+                } catch {
+                    await self.clearState(reason: "error")
+                    throw error
                 }
-            } catch {
-                await self.clearState(reason: "error")
-                throw error
-            }
-        } onDrain: {
-            await self.drain()
-        }
+            },
+            onDrain: { await self.drain()
+            },
+            onPostDrain: { await self.drainComplete() }
+        )
     }
 
     func announceService(name: String, workloadConfig: ServiceDiscoveryWorkloadConfig) {
         let promise: Promise<Void, Never>? = self.state.withLock { state in
             let serviceState = state.services[name]
-            if serviceState?.workloadTags == workloadConfig.workloadTags {
+            if serviceState?.workloadType == workloadConfig.workloadType,
+               serviceState?.workloadTags == workloadConfig.workloadTags {
                 Self.logger.log("Announcing \(name, privacy: .public) with duplicate config, no change")
                 return nil
             }
@@ -210,7 +238,8 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
             let details = ServiceDiscovery.ServiceDetails(
                 workloadType: workloadConfig.workloadType,
                 workloadTags: workloadConfig.workloadTags,
-                retractionPromise: .init()
+                retractionPromise: .init(),
+                deregistrationCompletedPromise: .init()
             )
             state.services[name] = details
 
@@ -265,6 +294,11 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
     }
 
     private func publishService(_ update: ServiceDiscovery.ServiceUpdate) async throws {
+        // Ensure the deregistration promise is always fulfilled when this method exits
+        defer {
+            update.details.deregistrationCompletedPromise.succeed()
+        }
+
         var connectionBackoff = RetryBackoff(config: self.backoffConfig)
         Self.logger.info(
             "Connection backoff created with configuration: \(connectionBackoff.config, privacy: .public)"
@@ -433,8 +467,8 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
 
     private func sendServiceRegistration(
         serviceName: String,
-        workloadType: WorkloadConfig.WorkloadType,
-        workloadTags: [String: WorkloadConfig.RoutingTagValue],
+        workloadType: ServiceDiscoveryWorkloadConfig.WorkloadType,
+        workloadTags: [String: RoutingTagValue],
         announcement: ServiceDiscovery.Announcement
     ) async -> UpdateEndResult? {
         let cloudOSBuildVersionToPublish = self.nodeInfo?.cloudOSBuildVersion
@@ -442,6 +476,8 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
         let serverOSBuildVersionToPublish = self.nodeInfo?.serverOSBuildVersion
         let machineNameToPublish = self.nodeInfo?.machineName
         let ensembleIDToPublish = self.nodeInfo?.ensembleID
+        let rackIDToPublish = self.nodeInfo?.rackID
+        let bootIDToPublish = self.bootID
         let request: ServiceDiscovery.Request
         do {
             Self.logger.info("Publishing \(serviceName, privacy: .public) with tags: \(workloadTags, privacy: .public)")
@@ -452,15 +488,11 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
                     $0.instanceInfo = try .with {
                         $0.locality = .init(self.locality)
                         $0.address = try .init(self.serviceAddress)
-                        $0.meta = [
+                        var meta: [String: Com_Apple_Ase_Traffic_Servicediscovery_Api_V1_Meta] = [
                             "lb": .with {
                                 $0.fields = .init(self.lbConfig)
                             },
-                            workloadType == .proxy ? "trusted-proxy" : "workload": .with {
-                                $0.fields = [String: Com_Apple_Ase_Traffic_Servicediscovery_Api_V1_MetaValue](
-                                    workloadTags
-                                )
-                            },
+                            // Note these are inconsistent in using Id vs ID. this matches ROPES though
                             "description": .with {
                                 $0.fields = .init(optionalFields: [
                                     "cloudOSBuildVersion": cloudOSBuildVersionToPublish,
@@ -468,11 +500,58 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
                                     "serverOSBuildVersion": serverOSBuildVersionToPublish,
                                     "machineName": machineNameToPublish,
                                     "ensembleID": ensembleIDToPublish,
+                                    "rackID": rackIDToPublish,
+                                    "bootId": bootIDToPublish,
                                     "cellId": self.cellID,
                                     "releaseDigest": self.nodeReleaseDigest,
                                 ])
+                                if let routingGroupAliases {
+                                    $0.fields["routingGroupAliases"] = .with {
+                                        $0.listValue = .with {
+                                            $0.values = routingGroupAliases.map { stringValue in
+                                                .with {
+                                                    $0.stringValue = stringValue
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             },
                         ]
+                        switch workloadType {
+                        case .compute:
+                            meta["workload"] = .with {
+                                $0.fields = [String: Com_Apple_Ase_Traffic_Servicediscovery_Api_V1_MetaValue](
+                                    workloadTags
+                                )
+                            }
+                        case .proxy(let proxyMetadata):
+                            meta["trusted-proxy"] = .with {
+                                $0.fields["services"] = .with {
+                                    $0.listValue = .with {
+                                        $0.values = proxyMetadata.services.map { service in
+                                            .with { $0.stringValue = service }
+                                        }
+                                    }
+                                }
+                                let proxyRGAs = proxyMetadata.routingGroupAliasOverrides ?? self.routingGroupAliases
+                                if let proxyRGAs {
+                                    $0.fields["routingGroupAliases"] = .with {
+                                        $0.listValue = .with {
+                                            $0.values = proxyRGAs.map { stringValue in
+                                                .with { $0.stringValue = stringValue }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            meta["workload"] = .with {
+                                $0.fields = [String: Com_Apple_Ase_Traffic_Servicediscovery_Api_V1_MetaValue](
+                                    workloadTags
+                                )
+                            }
+                        }
+                        $0.meta = meta
                     }
                 }
             }
@@ -519,12 +598,27 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
     }
 
     private func drain() async {
-        await self.clearState(reason: "drain")
+        self.state.withLock { state in
+            state.draining = true
+        }
     }
 
-    private func clearState(reason: String) async {
+    private func drainComplete() async {
+        let deregistrationPromises = await self.clearState(reason: "drainComplete")
+
+        // Wait for all deregistrations to complete before returning
+        await withTaskGroup(of: Void.self) { group in
+            for promise in deregistrationPromises {
+                group.addTask {
+                    await Future(promise).value
+                }
+            }
+            await group.waitForAll()
+        }
+    }
+
+    private func clearState(reason: String) async -> [Promise<Void, Never>] {
         let services = self.state.withLock { state in
-            state.draining = true
             let services = state.services
             state.services = [:]
 
@@ -539,6 +633,9 @@ final class ServiceDiscoveryPublisher: ServiceDiscoveryPublisherProtocol, Sendab
             service.value.retractionPromise.succeed()
         }
         self.statusMonitor.serviceDiscoveryPublisherDraining()
+
+        // Return the deregistration completion promises so caller can wait for them
+        return services.values.map(\.deregistrationCompletedPromise)
     }
 
     private func serviceRegistered() {
@@ -598,7 +695,7 @@ extension [String: Com_Apple_Ase_Traffic_Servicediscovery_Api_V1_MetaValue] {
 }
 
 extension [String: Com_Apple_Ase_Traffic_Servicediscovery_Api_V1_MetaValue] {
-    init(_ data: [String: WorkloadConfig.RoutingTagValue]) {
+    init(_ data: [String: RoutingTagValue]) {
         self = data.mapValues { routingTagValue in
             return .with {
                 switch routingTagValue {

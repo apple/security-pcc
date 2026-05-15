@@ -80,6 +80,8 @@ extension VM {
             VM.logger.log("starting VM")
             print("Starting VM: \(self.name) (ecid: \(self.ecidStr))")
 
+            self.setSaveCoresHandler(vzVM: vzVM)
+
             vzVM.start(options: vzStartOpts) { error in
                 if let error {
                     let startMsg = "Failed to start VM: \(error)"
@@ -89,20 +91,18 @@ extension VM {
                     exit(EXIT_FAILURE)
                 }
 
-                if !dfuMode {
-                    if let gdbStub = vzVM._debugStub as? _VZGDBDebugStub {
-                        let gdbMsg = "GDB stub available at localhost:\(gdbStub.port)"
-                        VM.logger.log("\(gdbMsg, privacy: .public)")
-                        print(gdbMsg)
-                    }
+                if let gdbStub = vzVM._debugStub as? _VZGDBDebugStub {
+                    let gdbMsg = "GDB stub available at localhost:\(gdbStub.port)"
+                    VM.logger.log("\(gdbMsg, privacy: .public)")
+                    print(gdbMsg)
+                }
 
-                    for coprocessor in vzVM._coprocessors {
-                        if let sep = coprocessor as? _VZSEPCoprocessor {
-                            if let sepGdbStub = sep.debugStub as? _VZGDBDebugStub {
-                                let sepGdbMsg = "SEP GDB stub available at localhost:\(sepGdbStub.port)"
-                                VM.logger.log("\(sepGdbMsg, privacy: .public)")
-                                print(sepGdbMsg)
-                            }
+                for coprocessor in vzVM._coprocessors {
+                    if let sep = coprocessor as? _VZSEPCoprocessor {
+                        if let sepGdbStub = sep.debugStub as? _VZGDBDebugStub {
+                            let sepGdbMsg = "SEP GDB stub available at localhost:\(sepGdbStub.port)"
+                            VM.logger.log("\(sepGdbMsg, privacy: .public)")
+                            print(sepGdbMsg)
                         }
                     }
                 }
@@ -113,6 +113,38 @@ extension VM {
 
                 VM.logger.log("started VM")
                 print("Started VM: \(self.name)")
+            }
+        }
+    }
+
+    func setSaveCoresHandler(vzVM: VZVirtualMachine) {
+        signal(SIGUSR1, SIG_IGN)
+        let signalSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: self.runQueue)
+        signalSource.setEventHandler {
+            self.saveCores(vzVM: vzVM)
+            // retain the source forever
+            withExtendedLifetime(signalSource) {}
+        }
+        signalSource.activate()
+    }
+
+    func saveCores(vzVM: VZVirtualMachine) {
+        print("Creating cores...")
+        vzVM._createCores { cores, error in
+            if let cores {
+                print("Created cores for \(cores.keys), saving")
+                let dir = URL(filePath: FileManager.default.currentDirectoryPath, directoryHint: .isDirectory)
+                for (name, core) in cores {
+                    do {
+                        let path = dir.appendingPathComponent("\(name)-\(Date.now.ISO8601Format()).core")
+                        try core.write(to: path)
+                        print("Saved \(name) coredump to \(path.path(percentEncoded: false))")
+                    } catch {
+                        print("Failed to save \(name) coredump - \(error.localizedDescription))")
+                    }
+                }
+            } else if let error {
+                print("Failed to save cores - \(error.localizedDescription)")
             }
         }
     }

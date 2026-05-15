@@ -12,64 +12,41 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 package import CloudBoardAsyncXPC
+package import CloudBoardDomain
+internal import CloudBoardLogging
 import Foundation
 
-/// This matches ``FindWorkerQuery`` but it is desirable to keep the
-/// XPC layer separate so it can be evolved independently.
-///
 /// Sent from Cloud App to CloudBoardJobHelper.
-package struct WorkerConstraints: Sendable, Equatable, CloudBoardAsyncXPCByteBufferMessage {
+package struct FindWorkerMessage: Sendable, Equatable, CloudBoardAsyncXPCByteBufferMessage {
     public typealias Success = ExplicitSuccess
     public typealias Failure = Never
 
-    package var workerID: UUID
-    package var serviceName: String
-    package var routingParameters: [String: [String]]
-    package var responseBypass: Bool
-    package var forwardRequestChunks: Bool
-    package var isFinal: Bool
-    package var spanID: String
+    package var query: FindWorkerQuery
+    package var subrequestID: UInt32?
+    package var cryptoMaterialHandles: [CryptoMaterialHandle]
 
     internal init(
-        workerID: UUID,
-        serviceName: String,
-        routingParameters: [String: [String]],
-        responseBypass: Bool,
-        forwardRequestChunks: Bool,
-        isFinal: Bool,
-        spanID: String
+        query: FindWorkerQuery,
+        subrequestID: UInt32?,
+        cryptoMaterialHandles: [CryptoMaterialHandle]
     ) {
-        self.workerID = workerID
-        self.serviceName = serviceName
-        self.routingParameters = routingParameters
-        self.responseBypass = responseBypass
-        self.forwardRequestChunks = forwardRequestChunks
-        self.isFinal = isFinal
-        self.spanID = spanID
+        self.query = query
+        self.subrequestID = subrequestID
+        self.cryptoMaterialHandles = cryptoMaterialHandles
     }
 
     @inlinable
     package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
-        try self.workerID.encode(to: &buffer)
-        try self.serviceName.encode(to: &buffer)
-        try self.routingParameters.encode(to: &buffer)
-        try self.responseBypass.encode(to: &buffer)
-        try self.forwardRequestChunks.encode(to: &buffer)
-        try self.isFinal.encode(to: &buffer)
-        try self.spanID.encode(to: &buffer)
+        try self.query.encode(to: &buffer)
+        try self.subrequestID.encode(to: &buffer)
+        try self.cryptoMaterialHandles.encode(to: &buffer)
     }
 
     package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
-        self.workerID = try .init(from: &buffer)
-        self.serviceName = try .init(from: &buffer)
-        self.routingParameters = try .init(from: &buffer)
-        self.responseBypass = try .init(from: &buffer)
-        self.forwardRequestChunks = try .init(from: &buffer)
-        self.isFinal = try .init(from: &buffer)
-        self.spanID = try .init(from: &buffer)
+        self.query = try .init(from: &buffer)
+        self.subrequestID = try .init(from: &buffer)
+        self.cryptoMaterialHandles = try .init(from: &buffer)
     }
 }
 
@@ -121,45 +98,25 @@ package struct WorkerEOF: Sendable, Equatable, CloudBoardAsyncXPCByteBufferMessa
     }
 }
 
-struct FinalizeRequestExecutionLog: CloudBoardAsyncXPCByteBufferMessage, Equatable {
-    typealias Success = Never
-    typealias Failure = Never
+package struct FinalizeRequestExecutionLog: CloudBoardAsyncXPCByteBufferMessage, Equatable {
+    package typealias Success = Never
+    package typealias Failure = Never
 
     init() {}
 
-    func encode(to _: inout CloudBoardAsyncXPC.ByteBuffer) throws {}
+    package func encode(to _: inout CloudBoardAsyncXPC.ByteBuffer) throws {}
 
-    init(from _: inout CloudBoardAsyncXPC.ByteBuffer) throws {}
+    package init(from _: inout CloudBoardAsyncXPC.ByteBuffer) throws {}
 }
 
-struct EndJob: CloudBoardAsyncXPCByteBufferMessage, Equatable {
-    typealias Success = ExplicitSuccess
-    typealias Failure = Never
-
-    init() {}
-
-    func encode(to _: inout CloudBoardAsyncXPC.ByteBuffer) throws {}
-
-    init(from _: inout CloudBoardAsyncXPC.ByteBuffer) throws {}
-}
-
-struct EndOfResponse: CloudBoardAsyncXPCByteBufferMessage, Equatable {
-    typealias Success = ExplicitSuccess
-    typealias Failure = Never
-
-    init() {}
-
-    func encode(to _: inout CloudBoardAsyncXPC.ByteBuffer) throws {}
-
-    init(from _: inout CloudBoardAsyncXPC.ByteBuffer) throws {}
-}
-
-package struct InternalErrorMessage: CloudBoardAsyncXPCByteBufferMessage, Equatable {
+package struct EndOfResponse: CloudBoardAsyncXPCByteBufferMessage, Equatable {
     package typealias Success = ExplicitSuccess
     package typealias Failure = Never
 
     init() {}
+
     package func encode(to _: inout CloudBoardAsyncXPC.ByteBuffer) throws {}
+
     package init(from _: inout CloudBoardAsyncXPC.ByteBuffer) throws {}
 }
 
@@ -188,6 +145,73 @@ package struct DataMessage: CloudBoardAsyncXPCByteBufferMessage {
     }
 }
 
+package struct SubresponsePayload: CloudBoardAsyncXPCByteBufferMessage, Equatable {
+    public typealias Success = Never
+    public typealias Failure = Never
+
+    public var subresponseID: UInt32
+    public var payload: Data
+
+    init(subresponseID: UInt32, payload: Data) {
+        self.subresponseID = subresponseID
+        self.payload = payload
+    }
+
+    package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        try self.subresponseID.encode(to: &buffer)
+        try self.payload.encode(to: &buffer)
+    }
+
+    package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        self.subresponseID = try .init(from: &buffer)
+        self.payload = try .init(from: &buffer)
+    }
+}
+
+package struct EndOfSubresponse: CloudBoardAsyncXPCByteBufferMessage, Equatable {
+    package typealias Success = ExplicitSuccess
+    package typealias Failure = Never
+    package var subresponseID: UInt32
+    package var status: InternalSubresponseStatus
+
+    init(subresponseID: UInt32, status: InternalSubresponseStatus) {
+        self.subresponseID = subresponseID
+        self.status = status
+    }
+
+    package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        try self.subresponseID.encode(to: &buffer)
+        try self.status.encode(to: &buffer)
+    }
+
+    package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        self.subresponseID = try .init(from: &buffer)
+        self.status = try .init(from: &buffer)
+    }
+}
+
+package struct SubresponseInternalError: CloudBoardAsyncXPCByteBufferMessage, Equatable {
+    package typealias Success = ExplicitSuccess
+    package typealias Failure = Never
+    public var subrequestID: UInt32
+    package var error: RequestExecutionError?
+
+    init(subrequestID: UInt32, error: RequestExecutionError?) {
+        self.subrequestID = subrequestID
+        self.error = error
+    }
+
+    package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        try self.subrequestID.encode(to: &buffer)
+        try self.error.encode(to: &buffer)
+    }
+
+    package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        self.subrequestID = try .init(from: &buffer)
+        self.error = try .init(from: &buffer)
+    }
+}
+
 package enum CloudAppToJobHelperDeriveKeyError: Codable, Sendable, Error {
     /// Any failure to derive or distribute the key
     case failedKeyDerivation
@@ -207,4 +231,113 @@ package enum CloudAppToJobHelperDeriveSealedKeyMessage: CloudBoardAsyncXPCCodabl
     public typealias Failure = CloudAppToJobHelperDeriveKeyError
 
     case distributeSealedEnsembleKey(info: String, distributionType: CloudBoardJobAPIEnsembleKeyDistributionType)
+}
+
+package enum CloudAppToJobHelperPIRError: String, ReportableError, CaseIterable {
+    case cancelled
+    case failedToDeserializeMessage
+    case noEncryptedRequestHandlerSet
+    case internalError
+}
+
+package struct CloudAppToJobHelperPIRMessage: CloudBoardAsyncXPCByteBufferMessage {
+    public typealias Success = CloudBoardJobAPIPIRResponse
+    public typealias Failure = CloudAppToJobHelperPIRError
+
+    package let request: CloudBoardJobAPIPIRRequest
+
+    internal init(request: CloudBoardJobAPIPIRRequest) {
+        self.request = request
+    }
+
+    package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        try self.request.encode(to: &buffer)
+    }
+
+    package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        self.request = try .init(from: &buffer)
+    }
+}
+
+extension CloudBoardJobAPIPIRRequest: ByteBufferCodable {
+    package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        try self.payload.encode(to: &buffer)
+        try self.purpose.encode(to: &buffer)
+        try self.traceContext.encode(to: &buffer)
+    }
+
+    package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        self.payload = try .init(from: &buffer)
+        self.purpose = try .init(from: &buffer)
+        self.traceContext = try .init(from: &buffer)
+    }
+}
+
+extension CloudBoardJobAPIPIRResponse: ByteBufferCodable {
+    package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        try self.payload.encode(to: &buffer)
+    }
+
+    package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        self.payload = try .init(from: &buffer)
+    }
+}
+
+extension CloudAppToJobHelperPIRError: ByteBufferCodable {
+    package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        switch self {
+        case .internalError:
+            buffer.writeInteger(0)
+        case .cancelled:
+            buffer.writeInteger(1)
+        case .failedToDeserializeMessage:
+            buffer.writeInteger(2)
+        case .noEncryptedRequestHandlerSet:
+            buffer.writeInteger(3)
+        }
+    }
+
+    package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        guard let enumCase: Int = buffer.readInteger() else {
+            throw DecodingError.valueNotFound(
+                Self.self,
+                .init(codingPath: [], debugDescription: "no expected enum case")
+            )
+        }
+        switch enumCase {
+        case 0:
+            self = .internalError
+        case 1:
+            self = .cancelled
+        case 2:
+            self = .failedToDeserializeMessage
+        case 3:
+            self = .noEncryptedRequestHandlerSet
+        case let value:
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [ByteBufferCodingKey(Self.self)],
+                debugDescription: "bad result enum case \(value)"
+            ))
+        }
+    }
+}
+
+package struct CloudAppToJobHelperRequestExecutionError: Sendable, Equatable, CloudBoardAsyncXPCByteBufferMessage {
+    public typealias Success = ExplicitSuccess
+    public typealias Failure = Never
+
+    package var error: RequestExecutionError
+
+    internal init(error: RequestExecutionError) {
+        self.error = error
+    }
+
+    @inlinable
+    package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        try self.error.encode(to: &buffer)
+    }
+
+    package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
+        self.error = try .init(from: &buffer)
+    }
 }

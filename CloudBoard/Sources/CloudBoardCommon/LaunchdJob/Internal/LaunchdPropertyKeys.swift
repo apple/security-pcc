@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple Inc. All rights reserved.
-
 /// Used to get the information to fill in ``CloudBoardJobAttributes``
 internal enum LaunchdPropertyKeys {
     /// Indicates whether the job is a CloudApp or other internal CloudBoard job type

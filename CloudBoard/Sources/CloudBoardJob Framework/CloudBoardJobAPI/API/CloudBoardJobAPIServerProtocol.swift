@@ -12,8 +12,7 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
+package import CloudBoardDomain
 import CryptoKit
 import Foundation
 
@@ -38,6 +37,26 @@ package struct CloudBoardJobAPIEnsembleKeyInfo: Codable, Sendable {
     }
 }
 
+package struct CloudBoardJobAPIPIRRequest: Sendable, Equatable {
+    package var payload: Data
+    package var purpose: String
+    package var traceContext: PIRRequestTraceContext
+
+    package init(payload: Data, purpose: String, traceContext: PIRRequestTraceContext) {
+        self.payload = payload
+        self.purpose = purpose
+        self.traceContext = traceContext
+    }
+}
+
+package struct CloudBoardJobAPIPIRResponse: Sendable, Equatable {
+    package var payload: Data
+
+    package init(payload: Data) {
+        self.payload = payload
+    }
+}
+
 /// CloudApp-end of the XPC protocol.
 ///
 /// Facilitates sending the messages back to CloudBoardJobHelper.
@@ -45,16 +64,13 @@ package protocol CloudBoardJobAPIServerToClientProtocol {
     func provideResponseChunk(_ data: Data) async
     /// A serious error has occured in the cloud app - treat as a failure
     func internalError() async
+    func reportRequestExecutionError(_ error: RequestExecutionError) async
     func endOfResponse() async
     func endJob() async
     func findWorker(
-        workerID: UUID,
-        serviceName: String,
-        routingParameters: [String: [String]],
-        responseBypass: Bool,
-        forwardRequestChunks: Bool,
-        isFinal: Bool,
-        spanID: String
+        query: FindWorkerQuery,
+        subrequestID: UInt32?,
+        cryptoMaterialHandles: [CryptoMaterialHandle]
     ) async throws
     func distributeEnsembleKey(
         info: String,
@@ -67,6 +83,12 @@ package protocol CloudBoardJobAPIServerToClientProtocol {
     func sendWorkerRequestMessage(workerID: UUID, _ data: Data) async
     func sendWorkerEOF(workerID: UUID, isError: Bool) async
     func finalizeRequestExecutionLog() async
+
+    func makePrivateInformationRetrievalRequest(
+        _ request: CloudBoardJobAPIPIRRequest
+    ) async throws -> CloudBoardJobAPIPIRResponse
+    func sendSubresponsePayload(subrequestID: UInt32, payload: Data) async
+    func sendSubresponseEOF(subrequestID: UInt32, status: InternalSubresponseStatus) async
 }
 
 /// CloudBoardJobHelper-end of the XPC protocol.
@@ -77,8 +99,10 @@ package protocol CloudBoardJobAPICloudAppResponseHandlerProtocol: Sendable {
     /// Should not be async to avoid chunk reordering
     func handleResponseChunk(_ data: Data)
 
-    /// Tell CloudBoard that we have experience a terminal error.
+    /// Tell CloudBoard that we have experienced a terminal error.
     func handleInternalError() async throws
+
+    func handleRequestExecutionError(_ error: CloudAppToJobHelperRequestExecutionError) async throws
 
     /// Tell CloudBoard that we are done sending response chunks.
     func handleEndOfResponse() async throws
@@ -90,7 +114,7 @@ package protocol CloudBoardJobAPICloudAppResponseHandlerProtocol: Sendable {
     ///
     /// This _should_ ideally only return once requested worker has been found for a cleaner API, instead of
     /// a separate call to send the workerFound message.
-    func handleFindWorker(_ constraints: WorkerConstraints) async throws
+    func handleFindWorker(_ findWorkerMessage: FindWorkerMessage) async throws
 
     /// Handle CloudApp request to a specific worker.
     ///
@@ -112,7 +136,7 @@ package protocol CloudBoardJobAPICloudAppResponseHandlerProtocol: Sendable {
 package protocol CloudBoardJobAPIServerDelegateProtocol:
 AnyObject, Sendable, CloudBoardJobAPIClientToServerProtocol {}
 
-package protocol CloudBoardJobAPIServerProtocol: CloudBoardJobAPIServerToClientProtocol {
+package protocol CloudBoardJobAPIServerProtocol: CloudBoardJobAPIServerToClientProtocol, Sendable {
     func set(delegate: CloudBoardJobAPIServerDelegateProtocol) async
     func connect() async
 }

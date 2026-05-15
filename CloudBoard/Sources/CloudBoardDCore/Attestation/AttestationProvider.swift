@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal import CloudBoardAsyncXPC
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
@@ -49,20 +47,22 @@ final actor AttestationProvider: CloudBoardAttestationAPIClientDelegateProtocol 
     // Only required by the proxy, but harmless to maintain anyway
     private var keyIDToTransitivelyTrustedReleases: [Data: [String]] = .init()
 
-    private var attestationExpiredFlag: Bool
-    private var healthMonitor: ServiceHealthMonitor
+    private var attestationInvalidFlag: Bool = false
+    private var healthMonitors: [ServiceHealthMonitor]
+    private let isProxy: Bool
 
     init(
         attestationClient: CloudBoardAttestationAPIClientProtocol,
         metricsSystem: MetricsSystem,
-        healthMonitor: ServiceHealthMonitor
+        healthMonitors: [ServiceHealthMonitor],
+        isProxy: Bool = false
     ) {
         self.attestationClient = attestationClient
         self.metricsSystem = metricsSystem
         self.connectionStateMachine = ConnectionStateMachine()
         self.attestationStateMachine = AttestationStateMachine()
-        self.attestationExpiredFlag = false
-        self.healthMonitor = healthMonitor
+        self.healthMonitors = healthMonitors
+        self.isProxy = isProxy
     }
 
     func run() async throws {
@@ -76,13 +76,54 @@ final actor AttestationProvider: CloudBoardAttestationAPIClientDelegateProtocol 
         _ = try await self.currentAttestationSet()
 
         if once {
-            await self.validateAttestationExpiryAndEmitTimeToExpiry()
+            await self.validateAttestations()
         } else {
             while true {
-                await self.validateAttestationExpiryAndEmitTimeToExpiry()
+                await self.validateAttestations()
                 try await Task.sleep(for: Self.metricsRecordingInterval)
             }
         }
+    }
+
+    internal func validateAttestations() async {
+        do {
+            let attestationSet = try await self.currentAttestationSet()
+
+            let bootIDValid = self.isBootIDValid(attestationSet)
+            let expiryValid = attestationSet.currentAttestation.expiry.timeIntervalSince(Date.now) > 0
+
+            self.metricsSystem.emit(
+                AttestationTimeToExpiryGauge(expireAt: attestationSet.currentAttestation.expiry)
+            )
+
+            if bootIDValid, expiryValid {
+                self.sendHealthMonitorStateUpdate(state: .valid)
+            } else {
+                self.sendHealthMonitorStateUpdate(state: .invalid)
+            }
+        } catch {
+            // If we can't get attestation, mark unhealthy
+            self.sendHealthMonitorStateUpdate(state: .error)
+            Self.logger.log("Attestation set not available yet. Skip validation")
+        }
+    }
+
+    private func isBootIDValid(_ attestationSet: AttestationSet) -> Bool {
+        // BootID validation is required to route requests to valid workers. We don't care about bootID for proxy
+        // attestations.
+        guard !self.isProxy else {
+            return true
+        }
+
+        let bootID = attestationSet.currentAttestation.appData[ComputeNodeAppDataKeys.bootID]?.utf8String ?? ""
+        if bootID.isEmpty {
+            Self.logger
+                .error(
+                    "Boot ID is missing from attestation - this is an unrecoverable configuration or implementation error. Worker routing will not function correctly."
+                )
+            return false
+        }
+        return true
     }
 
     private func onNewAttestation(_ attestationSet: AttestationSet) {
@@ -183,7 +224,7 @@ final actor AttestationProvider: CloudBoardAttestationAPIClientDelegateProtocol 
 
     /// Performs the same operation as ``currentAttestationSet()`` but with a timeout
     /// so that a failure to get the attestation on a request hot path can be timely.
-    /// If there is a problem generating a new attestion, or the attestation daemon is not recovering
+    /// If there is a problem generating a new attestation, or the attestation daemon is not recovering
     /// it's better to fail this fast.
     func currentAttestationSetWithTimeout(
         // This is used on the hot path for a request.
@@ -224,46 +265,28 @@ final actor AttestationProvider: CloudBoardAttestationAPIClientDelegateProtocol 
         self.attestationStateMachine.registerWatcher(continuation)
         return stream
     }
-
-    internal func validateAttestationExpiryAndEmitTimeToExpiry() async {
-        do {
-            let attestationSet = try await self.currentAttestationSet()
-            self.metricsSystem.emit(
-                AttestationTimeToExpiryGauge(expireAt: attestationSet.currentAttestation.expiry)
-            )
-            if attestationSet.currentAttestation.expiry.timeIntervalSince(Date.now) > 0 {
-                self.sendHealthMonitorStateUpdate(state: .valid)
-            } else {
-                self.sendHealthMonitorStateUpdate(state: .expired)
-            }
-        } catch {
-            self.sendHealthMonitorStateUpdate(state: .error)
-            Self.logger.log("Attestation set not available yet. Skip emitting expiry metrics")
-            return
-        }
-    }
 }
 
 extension AttestationProvider {
-    enum ExpiryState {
+    enum AttestationState {
         case valid
-        case expired
         case error
+        case invalid
     }
 
-    internal func sendHealthMonitorStateUpdate(state: ExpiryState) {
+    internal func sendHealthMonitorStateUpdate(state: AttestationState) {
         switch state {
         case .valid:
-            if self.attestationExpiredFlag {
-                self.healthMonitor.setAttestationValid()
-                self.attestationExpiredFlag = false
+            if self.attestationInvalidFlag {
+                self.healthMonitors.forEach { $0.setAttestationValid() }
+                self.attestationInvalidFlag = false
                 Self.logger.info("CloudBoard attestation active")
             }
-        case .error, .expired:
-            if !self.attestationExpiredFlag {
-                self.healthMonitor.setAttestationExpired()
-                self.attestationExpiredFlag = true
-                Self.logger.error("CloudBoard attestation expired")
+        case .error, .invalid:
+            if !self.attestationInvalidFlag {
+                self.healthMonitors.forEach { $0.setAttestationInvalid() }
+                self.attestationInvalidFlag = true
+                Self.logger.error("CloudBoard attestation invalid")
             }
         }
     }

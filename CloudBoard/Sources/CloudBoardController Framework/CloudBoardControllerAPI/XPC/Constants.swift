@@ -12,14 +12,13 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
 internal import CloudBoardCommon
 
 internal let kCloudBoardControllerAPIXPCLocalServiceEntitlement =
     "com.apple.private.cloudos.cloudboardcontroller"
 
 internal var kCloudBoardControllerAPIXPCServiceName: String {
-    if let isLeader = NodeInfo.load().isLeader, isLeader == false {
+    if let isLeader = NodeInfo.isLeader(), isLeader == false {
         return "com.apple.cloudos.cloudboardd_follower.controllerendpoint"
     }
     return "com.apple.cloudos.cloudboardd.controllerendpoint"

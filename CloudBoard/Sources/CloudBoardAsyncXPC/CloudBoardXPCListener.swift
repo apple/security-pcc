@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import Foundation
 import OSLog
 import XPC
@@ -277,6 +275,21 @@ package actor CloudBoardAsyncXPCListener {
     /// This sends the message to the first connection. This is primarily intended to be used in a client-server setting
     /// where it is known to be a 1:1 relationship.
     public func sendToAny<Message: CloudBoardAsyncXPCCodableMessage>(
+        _ message: Message,
+        requiringEntitlement: String? = nil
+    ) async throws -> Message.Success {
+        guard let connection = self.connections.values.first else {
+            throw CloudBoardAsyncXPCError.noConnection
+        }
+        if let requiringEntitlement, await !connection.hasEntitlement(requiringEntitlement) {
+            throw CloudBoardAsyncXPCError.missingEntitlement
+        }
+        return try await connection.send(message)
+    }
+
+    /// This sends the message to the first connection. This is primarily intended to be used in a client-server setting
+    /// where it is known to be a 1:1 relationship.
+    public func sendToAny<Message: CloudBoardAsyncXPCByteBufferMessage>(
         _ message: Message,
         requiringEntitlement: String? = nil
     ) async throws -> Message.Success {

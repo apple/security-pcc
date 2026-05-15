@@ -21,6 +21,7 @@
 
 import os.log
 import CryptoKit
+import InternalSwiftProtobuf
 
 public struct ProxiedReleasePolicy: AttestationPolicy {
     @usableFromInline

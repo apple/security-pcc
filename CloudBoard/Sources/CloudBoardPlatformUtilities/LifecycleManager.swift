@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardLogging
 import InternalGRPC
 import NIOCore
@@ -24,10 +22,32 @@ private enum LifecycleManagerTaskLocals {
     static var lifecycleManager: LifecycleManager?
 }
 
+/// Executes an operation with optional lifecycle management handlers.
+///
+/// This function registers drain and post-drain handlers with the current Task tree's lifecycle manager
+/// (if available) and then executes the provided operation. The handlers will be called
+/// during the lifecycle manager's drain process to enable graceful shutdown.
+///
+/// - Parameters:
+///   - label: An optional label to identify this managed service in logs. Defaults to `nil`.
+///   - operation: The async operation to execute under lifecycle management.
+///   - drainHandler: An optional handler called during the drain phase to gracefully
+///     shut down resources. This should perform cleanup operations like closing connections
+///     or stopping background tasks. Defaults to `nil`.
+///   - postDrainHandler: An optional handler called after the drain phase completes
+///     for final cleanup tasks that should occur after all drain handlers have finished.
+///     Defaults to `nil`.
+///
+/// - Returns: The result of the operation.
+/// - Throws: Any error thrown by the operation.
+///
+/// - Note: If no lifecycle manager is found in the current task context, the operation
+///   will proceed normally without lifecycle management, and a debug message will be logged.
 public func withLifecycleManagementHandlers<T>(
     label: String? = nil,
     operation: () async throws -> T,
-    onDrain drainHandler: @Sendable @escaping () async -> Void
+    onDrain drainHandler: (@Sendable () async -> Void)? = nil,
+    onPostDrain postDrainHandler: (@Sendable () async -> Void)? = nil
 ) async rethrows -> T {
     guard let lifecycleManager = LifecycleManagerTaskLocals.lifecycleManager else {
         LifecycleManager.logger.debug("Managed task started but no Lifecycle Manager is found, proceeding anyway.")
@@ -37,22 +57,26 @@ public func withLifecycleManagementHandlers<T>(
     // We have to keep track of our handler here to remove it once the operation is finished.
     await lifecycleManager.registerManagedService(.init(
         label: label,
-        drainHandler: drainHandler
+        drainHandler: drainHandler,
+        postDrainHandler: postDrainHandler
     ))
 
     return try await operation()
 }
 
 struct LifecycleManaged {
-    let drainHandler: @Sendable () async -> Void
+    let drainHandler: (@Sendable () async -> Void)?
+    let postDrainHandler: (@Sendable () async -> Void)?
     let label: String?
 
     init(
         label: String?,
-        drainHandler: @Sendable @escaping () async -> Void
+        drainHandler: (@Sendable () async -> Void)? = nil,
+        postDrainHandler: (@Sendable () async -> Void)? = nil
     ) {
         self.label = label
         self.drainHandler = drainHandler
+        self.postDrainHandler = postDrainHandler
     }
 }
 
@@ -75,7 +99,7 @@ public final class LifecycleManager: Sendable {
     }
 
     public func managed(
-        operation: @escaping () async throws -> Void,
+        operation: @Sendable @escaping () async throws -> Void,
         onDrain: (@Sendable () -> Void)? = nil,
         onDrainCompleted: (@Sendable () -> Void)? = nil
     ) async throws {
@@ -211,7 +235,11 @@ public final class LifecycleManager: Sendable {
                         switch storage.state {
                         case .active, .activeWithDrainContinuation:
                             storage.state = .draining
-                            return storage.handlers.map { ($0.service.label, $0.service.drainHandler) }
+                            return storage.handlers.map { (
+                                $0.service.label,
+                                $0.service.drainHandler,
+                                $0.service.postDrainHandler
+                            ) }
                         case .draining:
                             return [] // no-op
                         case .drainQueued, .drained:
@@ -225,7 +253,14 @@ public final class LifecycleManager: Sendable {
 
                     // execute drain
                     await withDiscardingTaskGroup { group in
-                        for (label, drainHandler) in drainHandlers {
+                        for (label, drainHandler, _) in drainHandlers {
+                            guard let drainHandler else {
+                                Self.logger
+                                    .info(
+                                        "No drain handler for \(label ?? "Unlabeled Lifecycle Managed Component") - skipping"
+                                    )
+                                continue
+                            }
                             group.addTaskWithLogging(
                                 operation: "drainHandler" + (label.map { ": \($0)" } ?? ""),
                                 sensitiveError: false
@@ -246,6 +281,25 @@ public final class LifecycleManager: Sendable {
                         }
                     }
                     onDrainCompleted?()
+
+                    // execute post drain
+                    await withDiscardingTaskGroup { group in
+                        for (label, _, postDrainHandler) in drainHandlers {
+                            guard let postDrainHandler else {
+                                Self.logger
+                                    .info(
+                                        "No post drain handler for \(label ?? "Unlabeled Lifecycle Managed Component") - skipping"
+                                    )
+                                continue
+                            }
+                            group.addTaskWithLogging(
+                                operation: "postDrainHandler" + (label.map { ": \($0)" } ?? ""),
+                                sensitiveError: false
+                            ) {
+                                await postDrainHandler()
+                            }
+                        }
+                    }
                 }
 
                 // Start a drain timer.

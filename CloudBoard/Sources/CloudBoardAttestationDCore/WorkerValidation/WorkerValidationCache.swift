@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import CloudAttestation
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
@@ -53,6 +51,10 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
     private let maximumValidatedEntrySize: Int
     private var validatedEntriesTotal: Int = 0
     private var allowedToAddToCacheTotal: Int = 0
+    private var workerRackIDCache: [String: WorkerRackValidationEntry<ClockType>] = [:]
+    private var workerRackIDCacheTTLMinutes: Int
+    private var lastRackCacheCleanupTime: ClockType.Instant?
+    private let minimumCleanupIntervalSeconds: Int = 30
 
     internal init(
         factory: any AttestationValidatorFactoryProtocol,
@@ -60,13 +62,15 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
         maximumValidatedEntrySize: Int,
         metrics: MetricsSystem,
         // abstracted to allow unit testing
-        clock: ClockType
+        clock: ClockType,
+        workerRackIDCacheTTLMinutes: Int
     ) {
         self.factory = factory
         self.enableReleaseSetValidation = enableReleaseSetValidation
         self.metrics = metrics
         self.maximumValidatedEntrySize = maximumValidatedEntrySize
         self.clock = clock
+        self.workerRackIDCacheTTLMinutes = workerRackIDCacheTTLMinutes
     }
 
     private func removeExpiredKeys() {
@@ -78,7 +82,7 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
     }
 
     private func addKey(
-        proxyKey: AttestedKey,
+        proxyKey: InternalAttestedKey,
         validator: AttestationValidatorProtocol
     ) {
         let keyID = proxyKey.keyID
@@ -150,7 +154,7 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
     /// On a restart this might be called repeatedly
     /// it's "new" to this instance of the cache regardless of the age
     func notifyOfNewKey(
-        proxyKey: AttestedKey
+        proxyKey: InternalAttestedKey
     ) async throws {
         let validator = try await self.factory.makeForProxyAttestation(
             rawProxyAttestationBundle: proxyKey.attestationBundle,
@@ -161,7 +165,7 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
 
     /// In theory automatic expiry will cover it, but good to be able to explicitly
     /// Remove keys from the set when no longer valid
-    func notifyOfKeyRemoval(proxyKey: AttestedKey) {
+    func notifyOfKeyRemoval(proxyKey: InternalAttestedKey) {
         self.removeKey(keyId: proxyKey.keyID, reason: "notification")
         // general tidy up too
         self.removeExpiredKeys()
@@ -199,10 +203,119 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
         self.allowedToAddToCacheTotal = total.validatingCacheable
     }
 
+    private func recordWorkerRackId(workerUDID: String, rackId: String) async {
+        let now = self.clock.now
+        self.workerRackIDCache[workerUDID] = WorkerRackValidationEntry(
+            workerUDID: workerUDID,
+            rackId: rackId,
+            creationInstant: now,
+            entryLifetimeMinutes: self.workerRackIDCacheTTLMinutes
+        )
+        self.logger.debug("Recorded new worker \(workerUDID, privacy: .public) -> rack \(rackId, privacy: .public)")
+    }
+
+    /// Updates the last update timestamp to now, extending the cache entry's lifetime before expiration
+    private func resetLastUpdateTime(workerUDID: String) async {
+        guard var entry = workerRackIDCache[workerUDID] else { return }
+        entry.lastUpdateInstant = self.clock.now
+        self.workerRackIDCache[workerUDID] = entry
+        self.logger.debug("Reset last update time for worker \(workerUDID, privacy: .public)")
+    }
+
+    /// Removes cache entries that haven't been updated within the configured TTL (default 1 hour)
+    /// Each successful validation from the same rack resets the timer, so only truly stale entries expire
+    /// To avoid excessive overhead with larger caches, cleanup only runs if at least
+    /// minimumCleanupIntervalSeconds has elapsed since the last cleanup
+    private func cleanupWorkerRackValidationEntries() async {
+        let now = self.clock.now
+
+        // Check if we need to cleanup - only if minimum interval has passed
+        if let lastCleanup = self.lastRackCacheCleanupTime {
+            let elapsed = lastCleanup.duration(to: now)
+            if elapsed < Duration.seconds(self.minimumCleanupIntervalSeconds) {
+                // Too soon since last cleanup, skip this one
+                return
+            }
+        }
+
+        // Update last cleanup time before doing the work
+        self.lastRackCacheCleanupTime = now
+
+        let expiredKeys = self.workerRackIDCache.compactMap { key, entry in
+            entry.isExpired(at: now) ? key : nil
+        }
+
+        for key in expiredKeys {
+            let removedEntry = self.workerRackIDCache.removeValue(forKey: key)
+            if let entry = removedEntry {
+                self.logger
+                    .info(
+                        "Removed expired rack validation entry for worker \(key, privacy: .public) (rack: \(entry.rackId, privacy: .public))"
+                    )
+            }
+        }
+
+        if !expiredKeys.isEmpty {
+            self.logger.info("Cleaned up \(expiredKeys.count, privacy: .public) expired rack validation entries")
+        }
+    }
+
+    /// Validates that a worker's rack ID matches its previously recorded rack
+    /// - First connection: Records the worker's rack and allows the connection
+    /// - Same rack: Resets the expiration timer and allows the connection
+    /// - Different rack: Blocks the connection and resets the timer to extend the blocking period
+    public func validateWorkerRackId(workerUDID: String, currentRackId: String) async throws -> RackValidationResult {
+        // Clean up expired entries first
+        await self.cleanupWorkerRackValidationEntries()
+
+        guard let existingEntry = self.workerRackIDCache[workerUDID] else {
+            // First time seeing this worker - record and allow
+            await self.recordWorkerRackId(workerUDID: workerUDID, rackId: currentRackId)
+            self.logger
+                .info(
+                    "First validation for worker \(workerUDID, privacy: .public) on rack \(currentRackId, privacy: .public)"
+                )
+            return .allowed
+        }
+
+        if existingEntry.rackId == currentRackId {
+            // Same rack - reset the last update time and allow
+            await self.resetLastUpdateTime(workerUDID: workerUDID)
+            self.logger
+                .debug(
+                    "Worker \(workerUDID, privacy: .public) validated on same rack \(currentRackId, privacy: .public), last update time reset"
+                )
+            return .allowed
+        }
+
+        // Rack has changed - fail worker validation and reset last update time
+        self.logger.error("""
+        Worker \(workerUDID, privacy: .public) rack change detected!
+        Previous rack ID: \(existingEntry.rackId, privacy: .public) -> Attempted rack ID: \(
+            currentRackId,
+            privacy: .public
+        )
+        Refusing worker validation and resetting last update time to extend blockage of worker use
+        """)
+
+        let rackChangeError = WorkerRackValidationError.rackIdChanged(
+            reason: "Rack change detected",
+            originalRackId: existingEntry.rackId,
+            blockedUntil: Date.now.addingTimeInterval(TimeInterval(self.workerRackIDCacheTTLMinutes * 60)),
+            udid: workerUDID
+        )
+        self.metrics.emit(Metrics.RackIdValidation.WorkerRackIdChangeCounter.Factory().make(rackChangeError))
+
+        // Reset last update time to reset the blocking period
+        await self.resetLastUpdateTime(workerUDID: workerUDID)
+
+        return .blocked(rackValidationError: rackChangeError)
+    }
+
     func validateWorkerAttestation(
         proxyAttestationKeyID: Data,
         rawWorkerAttestationBundle: Data
-    ) async throws -> CloudBoardAttestationDAPI.ValidatedWorker {
+    ) async throws -> CloudBoardAttestationDAPI.WorkerValidationResult {
         // We want to include the wasCached status in the success metrics, so we do them all at the end.
         // Error is inherently uncached
         let timeMeasurement = ContinuousTimeMeasurement.start()
@@ -272,7 +385,27 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
                 ) }
                 """
             )
-            return validated
+
+            let rackValidation: CloudBoardAttestationDAPI.RackValidationResult
+            let validationUdid = validated.udid
+            let validationRackID = validated.appData["rackID"]?.utf8String
+
+            if let validationUdid, let validationRackID {
+                rackValidation = try await self.validateWorkerRackId(
+                    workerUDID: validationUdid,
+                    currentRackId: validationRackID
+                )
+            } else {
+                // If no udid/rackID available in attestation, default to allowed.
+                // This behavior will likely change in the future once we determine whether missing attestation data
+                // should be treated as a security concern or a valid state.
+                rackValidation = .allowed
+            }
+
+            return CloudBoardAttestationDAPI.WorkerValidationResult(
+                validatedWorker: validated,
+                rackValidation: rackValidation
+            )
         } catch {
             self.metrics.emit(Metrics.CloudAttestationValidator.FailedValidationCounter.Factory().make(error))
             throw error
@@ -528,7 +661,7 @@ private final class PerProxyAttestationCache<ClockType: DateAwareClock>: Sendabl
     }
 
     private enum SharableValidationState {
-        // From the timeout sub task: timeout occured
+        // From the timeout sub task: timeout occurred
         case timeOutTriggered
         // From the timeout sub task: cancelled
         case timeOutCancelled
@@ -694,7 +827,7 @@ private final class PerProxyAttestationCache<ClockType: DateAwareClock>: Sendabl
             // if not then there's not point trying to get fancy, this is all we can do
             logger.error(
                 """
-                WORKER VALIDATION FAILURE: 
+                WORKER VALIDATION FAILURE:
                 error: \(originalError, privacy: .public)
                 workerKeyID:\(workerKeyID.description, privacy: .public)
                 enableReleaseSetValidation: \(validator.enableReleaseSetValidation, privacy: .public)
@@ -788,5 +921,35 @@ private struct CacheMetricsDelta: CustomStringConvertible {
 
     var description: String {
         "\(self.changes) sequenceId: \(self.sequenceID)"
+    }
+}
+
+/// Cache entry tracking a worker's UDID to rack ID mapping
+/// Entries expire if not updated within the configured TTL (default 1 hour)
+/// Timer resets on each successful validation from the same rack, or when a rack change is detected (to extend the
+/// blocking period)
+internal struct WorkerRackValidationEntry<ClockType: Clock>: Sendable where ClockType.Duration == Duration {
+    let workerUDID: String
+    let rackId: String
+    var lastUpdateInstant: ClockType.Instant
+    let lifetimeSinceLastUpdateMinutes: Int
+
+    /// Checks if this entry has expired (last update was longer ago than the configured TTL)
+    func isExpired(at currentInstant: ClockType.Instant) -> Bool {
+        let elapsed = self.lastUpdateInstant.duration(to: currentInstant)
+        return elapsed >= Duration.minutes(self.lifetimeSinceLastUpdateMinutes)
+    }
+
+    // MARK: - Codable Support for ContinuousClock.Instant
+
+    private enum CodingKeys: String, CodingKey {
+        case workerUDID, rackId, creationTimestamp, entryLifetime
+    }
+
+    init(workerUDID: String, rackId: String, creationInstant: ClockType.Instant, entryLifetimeMinutes: Int) {
+        self.workerUDID = workerUDID
+        self.rackId = rackId
+        self.lastUpdateInstant = creationInstant
+        self.lifetimeSinceLastUpdateMinutes = entryLifetimeMinutes
     }
 }

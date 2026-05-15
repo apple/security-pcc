@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardLogging
 import Foundation
@@ -31,7 +29,7 @@ private struct ConvergenceCheckPoint: RequestCheckpoint {
 
     var error: (any Error)?
 
-    var spanID: String?
+    var spanID: UInt64?
 
     var traceID: String?
 
@@ -42,7 +40,7 @@ private struct ConvergenceCheckPoint: RequestCheckpoint {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.traceID ?? "", privacy: .public)
-        tracing.span_id=\(self.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.time_unix_nano=\(time, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
@@ -58,7 +56,7 @@ private struct ConvergenceRequestSummary: RequestSummary {
     var type: String = "RequestSummary"
     var serviceName: String = "cloudboardd"
     var namespace: String = "cloudboard"
-    var spanID: String
+    var spanID: UInt64
     var linkSpanID: String
     var traceID: String
     var linkTraceID: String
@@ -71,7 +69,7 @@ private struct ConvergenceRequestSummary: RequestSummary {
 
     public init(
         span: Span,
-        spanID: String,
+        spanID: UInt64,
         linkSpanID: String,
         traceID: String,
         linkTraceID: String
@@ -92,7 +90,7 @@ private struct ConvergenceRequestSummary: RequestSummary {
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.traceID, privacy: .public)
-        tracing.span_id=\(self.spanID, privacy: .public)
+        tracing.span_id=\(self.spanID.hexEncoded, privacy: .public)
         tracing.parent_span_id=
         tracing.start_time_unix_nano=\(self.startTimeNanos ?? 0, privacy: .public)
         tracing.end_time_unix_nano=\(self.endTimeNanos ?? 0, privacy: .public)
@@ -116,7 +114,7 @@ public final class ConvergenceTracing: Sendable {
     let linkSpanID: String
     let linkTraceID: String
     let traceID: String
-    let spanID: String
+    let spanID: UInt64
     let tracer: any Tracer
 
     let requestSummarySpan: OSAllocatedUnfairLock<Span?>

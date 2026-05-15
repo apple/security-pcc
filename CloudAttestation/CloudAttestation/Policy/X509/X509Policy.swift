@@ -30,8 +30,15 @@ public struct X509Policy: AttestationPolicy {
     @usableFromInline
     var required: Bool
 
-    @usableFromInline
-    var roots: [SecCertificate]
+    var _roots: [Data] = []
+    var roots: [SecCertificate] {
+        get {
+            _roots.map { SecCertificateCreateWithData(nil, $0 as CFData)! }
+        }
+        set {
+            _roots = newValue.map { SecCertificateCopyData($0) as Data }
+        }
+    }
 
     @usableFromInline
     var clock: Date?

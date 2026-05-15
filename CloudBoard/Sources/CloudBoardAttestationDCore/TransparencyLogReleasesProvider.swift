@@ -12,11 +12,11 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardLogging
-import CloudBoardPreferences
+#if canImport(CloudConfigurationPreferences)
+@_weakLinked import CloudConfigurationPreferences
+#endif
 import os
 
 internal struct ExcludedReleasesHotProperties: Decodable, Sendable, Hashable {
@@ -66,6 +66,7 @@ final class TransparencyLogReleasesProvider: ReleasesProviderProtocol {
     }
 
     func run() async throws {
+        #if canImport(CloudConfigurationPreferences)
         let excludedReleasesUpdates = PreferencesUpdates(
             preferencesDomain: ExcludedReleasesHotProperties.domain,
             maximumUpdateDuration: .seconds(1),
@@ -84,6 +85,9 @@ final class TransparencyLogReleasesProvider: ReleasesProviderProtocol {
                 "Failed to fetch excluded release sets: \(error, privacy: .public). Defaulting to no excluded releases."
             )
         }
+        #else
+        self.stateMachine.withLock { $0.setExcludedReleases(.init()) }
+        #endif
 
         let releaseSet = try await self.transparencyLog.getReleaseSet()
         self.stateMachine.withLock { $0.setCurrentReleases(releaseSet) }
@@ -101,6 +105,7 @@ final class TransparencyLogReleasesProvider: ReleasesProviderProtocol {
                     self.stateMachine.withLock { $0.setCurrentReleases(newReleaseSet) }
                 }
             }
+            #if canImport(CloudConfigurationPreferences)
             taskGroup.addTask {
                 do {
                     var excludedReleasesUpadatesIterator = excludedReleasesUpdates.makeAsyncIterator()
@@ -123,6 +128,7 @@ final class TransparencyLogReleasesProvider: ReleasesProviderProtocol {
                     self.stateMachine.withLock { $0.setExcludedReleases(.init()) }
                 }
             }
+            #endif
             while !taskGroup.isEmpty {
                 try await taskGroup.next()
             }

@@ -22,6 +22,8 @@ import os.log
 @preconcurrency import Security
 import FeatureFlags
 import CryptoKit
+import AppleKeyStore
+import InternalSwiftProtobuf
 
 /// Implements ``Validator`` for Apple silicon nodes.
 public struct NodeValidator: Validator, Sendable {
@@ -76,9 +78,9 @@ public struct NodeValidator: Validator, Sendable {
     public var customerSecurityPolicy: DarwinInit.SecureConfigSecurityPolicy = .customer
 
     @_spi(Private)
-    static public var cacheProofs: Bool = Configuration.CFPreferences.cacheProofs ?? false
+    public var restrictSecurityPolicies: Bool
 
-    static var logger: Logger = Logger(subsystem: "com.apple.CloudAttestation", category: "NodeValidator")
+    static let logger: Logger = Logger(subsystem: "com.apple.CloudAttestation", category: "NodeValidator")
 
     /// Constructs a ``NodeValidator`` with a default validity duration of 1 day
     public init() {
@@ -103,7 +105,7 @@ public struct NodeValidator: Validator, Sendable {
     ///   - environment: The environment to validate the AttestationBundle in.
     public init(validity: Duration, environment: Environment) {
         self.validity = validity
-        self.transparencyVerifier = Self.cacheProofs ? CachingTransparencyVerifier(verifier: SWTransparencyVerifier()) : SWTransparencyVerifier()
+        self.transparencyVerifier = SWTransparencyVerifier()
         self.environment = environment
         let configuration = Configuration(for: environment)
         self.transparencyProofValidation = configuration.transparencyProofValidation
@@ -116,6 +118,7 @@ public struct NodeValidator: Validator, Sendable {
         self.requireLockedCryptexes = configuration.requireLockedCryptexes
         self.ensembleTopologyValidation = configuration.ensembleTopologyValidation
         self.allowExpired = configuration.allowExpired
+        self.restrictSecurityPolicies = configuration.restrictSecurityPolicies
     }
 
     var pinnedSigner: SecKey? = nil
@@ -129,13 +132,17 @@ public struct NodeValidator: Validator, Sendable {
     }
 
     private var securityPolicies: [DarwinInit.SecureConfigSecurityPolicy] {
+        guard restrictSecurityPolicies else {
+            return DarwinInit.SecureConfigSecurityPolicy.allCases
+        }
+
         switch self.environment {
         case .production:
-            [customerSecurityPolicy]
-        case .carry, .uat, .staging, .qa:
-            [customerSecurityPolicy, .carry]
+            return [customerSecurityPolicy]
+        case .carry, .liveon, .uat, .staging, .quarantine, .qa:
+            return [customerSecurityPolicy, .carry]
         case .dev, .ephemeral, .perf, .qa2Primary, .qa2Internal:
-            [customerSecurityPolicy, .carry, .none]
+            return [customerSecurityPolicy, .carry, .none]
         }
     }
 
@@ -149,6 +156,7 @@ public struct NodeValidator: Validator, Sendable {
             SEPAttestationPolicy(insecure: !self.strictCertificateValidation)
         }
         APTicketPolicy()
+        LocalBootPolicy()
         SEPImagePolicy()
         CryptexPolicy(locked: self.requireLockedCryptexes)
         SecureConfigPolicy()
@@ -190,12 +198,7 @@ public struct NodeValidator: Validator, Sendable {
                 attestation = try SEP.Attestation(from: bundle.proto.sepAttestation)
             }
 
-            if let nonce {
-                guard attestation.nonce == nonce else {
-                    Self.logger.error("Nonce \(attestation.nonce?.hexString ?? "unknown") does not match \(nonce.hexString)")
-                    throw CloudAttestationError.invalidNonce
-                }
-            }
+            try validateNonce(desiredNonce: nonce, observedNonce: attestation.nonce, bundle: bundle, logger: Self.logger)
 
             guard let keyData: PublicKeyData = attestation.publicKeyData else {
                 throw CloudAttestationError.unexpected(reason: "Unknown public key type")

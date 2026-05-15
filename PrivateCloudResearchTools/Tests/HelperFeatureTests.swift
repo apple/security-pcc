@@ -31,6 +31,7 @@ struct FeaturesTests {
             case .instanceInferenceRequestGrammarIDV1: break
             case .requiredMemory: break
             case .ensemble: break
+            case .modelSwitchingV1: break
             }
         }
         #expect(HelperFeature.featureList == """
@@ -41,6 +42,7 @@ struct FeaturesTests {
             instanceInferenceRequestGrammarIDV1
             requiredMemory
             ensemble
+            modelSwitchingV1
             """)
     }
 }

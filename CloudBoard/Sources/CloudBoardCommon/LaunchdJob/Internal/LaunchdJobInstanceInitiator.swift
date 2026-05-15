@@ -12,9 +12,8 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2023 Apple Inc. All rights reserved.
-
 internal import AppServerSupport.OSLaunchdJob
+import CloudBoardLogging
 import CloudBoardMetrics
 import Foundation
 import os
@@ -31,34 +30,41 @@ internal struct LaunchdJobInstanceInitiator: LaunchdJobInstanceInitiatorProtocol
 
     private let managedJob: ManagedLaunchdJob
     private let jobActor: LaunchdJobActor
-    private let _handle: LaunchdJobInstanceHandle
     public var uuid: UUID { self.jobActor.uuid }
-    public var handle: any LaunchdJobInstanceHandleProtocol { self._handle }
+
+    public var attributes: CloudBoardJobAttributes { self.managedJob.jobAttributes }
+
+    public var instanceHandleIfCreated: (any LaunchdJobInstanceHandleProtocol)? {
+        get async {
+            return await self.jobActor.instanceHandle.map {
+                LaunchdJobInstanceHandle($0, attributes: self.managedJob.jobAttributes)
+            }
+        }
+    }
 
     internal init(_ managedJob: ManagedLaunchdJob, uuid: UUID, metrics: (any MetricsSystem)? = nil) {
         self.managedJob = managedJob
         self.jobActor = LaunchdJobActor(managedJob, uuid: uuid, metrics: metrics)
-        self._handle = LaunchdJobInstanceHandle(managedJob)
     }
 
     func startAndWatch() -> any AsyncSequence<LaunchdJobEvents.State, Never> {
         return TransformingAsyncSequence(jobActor: self.jobActor)
     }
 
-    func findRunningLinkedInstance(
+    func findRunningLinkedInstances(
         type: CloudBoardJobType,
         logger: Logger
-    ) -> (any LaunchdJobInstanceHandleProtocol)? {
+    ) -> [any LaunchdJobInstanceHandleProtocol] {
         precondition(
             self.managedJob.jobAttributes.cloudBoardJobType != type,
             "Attempt to find a linked instance of \(type) which matches our own type"
         )
-        let linkedJob = LaunchdJobHelper.fetchManagedLaunchdJobs(
+        let linkedJobs = LaunchdJobHelper.fetchManagedLaunchdJobs(
             type: type, logger: logger
-        ).first {
+        ).filter {
             $0.jobHandle.getCurrentJobInfo()?.instance == self.uuid
         }
-        return linkedJob.map { LaunchdJobInstanceHandle($0) }
+        return linkedJobs.map { LaunchdJobInstanceHandle($0.jobHandle, attributes: $0.jobAttributes) }
     }
 
     /// This actor converts the LaunchdJobActor events into the public form
@@ -234,7 +240,7 @@ internal struct LaunchdJobInstanceInitiator: LaunchdJobInstanceInitiatorProtocol
                 // be called again in case of an error. Required to avoid mach
                 // port leak.
                 switch self.state {
-                case .starting, .running, .terminating:
+                case .starting, .running:
                     await self.job.stopMonitoring()
                     self.sigkillTask?.cancel()
                 default:

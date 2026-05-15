@@ -25,11 +25,108 @@ import XPC
 import XPCPrivate
 import os
 
+package struct XPCSubrequest: Sendable, Equatable, Codable, TC2JSON {
+    /// Represents encoded `XPCSubrequest`.  Use `XPCSubrequest(json:)` to convert.
+    package typealias Data = Foundation.Data
+
+    package enum Priority: Sendable, Equatable, Codable, TC2JSON {
+        case unspecified
+        case discardable
+    }
+    package var requestId: UInt64
+    package var priority: Priority
+
+    package init(requestId: UInt64, request: PrivateCloudComputeConnection.Request) {
+        self.requestId = requestId
+        switch request.priority {
+        case .unspecified:
+            self.priority = .unspecified
+        case .discardable:
+            self.priority = .discardable
+        }
+    }
+}
+
+package protocol XPCWrapperProtocol: Sendable {
+    associatedtype RequestProxy: TC2XPCTrustedRequestProtocol
+
+    func cancel(connectionID: Int, proxy: RequestProxy) async
+    func close(connectionID: Int, proxy: RequestProxy) async
+    func send(connectionID: Int, proxy: RequestProxy, message: XPCRequestMessage) async throws
+    func next(connectionID: Int, proxy: RequestProxy) async throws -> XPCResponseMessage?
+    func nextProgress(connectionID: Int, proxy: RequestProxy) async throws -> PrivateCloudComputeConnection.Progress?
+
+    func createSubrequest(
+        connectionID: Int,
+        proxy: RequestProxy,
+        subrequest: XPCSubrequest
+    ) async throws
+
+    func trustedRequest(
+        withParameters parameters: Data,
+        requestID: UUID,
+        multiTurn: Bool,
+        bundleIdentifier: String?,
+        originatingBundleIdentifier: String?,
+        featureIdentifier: String?,
+        sessionIdentifier: UUID?
+    ) async throws -> any XPCRequestProxyProtocol
+
+    func connection(
+        withParameters parameters: Data,
+        connectionIdentifier: UUID,
+        bundleIdentifier: String?,
+        originatingBundleIdentifier: String?,
+        featureIdentifier: String?,
+        sessionIdentifier: UUID?
+    ) async throws -> any XPCRequestProxyProtocol
+
+    func close()
+    func currentEnvironment() async throws -> String
+    func prefetchRequest(
+        _ request: Prefetch
+    ) async throws -> [Prefetch.Response]
+    func prewarmRequest(
+        workloadType: String,
+        workloadParameters: [String: String],
+        bundleIdentifier: String?,
+        featureIdentifier: String,
+        runOnEventStream: Bool
+    ) async throws
+    func prefetchParametersCache() async throws -> [String]
+    func prefetchParametersCacheSavedState() async throws -> [String]
+    func prefetchCacheReset() async throws -> Bool
+    func prefetchCache() async throws -> [String]
+    func knownRateLimits(
+        bundleIdentifier: String?,
+        featureIdentifier: String?,
+        skipFetch: Bool
+    ) async throws -> Data?
+    func listRateLimits(
+        bundleIdentifier: String?,
+        featureIdentifier: String?,
+        fetch: Bool
+    ) async throws -> Data?
+    func addRateLimit(
+        bundleIdentifier: String?,
+        featureIdentifier: String?,
+        workloadType: String?,
+        count: UInt,
+        duration: Double,
+        ttl: Double,
+        jitter: Double
+    ) async throws
+    func resetRateLimits() async throws
+    func fetchServerDrivenConfiguration() async throws -> Data
+    func listServerDrivenConfiguration() async throws -> Data
+    func setServerDrivenConfiguration(json: Data) async throws -> Data
+}
+
 /// This class wraps the NSXPCConnection and ensures that Swift concurrency
 /// task cancellation is forwarded properly. Also it ensures that all dangling requests
-/// are failed in case the deamon crashes.
-final actor XPCWrapper {
-    nonisolated var unownedExecutor: UnownedSerialExecutor {
+/// are failed in case the daemon crashes.
+package final actor XPCWrapper: XPCWrapperProtocol {
+    nonisolated package var unownedExecutor: UnownedSerialExecutor {
         self.queue.asUnownedSerialExecutor()
     }
 
@@ -41,6 +138,8 @@ final actor XPCWrapper {
         case string(CheckedContinuation<String, any Error>)
         case stringArray(CheckedContinuation<[String], any Error>)
         case requestProxy(CheckedContinuation<(any TC2XPCTrustedRequestProtocol, Int), any Error>)
+        case optionalResponseMessage(CheckedContinuation<XPCResponseMessage?, any Error>)
+        case optionalProgress(CheckedContinuation<PrivateCloudComputeConnection.Progress?, any Error>)
 
         func resume(throwing error: any Error) {
             switch self {
@@ -58,6 +157,10 @@ final actor XPCWrapper {
                 checkedContinuation.resume(throwing: error)
             case .requestProxy(let checkedContinuation):
                 checkedContinuation.resume(throwing: error)
+            case .optionalResponseMessage(let checkedContinuation):
+                checkedContinuation.resume(throwing: error)
+            case .optionalProgress(let checkedContinuation):
+                checkedContinuation.resume(throwing: error)
             }
         }
     }
@@ -74,7 +177,7 @@ final actor XPCWrapper {
 
     private var runningRequests: [Int: Continuation] = [:]
 
-    init(userID: uid_t? = nil) {
+    package init(userID: uid_t? = nil) {
         self.userID = userID
         self.queue = DispatchSerialQueue(label: "com.apple.privatecloudcompute.xpc.connection")
 
@@ -102,7 +205,7 @@ final actor XPCWrapper {
         connection.resume()
     }
 
-    nonisolated func close() {
+    nonisolated package func close() {
         self.queue.async {
             self.assumeIsolated { wrapper in
                 precondition(wrapper.runningRequests.isEmpty)
@@ -114,14 +217,15 @@ final actor XPCWrapper {
 
     // MARK: - XPC Methods
 
-    func trustedRequest(
+    package func trustedRequest(
         withParameters parameters: Data,
         requestID: UUID,
+        multiTurn: Bool,
         bundleIdentifier: String?,
         originatingBundleIdentifier: String?,
         featureIdentifier: String?,
         sessionIdentifier: UUID?
-    ) async throws -> XPCRequestProxy {
+    ) async throws -> any XPCRequestProxyProtocol {
         let xpcRequestID = self.nextRequestID()
         let (proxy, connectionID) = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(any TC2XPCTrustedRequestProtocol, Int), any Error>) in
             self.storeContinuation(continuation, id: xpcRequestID)
@@ -129,6 +233,7 @@ final actor XPCWrapper {
             self.xpc.trustedRequest(
                 withParameters: parameters,
                 requestID: requestID,
+                multiTurn: multiTurn,
                 bundleIdentifier: bundleIdentifier,
                 originatingBundleIdentifier: originatingBundleIdentifier,
                 featureIdentifier: featureIdentifier,
@@ -156,7 +261,27 @@ final actor XPCWrapper {
         return XPCRequestProxy(connectionID: connectionID, proxy: proxy, wrapper: self)
     }
 
-    func currentEnvironment() async throws -> String {
+    /// Uses `connectionIdentifier` as client's `requestID` when creating `XPCRequestProxy`.
+    package func connection(
+        withParameters parameters: Data,
+        connectionIdentifier: UUID,
+        bundleIdentifier: String?,
+        originatingBundleIdentifier: String?,
+        featureIdentifier: String?,
+        sessionIdentifier: UUID?
+    ) async throws -> any XPCRequestProxyProtocol {
+        try await trustedRequest(
+            withParameters: parameters,
+            requestID: connectionIdentifier,
+            multiTurn: true,
+            bundleIdentifier: bundleIdentifier,
+            originatingBundleIdentifier: originatingBundleIdentifier,
+            featureIdentifier: featureIdentifier,
+            sessionIdentifier: sessionIdentifier
+        )
+    }
+
+    package func currentEnvironment() async throws -> String {
         let requestID = self.nextRequestID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, any Error>) in
             self.storeContinuation(continuation, id: requestID)
@@ -183,20 +308,7 @@ final actor XPCWrapper {
         }
     }
 
-    func requestMetadata() async throws -> Data? {
-        let requestID = self.nextRequestID()
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data?, any Error>) in
-            self.storeContinuation(continuation, id: requestID)
-
-            self.xpc.requestMetadata { result in
-                self.assumeIsolated { wrapper in
-                    wrapper.finishContinuation(id: requestID, with: result)
-                }
-            }
-        }
-    }
-
-    func prefetchRequest(
+    package func prefetchRequest(
         _ request: Prefetch
     ) async throws -> [Prefetch.Response] {
         let requestID = self.nextRequestID()
@@ -215,7 +327,7 @@ final actor XPCWrapper {
         return try self.jsonDecoder.decode([Prefetch.Response].self, from: data)
     }
 
-    func prewarmRequest(
+    package func prewarmRequest(
         workloadType: String,
         workloadParameters: [String: String],
         bundleIdentifier: String?,
@@ -240,7 +352,7 @@ final actor XPCWrapper {
         }
     }
 
-    func prefetchCache() async throws -> [String] {
+    package func prefetchCache() async throws -> [String] {
         let requestID = self.nextRequestID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String], any Error>) in
             self.storeContinuation(continuation, id: requestID)
@@ -253,7 +365,7 @@ final actor XPCWrapper {
         }
     }
 
-    func prefetchParametersCache() async throws -> [String] {
+    package func prefetchParametersCache() async throws -> [String] {
         let requestID = self.nextRequestID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String], any Error>) in
             self.storeContinuation(continuation, id: requestID)
@@ -266,7 +378,7 @@ final actor XPCWrapper {
         }
     }
 
-    func prefetchParametersCacheSavedState() async throws -> [String] {
+    package func prefetchParametersCacheSavedState() async throws -> [String] {
         let requestID = self.nextRequestID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String], any Error>) in
             self.storeContinuation(continuation, id: requestID)
@@ -279,7 +391,7 @@ final actor XPCWrapper {
         }
     }
 
-    func prefetchCacheReset() async throws -> Bool {
+    package func prefetchCacheReset() async throws -> Bool {
         let requestID = self.nextRequestID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, any Error>) in
             self.storeContinuation(continuation, id: requestID)
@@ -292,7 +404,7 @@ final actor XPCWrapper {
         }
     }
 
-    func knownRateLimits(
+    package func knownRateLimits(
         bundleIdentifier: String?,
         featureIdentifier: String?,
         skipFetch: Bool
@@ -313,7 +425,7 @@ final actor XPCWrapper {
         }
     }
 
-    func listRateLimits(
+    package func listRateLimits(
         bundleIdentifier: String?,
         featureIdentifier: String?,
         fetch: Bool
@@ -334,7 +446,7 @@ final actor XPCWrapper {
         }
     }
 
-    func addRateLimit(
+    package func addRateLimit(
         bundleIdentifier: String?,
         featureIdentifier: String?,
         workloadType: String?,
@@ -363,7 +475,7 @@ final actor XPCWrapper {
         }
     }
 
-    func resetRateLimits() async throws {
+    package func resetRateLimits() async throws {
         let requestID = self.nextRequestID()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             self.storeContinuation(continuation, id: requestID)
@@ -376,7 +488,7 @@ final actor XPCWrapper {
         }
     }
 
-    func fetchServerDrivenConfiguration() async throws -> Data {
+    package func fetchServerDrivenConfiguration() async throws -> Data {
         let requestID = self.nextRequestID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, any Error>) in
             self.storeContinuation(continuation, id: requestID)
@@ -389,7 +501,7 @@ final actor XPCWrapper {
         }
     }
 
-    func listServerDrivenConfiguration() async throws -> Data {
+    package func listServerDrivenConfiguration() async throws -> Data {
         let requestID = self.nextRequestID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, any Error>) in
             self.storeContinuation(continuation, id: requestID)
@@ -402,7 +514,7 @@ final actor XPCWrapper {
         }
     }
 
-    func setServerDrivenConfiguration(json: Data) async throws -> Data {
+    package func setServerDrivenConfiguration(json: Data) async throws -> Data {
         let requestID = self.nextRequestID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, any Error>) in
             self.storeContinuation(continuation, id: requestID)
@@ -417,26 +529,27 @@ final actor XPCWrapper {
 
     // MARK: Trusted request proxy methods
 
-    func cancel(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol) async {
+    package func cancel(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol) async {
         guard self.connectionID == connectionID else { return }
         proxy.cancel {}
     }
 
-    func close(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol) async {
+    package func close(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol) async {
         guard self.connectionID == connectionID else { return }
         proxy.close {}
     }
 
-    func send(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol, data: Data, isComplete: Bool) async throws {
+    package func send(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol, message: XPCRequestMessage) async throws {
         guard self.connectionID == connectionID else {
             // check that the xpc connection for which we received the proxy object is still alive
             throw PrivateCloudComputeError(code: .xpcConnectionInterrupted)
         }
+        let data = message.json
         let xpcRequestID = self.nextRequestID()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             self.storeContinuation(continuation, id: xpcRequestID)
 
-            proxy.send(data: data, isComplete: isComplete) { (errorData) in
+            proxy.send(data: data) { (errorData) in
                 self.assumeIsolated { wrapper in
                     if let errorData {
                         if let error = PrivateCloudComputeError(json: errorData) {
@@ -453,13 +566,13 @@ final actor XPCWrapper {
         }
     }
 
-    func next(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol) async throws -> Data? {
+    package func next(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol) async throws -> XPCResponseMessage? {
         guard self.connectionID == connectionID else {
             // check that the xpc connection for which we received the proxy object is still alive
             throw PrivateCloudComputeError(code: .xpcConnectionInterrupted)
         }
         let xpcRequestID = self.nextRequestID()
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data?, any Error>) in
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<XPCResponseMessage?, any Error>) in
             self.storeContinuation(continuation, id: xpcRequestID)
 
             proxy.next { (responseData, errorData) in
@@ -472,11 +585,80 @@ final actor XPCWrapper {
                             wrapper.failContinuation(id: xpcRequestID, error: error)
                         }
                     } else {
-                        wrapper.finishContinuation(id: xpcRequestID, with: responseData)
+                        if let responseData {
+                            if let message = XPCResponseMessage(json: responseData) {
+                                wrapper.finishContinuation(id: xpcRequestID, with: message)
+                            } else {
+                                let error = PrivateCloudComputeError(message: "failed to decode response message")
+                                wrapper.failContinuation(id: xpcRequestID, error: error)
+                            }
+                        } else {
+                            // receiving completed
+                            wrapper.finishContinuation(id: xpcRequestID, with: nil as XPCResponseMessage?)
+                        }
                     }
                 }
             }
         }
+    }
+
+    package func createSubrequest(
+        connectionID: Int,
+        proxy: any TC2XPCTrustedRequestProtocol,
+        subrequest: XPCSubrequest
+    ) async throws {
+        guard self.connectionID == connectionID else {
+            // check that the xpc connection for which we received the proxy object is still alive
+            throw PrivateCloudComputeError(code: .xpcConnectionInterrupted)
+        }
+        let data = subrequest.json
+        let xpcRequestID = self.nextRequestID()
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            self.storeContinuation(continuation, id: xpcRequestID)
+
+            proxy.createSubrequest(request: data) { (errorData) in
+                self.assumeIsolated { wrapper in
+                    if let errorData {
+                        if let error = PrivateCloudComputeError(json: errorData) {
+                            wrapper.failContinuation(id: xpcRequestID, error: error)
+                        } else {
+                            let error = PrivateCloudComputeError(message: "failed to createSubrequest and decode error")
+                            wrapper.failContinuation(id: xpcRequestID, error: error)
+                        }
+                    } else {
+                        wrapper.finishContinuation(id: xpcRequestID)
+                    }
+                }
+            }
+        }
+    }
+
+    package func nextProgress(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol) async throws -> PrivateCloudComputeConnection.Progress? {
+        guard self.connectionID == connectionID else {
+            // check that the xpc connection for which we received the proxy object is still alive
+            throw PrivateCloudComputeError(code: .xpcConnectionInterrupted)
+        }
+        let xpcRequestID = self.nextRequestID()
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<PrivateCloudComputeConnection.Progress?, any Error>) in
+            self.storeContinuation(continuation, id: xpcRequestID)
+
+            proxy.nextProgress { responseData in
+                self.assumeIsolated { wrapper in
+                    if let responseData {
+                        if let message = PrivateCloudComputeConnection.Progress(json: responseData) {
+                            wrapper.finishContinuation(id: xpcRequestID, with: message)
+                        } else {
+                            let error = PrivateCloudComputeError(message: "failed to decode progress update")
+                            wrapper.failContinuation(id: xpcRequestID, error: error)
+                        }
+                    } else {
+                        // receiving completed
+                        wrapper.finishContinuation(id: xpcRequestID, with: nil as XPCResponseMessage?)
+                    }
+                }
+            }
+        }
+
     }
 
     // MARK: - Private Methods -
@@ -542,7 +724,7 @@ final actor XPCWrapper {
         }
 
         switch continuation {
-        case .bool, .optionalData, .data, .string, .stringArray, .requestProxy:
+        case .bool, .optionalData, .data, .string, .stringArray, .requestProxy, .optionalResponseMessage, .optionalProgress:
             fatalError()
         case .void(let continuation):
             continuation.resume(returning: ())
@@ -559,7 +741,7 @@ final actor XPCWrapper {
         }
 
         switch continuation {
-        case .void, .optionalData, .data, .string, .stringArray, .requestProxy:
+        case .void, .optionalData, .data, .string, .stringArray, .requestProxy, .optionalResponseMessage, .optionalProgress:
             fatalError()
         case .bool(let continuation):
             continuation.resume(returning: result)
@@ -576,7 +758,7 @@ final actor XPCWrapper {
         }
 
         switch continuation {
-        case .void, .bool, .optionalData, .string, .stringArray, .requestProxy:
+        case .void, .bool, .optionalData, .string, .stringArray, .requestProxy, .optionalResponseMessage, .optionalProgress:
             fatalError()
         case .data(let continuation):
             continuation.resume(returning: data)
@@ -593,7 +775,7 @@ final actor XPCWrapper {
         }
 
         switch continuation {
-        case .void, .bool, .data, .string, .stringArray, .requestProxy:
+        case .void, .bool, .data, .string, .stringArray, .requestProxy, .optionalResponseMessage, .optionalProgress:
             fatalError()
         case .optionalData(let continuation):
             continuation.resume(returning: data)
@@ -610,7 +792,7 @@ final actor XPCWrapper {
         }
 
         switch continuation {
-        case .void, .bool, .data, .stringArray, .optionalData, .requestProxy:
+        case .void, .bool, .data, .stringArray, .optionalData, .requestProxy, .optionalResponseMessage, .optionalProgress:
             fatalError()
         case .string(let continuation):
             continuation.resume(returning: string)
@@ -627,7 +809,7 @@ final actor XPCWrapper {
         }
 
         switch continuation {
-        case .void, .bool, .data, .string, .optionalData, .requestProxy:
+        case .void, .bool, .data, .string, .optionalData, .requestProxy, .optionalResponseMessage, .optionalProgress:
             fatalError()
         case .stringArray(let continuation):
             continuation.resume(returning: array)
@@ -644,10 +826,44 @@ final actor XPCWrapper {
         }
 
         switch continuation {
-        case .void, .bool, .data, .string, .optionalData, .stringArray:
+        case .void, .bool, .data, .string, .optionalData, .stringArray, .optionalResponseMessage, .optionalProgress:
             fatalError()
         case .requestProxy(let continuation):
             continuation.resume(returning: (proxy, connectionID))
+        }
+    }
+
+    private func storeContinuation(_ checkedContinuation: CheckedContinuation<XPCResponseMessage?, any Error>, id: Int) {
+        self.runningRequests[id] = .optionalResponseMessage(checkedContinuation)
+    }
+
+    private func finishContinuation(id: Int, with message: XPCResponseMessage?) {
+        guard let continuation = self.runningRequests.removeValue(forKey: id) else {
+            return  // race.
+        }
+
+        switch continuation {
+        case .void, .bool, .data, .optionalData, .string, .stringArray, .requestProxy, .optionalProgress:
+            fatalError()
+        case .optionalResponseMessage(let continuation):
+            continuation.resume(returning: message)
+        }
+    }
+
+    private func storeContinuation(_ checkedContinuation: CheckedContinuation<PrivateCloudComputeConnection.Progress?, any Error>, id: Int) {
+        self.runningRequests[id] = .optionalProgress(checkedContinuation)
+    }
+
+    private func finishContinuation(id: Int, with message: PrivateCloudComputeConnection.Progress?) {
+        guard let continuation = self.runningRequests.removeValue(forKey: id) else {
+            return  // race.
+        }
+
+        switch continuation {
+        case .void, .bool, .data, .optionalData, .string, .stringArray, .requestProxy, .optionalResponseMessage:
+            fatalError()
+        case .optionalProgress(let continuation):
+            continuation.resume(returning: message)
         }
     }
 
@@ -670,6 +886,10 @@ final actor XPCWrapper {
         case .stringArray(let continuation):
             continuation.resume(throwing: error)
         case .requestProxy(let continuation):
+            continuation.resume(throwing: error)
+        case .optionalResponseMessage(let continuation):
+            continuation.resume(throwing: error)
+        case .optionalProgress(let continuation):
             continuation.resume(throwing: error)
         }
     }

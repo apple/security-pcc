@@ -64,6 +64,7 @@
 	</array>
 	<key>com.apple.security.exception.shared-preference.read-only</key>
 	<array>
+		<string>com.apple.acec</string>
 		<string>com.apple.acsi.cloudusagetrackingd</string>
 		<string>com.apple.cloudos.cloudOSInfo</string>
 		<string>com.apple.narrative</string>

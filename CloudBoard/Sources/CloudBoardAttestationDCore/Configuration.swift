@@ -12,12 +12,12 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CFPreferenceCoder
 import CloudBoardCommon
+import CloudBoardLogging
 import Foundation
 import NIOCore
+import os
 
 extension CFPreferences {
     static var cbAttestationPreferencesDomain: String {
@@ -37,6 +37,7 @@ struct CloudBoardAttestationDConfiguration: Codable, Hashable {
             "ExistingAttestationsAvailableOnlyOnNodeAfterReleaseEntryAddition"
         case _maximumValidatedEntryCacheSize =
             "MaximumValidatedEntryCacheSize"
+        case _rackIdCacheLifetimeMinutes = "RackIdCacheLifetimeMinutes"
     }
 
     private var _useInMemoryKey: Bool?
@@ -48,6 +49,13 @@ struct CloudBoardAttestationDConfiguration: Codable, Hashable {
     private var _transparencyLog: TransparencyLogConfiguration?
     private var _existingAttestationsAvailableOnlyOnNodeAfterReleaseEntryAddition: Bool?
     private var _maximumValidatedEntryCacheSize: Int?
+    private var _rackIdCacheLifetimeMinutes: Int?
+
+    // Test-only: Override default dummy IDs for in-memory attestations
+    // These are not serialized and only used in test environments with useInMemoryKey=true
+    var testEnsembleID: String?
+    var testBootID: String?
+    var testRackID: String?
 
     // If true, an in-memory key is used as node key instead of a SEP-backed key. This automatically disables the use of
     // CloudAttestation which require SEP-backed keys. Note that regular clients enforce SEP-backed attested keys and
@@ -127,6 +135,11 @@ struct CloudBoardAttestationDConfiguration: Codable, Hashable {
             self._maximumValidatedEntryCacheSize ?? 19275
         }
         set { self._maximumValidatedEntryCacheSize = newValue }
+    }
+
+    var rackIdCacheLifetime: Int {
+        get { self._rackIdCacheLifetimeMinutes ?? 0 }
+        set { self._rackIdCacheLifetimeMinutes = newValue }
     }
 
     private var _secureConfig: SecureConfig? = nil
@@ -263,6 +276,16 @@ struct CloudBoardAttestationDConfiguration: Codable, Hashable {
                 .error("Overriding configuration with new value EnableReleaseSetValidation=true")
             self.enableReleaseSetValidation = true
         }
+
+        // Enforce minimum rack ID cache lifetime of 60 minutes in production/customer mode
+        let minimumRackIdCacheLifetimeMinutes = 60
+        if self.rackIdCacheLifetime < minimumRackIdCacheLifetimeMinutes {
+            let oldValue = self.rackIdCacheLifetime
+            CloudBoardAttestationDaemon.logger.error(
+                "Overriding configuration with new value RackIdCacheLifetime=\(minimumRackIdCacheLifetimeMinutes) minutes (was \(oldValue) minutes)"
+            )
+            self.rackIdCacheLifetime = minimumRackIdCacheLifetimeMinutes
+        }
     }
 }
 
@@ -338,7 +361,7 @@ extension CloudBoardAttestationDConfiguration {
         }
 
         public var releaseDigestPollingIntervalMintues: Duration {
-            self._releaseDigestPollingIntervalMintues.map { .minutes($0) } ?? .minutes(30)
+            self._releaseDigestPollingIntervalMintues.map { .minutes($0) } ?? .minutes(5)
         }
 
         var pollingIntervalJitter: Double {
@@ -450,7 +473,7 @@ extension CloudBoardAttestationDConfiguration {
         let preferences = CFPreferences(domain: domain)
         let decoder = CFPreferenceDecoder()
         do {
-            var legacyConfig = try decoder.decode(CBJobHelperConfigurationShim.self, from: preferences)
+            let legacyConfig = try decoder.decode(CBJobHelperConfigurationShim.self, from: preferences)
             let legacyValue = legacyConfig._proxyConfiguration?.enableReleaseSetValidation
             if let legacyValue {
                 if let fromOwn = fromOwnConfig._enableReleaseSetValidation {

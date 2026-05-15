@@ -12,10 +12,9 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 package import CloudBoardAsyncXPC
 import CloudBoardCommon
+package import CloudBoardDomain
 import Foundation
 
 package enum JobHelperToCloudBoardDaemonMessage: CloudBoardAsyncXPCByteBufferMessage, Sendable, Equatable {
@@ -30,12 +29,15 @@ package enum JobHelperToCloudBoardDaemonMessage: CloudBoardAsyncXPCByteBufferMes
 
     case responseChunk(ResponseChunk)
     case failureReport(FailureReason)
-    case findWorker(FindWorkerQuery)
+    case findWorker(query: FindWorkerQuery, negotiate: Negotiate)
+    case workerNegotiatePickResponse(UUID, selectableEnsembles: EnsembleNegotiation)
     case workerDecryptionKey(UUID, keyID: Data, Data)
     case workerRequestMessage(UUID, Data, isFinal: Bool)
     case workerRequestEOF(UUID)
     case workerError(UUID)
     case jobHelperEOF
+    case usedLAContext
+    case requestExecutionError(RequestExecutionError)
 
     public static func == (
         lhs: JobHelperToCloudBoardDaemonMessage,
@@ -57,9 +59,14 @@ package enum JobHelperToCloudBoardDaemonMessage: CloudBoardAsyncXPCByteBufferMes
                 return lhsWorkerID == rhsWorkerID && lhsKeyID == rhsKeyID && lhsKey == rhsKey
             }
             return false
-        case .findWorker(let lhsQuery):
-            if case .findWorker(let rhsQuery) = rhs {
-                return lhsQuery == rhsQuery
+        case .findWorker(let lhsQuery, let lhsNegotiate):
+            if case .findWorker(let rhsQuery, let rhsNegotiate) = rhs {
+                return lhsQuery == rhsQuery && lhsNegotiate == rhsNegotiate
+            }
+            return false
+        case .workerNegotiatePickResponse(let lhsWorkerID, let lhsSelectableEnsembles):
+            if case .workerNegotiatePickResponse(let rhsWorkerID, let rhsSelectableEnsembles) = rhs {
+                return lhsWorkerID == rhsWorkerID && lhsSelectableEnsembles == rhsSelectableEnsembles
             }
             return false
         case .workerRequestMessage(let lhsWorkerID, let lhsChunk, let lhsIsFinal):
@@ -78,7 +85,20 @@ package enum JobHelperToCloudBoardDaemonMessage: CloudBoardAsyncXPCByteBufferMes
             }
             return false
         case .jobHelperEOF:
-            return true
+            if case .jobHelperEOF = rhs {
+                return true
+            }
+            return false
+        case .usedLAContext:
+            if case .usedLAContext = rhs {
+                return true
+            }
+            return false
+        case .requestExecutionError(let lhsRequestExecutionError):
+            if case .requestExecutionError(let rhsRequestExecutionError) = rhs {
+                return lhsRequestExecutionError == rhsRequestExecutionError
+            }
+            return false
         }
     }
 
@@ -91,9 +111,10 @@ package enum JobHelperToCloudBoardDaemonMessage: CloudBoardAsyncXPCByteBufferMes
         case .failureReport(let failureReason):
             buffer.writeInteger(1)
             try failureReason.encode(to: &buffer)
-        case .findWorker(let findWorkerQuery):
+        case .findWorker(let findWorkerQuery, let negotiate):
             buffer.writeInteger(2)
             try findWorkerQuery.encode(to: &buffer)
+            try negotiate.encode(to: &buffer)
         case .workerDecryptionKey(let uuid, keyID: let keyID, let data):
             buffer.writeInteger(3)
             try uuid.encode(to: &buffer)
@@ -112,6 +133,15 @@ package enum JobHelperToCloudBoardDaemonMessage: CloudBoardAsyncXPCByteBufferMes
             try uuid.encode(to: &buffer)
         case .jobHelperEOF:
             buffer.writeInteger(7)
+        case .usedLAContext:
+            buffer.writeInteger(8)
+        case .requestExecutionError(let requestExecutionError):
+            buffer.writeInteger(9)
+            try requestExecutionError.encode(to: &buffer)
+        case .workerNegotiatePickResponse(let uuid, let selectableEnsembles):
+            buffer.writeInteger(10)
+            try uuid.encode(to: &buffer)
+            try selectableEnsembles.encode(to: &buffer)
         }
     }
 
@@ -131,8 +161,10 @@ package enum JobHelperToCloudBoardDaemonMessage: CloudBoardAsyncXPCByteBufferMes
             let failureReason = try FailureReason(from: &buffer)
             self = .failureReport(failureReason)
         case 2:
-            let findWorkerQuery = try FindWorkerQuery(from: &buffer)
-            self = .findWorker(findWorkerQuery)
+            self = try .findWorker(
+                query: FindWorkerQuery(from: &buffer),
+                negotiate: Negotiate(from: &buffer)
+            )
         case 3:
             self = try .workerDecryptionKey(
                 .init(from: &buffer),
@@ -151,6 +183,16 @@ package enum JobHelperToCloudBoardDaemonMessage: CloudBoardAsyncXPCByteBufferMes
             self = try .workerError(.init(from: &buffer))
         case 7:
             self = .jobHelperEOF
+        case 8:
+            self = .usedLAContext
+        case 9:
+            let requestExecutionError = try RequestExecutionError(from: &buffer)
+            self = .requestExecutionError(requestExecutionError)
+        case 10:
+            self = try .workerNegotiatePickResponse(
+                .init(from: &buffer),
+                selectableEnsembles: .init(from: &buffer)
+            )
         case let value:
             throw DecodingError.dataCorrupted(.init(
                 codingPath: [ByteBufferCodingKey(Self.self)],

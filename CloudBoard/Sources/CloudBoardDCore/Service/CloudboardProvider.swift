@@ -12,11 +12,11 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
 import CloudBoardController
+import CloudBoardDomain
+import CloudBoardJobCore
 import CloudBoardJobHelperAPI
 import CloudBoardLogging
 import CloudBoardMetrics
@@ -32,8 +32,13 @@ import ServiceContextModule
 import Tracing
 
 final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvider, Sendable {
-    public static let logger: Logger = .init(
+    internal static let logger: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
+        category: "CloudBoardProvider"
+    )
+
+    internal static let tracingLogger: Logger = .init(
+        subsystem: "com.apple.cloudos.cloudboard.tracing",
         category: "CloudBoardProvider"
     )
 
@@ -50,6 +55,7 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
     let sessionStore: SessionStore
 
     let isProxy: Bool
+    let cloudAppName: String
     let enforceRequestBypass: Bool
     let jobHelperClientProvider: CloudBoardJobHelperClientProvider
     let jobHelperResponseDelegateProvider: CloudBoardJobHelperResponseDelegateProvider
@@ -131,6 +137,7 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
 
     init(
         isProxy: Bool,
+        cloudAppName: String,
         enforceRequestBypass: Bool = false,
         jobHelperClientProvider: CloudBoardJobHelperClientProvider,
         jobHelperResponseDelegateProvider: CloudBoardJobHelperResponseDelegateProvider,
@@ -143,6 +150,7 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
         sessionStore: SessionStore
     ) {
         self.isProxy = isProxy
+        self.cloudAppName = cloudAppName
         self.enforceRequestBypass = enforceRequestBypass
         self.jobHelperClientProvider = jobHelperClientProvider
         self.jobHelperResponseDelegateProvider = jobHelperResponseDelegateProvider
@@ -172,6 +180,12 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                     $0.paused = false
                     $0.pauseReason = nil
                 }
+                self.metrics.emit(
+                    Metrics.CloudBoardProvider.MaxConcurrentRequests(
+                        value: maxConcurrentRequests,
+                        cloudApp: self.cloudAppName
+                    )
+                )
             }
         }
     }
@@ -183,8 +197,12 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
     ) async throws {
         var serviceContext = ServiceContext.topLevel
         self.tracer.extract(context.request.headers, into: &serviceContext, using: HPACKHeadersExtractor())
+        // In some circumstance it is possible we need to log when not part of the structured task hierachy,
+        // thus logMetadata() is unable to access the Task local value with up to date context.
+        // This is a snapshot that is sufficient for those cases
+        let detachedServiceContext = serviceContext
 
-        let invokeWorkloadSpanID = TraceContextCache.singletonCache.generateNewSpanID()
+        let invokeWorkloadSpanID: UInt64 = TraceContextCache.singletonCache.generateNewSpanID()
         try await self.tracer.withSpan(OperationNames.invokeWorkload, context: serviceContext) { span in
             let requestDurationMeasurementIncludingJobHelperExit = ContinuousTimeMeasurement.start()
             span.attributes.requestSummary.invocationAttributes.invocationRequestHeaders = context.request
@@ -208,11 +226,10 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                                 pccWorkerToInitiatorMapping: self.pccWorkerToInitiatorMapping,
                                 attestationProvider: self.attestationProvider,
                                 isProxy: self.isProxy,
+                                cloudAppName: self.cloudAppName,
                                 enforceRequestBypass: self.enforceRequestBypass,
                                 idleTimeoutDuration: idleTimeoutDuration,
                                 maxCumulativeRequestBytes: self.currentMaxCumulativeRequestBytes(),
-                                pushFailureReportsToROPES: self.hotProperties?.currentValue?
-                                    .pushFailureReportsToROPES ?? false,
                                 metrics: self.metrics,
                                 tracer: self.tracer,
                                 workloadInvocationSpanID: invokeWorkloadSpanID,
@@ -221,6 +238,11 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                                 requestSummarySpan: span
                             ).handle(notifyOfClientCreation: onClient)
                         } catch is CancellationError {
+                            let parentSpanID = TraceContextCache.singletonCache.getSpanID(
+                                forKeyWithID: serviceContext.rpcID.uuidString,
+                                forKeyWithSpanIdentifier: SpanIdentifier.parameters
+                            )
+                            span.attributes.requestSummary.invocationAttributes.parentSpanID = parentSpanID
                             span.attributes.requestSummary.invocationAttributes.connectionCancelled = true
                             var error: Swift.Error = CancellationError()
                             let durationMicrosIncludingJobHelperExit = requestDurationMeasurementIncludingJobHelperExit
@@ -233,6 +255,7 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                                 error = GRPCTransformableError.connectionCancelled
                             }
                             self.metrics.emit(Metrics.CloudBoardProvider.RequestTimeWithJobHelperExitHistogram(
+                                cloudApp: self.cloudAppName,
                                 duration: durationMicrosIncludingJobHelperExit,
                                 failureReason: error
                             ))
@@ -243,7 +266,11 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                     }
                 }
             } onCancel: {
-                Self.logger.log("\(Self.logMetadata(), privacy: .public) Connection cancelled")
+                // This callback is not guaranteed to be in the structured task hierachy
+                Self.logger
+                    .log(
+                        "\(Self.logMetadata(context: detachedServiceContext, spanID: invokeWorkloadSpanID), privacy: .public) Connection cancelled"
+                    )
                 span.attributes.requestSummary.invocationAttributes.connectionCancelled = true
             }
             let parentSpanID = TraceContextCache.singletonCache.getSpanID(
@@ -258,6 +285,7 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                 .emit(
                     Metrics.CloudBoardProvider
                         .RequestTimeWithJobHelperExitHistogram(
+                            cloudApp: self.cloudAppName,
                             duration: durationMicrosIncludingJobHelperExit
                         )
                 )
@@ -268,16 +296,22 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
     /// It is deliberately pessimisitc, it increments as soon as possble, and decrements only when it is sure the helper
     /// has terminated, to achieve the latter it has to resort to starting a detached task when cancellations occur
     fileprivate func enforceConcurrentWorkloadLimit(
-        executeWorkload: ((CloudBoardJobHelperInstanceProtocol) -> Void) async throws -> Void
+        executeWorkload: (@Sendable (CloudBoardJobHelperInstanceProtocol) -> Void) async throws -> Void
     ) async throws {
         try self.loadState.withLock { loadState in
             let maxConcurrentRequests = loadState.maxConcurrentRequests
             if loadState.concurrentRequestCount >= maxConcurrentRequests {
-                self.metrics.emit(Metrics.CloudBoardProvider.MaxConcurrentRequestCountExceededTotal(action: .increment))
+                self.metrics.emit(Metrics.CloudBoardProvider.MaxConcurrentRequestCountExceededTotal(
+                    action: .increment,
+                    cloudApp: self.cloudAppName
+                ))
 
                 if self.loadConfiguration.enforceConcurrentRequestLimit {
                     self.metrics.emit(
-                        Metrics.CloudBoardProvider.MaxConcurrentRequestCountRejectedTotal(action: .increment)
+                        Metrics.CloudBoardProvider.MaxConcurrentRequestCountRejectedTotal(
+                            action: .increment,
+                            cloudApp: self.cloudAppName
+                        )
                     )
                     Self.logger.warning(
                         "\(Self.logMetadata(), privacy: .public) incoming workload rejected because it would exceed the number of max concurrent request count of \(maxConcurrentRequests, privacy: .public)"
@@ -301,13 +335,16 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
             if self.loadConfiguration.overrideCloudAppConcurrentRequests {
                 self.healthMonitor.overrideCurrentRequestCount(count: loadState.concurrentRequestCount)
             }
-            self.metrics.emit(Metrics.CloudBoardProvider.ConcurrentRequests(value: loadState.concurrentRequestCount))
+            self.metrics.emit(Metrics.CloudBoardProvider.ConcurrentRequests(
+                value: loadState.concurrentRequestCount,
+                cloudApp: self.cloudAppName
+            ))
             self.concurrentRequestCountContinuation.yield(loadState.concurrentRequestCount)
         }
 
         // avoid lock ordering, never hold this at the same time as self.loadState
         let jobHelperInstance = OSAllocatedUnfairLock<CloudBoardJobHelperInstanceProtocol?>(initialState: nil)
-        func notifyOfClientCreation(helper: CloudBoardJobHelperInstanceProtocol) {
+        @Sendable func notifyOfClientCreation(helper: CloudBoardJobHelperInstanceProtocol) {
             jobHelperInstance.withLock { $0 = helper }
         }
 
@@ -319,7 +356,10 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                     self.healthMonitor.overrideCurrentRequestCount(count: loadState.concurrentRequestCount)
                 }
                 self.metrics.emit(
-                    Metrics.CloudBoardProvider.ConcurrentRequests(value: loadState.concurrentRequestCount)
+                    Metrics.CloudBoardProvider.ConcurrentRequests(
+                        value: loadState.concurrentRequestCount,
+                        cloudApp: self.cloudAppName
+                    )
                 )
                 self.concurrentRequestCountContinuation.yield(loadState.concurrentRequestCount)
 
@@ -343,7 +383,20 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                 Self.logger.info(
                     "\(Self.logMetadata(), privacy: .public) Spawning detached task to monitor job helpers before releasing workload count"
                 )
+                // transition to a detached task, we have to manually transfer any Task Local state we
+                // would normally rely on. In this case just the ServiceContext so logging stays linked to the
+                // requestID.
+                // It is concious decision to remain linked to the rpcID, despite that rpc being allowed to
+                // finish shortly. The subsequent detached task is a direct of that rpc call, and searching
+                // the logs for the rpcID should show the subsequent work.
+                let snapshotServiceContext = ServiceContext.current
                 Task.detached {
+                    // This now calls into other code that expected the context, so we rebuild a fresh one
+                    var serviceContext = ServiceContext.topLevel
+                    if let snapshotServiceContext {
+                        serviceContext.rpcID = snapshotServiceContext.rpcID
+                        serviceContext.requestID = snapshotServiceContext.requestID
+                    }
                     await self.waitForExit(jobHelperInstance)
                     onJobConsideredFinished()
                     Self.logger.info("\(Self.logMetadata(), privacy: .public) released workload count")
@@ -397,6 +450,12 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                 return
             }
             loadState.idleContinuation = idleContinuation
+            self.metrics.emit(
+                Metrics.CloudBoardProvider.MaxConcurrentRequests(
+                    value: 0,
+                    cloudApp: self.cloudAppName
+                )
+            )
         }
 
         for await _ in idleStream {
@@ -477,7 +536,7 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
         Self.logger.log("message=\"received fetch attestation request\"\nrpcID=\(context.rpcID)")
         return try await withErrorLogging(operation: "fetchAttestation", sensitiveError: false) {
             let requestSummary = FetchAttestationRequestSummary(rpcID: context.rpcID)
-            return try await requestSummary.loggingRequestSummaryModifying(logger: Self.logger) { summary in
+            return try await requestSummary.loggingRequestSummaryModifying(logger: Self.tracingLogger) { summary in
                 let attestationSet = try await self.attestationProvider.currentAttestationSet()
                 summary.populateAttestationSet(attestationSet: attestationSet)
                 if attestationSet.currentAttestation.expiry.timeIntervalSince(Date.now) <= 0 {
@@ -576,49 +635,16 @@ struct LoadState {
     var idleContinuation: AsyncStream<Void>.Continuation?
 }
 
-extension CloudBoardDaemonToJobHelperMessage {
-    init?(from cloudBoardRequest: Com_Apple_Cloudboard_Api_V1_InvokeWorkloadRequest) {
-        switch cloudBoardRequest.type {
-        case .parameters(let parameters):
-            // validation was handled elsewhere, we just fail to parse
-            let responseBypassMode = try? ResponseBypassMode(from: parameters)
-            guard let responseBypassMode else {
-                return nil
-            }
-            self = .parameters(.init(
-                requestID: parameters.requestID,
-                oneTimeToken: parameters.oneTimeToken,
-                encryptedKey: .init(
-                    keyID: parameters.decryptionKey.keyID,
-                    key: parameters.decryptionKey.encryptedPayload
-                ),
-                parametersReceived: .now,
-                plaintextMetadata: .init(tenantInfo: parameters.tenantInfo, workload: parameters.workload),
-                responseBypassMode: responseBypassMode,
-                requestBypassed: parameters.requestBypassed,
-                requestedNack: parameters.requestNack,
-                traceContext: .init(
-                    traceID: parameters.traceContext.traceID,
-                    spanID: TraceContextCache.singletonCache
-                        .getSpanID(
-                            forKeyWithID: parameters.requestID,
-                            forKeyWithSpanIdentifier: SpanIdentifier.invokeWorkload
-                        ) ?? ""
-                )
-            ))
-        case .requestChunk(let requestChunk):
-            self = .requestChunk(requestChunk.encryptedPayload, isFinal: requestChunk.isFinal)
-        case .none, .setup, .terminate:
-            return nil
-        }
-    }
-}
-
-class InvokeWorkloadRequestStreamHandler {
+final class InvokeWorkloadRequestStreamHandler: Sendable {
     public static let logger: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
         // Keeping this at CloudBoardProvider deliberately for now, the handler class is
         // private to `CloudBoardProvider`
+        category: "CloudBoardProvider"
+    )
+
+    public static let tracingLogger: Logger = .init(
+        subsystem: "com.apple.cloudos.cloudboard.tracing",
         category: "CloudBoardProvider"
     )
     private static let signposter: OSSignposter = .init(logger: logger)
@@ -628,6 +654,7 @@ class InvokeWorkloadRequestStreamHandler {
         case jobHelperExited
         case receiveInputCompleted
         case responseOutputCompleted
+        case laContextUsed
     }
 
     /// Stream of inbound requests coming in
@@ -655,11 +682,11 @@ class InvokeWorkloadRequestStreamHandler {
     // MARK: handler configuration
 
     private let isProxy: Bool
+    private let cloudAppName: String
     private let enforceRequestBypass: Bool
     private let idleTimeoutDuration: Duration
     private let maxCumulativeRequestBytes: Int
-    private let pushFailureReportsToROPES: Bool
-    private let invokeWorkloadSpanID: String
+    private let invokeWorkloadSpanID: UInt64
 
     let metrics: any MetricsSystem
     let tracer: RequestSummaryTracer
@@ -685,13 +712,13 @@ class InvokeWorkloadRequestStreamHandler {
         pccWorkerToInitiatorMapping: PccWorkerToInitiatorMapping,
         attestationProvider: AttestationProvider,
         isProxy: Bool,
+        cloudAppName: String,
         enforceRequestBypass: Bool,
         idleTimeoutDuration: Duration,
         maxCumulativeRequestBytes: Int,
-        pushFailureReportsToROPES: Bool,
         metrics: any MetricsSystem,
         tracer: RequestSummaryTracer,
-        workloadInvocationSpanID: String,
+        workloadInvocationSpanID: UInt64,
         trustedProxyParametersToFirstRewrapDurationMeasurement: OSAllocatedUnfairLock<ContinuousTimeMeasurement?>,
         requestSummarySpan: RequestSummaryTracer.Span
     ) {
@@ -703,10 +730,10 @@ class InvokeWorkloadRequestStreamHandler {
         self.pccWorkerToInitiatorMapping = pccWorkerToInitiatorMapping
         self.attestationProvider = attestationProvider
         self.isProxy = isProxy
+        self.cloudAppName = cloudAppName
         self.enforceRequestBypass = enforceRequestBypass
         self.idleTimeoutDuration = idleTimeoutDuration
         self.maxCumulativeRequestBytes = maxCumulativeRequestBytes
-        self.pushFailureReportsToROPES = pushFailureReportsToROPES
         self.metrics = metrics
         self.tracer = tracer
         self.invokeWorkloadSpanID = workloadInvocationSpanID
@@ -717,7 +744,7 @@ class InvokeWorkloadRequestStreamHandler {
     }
 
     func handle(
-        notifyOfClientCreation: (CloudBoardJobHelperInstanceProtocol) -> Void
+        notifyOfClientCreation: @Sendable (CloudBoardJobHelperInstanceProtocol) -> Void
     ) async throws {
         try await withErrorLogging(
             operation: "_invokeWorkload",
@@ -728,13 +755,15 @@ class InvokeWorkloadRequestStreamHandler {
                 logMetadata: Self.logMetadata(spanID: self.invokeWorkloadSpanID),
                 operationName: "cloudboard_invoke_workload_request_received",
                 message: "invokeWorkload() received workload invocation request"
-            ).log(to: Self.logger)
+            ).log(to: Self.tracingLogger)
 
             let (jobHelperResponseStream, jobHelperResponseContinuation) = AsyncStream<JobHelperInvokeWorkloadResponse>
                 .makeStream()
 
-            let delegate = await self.jobHelperResponseDelegateProvider
-                .makeDelegate(invokeWorkloadResponseContinuation: jobHelperResponseContinuation)
+            let delegate = await self.jobHelperResponseDelegateProvider.makeDelegate(
+                invokeWorkloadResponseContinuation: jobHelperResponseContinuation
+            )
+            let invokeWorkloadStreamState = InvokeWorkloadStreamState(isProxy: self.isProxy)
             let idleTimeout = await self.idleTimeout(
                 timeout: self.idleTimeoutDuration, taskName: "invokeWorkload",
                 taskID: ServiceContext.current?.rpcID.uuidString ?? ""
@@ -755,9 +784,9 @@ class InvokeWorkloadRequestStreamHandler {
                             CloudBoardProviderCheckpoint(
                                 logMetadata: Self.logMetadata(spanID: self.invokeWorkloadSpanID),
                                 operationName: "cloudboard_invoke_workload_idle_timeout_error",
-                                message: "preparing idle timeout",
+                                message: "idle timeout trigerred",
                                 error: error
-                            ).log(to: Self.logger, level: .error)
+                            ).log(workloadStreamState: invokeWorkloadStreamState, to: Self.tracingLogger, level: .error)
                             throw GRPCTransformableError(idleTimeoutError: error)
                         }
                     }
@@ -773,12 +802,24 @@ class InvokeWorkloadRequestStreamHandler {
                                 responseStream: self.responseWriter,
                                 jobHelperClient: jobHelperClient,
                                 idleTimeout: idleTimeout,
+                                invokeWorkloadStreamState: invokeWorkloadStreamState,
                                 invokeWorkloadSpanID: self.invokeWorkloadSpanID
                             )
                             return .receiveInputCompleted
                         } catch let error as InvokeWorkloadStreamState.Error {
                             throw GRPCTransformableError(error)
                         }
+                    }
+
+                    group.addTaskWithLogging(
+                        operation: "_invokeWorkload.laContextUsedWait",
+                        diagnosticKeys: CloudBoardDaemonDiagnosticKeys([.rpcID]),
+                        sensitiveError: false
+                    ) {
+                        try await delegate.waitForLAContextUsedNotification()
+                        try await jobHelperClient.laContextUsed()
+                        await self.jobHelperClientProvider.laContextUsedByClient()
+                        return .laContextUsed
                     }
 
                     group.addTaskWithLogging(
@@ -806,7 +847,7 @@ class InvokeWorkloadRequestStreamHandler {
                             invokeWorkloadSpanID: self.invokeWorkloadSpanID
                         )
                         // Not including cb_jobhelper exit time in the request duration calculation.
-                        self.requestSummarySpan.setManualEndTime(DefaultTracerClock.now)
+                        self.requestSummarySpan.endTimeManual = DefaultTracerClock.now.nanosecondsSinceEpoch
 
                         return .responseOutputCompleted
                     }
@@ -837,7 +878,7 @@ class InvokeWorkloadRequestStreamHandler {
                             } else {
                                 status = .awaitingJobHelperCompletion
                             }
-                        case .receiveInputCompleted:
+                        case .receiveInputCompleted, .laContextUsed:
                             // Nothing to do, job helper is expected to terminate on its own at this point
                             ()
                         }
@@ -846,7 +887,7 @@ class InvokeWorkloadRequestStreamHandler {
                                 logMetadata: Self.logMetadata(spanID: self.invokeWorkloadSpanID),
                                 operationName: "cb_jobhelper_completed",
                                 message: "cb_jobhelper exited + output completed, cancelling remaining work in invokeWorkload"
-                            ).log(to: Self.logger)
+                            ).log(to: Self.tracingLogger)
                             group.cancelAll()
                             break taskResultLoop
                         }
@@ -856,14 +897,92 @@ class InvokeWorkloadRequestStreamHandler {
         }
     }
 
+    fileprivate func encodeInvokeProxyInitiate(
+        query: FindWorkerQuery,
+        routingParameters: [String: [String]],
+        responseBypassMode: ResponseBypassMode,
+        negotiate: Negotiate
+    ) -> Com_Apple_Cloudboard_Api_V1_InvokeWorkloadResponse {
+        let protoBypass = switch responseBypassMode {
+        case .none:
+            Com_Apple_Cloudboard_Api_V1_ResponseBypassMode.none
+        case .matchRequestCiphersuiteSharedAeadState:
+            Com_Apple_Cloudboard_Api_V1_ResponseBypassMode
+                .matchRequestCiphersuiteSharedAeadState
+        }
+        return .with {
+            $0.invokeProxyInitiate = .with {
+                $0.taskID = query.workerID.uuidString
+                $0.workload = .with {
+                    $0.type = query.serviceName
+                    $0.param = .init(routingParameters)
+                }
+                $0.traceContextV1.traceID = ServiceContext.current?.requestID ?? ""
+                $0.traceContextV1.spanID = query.spanID.hexEncoded
+                $0.responseBypassMode = protoBypass
+                if query.forwardRequestChunks {
+                    $0.forwardBypassedRequestChunks = true
+                }
+                $0.efforts = query.effort.effortsAfterDegrading.map { effort in
+                    var proto = Com_Apple_Cloudboard_Api_V1_InvokeProxyInitiate.Effort()
+                    proto.key = effort.key
+                    proto.privacyTransformedNumerator = UInt32(effort.value.degraded.numerator)
+                    proto.privacyTransformedDenominator = UInt32(effort.value.degraded.denominator)
+                    // cb_jobhelper is responsible for applying the customer policy to drop this
+                    // before it even gets to cloudboardd
+                    if let ideal = effort.value.ideal {
+                        proto.idealPercentage = ideal
+                    }
+                    return proto
+                }
+                if let reuse = query.reuseTarget {
+                    $0.reuseConstraints = .with {
+                        $0.ensemble = .with {
+                            $0.ensembleID = reuse.ensemble.ensembleId
+                            $0.bootID = reuse.ensemble.bootId
+                        }
+                        if let rack = reuse.rack {
+                            $0.rackID = rack
+                        }
+                        $0.workloadAdditions = .with {
+                            // we cannot check the service name via reuse
+                            // restate it to be explicit
+                            $0.type = query.serviceName
+                            $0.param = .init(reuse.workloadAdditions)
+                        }
+                    }
+                }
+
+                if let groupID = query.groupID {
+                    $0.groupID = groupID
+                }
+
+                $0.negotiate = .with {
+                    $0.freeChoice = negotiate.freeChoice
+                    $0.trustedEnsembles = negotiate.trustedEnsembles.ensembles.map { .init($0) }
+                    $0.trustedRackIds = negotiate.trustedRackIds
+                    if let pick = negotiate.pick {
+                        $0.pick = .init(pick)
+                    }
+                }
+
+                if let oneTimeToken = query.oneTimeToken {
+                    $0.oneTimeToken = oneTimeToken
+                }
+
+                $0.isDiscardable = query.isDiscardable
+            }
+        }
+    }
+
     private func processJobHelperResponses(
         jobHelperResponseStream: consuming AsyncStream<JobHelperInvokeWorkloadResponse>,
         idleTimeout: IdleTimeout<ContinuousClock>,
         jobHelperClient: CloudBoardJobHelperInstanceProtocol,
         delegate: JobHelperResponseDelegateProtocol,
-        invokeWorkloadSpanID: String
+        invokeWorkloadSpanID: UInt64
     ) async throws {
-        let workloadResponseSpanID = TraceContextCache.singletonCache.generateNewSpanID()
+        let workloadResponseSpanID: UInt64 = TraceContextCache.singletonCache.generateNewSpanID()
         self.serviceContext.withLock { $0.spanID = workloadResponseSpanID }
         self.serviceContext.withLock { $0.parentSpanID = invokeWorkloadSpanID }
         try await self.tracer.withSpan(
@@ -940,7 +1059,7 @@ class InvokeWorkloadRequestStreamHandler {
                                 operationName: "sentResponseChunkFinal",
                                 message: "Sent final response chunk"
                             ).log(
-                                to: Self.logger,
+                                to: Self.tracingLogger,
                                 level: .default
                             )
                             self.finalRequestChunkToEndResponseSpan.withLock { span in
@@ -973,7 +1092,7 @@ class InvokeWorkloadRequestStreamHandler {
                             }
                         }
                         Self.logger.debug("\(Self.logMetadata(), privacy: .public) sent grpc response")
-                    case .findWorker(let query):
+                    case .findWorker(let query, let negotiate):
                         let findWorkerDurationMeasurement =
                             OSAllocatedUnfairLock<ContinuousTimeMeasurement>(
                                 initialState: ContinuousTimeMeasurement
@@ -1026,7 +1145,9 @@ class InvokeWorkloadRequestStreamHandler {
                             workerID: query.workerID,
                             service: query.serviceName,
                             routingParameters: routingParameters,
-                            to: Self.logger,
+                            to: Self.tracingLogger,
+                            groupID: query.groupID,
+                            reuseTarget: query.reuseTarget,
                             level: .info
                         )
                         self.pccWorkerToInitiatorMapping.link(
@@ -1038,37 +1159,21 @@ class InvokeWorkloadRequestStreamHandler {
                         requestedWorkerIDs.insert(query.workerID)
 
                         let responseBypassMode = ResponseBypassMode(requested: query.responseBypass)
-                        let protoBypass = switch responseBypassMode {
-                        case .none:
-                            Com_Apple_Cloudboard_Api_V1_ResponseBypassMode.none
-                        case .matchRequestCiphersuiteSharedAeadState:
-                            Com_Apple_Cloudboard_Api_V1_ResponseBypassMode
-                                .matchRequestCiphersuiteSharedAeadState
-                        }
-                        try await self.responseWriter.send(.with {
-                            $0.invokeProxyInitiate = .with {
-                                $0.taskID = query.workerID.uuidString
-                                $0.workload = .with {
-                                    $0.type = query.serviceName
-                                    $0.param = .init(routingParameters)
-                                }
-                                $0.traceContext.traceID = ServiceContext.current?.requestID ?? ""
-                                $0.traceContext.spanID = query.spanID
-                                $0.responseBypassMode = protoBypass
-                                if query.forwardRequestChunks {
-                                    $0.forwardBypassedRequestChunks = true
-                                }
-                            }
-                        })
+                        try await self.responseWriter.send(
+                            self.encodeInvokeProxyInitiate(
+                                query: query,
+                                routingParameters: routingParameters,
+                                responseBypassMode: responseBypassMode,
+                                negotiate: negotiate
+                            )
+                        )
                     case .failureReport(let failureReason):
                         CloudBoardProviderCheckpoint(
                             logMetadata: Self.logMetadata(spanID: invokeWorkloadSpanID),
                             operationName: "cb_jobhelper_failure_response",
                             message: "received error response from cb_jobhelper with FailureReason"
-                        ).log(failureReason: failureReason, to: Self.logger)
-                        if self.pushFailureReportsToROPES {
-                            throw GRPCTransformableError(failureReason: failureReason)
-                        }
+                        ).log(failureReason: failureReason, to: Self.tracingLogger)
+                        throw GRPCTransformableError(failureReason: failureReason)
                     case .workerError(let uuid):
                         CloudBoardProviderCheckpoint(
                             logMetadata: Self.logMetadata(spanID: invokeWorkloadSpanID),
@@ -1076,12 +1181,31 @@ class InvokeWorkloadRequestStreamHandler {
                             message: "received worker error from cb_jobhelper"
                         ).log(
                             workerID: uuid,
-                            to: Self.logger,
+                            to: Self.tracingLogger,
                             level: .default
                         )
                         try await self.responseWriter.send(.with {
                             $0.proxyWorkerError = .with {
                                 $0.taskID = uuid.uuidString
+                            }
+                        })
+                    case .requestExecutionError(let error):
+                        CloudBoardProviderCheckpoint(
+                            logMetadata: Self.logMetadata(spanID: invokeWorkloadSpanID),
+                            operationName: "cb_jobhelper_request_execution_error",
+                            message: "received request execution error from cb_jobhelper"
+                        ).log(
+                            requestExecutionError: error,
+                            to: Self.tracingLogger
+                        )
+
+                        span.attributes.requestSummary.requestExecutionErrorAttributes.errorMessage = error.errorMessage
+
+                        try await self.responseWriter.send(.with {
+                            $0.requestExecutionError = .with {
+                                $0.source = .init(from: error.errorSource)
+                                $0.errorMessage = error.errorMessage
+                                $0.errorCode = error.errorCode
                             }
                         })
                     }
@@ -1095,24 +1219,25 @@ class InvokeWorkloadRequestStreamHandler {
         responseStream: GRPCAsyncResponseStreamWriter<Com_Apple_Cloudboard_Api_V1_InvokeWorkloadResponse>,
         jobHelperClient: CloudBoardJobHelperInstanceProtocol,
         idleTimeout: IdleTimeout<ContinuousClock>,
-        invokeWorkloadSpanID: String
+        invokeWorkloadStreamState: InvokeWorkloadStreamState,
+        invokeWorkloadSpanID: UInt64
     ) async throws {
-        var cumulativeRequestBytesLimiter = CumulativeRequestBytesLimiter()
+        var cumulativeRequestBytesLimiter = CumulativeRequestBytesLimiter(cloudApp: self.cloudAppName)
         var stateMachine = InvokeWorkloadRequestStateMachine()
-        var state = InvokeWorkloadStreamState(isProxy: self.isProxy)
 
         let context: ServiceContext
         var updatedContextWithTraceContext = ServiceContext.current ?? .topLevel
-        let workloadRequestSpanID = TraceContextCache.singletonCache.generateNewSpanID()
+        let workloadRequestSpanID: UInt64 = TraceContextCache.singletonCache.generateNewSpanID()
         updatedContextWithTraceContext.spanID = workloadRequestSpanID
         updatedContextWithTraceContext.parentSpanID = invokeWorkloadSpanID
+        updatedContextWithTraceContext.cloudApp = self.cloudAppName
         context = updatedContextWithTraceContext
         self.serviceContext.withLock { $0 = context }
 
         var requestChunksReceived = 0
         for try await request in requestStream {
             idleTimeout.registerActivity()
-            try state.receiveMessage(request)
+            try invokeWorkloadStreamState.receiveMessage(request)
 
             // This is quite hacky, but we only get request ID with the parameters message, however once we have
             // received it, we would like to always carry it with our context.
@@ -1140,19 +1265,21 @@ class InvokeWorkloadRequestStreamHandler {
                         logMetadata: Self.logMetadata(spanID: invokeWorkloadSpanID),
                         operationName: "awaiting_warmup_complete_before_workload_setup_request",
                         message: "received workload setup request, awaiting warmup complete before continuing"
-                    ).log(to: Self.logger)
+                    ).log(to: Self.tracingLogger)
                     span.attributes.requestSummary.workloadRequestAttributes.receivedSetup = true
                     let waitForWarmupCompleteTimeMeasurement = ContinuousTimeMeasurement.start()
                     do {
                         try await jobHelperClient.waitForWarmupComplete()
                         self.metrics.emit(
                             Metrics.CloudBoardProvider.WaitForWarmupCompleteTimeHistogram(
+                                cloudApp: self.cloudAppName,
                                 duration: waitForWarmupCompleteTimeMeasurement.duration
                             )
                         )
                     } catch {
                         self.metrics.emit(
                             Metrics.CloudBoardProvider.FailedWaitForWarmupCompleteTimeHistogram(
+                                cloudApp: self.cloudAppName,
                                 duration: waitForWarmupCompleteTimeMeasurement.duration
                             )
                         )
@@ -1161,14 +1288,14 @@ class InvokeWorkloadRequestStreamHandler {
                             operationName: "wait_for_warmup_complete_returned_error",
                             message: "waitForWarmupComplete returned error",
                             error: error
-                        ).log(to: Self.logger, level: .error)
+                        ).log(to: Self.tracingLogger, level: .error)
                         throw error
                     }
                     CloudBoardProviderCheckpoint(
                         logMetadata: Self.logMetadata(spanID: invokeWorkloadSpanID),
                         operationName: "warmup_completed",
                         message: "warmup completed, sending acknowledgement"
-                    ).log(to: Self.logger)
+                    ).log(to: Self.tracingLogger)
                     idleTimeout.registerActivity()
 
                     try await responseStream.send(.with {
@@ -1176,24 +1303,25 @@ class InvokeWorkloadRequestStreamHandler {
                             $0.supportTerminate = true
                             $0.supportNack = self.isProxy ? true : false
                             $0.supportAuthTokenWithRequestBypass = self.isProxy ? true : false
+                            $0.supportRoutingV2 = true
                         }
                     })
                 case .parameters:
                     self.trustedProxyParametersToFirstRewrapDurationMeasurement
                         .withLock { $0 = ContinuousTimeMeasurement.start() }
-                    let parentSpanID = request.parameters.traceContext.spanID
+                    let parentSpanID = request.parameters.traceContextV1.spanID
                     let requestID = request.parameters.requestID
                     let rpcID = self.serviceContext.withLock { $0.rpcID.uuidString }
 
                     // This spanID is needed to associate the cloudboardd spans(invokeWorkload + invokeProxyDialBack
                     // spans) with appropriate parent spans
                     TraceContextCache.singletonCache.setSpanID(
-                        parentSpanID,
+                        UInt64(parentSpanID, radix: 16) ?? UInt64.random(in: 0 ..< UInt64.max),
                         forKeyWithID: requestID,
                         forKeyWithSpanIdentifier: SpanIdentifier.parameters
                     )
                     TraceContextCache.singletonCache.setSpanID(
-                        parentSpanID,
+                        UInt64(parentSpanID, radix: 16) ?? UInt64.random(in: 0 ..< UInt64.max),
                         forKeyWithID: rpcID,
                         forKeyWithSpanIdentifier: SpanIdentifier.parameters
                     )
@@ -1214,7 +1342,7 @@ class InvokeWorkloadRequestStreamHandler {
                         logMetadata: Self.logMetadata(spanID: invokeWorkloadSpanID),
                         operationName: "workload_parameter_request_received",
                         message: "received workload parameters request"
-                    ).log(to: Self.logger)
+                    ).log(to: Self.tracingLogger)
 
                     if request.parameters.hasRequestNack && request.parameters.requestNack {
                         span.attributes.requestSummary.workloadRequestAttributes.isNack = true
@@ -1238,6 +1366,7 @@ class InvokeWorkloadRequestStreamHandler {
                         // validation fails and terminates the entire request
                         let keyID = request.parameters.decryptionKey.keyID
                         self.keyID.withLock { $0 = keyID }
+                        span.attributes.requestSummary.workloadRequestAttributes.keyID = keyID.base64EncodedString()
                         // The encryptedPayload provides a means to perform anti replay as all the bytes
                         // within this (including the header) form part of the input to the downstream
                         // HPKE functionality, so there is no scope for  this (say by editing the
@@ -1251,7 +1380,7 @@ class InvokeWorkloadRequestStreamHandler {
                             operationName: "decryption_key_addition_to_session_store_failed",
                             message: "Failed to add decryption key to session store",
                             error: error
-                        ).log(to: Self.logger, level: .error)
+                        ).log(to: Self.tracingLogger, level: .error)
                         throw error
                     }
                     let responseBypass: ResponseBypassMode
@@ -1270,7 +1399,7 @@ class InvokeWorkloadRequestStreamHandler {
                             operationName: "response_bypass_received_at_proxy",
                             message: "Proxy instance received response bypass instructions",
                             error: error
-                        ).log(to: Self.logger, level: .error)
+                        ).log(to: Self.tracingLogger, level: .error)
                         throw error
                     }
 
@@ -1286,7 +1415,7 @@ class InvokeWorkloadRequestStreamHandler {
                             operationName: "request_bypassed_received_at_worker",
                             message: "Worker instance received requestBypassed notification",
                             error: error
-                        ).log(to: Self.logger, level: .error)
+                        ).log(to: Self.tracingLogger, level: .error)
                         throw error
                     }
 
@@ -1299,7 +1428,7 @@ class InvokeWorkloadRequestStreamHandler {
                             operationName: "expected_request_bypassed_not_set",
                             message: "Request bypassed is expected but not set",
                             error: error
-                        ).log(to: Self.logger, level: .error)
+                        ).log(to: Self.tracingLogger, level: .error)
                         throw error
                     }
                 case .requestChunk(let chunk):
@@ -1321,7 +1450,7 @@ class InvokeWorkloadRequestStreamHandler {
                         logMetadata: Self.logMetadata(spanID: invokeWorkloadSpanID),
                         operationName: message,
                         message: message
-                    ).log(to: Self.logger)
+                    ).log(to: Self.tracingLogger)
                     span.attributes.requestSummary.workloadRequestAttributes.chunkSize = chunk.encryptedPayload
                         .count
                     span.attributes.requestSummary.workloadRequestAttributes.isFinal = chunk.isFinal
@@ -1335,7 +1464,7 @@ class InvokeWorkloadRequestStreamHandler {
                             operationName: "erroneous_request_payload_received_on_bypass",
                             message: "Received more than one request chunk when proxy should be bypassed",
                             error: error
-                        ).log(to: Self.logger, level: .error)
+                        ).log(to: Self.tracingLogger, level: .error)
                         throw error
                     }
                 case .terminate(let message):
@@ -1349,7 +1478,7 @@ class InvokeWorkloadRequestStreamHandler {
                     ).log(
                         terminationCode: message.code.rawValue,
                         terminationReason: message.reason,
-                        to: Self.logger
+                        to: Self.tracingLogger
                     )
                 case .none:
                     break
@@ -1362,7 +1491,7 @@ class InvokeWorkloadRequestStreamHandler {
             }
         }
 
-        try state.receiveEOF()
+        try invokeWorkloadStreamState.receiveEOF()
     }
 
     private func invokeJobHelperRequest(
@@ -1383,12 +1512,12 @@ class InvokeWorkloadRequestStreamHandler {
                     logMetadata: Self.logMetadata(spanID: self.invokeWorkloadSpanID),
                     operationName: "cloudboard_received_invalid_request_message",
                     message: "received invalid InvokeWorkloadRequest message on request stream, ignoring"
-                ).log(to: Self.logger, level: .error)
+                ).log(to: Self.tracingLogger, level: .error)
             }
         }
     }
 
-    internal static func logMetadata(spanID: String? = nil) -> CloudBoardDaemonLogMetadata {
+    internal static func logMetadata(spanID: UInt64? = nil) -> CloudBoardDaemonLogMetadata {
         return CloudBoardProvider.logMetadata(spanID: spanID)
     }
 
@@ -1401,7 +1530,7 @@ class InvokeWorkloadRequestStreamHandler {
             logMetadata: Self.logMetadata(spanID: self.invokeWorkloadSpanID),
             operationName: "preparing_idle_timeout",
             message: "preparing idle timeout"
-        ).log(timeoutDuration: duration, to: Self.logger)
+        ).log(timeoutDuration: duration, to: Self.tracingLogger)
         return IdleTimeout(timeout: duration, taskName: taskName, taskID: taskID)
     }
 }
@@ -1461,72 +1590,20 @@ struct InvokeWorkloadRequestStateMachine {
     }
 }
 
-extension Com_Apple_Cloudboard_Api_V1_LoadResponse {
-    init(_ status: ServiceHealthMonitor.Status.Healthy) {
-        self = .with {
-            $0.currentBatchSize = UInt32(status.currentBatchSize)
-            $0.maxBatchSize = UInt32(status.maxBatchSize)
-            $0.optimalBatchSize = UInt32(status.optimalBatchSize)
-        }
-    }
-}
-
-extension [Proto_Ropes_Common_Workload.Parameter] {
-    init(_ tags: [String: [String]]) {
-        self = tags.map { key, values in
-            .with {
-                $0.key = key
-                $0.value = values
-            }
-        }
-    }
-}
-
-func extractRequestID(
-    from request: Com_Apple_Cloudboard_Api_V1_InvokeWorkloadRequest
-) -> String? {
-    switch request.type {
-    case .parameters(let parameters):
-        return parameters.requestID
-    default:
-        return nil
-    }
-}
-
 extension CloudBoardProvider {
-    internal static func logMetadata(spanID: String? = nil) -> CloudBoardDaemonLogMetadata {
+    internal static func logMetadata(spanID: UInt64? = nil) -> CloudBoardDaemonLogMetadata {
+        return self.logMetadata(context: ServiceContext.current, spanID: spanID)
+    }
+
+    internal static func logMetadata(
+        context: ServiceContext?,
+        spanID: UInt64? = nil
+    ) -> CloudBoardDaemonLogMetadata {
         return CloudBoardDaemonLogMetadata(
-            rpcID: ServiceContext.current?.rpcID ?? .zero,
-            requestTrackingID: ServiceContext.current?.requestID ?? "",
-            spanID: spanID ?? ""
+            rpcID: context?.rpcID ?? .zero,
+            requestTrackingID: context?.requestID ?? "",
+            spanID: spanID
         )
-    }
-}
-
-extension Parameters.PlaintextMetadata {
-    init(
-        tenantInfo: Proto_Ropes_Common_TenantInfo,
-        workload: Proto_Ropes_Common_Workload
-    ) {
-        self.init(
-            bundleID: tenantInfo.bundleID,
-            bundleVersion: tenantInfo.bundleVersion,
-            featureID: tenantInfo.featureID,
-            clientInfo: tenantInfo.clientInfo,
-            workloadType: workload.type,
-            workloadParameters: Dictionary(parameters: workload.param),
-            automatedDeviceGroup: tenantInfo.automatedDeviceGroup
-        )
-    }
-}
-
-extension [String: [String]] {
-    init(parameters: [Proto_Ropes_Common_Workload.Parameter]) {
-        self = [:]
-
-        for parameter in parameters {
-            self[parameter.key, default: []].append(contentsOf: parameter.value)
-        }
     }
 }
 
@@ -1563,7 +1640,7 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         }
     }
 
-    public func log(to logger: Logger, level: OSLogType = .default) {
+    func log(to logger: Logger, level: OSLogType = .default) {
         logger.log(level: level, """
         ttl=\(self.type, privacy: .public)
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
@@ -1572,7 +1649,7 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         rpcId=\(self.logMetadata.rpcID?.uuidString ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         status=\(status?.rawValue ?? "", privacy: .public)
@@ -1583,7 +1660,7 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         """)
     }
 
-    public func log(failureReason: FailureReason, to logger: Logger, level: OSLogType = .default) {
+    func log(workloadStreamState: InvokeWorkloadStreamState, to logger: Logger, level: OSLogType = .default) {
         logger.log(level: level, """
         ttl=\(self.type, privacy: .public)
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
@@ -1592,7 +1669,51 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         rpcId=\(self.logMetadata.rpcID?.uuidString ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        error.detailed=\(self.error.map { String(describing: $0) } ?? "", privacy: .private)
+        message=\(self.message, privacy: .public)
+        workloadStreamState=\(workloadStreamState, privacy: .public)
+        """)
+    }
+
+    func log(requestExecutionError: RequestExecutionError, to logger: Logger, level: OSLogType = .default) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+        remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
+        request.uuid=\(self.requestID ?? "", privacy: .public)
+        rpcId=\(self.logMetadata.rpcID?.uuidString ?? "", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        error.detailed=\(self.error.map { String(describing: $0) } ?? "", privacy: .private)
+        message=\(self.message, privacy: .public)
+        requestExecutionError.errorSource=\(requestExecutionError.errorSource, privacy: .public)
+        requestExecutionError.errorMessage=\(requestExecutionError.errorMessage, privacy: .public)
+        requestExecutionError.errorCode=\(requestExecutionError.errorCode, privacy: .public)
+        """)
+    }
+
+    func log(failureReason: FailureReason, to logger: Logger, level: OSLogType = .default) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+        remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
+        request.uuid=\(self.requestID ?? "", privacy: .public)
+        rpcId=\(self.logMetadata.rpcID?.uuidString ?? "", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         status=\(status?.rawValue ?? "", privacy: .public)
@@ -1604,7 +1725,7 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         """)
     }
 
-    public func log(timeoutDuration: Duration, to logger: Logger, level: OSLogType = .default) {
+    func log(timeoutDuration: Duration, to logger: Logger, level: OSLogType = .default) {
         logger.log(level: level, """
         ttl=\(self.type, privacy: .public)
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
@@ -1613,7 +1734,7 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         rpcId=\(self.logMetadata.rpcID?.uuidString ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
         status=\(status?.rawValue ?? "", privacy: .public)
@@ -1625,7 +1746,7 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         """)
     }
 
-    public func log(terminationCode: Int, terminationReason: String, to logger: Logger, level: OSLogType = .default) {
+    func log(terminationCode: Int, terminationReason: String, to logger: Logger, level: OSLogType = .default) {
         logger.log(level: level, """
         ttl=\(self.type, privacy: .public)
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
@@ -1633,7 +1754,7 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         request.uuid=\(self.requestID ?? "", privacy: .public)
         rpcId=\(self.logMetadata.rpcID?.uuidString ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
@@ -1647,11 +1768,13 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         """)
     }
 
-    public func log(
+    func log(
         workerID: UUID,
         service: String,
         routingParameters: [String: [String]],
         to logger: Logger,
+        groupID: String?,
+        reuseTarget: ReuseTargetConstraints?,
         level: OSLogType = .default
     ) {
         logger.log(level: level, """
@@ -1661,7 +1784,7 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         request.uuid=\(self.requestID ?? "", privacy: .public)
         rpcId=\(self.logMetadata.rpcID?.uuidString ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
@@ -1673,10 +1796,14 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         worker.uuid=\(workerID, privacy: .public),
         worker.service=\(service, privacy: .public),
         worker.routingParameters=\(routingParameters, privacy: .public)
+        worker.reuseTarget.ensemble=\(reuseTarget?.ensemble.description ?? "", privacy: .public)
+        worker.reuseTarget.rack=\(reuseTarget?.rack?.description ?? "", privacy: .public)
+        worker.reuseTarget.workloadAdditions=\(reuseTarget?.workloadAdditions ?? [:], privacy: .public)
+        worker.groupID=\(groupID ?? "", privacy: .public)
         """)
     }
 
-    public func log(
+    func log(
         workerID: UUID?,
         to logger: Logger,
         level: OSLogType = .default
@@ -1688,7 +1815,7 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         request.uuid=\(self.requestID ?? "", privacy: .public)
         rpcId=\(self.logMetadata.rpcID?.uuidString ?? "", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
-        tracing.span_id=\(self.logMetadata.spanID ?? "", privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
         service.namespace=\(self.namespace, privacy: .public)
@@ -1743,30 +1870,6 @@ struct FetchAttestationRequestSummary: RequestSummary {
         error.detailed=\(self.error.map { String(describing: $0) } ?? "", privacy: .private)
         attestationSet=\(self.attestationSet.map { "\($0)" } ?? "", privacy: .public)
         """)
-    }
-}
-
-extension ResponseBypassMode {
-    init(from parameters: Com_Apple_Cloudboard_Api_V1_InvokeWorkloadRequest.Parameters) throws {
-        // so old it doesn't know about it
-        guard parameters.hasTrustedProxyMetadata else {
-            self = .none
-            return
-        }
-        // new but not specified at all
-        guard parameters.trustedProxyMetadata.hasResponseBypassMode else {
-            self = .none
-            return
-        }
-        switch parameters.trustedProxyMetadata.responseBypassMode {
-        case .none:
-            self = .none
-        case .matchRequestCiphersuiteSharedAeadState:
-            self = .matchRequestCiphersuiteSharedAeadState
-        case .UNRECOGNIZED(let value):
-            // we don't know what this version is, so we fail safe
-            throw GRPCTransformableError.bypassVersionInvalid(value: value)
-        }
     }
 }
 

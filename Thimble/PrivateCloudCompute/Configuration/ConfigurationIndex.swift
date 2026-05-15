@@ -21,6 +21,7 @@
 
 package enum ClientConfigurationKey: String, CaseIterable {
     case environment
+    case expiredBuildNotificationDisplayInterval
     case ignoreCertificateErrors
     case rateLimitRequestPath
     case rateLimitRequestMinimumSpacing
@@ -28,18 +29,11 @@ package enum ClientConfigurationKey: String, CaseIterable {
     case prefetchRequestPath
     case trustedRequestPath
     case forceAEADKey
-    case liveOnTargetBuild
     case lttIssuer
     case ottIssuer
-    case maxCachedAttestations
-    case maxPrefetchedAttestations
-    case maxTotalAttestations
-    case maxInlineAttestations
     case prewarmAttestationsValidityInSeconds
-    case maxPrefetchBatches
     case maxProtobufRandomizedPaddingSize
     case overrideCellID
-    case overrideNodeKind
     case rateLimiterSessionTimeout
     case rateLimiterSessionLengthForSoftening
     case rateLimiterDefaultJitterFactor
@@ -105,25 +99,9 @@ extension ConfigurationIndex {
     package static var lttIssuer: ConfigurationIndex<String> { .init(key: .lttIssuer, defaultValue: "tis.gateway.icloud.com") }
     package static var ottIssuer: ConfigurationIndex<String> { .init(key: .ottIssuer, defaultValue: "rts.gateway.icloud.com") }
 
-    /// This currently serves two purposes:
-    /// 1. On internal builds it allows to override `MaxCachedAttestations` value provided by the
-    /// server-driven config with a _smaller_ value.
-    /// 2. This basically clamps down the max value that we can ever use. E.g. if due to an error server-driven config
-    /// returns some bad number for `MaxCachedAttestations`, like 1024, the device won't use a value more than this
-    /// `maxCachedAttestations`.
-    package static var maxCachedAttestations: ConfigurationIndex<Int> { .init(key: .maxCachedAttestations, defaultValue: 12) }
-    package static var maxPrefetchedAttestations: ConfigurationIndex<Int> { .init(key: .maxPrefetchedAttestations, defaultValue: 60) }
-    /// This serves two purposes:
-    /// 1. On internal builds it allows to override `MaxTotalAttestations` from server config with a _smaller_ value.
-    /// 2. This clamps down the max value we can ever use. E.g. if the server returns `MaxTotalAttestations: 100`, the
-    /// client will use `maxTotalAttestations` as max.
-    package static var maxTotalAttestations: ConfigurationIndex<Int> { .init(key: .maxTotalAttestations, defaultValue: 87) }
-    /// This clamps down the max number of inline attestations we would use for attest-to-k.
-    package static var maxInlineAttestations: ConfigurationIndex<Int> { .init(key: .maxInlineAttestations, defaultValue: 27) }
     package static var prewarmAttestationsValidityInSeconds: ConfigurationIndex<Double> { .init(key: .prewarmAttestationsValidityInSeconds, defaultValue: 30.0 * 60.0) }
-    package static var maxPrefetchBatches: ConfigurationIndex<Int> { .init(key: .maxPrefetchBatches, defaultValue: 5) }
 
-    /// Unlike with `maxCachedAttestations`, this config allows to override `TrustedProxyMaxCachedAttestations` from
+    /// Allows to override `TrustedProxyMaxCachedAttestations` from
     /// server-driven config with another value that could be _smaller or larger_. This is not used for clamping the value to valid range
     /// since this may be used to either increase or decrease the number of attestations used.
     package static var trustedProxyMaxCachedAttestations: ConfigurationIndex<Int?> { .init(key: .trustedProxyMaxCachedAttestations, defaultValue: nil) }
@@ -132,20 +110,13 @@ extension ConfigurationIndex {
     package static var trustedProxyMaxInlineAttestations: ConfigurationIndex<Int?> { .init(key: .trustedProxyMaxInlineAttestations, defaultValue: nil) }
     package static var trustedProxyMaxPrefetchBatches: ConfigurationIndex<Int> { .init(key: .trustedProxyMaxPrefetchBatches, defaultValue: 1) }
     package static var trustedProxyMaxPrefetchedAttestations: ConfigurationIndex<Int> { .init(key: .trustedProxyMaxPrefetchedAttestations, defaultValue: 60) }
-    /// Unlike `maxTotalAttestations` this allows to override `TrustedProxyMaxTotalAttestations` value
-    /// from the server with either smaller or larger value.
+    /// Allows to override `TrustedProxyMaxTotalAttestations` value from server-driven config.
     package static var trustedProxyMaxTotalAttestations: ConfigurationIndex<Int?> { .init(key: .trustedProxyMaxTotalAttestations, defaultValue: nil) }
 
     /// Maximum number of random bytes that should be added as a padding to some protobuf messages.
     package static var maxProtobufRandomizedPaddingSize: ConfigurationIndex<Int> { .init(key: .maxProtobufRandomizedPaddingSize, defaultValue: 2048) }
 
     package static var overrideCellID: ConfigurationIndex<String?> { .init(key: .overrideCellID, defaultValue: nil, isAllowedOnCustomerBuilds: true) }
-
-    /// Allows to force the usage of trusted proxy or compute nodes directly in invoke and prefetch requests regardless
-    /// of server-driven configuration controlling the rollout of the feature.
-    /// Valid values are: `proxy` and `direct`. Invalid values are ignored and the system will operate like there is
-    /// no override.
-    package static var overrideNodeKind: ConfigurationIndex<String?> { .init(key: .overrideNodeKind, defaultValue: nil) }
 
     package static var rateLimiterSessionTimeout: ConfigurationIndex<Double> { .init(key: .rateLimiterSessionTimeout, defaultValue: 60.0) }
     package static var rateLimiterSessionLengthForSoftening: ConfigurationIndex<Int> { .init(key: .rateLimiterSessionLengthForSoftening, defaultValue: 5) }
@@ -168,16 +139,16 @@ extension ConfigurationIndex {
     package static var trustedProxyRoutingGroupAlias: ConfigurationIndex<String?> { .init(key: .trustedProxyRoutingGroupAlias, defaultValue: nil) }
     package static var routingGroupAlias: ConfigurationIndex<String?> { .init(key: .routingGroupAlias, defaultValue: nil) }
 
-    /// Sets the Private Cloud Compute OS version to request when the LiveOn environment is enabled.
-    ///
-    /// This setting only has an effect when ``ConfigurationIndex/environment`` is set to "liveon". If ``ConfigurationIndex/routingGroupAlias`` is specified this value will be ignored.
-    ///
-    /// - Note: if the requested OS version is not available on the server this will cause requests to fail.
-    package static var liveOnTargetBuild: ConfigurationIndex<String?> { .init(key: .liveOnTargetBuild, defaultValue: nil) }
-
     package static var enforceWorkloadParametersFiltering: ConfigurationIndex<Bool> { .init(key: .enforceWorkloadParametersFiltering, defaultValue: true) }
 
     package static var proposedLiveOnEnvironment: ConfigurationIndex<String?> { .init(key: .proposedLiveOnEnvironment, defaultValue: nil) }
     package static var bootFixedLiveOnEnvironment: ConfigurationIndex<String?> { .init(key: .bootFixedLiveOnEnvironment, defaultValue: nil) }
 
+    /// The minimum time (in seconds)  before the ExpiredBuildNotification can be triggered again after being shown.
+    package static var expiredBuildNotificationDisplayInterval: ConfigurationIndex<Double> {
+        .init(
+            key: .expiredBuildNotificationDisplayInterval,
+            defaultValue: 60.0 * 60.0 * 24.0  // 24 hours
+        )
+    }
 }

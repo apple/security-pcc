@@ -42,13 +42,14 @@ import os
 	/// Initializer for custom location. Can be used for testing
 	/// - Parameter dbURL: Target location to set the database
 	public init(dbURL: URL = SCDataBase.defaultURL) {
-		var size = 0
-		sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0)
-		var buf = [CChar](repeating: 0, count: size)
-		let result = sysctlbyname("kern.bootsessionuuid", &buf, &size, nil, 0)
-		precondition(result == 0, "Failed to get boot session UUID")
+		let bootUUID: String
+		do {
+			bootUUID = try readBootSessionUUID()
+		} catch {
+			fatalError("Failed to read boot session uuid: \(error)")
+		}
 
-		self.dbURL = dbURL.appendingPathComponent(String(cString: buf, encoding: .ascii) ?? "")
+		self.dbURL = dbURL.appendingPathComponent(bootUUID)
 		self.slots = SCDataBase.loadContents(dbURL: self.dbURL)
 	}
 

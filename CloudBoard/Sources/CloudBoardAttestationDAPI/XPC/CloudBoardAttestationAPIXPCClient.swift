@@ -12,10 +12,9 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal import CloudBoardAsyncXPC
 import Foundation
+import os
 
 public actor CloudBoardAttestationAPIXPCClient {
     private var connection: CloudBoardAsyncXPCConnection?
@@ -29,6 +28,7 @@ public actor CloudBoardAttestationAPIXPCClient {
         self.reconnectHandler = reconnectHandler
         self.connection = await connection
             .handleConnectionInvalidated { [weak self] _ in await self?.surpriseDisconnect() }
+            .handleConnectionInterrupted { [weak self] _ in await self?.surpriseDisconnect() }
     }
 }
 
@@ -44,15 +44,25 @@ extension CloudBoardAttestationAPIXPCClient {
 extension CloudBoardAttestationAPIXPCClient {
     private func surpriseDisconnect() async {
         if let reconnectHandler {
+            if let connection = self.connection {
+                // We only need to handle the surprise disconnect once so make sure we reset the handlers on
+                // the old connection and clean up the connection
+                await connection.handleConnectionInvalidated(handler: nil)
+                await connection.handleConnectionInterrupted(handler: nil)
+                await connection.cancel()
+            }
+
             let connection = await reconnectHandler()
             self.connection = await connection
                 .handleConnectionInvalidated { [weak self] _ in await self?.surpriseDisconnect() }
+                .handleConnectionInterrupted { [weak self] _ in await self?.surpriseDisconnect() }
 
-            await self.delegate?.surpriseDisconnect()
         } else {
             await self.connection?.logger
                 .log("Surprise disconnect occurred. Reconnect handler not set, not attempting to reconnect.")
         }
+
+        await self.delegate?.surpriseDisconnect()
     }
 
     public func disconnect() async {
@@ -92,7 +102,7 @@ extension CloudBoardAttestationAPIXPCClient: CloudBoardAttestationAPIClientToSer
     package func validateWorkerAttestation(
         proxyAttestationKeyID: Data,
         rawWorkerAttestationBundle: Data
-    ) async throws -> ValidatedWorker {
+    ) async throws -> WorkerValidationResult {
         guard let connection else {
             throw CloudBoardAttestationAPIError.notConnected
         }

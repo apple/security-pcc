@@ -12,12 +12,8 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
-
 import CloudBoardMetrics
 import Foundation
-
-private let prefix = "cb_attestationd"
 
 extension HistogramBuckets {
     fileprivate static let keyAttestationTime: Self = [
@@ -79,25 +75,30 @@ extension HistogramBuckets {
 }
 
 enum Metrics {
+    struct ProcessInfo: CloudBoardMetrics.Uptime.ProcessInfo {
+        static let prefix: String = "cb_attestationd"
+        static let type = CloudBoardMetrics.Uptime.ProcessType.daemon
+    }
+
     enum CloudAttestation {
         struct AttestationCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_attestation_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_attestation_total"
             var action: CounterAction
         }
 
         struct AttestationErrorCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_attestation_failed_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_attestation_failed_total"
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
             var action: CounterAction
         }
 
         struct AttestationRetryCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_attestation_retry_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_attestation_retry_total"
             var action: CounterAction
         }
 
         struct AttestationDurationHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_attestation_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_attestation_seconds"
             static let buckets: HistogramBuckets = .keyAttestationTime
             var value: Double
         }
@@ -105,37 +106,37 @@ enum Metrics {
 
     enum CloudBoardAttestationDaemon {
         struct PhysicalMemoryFootprintGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_physical_memory_footprint_bytes"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_physical_memory_footprint_bytes"
             var value: Int
         }
 
         struct LifetimeMaxPhysicalMemoryFootprintGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_lifetime_max_physical_memory_footprint_bytes"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_lifetime_max_physical_memory_footprint_bytes"
             var value: Int
         }
     }
 
     enum CloudBoardAttestationServer {
         struct KeyRotationCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_key_rotated_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_key_rotated_total"
             var action: CounterAction
         }
     }
 
     enum TransparencyLog {
         struct TransparencyLogCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_transparency_log_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_transparency_log_total"
             var action: CounterAction
         }
 
         struct TransparencyLogErrorCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_transparency_log_failed_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_transparency_log_failed_total"
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
             var action: CounterAction
         }
 
         struct TransparencyLogRetryCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_transparency_log_retry_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_transparency_log_retry_total"
             var action: CounterAction
         }
     }
@@ -153,18 +154,18 @@ enum Metrics {
 
         /// Number of validated entries
         struct WorkerValidationCacheCountGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_compute_node_attestation_cache_validated_count"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_compute_node_attestation_cache_validated_count"
             var value: Double
         }
 
         /// Number of entries being validated at this point
         struct WorkerValidationCacheValidatingCountGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_compute_node_attestation_cache_validating_count"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_compute_node_attestation_cache_validating_count"
             var value: Double
         }
 
         struct ValidationCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_compute_node_attestation_validation_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_compute_node_attestation_validation_total"
             var action: CounterAction
             var dimensions: MetricDimensions<DimensionKey>
             init(action: CounterAction, inCache: InCache) {
@@ -181,13 +182,13 @@ enum Metrics {
         }
 
         struct FailedValidationCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_compute_node_attestation_failed_validation_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_compute_node_attestation_failed_validation_total"
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
             var action: CounterAction
         }
 
         struct ValidationDurationHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_compute_node_attestation_validation_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_compute_node_attestation_validation_seconds"
             static let buckets: HistogramBuckets = .keyAttestationTime
             var dimensions: MetricDimensions<DimensionKey>
             var value: Double
@@ -198,6 +199,14 @@ enum Metrics {
                     .inCache: inCache.rawValue,
                 ]
             }
+        }
+    }
+
+    enum RackIdValidation {
+        struct WorkerRackIdChangeCounter: ErrorCounter {
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_compute_node_rack_id_change_total"
+            var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
+            var action: CounterAction
         }
     }
 }

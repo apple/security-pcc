@@ -193,7 +193,7 @@ extension Configuration {
 
     internal static func makeFromCFPrefs(auditLists: Configuration.AuditLists? = nil) throws -> Configuration {
         let auditLists = try auditLists ?? auditListsFromCFPrefs()
-        let config = try Configuration(
+        var config = try Configuration(
             auditLists: auditLists,
             openTelemetryEndpoint: openTelemetryEndpointFromCFPrefs(),
             openTelemetry: .init(defaultBackoff: .milliseconds(10), maxBackoff: .seconds(30)),
@@ -207,7 +207,7 @@ extension Configuration {
             defaultDestination: defaultDestinationFromCFPrefs(),
             configuredLabels: preferencesDictionaryValue("GlobalLabels") ?? [:]
         )
-        try config.validateDestinations()
+        try config.updateDefaultDestination()
         return config
     }
 

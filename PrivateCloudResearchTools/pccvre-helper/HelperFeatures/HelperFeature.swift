@@ -25,6 +25,7 @@ enum HelperFeature: String, CaseIterable {
     case instanceInferenceRequestGrammarIDV1
     case requiredMemory
     case ensemble
+    case modelSwitchingV1
 
     static var featureList: String {
         allCases.map({ $0.rawValue }).joined(separator: "\n")

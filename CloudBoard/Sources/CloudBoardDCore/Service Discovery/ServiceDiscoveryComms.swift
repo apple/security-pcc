@@ -12,10 +12,9 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 import CloudBoardCommon
 import CloudBoardController
+import CloudBoardLogging
 import CloudBoardMetrics
 import CloudBoardPlatformUtilities
 import Foundation
@@ -66,12 +65,21 @@ final class ServiceDiscoveryComms: ServiceDiscoveryCommsProtocol, Sendable {
             config.keepalive = .init(keepalive)
             config.debugChannelInitializer = { channel in
                 // We want to go immediately after the HTTP2 handler so we can see what the GRPC idle handler is doing.
-                channel.pipeline.handler(type: NIOHTTP2Handler.self).flatMap { http2Handler in
+                channel.pipeline.handler(type: NIOHTTP2Handler.self).map { http2Handler in
                     let pingDiagnosticHandler = GRPCPingDiagnosticHandler(logger: os.Logger(
                         subsystem: "com.apple.cloudos.cloudboard",
                         category: "ServiceDiscovery.GRPCPingDiagnosticHandler"
                     ))
-                    return channel.pipeline.addHandler(pingDiagnosticHandler, position: .after(http2Handler))
+                    do {
+                        return try channel.pipeline.syncOperations.addHandler(
+                            pingDiagnosticHandler,
+                            position: .after(http2Handler)
+                        )
+                    } catch {
+                        Self.logger.error(
+                            "Failed to add GRPCPingDiagnosticHandler: \(String(unredacted: error), privacy: .public)"
+                        )
+                    }
                 }
             }
             config.delegate = PoolDelegate(metrics: metrics)

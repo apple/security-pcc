@@ -21,6 +21,7 @@
 
 internal import CloudMetricsConstants
 package import CloudMetricsHealthFramework
+private import CloudMetricsUtils
 internal import CloudMetricsXPC
 internal import NIO
 internal import os
@@ -28,9 +29,13 @@ private import OpenTelemetrySdk
 
 /// Setup the server along with all metric collection services.
 public final class CloudMetricsDaemon: Sendable {
+    private enum State {
+        case stopped
+        case running(Promise<Void, Error>)
+        case shuttingDown
+    }
+
     private let cloudMetricsServer: CloudMetricsXPCServer
-    /// Publisher aggregates the metrics and publishes them according to configuration
-    private let publisher: CloudMetricsPublisher
     /// Provides the XPC interface and passes data to the publisher
     private let cloudMetricsService: CloudMetricsService
     private let coreAnalyticsActivity: CoreAnalyticsActivity
@@ -38,14 +43,27 @@ public final class CloudMetricsDaemon: Sendable {
     private let otlpMetricExporter: OTLPGRPCClient
     private let configuration: Configuration
     private let healthContinuation: AsyncStream<CloudMetricsHealthState>.Continuation
+    /// Stream that provides us with new readers that we need to run.
+    ///
+    /// We have a separate store/reader per process. So this will yield whenever a new process starts.
+    /// When it yields we need to create and run a new reader.
+    private let newReaderStream: AsyncStream<OpenTelemetryPeriodicMetricReader>
+
     private let logger = Logger(subsystem: kCloudMetricsLoggingSubsystem, category: "Daemon")
+    private let osMetricService: OSMetricService
+
+    private let state = OSAllocatedUnfairLock<State>(initialState: .stopped)
 
     /// Initialises the daemon from in-memory objects
     ///
     /// This method is preferable for testing.
-    package init(configuration: Configuration,
-                 healthContinuation: AsyncStream<CloudMetricsHealthState>.Continuation,
-                 xpcServiceName: String = kCloudMetricsXPCServiceName) {
+    package init(
+        configuration: Configuration,
+        healthContinuation: AsyncStream<CloudMetricsHealthState>.Continuation,
+        osMetricStream: AsyncStream<OSMetricEvent>,
+        osMetricContinuation: AsyncStream<OSMetricEvent>.Continuation,
+        xpcServiceName: String = kCloudMetricsXPCServiceName
+    ) throws {
         self.configuration = configuration
         self.healthContinuation = healthContinuation
         self.coreAnalyticsActivity = CoreAnalyticsActivity()
@@ -53,35 +71,68 @@ public final class CloudMetricsDaemon: Sendable {
 
         self.certExpiryHandler = NICCertExpiryHandler()
 
-        let (metricDataStream, metricDataContinuation) = AsyncStream<(Configuration.Destination, [StableMetricData])>.makeStream()
+        let (metricDataStream, metricDataContinuation) = AsyncStream<CollectedMetricsData>
+            .makeStream()
 
         self.otlpMetricExporter = OTLPGRPCClient(
             metricDataStream: metricDataStream,
             tlsConfigStream: self.certExpiryHandler,
             configuration: configuration,
             healthContinuation: healthContinuation,
-            metricsFilter: metricsFilter)
-
-        self.publisher = OpenTelemetryPublisher(configuration: configuration,
-                                                metricsFilter: metricsFilter,
-                                                metricDataContinuation: metricDataContinuation)
-
-        self.cloudMetricsService = CloudMetricsService(
-            manager: publisher,
             metricsFilter: metricsFilter
         )
-        self.cloudMetricsServer = CloudMetricsXPCServer.localListener(delegate: cloudMetricsService,
-                                                                      xpcServiceName: xpcServiceName)
+
+        let (newReaderStream, newReaderContinuation) = AsyncStream<OpenTelemetryPeriodicMetricReader>.makeStream()
+        self.newReaderStream = newReaderStream
+
+        let metricStoreProvider = MetricsStoreProvider(
+            configuration: configuration,
+            newReaderContinuation: newReaderContinuation,
+            metricDataContinuation: metricDataContinuation
+        )
+
+        self.cloudMetricsService = CloudMetricsService(
+            metricsStoreProvider: metricStoreProvider,
+            metricsFilter: metricsFilter
+        )
+        self.cloudMetricsServer = CloudMetricsXPCServer.localListener(
+            delegate: self.cloudMetricsService,
+            xpcServiceName: xpcServiceName
+        )
+        self.osMetricService = try OSMetricService(
+            delegate: self.cloudMetricsService,
+            metricStream: osMetricStream,
+            metricContinuation: osMetricContinuation
+        )
     }
 
     /// Calling main will setup all metrics and servers. This will block until
     /// an error or shutdown occurs.
     package func run() async throws {
-        logger.log("Registering CoreAnalyticsActivity")
+        self.logger.log("Running CloudMetricsDaemon")
+        let shutdownPromise = try self.state.withLock { state in
+            switch state {
+            case .stopped:
+                let shutdownPromise = Promise<Void, Error>()
+                state = .running(shutdownPromise)
+                return shutdownPromise
+            default:
+                self.logger.fault("Invalid state to run cloudmetricsdaemon")
+                throw CloudMetricsInternalError.invalidStateTransition
+            }
+        }
+
+        self.logger.log("Registering CoreAnalyticsActivity")
         self.coreAnalyticsActivity.registerActivity()
-        await self.cloudMetricsServer.listen()
 
         try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                self.logger.log("OS Metric streaming starting")
+                defer {
+                    self.logger.log("OS Metric streaming stopped")
+                }
+                try await self.osMetricService.stream()
+            }
             group.addTask {
                 self.logger.log("Metric exporter starting")
                 defer {
@@ -90,20 +141,48 @@ public final class CloudMetricsDaemon: Sendable {
                 try await self.otlpMetricExporter.run()
             }
             group.addTask {
-                self.logger.log("Publisher starting")
+                self.logger.log("Cloud metrics server starting")
                 defer {
-                    self.logger.log("Publisher stopped")
+                    self.logger.log("Cloud metrics server stopped")
                 }
-                try await self.publisher.run()
+                try await self.cloudMetricsServer.run()
             }
-            if configuration.keySource == .keychain {
+            if self.configuration.keySource == .keychain {
                 // Only run the cert expiry handler if we're going to load cers from keychain.
                 group.addTask {
                     self.logger.log("Cert expiry handler starting")
-                    await self.certExpiryHandler.run()
+                    try await self.certExpiryHandler.run()
                     self.logger.log("Cert expiry handler stopped")
                 }
             }
+
+            group.addTask {
+                self.logger.log("Processing of new stores starting")
+                defer {
+                    self.logger.log("Processing of new stores stopped")
+                }
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    for try await reader in self.newReaderStream {
+                        group.addTask {
+                            try await reader.run()
+                        }
+                    }
+                    try await group.waitForAll()
+                }
+            }
+
+            group.addTask {
+                self.logger.log("Waiting for shutdown promise")
+                defer {
+                    self.logger.log("Shutdown promise returned")
+                }
+                try await withTaskCancellationHandler(operation: {
+                    try await Future(shutdownPromise).valueWithCancellation
+                }, onCancel: {
+                    shutdownPromise.fail(with: CancellationError())
+                })
+            }
+
             defer {
                 logger.log("Cancelling daemon children")
                 group.cancelAll()
@@ -115,6 +194,15 @@ public final class CloudMetricsDaemon: Sendable {
 
     package func shutdown() async throws {
         self.coreAnalyticsActivity.flush()
-        try await publisher.shutdown()
+        try self.state.withLock { state in
+            switch state {
+            case .running(let promise):
+                self.logger.log("Initiating shutdown")
+                promise.succeed(with: ())
+            default:
+                self.logger.fault("Invalid state to begin shutdown")
+                throw CloudMetricsInternalError.invalidStateTransition
+            }
+        }
     }
 }

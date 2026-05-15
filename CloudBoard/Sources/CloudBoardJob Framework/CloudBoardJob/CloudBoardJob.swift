@@ -12,11 +12,10 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
-import ArgumentParserInternal
+internal import ArgumentParserInternal
 import CloudBoardJobAPI
 @_exported import CloudBoardJobCore
+internal import CloudBoardLogging
 import Foundation
 import os
 
@@ -39,7 +38,7 @@ extension CloudBoardApp {
             )
             log.info("CloudBoardApp finished")
         } catch {
-            log.info("CloudBoardApp exiting with error: \(String(reportable: error))")
+            log.error("CloudBoardApp exiting with error: \(String(reportable: error), privacy: .public)")
             CloudBoardJobCommand.exit(withError: error)
         }
     }

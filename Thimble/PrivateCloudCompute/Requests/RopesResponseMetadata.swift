@@ -49,6 +49,9 @@ package struct RopesResponseMetadata: Sendable, Codable {
     package var ttrComponentName: String?
     package var ttrComponentVersion: String?
 
+    /// Component time measurements from ROPES (can have multiple values)
+    package var componentTimeMeasurements: [String] = []
+
     // This is for computing retryAfterDate--we need to know when we got the
     // error, it is like creationDate.
     private var now: Date
@@ -71,6 +74,7 @@ package struct RopesResponseMetadata: Sendable, Codable {
             ttrComponentID: \(nilStringIfNil(ttrComponentID))
             ttrComponentName: \(nilStringIfNil(ttrComponentName))
             ttrComponentVersion: \(nilStringIfNil(ttrComponentVersion))
+            componentTimeMeasurements: \(componentTimeMeasurements)
             now: \(now)
         >
         """
@@ -98,6 +102,8 @@ package struct RopesResponseMetadata: Sendable, Codable {
             self.ttrComponentName = value
         case "ttr-component-version":
             self.ttrComponentVersion = value
+        case "apple-component-time-measurement":
+            self.componentTimeMeasurements.append(value)
         default:
             break
         }
@@ -249,12 +255,17 @@ package struct RopesResponseMetadata: Sendable, Codable {
         case rateLimitsInvalidRequestType = 1013
         case invalidClientInfo = 1014
         case unauthorizedTestOptions = 1015
+        case invalidClientOverrideBuildVersion = 1016
+        case invalidRoutingGroupAlias = 1017
+        case invalidTrustedProxyRoutingGroupAlias = 1018
+        case missingGroupId = 1019
 
         // Errors 2XXX: timeout
         case setupRequestTimeout = 2000
         case decryptionKeyTimeout = 2001
         case maxRequestLifetimeReached = 2002
         case requestChunkTimeout = 2003
+        case trustedProxyPickTimeout = 2004
 
         // Errors 3XXX: throttling
         case rateLimitReached = 3000
@@ -271,6 +282,9 @@ package struct RopesResponseMetadata: Sendable, Codable {
         case workloadNotFound = 4004
         case attestationsUnavailable = 4005
         case trustedProxyNotFound = 4006
+        case trustedProxyIncompatibleTrains = 4007
+        case resourceExhaustedDiscardable = 4008
+        case notEnoughNodes = 4009
 
         // Errors 5XXX: CloudBoard errors
         case cloudboardUnknownError = 5002

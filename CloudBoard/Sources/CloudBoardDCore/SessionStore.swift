@@ -14,13 +14,13 @@
 
 import CloudBoardAttestationDAPI
 
-// Copyright © 2024 Apple. All rights reserved.
 import CloudBoardCommon
 import CloudBoardLogging
 import CloudBoardMetrics
 import DequeModule
 import Foundation
 import NIOCore
+import NIOFoundationCompat
 import os
 import Synchronization
 

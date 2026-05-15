@@ -12,9 +12,8 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 internal import CloudBoardAsyncXPC
+internal import CloudBoardDomain
 import Foundation
 
 internal enum CloudBoardJobHelperAPIXPCClientToServerMessages {
@@ -34,6 +33,18 @@ internal enum CloudBoardJobHelperAPIXPCClientToServerMessages {
         internal typealias Success = ExplicitSuccess
         internal typealias Failure = CloudBoardJobHelperAPIError
     }
+
+    internal struct Warmup: CloudBoardAsyncXPCByteBufferMessage, Equatable {
+        internal typealias Success = ExplicitSuccess
+        internal typealias Failure = CloudBoardJobHelperAPIError
+
+        internal var info: WarmupInfo
+    }
+
+    internal struct AssignLAContext: CloudBoardAsyncXPCByteBufferMessage, Equatable {
+        internal typealias Success = ExplicitSuccess
+        internal typealias Failure = CloudBoardJobHelperAPIError
+    }
 }
 
 extension CloudBoardJobHelperAPIXPCClientToServerMessages.Teardown: ByteBufferCodable {
@@ -48,6 +59,12 @@ extension CloudBoardJobHelperAPIXPCClientToServerMessages.Abandon: ByteBufferCod
     init(from _: inout ByteBuffer) throws {}
 }
 
+extension CloudBoardJobHelperAPIXPCClientToServerMessages.AssignLAContext: ByteBufferCodable {
+    func encode(to _: inout ByteBuffer) throws {}
+
+    init(from _: inout ByteBuffer) throws {}
+}
+
 extension CloudBoardJobHelperAPIXPCClientToServerMessages.InvokeWorkload: ByteBufferCodable {
     func encode(to buffer: inout ByteBuffer) throws {
         try message.encode(to: &buffer)
@@ -55,5 +72,15 @@ extension CloudBoardJobHelperAPIXPCClientToServerMessages.InvokeWorkload: ByteBu
 
     init(from buffer: inout ByteBuffer) throws {
         message = try .init(from: &buffer)
+    }
+}
+
+extension CloudBoardJobHelperAPIXPCClientToServerMessages.Warmup: ByteBufferCodable {
+    func encode(to buffer: inout ByteBuffer) throws {
+        try self.info.encode(to: &buffer)
+    }
+
+    init(from buffer: inout ByteBuffer) throws {
+        self.info = try .init(from: &buffer)
     }
 }

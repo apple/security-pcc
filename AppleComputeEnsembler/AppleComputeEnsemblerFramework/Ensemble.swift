@@ -38,6 +38,12 @@ import XPC
 public let kEnsemblerServiceName = "com.apple.cloudos.AppleComputeEnsembler.service"
 
 @available(macOS 15.0, iOS 18.0, *)
+public let kDefaultRackID = "DEFAULT.RACK.ID"
+
+@available(macOS 15.0, iOS 18.0, *)
+public let kDefaultEnsembleID = "DEFAULT.ENSEMBLE.ID"
+
+@available(macOS 15.0, iOS 18.0, *)
 public let kEnsembleStatusReadyEventName =
 	"com.apple.cloudos.AppleComputeEnsembler.Notification.ready"
 
@@ -79,6 +85,49 @@ public enum EnsembleError: Error {
     case createAttestationFailed
     /// refreshAttestationFailed
     case refreshAttestationFailed
+    
+    public var errorDescription: String? {
+        switch self {
+        case .clientConnectionFailure:
+            return "XPC client failed to connect to ensembled service"
+        case .messagingFailure:
+            return "Failed to construct, send, or receive XPC message"
+        case .commandFailure(let error):
+            if let error = error {
+                return "Command failed to execute: \(error)"
+            } else {
+                return "Command failed to execute"
+            }
+        case .internalError(let error):
+            if let error = error {
+                return "Internal ensemble error: \(error)"
+            } else {
+                return "Internal ensemble error occurred"
+            }
+        case .statusNotFound:
+            return "Cannot fetch ensemble status from daemon"
+        case .shareKeyNotFound:
+            return "Shared key is not available"
+        case .cannotDetermineUDID:
+            return "Cannot determine device UDID"
+        case .cannotFindNodesInfo:
+            return "Cannot find node information in ensemble"
+        case .cannotFindSelfInfo:
+            return "Cannot find information about current node"
+        case .cannotFindLeaderInfo:
+            return "Cannot find ensemble leader information"
+        case .drainingNotFound:
+            return "Failed to retrieve node's draining state"
+        case .cannotFindSingleUseKeyToken:
+            return "No single-use key token found"
+        case .cannotFindKVKey:
+            return "Cannot find KV cache key"
+        case .createAttestationFailed:
+            return "Failed to create attestation"
+        case .refreshAttestationFailed:
+            return "Failed to refresh attestation"
+        }
+    }
 }
 
 // MARK: - Client Protocol (Public)
@@ -275,6 +324,10 @@ public enum DistributionType: String, Sendable, Codable, CodingKeyRepresentable,
 @available(macOS 15.0, iOS 18.0, *)
 public typealias refreshAttestation = @Sendable () async throws -> Void
 
+/// Callback for handling incoming data messages and returning responses
+@available(macOS 15.0, iOS 18.0, *)
+public typealias EnsembleDataMessageReceived = (Int, Data) -> Data
+
 /// Copied verbatim from CMAC.
 @available(macOS 15.0, iOS 18.0, *)
 public enum HealthState: String, Sendable, Codable, CodingKeyRepresentable, Equatable {
@@ -314,6 +367,30 @@ public struct EnsembleHealth: Sendable, Codable {
 			self.metadata["message2"] = message2
 		}
 	}
+}
+
+/// Health status (derived from `EnsembleStatus`).
+@available(macOS 15.0, iOS 18.0, *)
+public struct NodeResponse: Codable {
+    public let rank: Int
+    public let data: Data?
+    public let errorMessage: String?
+    public let timestamp: Date
+    
+    public var error: Error? {
+        if let errorMessage = errorMessage {
+            return EnsembleError.internalError(error: errorMessage)
+        }
+        return nil
+    }
+    
+    public init(rank: Int, data: Data?, error: Error?, timestamp: Date) {
+        self.rank = rank
+        self.data = data
+        self.errorMessage = error?.localizedDescription
+        self.timestamp = timestamp
+    }
+    
 }
 
 // MARK: - XPC Protocol (Private)
@@ -357,12 +434,24 @@ public enum EnsemblerRequest: Codable {
 	case getMaxSecsPerKey
 	/// Get the ensemble ID
 	case getEnsembleID
+    /// Get the rack ID
+    case getRackID
 	/// Get authetnication code
 	case getAuthCode(Data)
 	/// Distribute a KVCache key
 	case distributeDataKey(Data, DistributionType)
 	/// get KVCache key
 	case getDataKey(SingleUseKeyToken)
+	/// Register callback for receiving data messages for an appID
+	case registerDataCallback(String, String)
+	/// Unregister callback for receiving data messages
+	case unregisterDataCallback(String)
+	/// Send data to a destination and get response
+	case sendDataAndGetResponse(String, Data, Int, TimeInterval)
+	/// Send data to all followers and get responses
+	case sendDataToAllFollowers(String, Data, TimeInterval)
+    /// Message to indicate received data
+    case recievedData(Int, String, Data)
 }
 
 /// XPC response from ensembled to the framework
@@ -392,12 +481,18 @@ public struct EnsemblerResponse: Codable {
 	public var maxSecsPerKey: UInt64?
 	/// ensemble ID
 	public var ensembleID: String?
+    /// rack ID
+    public var rackID: String?
 	/// authentication code
 	public var authCode: Data?
 	/// SingleUseKeyToken
 	public var singleUseKeyToken: SingleUseKeyToken?
 	/// KVCache key
 	public var kvKey: Data?
+	/// Response data from sendDataAndGetResponse
+	public var responseData: Data?
+	/// Response data from sendDataToAllFollowers
+	public var allFollowersResponseData: [NodeResponse]?
 
 	public init(
 		result: Bool,
@@ -412,9 +507,12 @@ public struct EnsemblerResponse: Codable {
 		maxSecsPerKey: UInt64? = nil,
 		maxBuffersPerKey: UInt64? = nil,
 		ensembleID: String? = nil,
+        rackID: String? = nil,
 		authCode: Data? = nil,
 		singleUseKeyToken: SingleUseKeyToken? = nil,
-		kvKey: Data? = nil
+		kvKey: Data? = nil,
+		responseData: Data? = nil,
+		allFollowersResponseData: [NodeResponse]? = nil
 	) {
 		self.result = result
 		self.status = status
@@ -428,9 +526,12 @@ public struct EnsemblerResponse: Codable {
 		self.maxSecsPerKey = maxSecsPerKey
 		self.maxBuffersPerKey = maxBuffersPerKey
 		self.ensembleID = ensembleID
+        self.rackID = rackID
 		self.authCode = authCode
 		self.singleUseKeyToken = singleUseKeyToken
 		self.kvKey = kvKey
+		self.responseData = responseData
+		self.allFollowersResponseData = allFollowersResponseData
 	}
 }
 
@@ -602,18 +703,40 @@ public struct SecureSymmetricKey: ~Copyable {
 
 // MARK: - Ensemble Session -
 
-fileprivate var configurator: AttestedTLS.Configurator<EnsembleAttestor>?
 
+fileprivate var configurator: AttestedTLS.Configurator<EnsembleAttestor>?
 /// A client representing an XPC connection to ensembled. Session lifecycle is tied to the client
 @available(macOS 15.0, iOS 18.0, *)
 public class EnsemblerSession {
-	let session: XPCSession
-	let targetQ: DispatchQueue?
-	let UDID: String
     
+	var session: XPCSession? = nil
+	let targetQ: DispatchQueue?
+	var UDID: String? = nil
+	var callbackRegistry: [String: EnsembleDataMessageReceived] = [:]
+	var appIDToCallbackIDs: [String: String] = [:]
 
 	static let logger = Logger(subsystem: "com.apple.cloudos.Ensemble", category: "EnsemblerClient")
 
+    // Handler to receive and process request from ensembled.
+    private func handleIncoming(_ request: EnsemblerRequest) -> Data? {
+        EnsemblerSession.logger.info("Received incoming message from ensembled.")
+        switch (request) {
+            case (.recievedData(let sender, let callbackID, let data)):
+            EnsemblerSession.logger.info("Received .recievedData with \(callbackID, privacy: .public)")
+                guard let callback = callbackRegistry[callbackID] else {
+                    EnsemblerSession.logger.error("No handler exists for \(callbackID, privacy: .public)")
+                    return nil
+                }
+            EnsemblerSession.logger.debug("Handler exists for \(callbackID, privacy: .public), calling it now")
+                
+                return callback(sender, data)
+            default:
+                EnsemblerSession.logger.warning("Received incoming message from ensembled, but not handled.")
+                    break
+            }
+            return nil
+        }
+    
 	/// Optionally accept a dispatch queue to be passed to XPCSession
 	///  - NOTE: will fall back to default queue if `nil`
 	public init(targetQ: DispatchQueue?) throws {
@@ -621,8 +744,17 @@ public class EnsemblerSession {
 		do {
 			self.session = try XPCSession(
 				machService: kEnsemblerServiceName,
-				targetQueue: self.targetQ
+				targetQueue: self.targetQ,
+                options: [],
+                incomingMessageHandler: { (request: EnsemblerRequest) in
+                    return self.handleIncoming(request)
+                    
+                },
+                cancellationHandler: { error in
+                    EnsemblerSession.logger.warning("Session cancelled: \(error)")
+                }
 			)
+            
 			self.UDID = try getNodeUDID()
 		} catch {
 			EnsemblerSession.logger.error("Failed to establish XPC session with ensembled")
@@ -631,7 +763,11 @@ public class EnsemblerSession {
 	}
 
 	deinit {
-		self.session.cancel(reason: "client destroyed")
+        guard let session = self.session else {
+            EnsemblerSession.logger.error("XPC session with ensembled does not exists")
+            return
+        }
+		session.cancel(reason: "client destroyed")
 	}
 
 	private func validateResponse(response: EnsemblerResponse) throws {
@@ -704,7 +840,12 @@ public class EnsemblerSession {
 
 	private func grabSelf(response: EnsemblerResponse) throws -> EnsembleNodeInfo {
 		try self.validateNodesInfo(response: response)
-		guard let info = response.nodesInfo?[self.UDID] else {
+        guard let udid = self.UDID else {
+            EnsemblerSession.logger.error("Could not find UDID")
+            throw EnsembleError.cannotFindSelfInfo
+        }
+        
+		guard let info = response.nodesInfo?[udid] else {
 			EnsemblerSession.logger.error("Could not find self in node info")
 			throw EnsembleError.cannotFindSelfInfo
 		}
@@ -879,14 +1020,14 @@ public class EnsemblerSession {
         EnsemblerSession.logger.debug("Trigger distributing a key")
         
         let spanID = generateSpanId()
-        var summary = DistributeDatakeySummary(requestID: tracingContext?.requestID.uuidString, spanID: spanID, parentSpanID: tracingContext?.spanID.hexEncoded)
+        var summary = DistributeDataSummary(requestID: tracingContext?.requestID.uuidString, spanID: spanID, parentSpanID: tracingContext?.spanID.hexEncoded, operationName: "Distributing data key")
         
         return try summary.loggingRequestSummary(logger: EnsemblerSession.logger) {
             guard let keyData = key.combined else {
                 EnsemblerSession.logger.error("Error getting keydata")
                 throw EnsembleError.internalError(error: "Error getting keydata")
             }
-
+            
             let response = try self.sendCommandSync(command: .distributeDataKey(keyData, type))
             return try self.grabSingleUseKeyToken(response: response)
         }
@@ -901,8 +1042,8 @@ public class EnsemblerSession {
         EnsemblerSession.logger.debug("Trigger distributing a key")
         
         let spanID = generateSpanId()
-        var summary = DistributeDatakeySummary(requestID: tracingContext?.requestID.uuidString, spanID: spanID, parentSpanID: tracingContext?.spanID.hexEncoded)
-        
+        var summary = DistributeDataSummary(requestID: tracingContext?.requestID.uuidString, spanID: spanID, parentSpanID: tracingContext?.spanID.hexEncoded, operationName: "Distributing data key")
+                
         return try await summary.loggingRequestSummary(logger: EnsemblerSession.logger) {
             guard let keyData = key.combined else {
                 EnsemblerSession.logger.error("Error getting keydata")
@@ -960,12 +1101,13 @@ public class EnsemblerSession {
     /// - Returns: `Data
     public func getDataKey(token: SingleUseKeyToken, tracingContext: EnsembleTracingContext? = nil) throws -> AES.GCM.SealedBox {
         EnsemblerSession.logger.debug("Getting Data key")
-
+        
         let spanID = generateSpanId()
         var summary = GetDatakeySummary(token: token.uuidString, requestID: tracingContext?.requestID.uuidString, spanID: spanID, parentSpanID: tracingContext?.spanID.hexEncoded)
-        
+                
         return try summary.loggingRequestSummary(logger: EnsemblerSession.logger)
         {
+            
             let response = try self.sendCommandSync(command: .getDataKey(token))
             let keyData = try self.grabKVKey(response: response)
             
@@ -981,8 +1123,8 @@ public class EnsemblerSession {
         EnsemblerSession.logger.debug("Getting Data key")
         
         let spanID = generateSpanId()
-        var summary = GetDatakeySummary(token: token.uuidString, requestID: tracingContext?.requestID.uuidString, spanID: spanID, parentSpanID: tracingContext?.spanID.hexEncoded)
-        
+       var summary = GetDatakeySummary(token: token.uuidString, requestID: tracingContext?.requestID.uuidString, spanID: spanID, parentSpanID: tracingContext?.spanID.hexEncoded)
+               
         return try await summary.loggingRequestSummary(logger: EnsemblerSession.logger) {
             let response = try await self.sendCommandAsync(command: .getDataKey(token))
             let keyData = try self.grabKVKey(response: response)
@@ -1555,6 +1697,296 @@ public class EnsemblerSession {
 		try self.validateResponse(response: response)
 		return response.ensembleID
 	}
+    
+    /// Blocking call to get rack  ID
+    public func getRackID() throws -> String? {
+        EnsemblerSession.logger.debug("Requesting rack ID")
+        let response = try sendCommandSync(command: EnsemblerRequest.getRackID)
+        try self.validateResponse(response: response)
+        return response.rackID
+    }
+
+    /// Async-Friendly call to get rack ID
+    public func getRackID() async throws -> String? {
+        EnsemblerSession.logger.debug("Requesting rack ID asynchronously")
+        let response = try await sendCommandAsync(command: EnsemblerRequest.getRackID)
+        try self.validateResponse(response: response)
+        return response.rackID
+    }
+
+	/// Register a callback to handle incoming data messages for a specific app ID
+	/// - Parameters:
+	///   - appID: The application identifier for routing messages
+	///   - callback: The callback function to handle incoming data and return a response
+	///   - Note: For a node to receive data from other node, lets say for follower-1 to receive data from app1 on leader or any other node
+    ///    follower-1 will have to invoke this with app1, and callback which will be triggered when it receives data.
+	public func registerDataCallback(appID: String, callback: @escaping EnsembleDataMessageReceived) throws
+    {
+        EnsemblerSession.logger.info("Registering data message handler for appID: \(appID, privacy: .public) synchronously")
+		
+        let callbackID = UUID().uuidString
+        callbackRegistry[callbackID] = callback
+        
+        // Track the mapping between appID and callbackID
+        appIDToCallbackIDs[appID] = callbackID
+        
+        EnsemblerSession.logger.debug("Calling EnsemblerRequest.registerDataCallback for \(callbackID)")
+		let response = try sendCommandSync(command: EnsemblerRequest.registerDataCallback(appID, callbackID))
+        EnsemblerSession.logger.debug("Registered the callback successfully for \(appID) with \(callbackID)")
+		try self.validateResponse(response: response)
+	}
+
+	/// Async version of registerDataCallback
+	/// - Parameters:
+	///   - appID: The application identifier for routing messages
+	///   - callback: The callback function to handle incoming data and return a response
+	public func registerDataCallback(appID: String, callback: @escaping EnsembleDataMessageReceived) async throws {
+        EnsemblerSession.logger.info("Registering data message handler for appID: \(appID, privacy: .public) asynchronously")
+		
+        let callbackID = UUID().uuidString
+        callbackRegistry[callbackID] = callback
+        
+        // Track the mapping between appID and callbackID
+        appIDToCallbackIDs[appID] = callbackID
+        
+        EnsemblerSession.logger.debug("Calling EnsemblerRequest.registerDataCallback for \(callbackID)")
+		let response = try await sendCommandAsync(command: EnsemblerRequest.registerDataCallback(appID, callbackID))
+        EnsemblerSession.logger.debug("Registered the callback successfully for \(appID) with \(callbackID)")
+		try self.validateResponse(response: response)
+	}
+    
+    /// Unregister a data callback by its app ID
+    /// - Parameter appID: The application identifier used when registering the callback
+    public func unregisterDataCallback(appID: String) throws {
+        EnsemblerSession.logger.info("Unregistering data message handler for appID: \(appID, privacy: .public) synchronously")
+        
+        guard let callbackID = appIDToCallbackIDs[appID] else {
+            EnsemblerSession.logger.error("No callback registered for appID: \(appID, privacy: .public)")
+            throw EnsembleError.commandFailure(error: "No callback registered for appID: \(appID)")
+        }
+        
+        // Remove from callback registry
+        callbackRegistry.removeValue(forKey: callbackID)
+        
+        // Remove from appID mapping
+        appIDToCallbackIDs.removeValue(forKey: appID)
+        
+        EnsemblerSession.logger.debug("Calling EnsemblerRequest.unregisterDataCallback for \(callbackID)")
+        let response = try sendCommandSync(command: EnsemblerRequest.unregisterDataCallback(callbackID))
+        EnsemblerSession.logger.debug("Unregistered the callback successfully for \(appID) with \(callbackID)")
+        try self.validateResponse(response: response)
+    }
+    
+    /// Async version of unregisterDataCallback
+    /// - Parameter appID: The application identifier used when registering the callback
+    public func unregisterDataCallback(appID: String) async throws {
+        EnsemblerSession.logger.info("Unregistering data message handler for appID: \(appID, privacy: .public) asynchronously")
+        
+        guard let callbackID = appIDToCallbackIDs[appID] else {
+            EnsemblerSession.logger.error("No callback registered for appID: \(appID, privacy: .public)")
+            throw EnsembleError.commandFailure(error: "No callback registered for appID: \(appID)")
+        }
+        
+        // Remove from callback registry
+        callbackRegistry.removeValue(forKey: callbackID)
+        
+        // Remove from appID mapping
+        appIDToCallbackIDs.removeValue(forKey: appID)
+        
+        EnsemblerSession.logger.debug("Calling EnsemblerRequest.unregisterDataCallback for \(callbackID)")
+        let response = try await sendCommandAsync(command: EnsemblerRequest.unregisterDataCallback(callbackID))
+        EnsemblerSession.logger.debug("Unregistered the callback successfully for \(appID) with \(callbackID)")
+		try self.validateResponse(response: response)
+	}
+    
+	/// Send data to a specific destination and wait for a response
+	/// - Parameters:
+	///   - appID: The application identifier for routing the message
+	///   - data: The data to send
+	///   - destination: The rank of the destination node
+	///   - timeout: Timeout for waiting for a response (default: 2.0 seconds)
+	/// - Returns: The response data from the destination node
+	public func sendDataAndGetResponse(appID: String, data: Data, destination: Int, timeout: TimeInterval = 2.0) throws -> Data {
+        EnsemblerSession.logger.info("Sending data to destination: \(destination, privacy: .public), appID: \(appID, privacy: .public)")
+		let response = try sendCommandSync(command: EnsemblerRequest.sendDataAndGetResponse(appID, data, destination, timeout))
+		try self.validateResponse(response: response)
+		
+		guard let responseData = response.responseData else {
+			EnsemblerSession.logger.error("No response data received")
+			throw EnsembleError.commandFailure(error: "No response data received")
+		}
+		
+		return responseData
+	}
+
+	/// Async version of sendDataAndGetResponse
+	/// - Parameters:
+	///   - appID: The application identifier for routing the message
+	///   - data: The data to send
+	///   - destination: The rank of the destination node
+	///   - timeout: Timeout for waiting for a response (default: 2.0 seconds)
+	/// - Returns: The response data from the destination node
+	public func sendDataAndGetResponse(appID: String, data: Data, destination: Int, timeout: TimeInterval = 2.0) async throws -> Data {
+        EnsemblerSession.logger.info("Sending data to destination: \(destination, privacy: .public), appID: \(appID, privacy: .public) asynchronously")
+		let response = try await sendCommandAsync(command: EnsemblerRequest.sendDataAndGetResponse(appID, data, destination, timeout))
+		try self.validateResponse(response: response)
+		
+		guard let responseData = response.responseData else {
+			EnsemblerSession.logger.error("No response data received")
+			throw EnsembleError.commandFailure(error: "No response data received")
+		}
+		
+		return responseData
+	}
+    
+    /// Send data to a specific follower destination and wait for a response, with TracingContext
+    /// - Parameters:
+    ///   - appID: The application identifier for routing the message
+    ///   - data: The data to send
+    ///   - destination: The follower rank of the destination node
+    ///   - timeout: Timeout for waiting for a response (default: 2.0 seconds)
+    /// - Returns: The response data from the destination node
+    public func sendDataToFollowerNode(appID: String, data: Data, destination: Int,
+                                       timeout: TimeInterval = 2.0,
+                                       tracingContext: EnsembleTracingContext? = nil) throws -> Data {
+        
+        EnsemblerSession.logger.info("Sending data to destination: \(destination, privacy: .public), appID: \(appID, privacy: .public)")
+        
+        let spanID = generateSpanId()
+        let summary = DistributeDataSummary(requestID: tracingContext?.requestID.uuidString, spanID: spanID, parentSpanID: tracingContext?.spanID.hexEncoded, operationName: "Sending data to a node")
+        
+        return try summary.loggingRequestSummary(logger: EnsemblerSession.logger) {
+            let response = try self.sendCommandSync(command: EnsemblerRequest.sendDataAndGetResponse(appID, data, destination, timeout))
+            try self.validateResponse(response: response)
+            
+            guard let responseData = response.responseData else {
+                EnsemblerSession.logger.error("No response data received")
+                throw EnsembleError.commandFailure(error: "No response data received")
+            }
+            
+            return responseData
+        }
+    }
+
+    /// Async version of sendDataToNode with TracingContext
+    /// - Parameters:
+    ///   - appID: The application identifier for routing the message
+    ///   - data: The data to send
+    ///   - destination: The rank of the destination node
+    ///   - timeout: Timeout for waiting for a response (default: 2.0 seconds)
+    /// - Returns: The response data from the destination node
+    public func sendDataToFollowerNode(appID: String, data: Data, destination: Int,
+                                       timeout: TimeInterval = 2.0,
+                                       tracingContext: EnsembleTracingContext? = nil) async throws -> Data {
+        EnsemblerSession.logger.info("Sending data to destination: \(destination, privacy: .public), appID: \(appID, privacy: .public) asynchronously")
+        
+        let spanID = generateSpanId()
+        let summary = DistributeDataSummary(requestID: tracingContext?.requestID.uuidString, spanID: spanID, parentSpanID: tracingContext?.spanID.hexEncoded, operationName: "Sending data to a node")
+        
+        return try await summary.loggingRequestSummary(logger: EnsemblerSession.logger) {
+            let response = try await self.sendCommandAsync(command: EnsemblerRequest.sendDataAndGetResponse(appID, data, destination, timeout))
+            try self.validateResponse(response: response)
+            
+            guard let responseData = response.responseData else {
+                EnsemblerSession.logger.error("No response data received")
+                throw EnsembleError.commandFailure(error: "No response data received")
+            }
+            
+            return responseData
+        }
+    }
+	
+	/// Send data to all followers and wait for responses (leader only)
+	/// - Parameters:
+	///   - appID: The application identifier for routing the message
+	///   - data: The data to send
+	///   - timeout: Timeout for waiting for responses (default: 2.0 seconds)
+	/// - Returns: Array of NodeResponse objects containing responses from all followers
+	public func sendDataToAllFollowers(appID: String, data: Data, timeout: TimeInterval = 2.0) throws -> [NodeResponse] {
+        EnsemblerSession.logger.info("Broadcasting data to all followers, appID: \(appID, privacy: .public)")
+		let response = try sendCommandSync(command: EnsemblerRequest.sendDataToAllFollowers(appID, data, timeout))
+		try self.validateResponse(response: response)
+		
+		guard let allFollowersResponseData = response.allFollowersResponseData else {
+			EnsemblerSession.logger.error("No response data received from followers")
+			throw EnsembleError.commandFailure(error: "No response data received from followers")
+		}
+		
+		return allFollowersResponseData
+	}
+	
+	/// Async version of sendDataToAllFollowers
+	/// - Parameters:
+	///   - appID: The application identifier for routing the message
+	///   - data: The data to send
+	///   - timeout: Timeout for waiting for responses (default: 2.0 seconds)
+	/// - Returns: Array of NodeResponse objects containing responses from all followers
+	public func sendDataToAllFollowers(appID: String, data: Data, timeout: TimeInterval = 2.0) async throws -> [NodeResponse] {
+        EnsemblerSession.logger.info("Broadcasting data to all followers asynchronously, appID: \(appID, privacy: .public)")
+		let response = try await sendCommandAsync(command: EnsemblerRequest.sendDataToAllFollowers(appID, data, timeout))
+		try self.validateResponse(response: response)
+		
+		guard let allFollowersResponseData = response.allFollowersResponseData else {
+			EnsemblerSession.logger.error("No response data received from followers")
+			throw EnsembleError.commandFailure(error: "No response data received from followers")
+		}
+		
+		return allFollowersResponseData
+	}
+    
+    /// Send data to all followers and wait for responses (leader only) with TracingContext
+    /// - Parameters:
+    ///   - appID: The application identifier for routing the message
+    ///   - data: The data to send
+    ///   - timeout: Timeout for waiting for responses (default: 2.0 seconds)
+    /// - Returns: Array of NodeResponse objects containing responses from all followers
+    public func sendDataToAllFollowers(appID: String, data: Data,
+                                       timeout: TimeInterval = 2.0,
+                                       tracingContext: EnsembleTracingContext? = nil) throws -> [NodeResponse] {
+        EnsemblerSession.logger.info("Broadcasting data to all followers, appID: \(appID, privacy: .public)")
+        let spanID = generateSpanId()
+        let summary = DistributeDataSummary(requestID: tracingContext?.requestID.uuidString, spanID: spanID, parentSpanID: tracingContext?.spanID.hexEncoded, operationName: "Distributing data to all followers")
+        
+        return try summary.loggingRequestSummary(logger: EnsemblerSession.logger) {
+            let response = try self.sendCommandSync(command: EnsemblerRequest.sendDataToAllFollowers(appID, data, timeout))
+            try self.validateResponse(response: response)
+            
+            guard let allFollowersResponseData = response.allFollowersResponseData else {
+                EnsemblerSession.logger.error("No response data received from followers")
+                throw EnsembleError.commandFailure(error: "No response data received from followers")
+            }
+            
+            return allFollowersResponseData
+        }
+        
+    }
+    
+    /// Async version of sendDataToAllFollowers with TracingContext
+    /// - Parameters:
+    ///   - appID: The application identifier for routing the message
+    ///   - data: The data to send
+    ///   - timeout: Timeout for waiting for responses (default: 2.0 seconds)
+    /// - Returns: Array of NodeResponse objects containing responses from all followers
+    public func sendDataToAllFollowers(appID: String, data: Data,
+                                       timeout: TimeInterval = 2.0,
+                                       tracingContext: EnsembleTracingContext? = nil) async throws -> [NodeResponse] {
+        
+        EnsemblerSession.logger.info("Broadcasting data to all followers asynchronously, appID: \(appID, privacy: .public)")
+        let spanID = generateSpanId()
+        let summary = DistributeDataSummary(requestID: tracingContext?.requestID.uuidString, spanID: spanID, parentSpanID: tracingContext?.spanID.hexEncoded, operationName: "Distributing data to all followers")
+        
+        return try await summary.loggingRequestSummary(logger: EnsemblerSession.logger) {
+            let response = try await self.sendCommandAsync(command: EnsemblerRequest.sendDataToAllFollowers(appID, data, timeout))
+            try self.validateResponse(response: response)
+            
+            guard let allFollowersResponseData = response.allFollowersResponseData else {
+                EnsemblerSession.logger.error("No response data received from followers")
+                throw EnsembleError.commandFailure(error: "No response data received from followers")
+            }
+            
+            return allFollowersResponseData
+        }
+    }
 
 	// MARK: - SPIs for the CLI
 
@@ -1655,14 +2087,22 @@ public class EnsemblerSession {
 
 extension EnsemblerSession {
 	private func sendCommandSync(command: EnsemblerRequest) throws -> EnsemblerResponse {
+        guard let session = self.session else {
+            EnsemblerSession.logger.error("No xpc session exists")
+            throw EnsembleError.internalError(error: "No xpc session exists")
+        }
 		let reply = try session.sendSync(command)
 		return try reply.decode(as: EnsemblerResponse.self)
 	}
 
 	private func sendCommandAsync(command: EnsemblerRequest) async throws -> EnsemblerResponse {
+        guard let session = self.session else {
+            EnsemblerSession.logger.error("No xpc session exists")
+            throw EnsembleError.internalError(error: "No xpc session exists")
+        }
 		let reply = try await withCheckedThrowingContinuation { continuation in
 			do {
-				try self.session.send(command, replyHandler: continuation.resume(with:))
+				try session.send(command, replyHandler: continuation.resume(with:))
 			} catch {
 				continuation.resume(throwing: error)
 			}

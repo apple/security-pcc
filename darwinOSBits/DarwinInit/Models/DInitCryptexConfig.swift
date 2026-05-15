@@ -17,6 +17,8 @@
 //  DarwinInit
 //
 
+import Foundation
+
 struct DInitCryptexConfig {
     var url: URL
     var variant: String?
@@ -24,6 +26,7 @@ struct DInitCryptexConfig {
     var sha256: DInitSHA256Digest?
     var auth: DInitAuthorizationService?
     var dawToken: CredentialString?
+    var oidcToken: CredentialString?
     var wgUsername: String?
     var wgToken: CredentialString?
     var alternateCDNHost: String?
@@ -46,6 +49,7 @@ extension DInitCryptexConfig {
         case sha256
         case auth
         case dawToken = "daw_token"
+        case oidcToken = "oidc_token"
         case wgUsername = "wg_username"
         case wgToken = "wg_token"
         case alternateCDNHost = "alternate_cdn_host"

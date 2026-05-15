@@ -44,6 +44,8 @@ public enum PrivateCloudCompute_Environment: InternalSwiftProtobuf.Enum, Swift.C
   case perf // = 5
   case ephemeral // = 6
   case dev // = 7
+  case liveon // = 8
+  case quarantine // = 9
   case qa1Primary // = 96
   case qa1Internal // = 97
   case qa2Primary // = 98
@@ -64,6 +66,8 @@ public enum PrivateCloudCompute_Environment: InternalSwiftProtobuf.Enum, Swift.C
     case 5: self = .perf
     case 6: self = .ephemeral
     case 7: self = .dev
+    case 8: self = .liveon
+    case 9: self = .quarantine
     case 96: self = .qa1Primary
     case 97: self = .qa1Internal
     case 98: self = .qa2Primary
@@ -82,6 +86,8 @@ public enum PrivateCloudCompute_Environment: InternalSwiftProtobuf.Enum, Swift.C
     case .perf: return 5
     case .ephemeral: return 6
     case .dev: return 7
+    case .liveon: return 8
+    case .quarantine: return 9
     case .qa1Primary: return 96
     case .qa1Internal: return 97
     case .qa2Primary: return 98
@@ -100,6 +106,8 @@ public enum PrivateCloudCompute_Environment: InternalSwiftProtobuf.Enum, Swift.C
     .perf,
     .ephemeral,
     .dev,
+    .liveon,
+    .quarantine,
     .qa1Primary,
     .qa1Internal,
     .qa2Primary,
@@ -120,6 +128,8 @@ extension PrivateCloudCompute_Environment: InternalSwiftProtobuf._ProtoNameProvi
     5: .same(proto: "PERF"),
     6: .same(proto: "EPHEMERAL"),
     7: .same(proto: "DEV"),
+    8: .same(proto: "LIVEON"),
+    9: .same(proto: "QUARANTINE"),
     96: .same(proto: "QA1_PRIMARY"),
     97: .same(proto: "QA1_INTERNAL"),
     98: .same(proto: "QA2_PRIMARY"),

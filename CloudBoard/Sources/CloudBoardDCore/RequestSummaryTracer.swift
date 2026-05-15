@@ -39,7 +39,7 @@ enum OperationNames {
 /// When using this tracer every request has a `RequestSummary` entry in the logs.
 public final class RequestSummaryTracer: Tracing.Tracer, RequestIDInstrument, Sendable {
     fileprivate static let logger: Logger = .init(
-        subsystem: "com.apple.cloudos.cloudboard",
+        subsystem: "com.apple.cloudos.cloudboard.tracing",
         category: "CloudBoardRequestSummary"
     )
     private let metrics: any MetricsSystem
@@ -70,7 +70,7 @@ public final class RequestSummaryTracer: Tracing.Tracer, RequestIDInstrument, Se
         line: UInt
     ) -> Span {
         let context = context()
-        let newSpanID = TraceContextCache.singletonCache.generateNewSpanID()
+        let newSpanID: UInt64 = TraceContextCache.singletonCache.generateNewSpanID()
         let parentID = context.spanID
         let rpcID = context.rpcID
         var nextContext = context
@@ -90,6 +90,7 @@ public final class RequestSummaryTracer: Tracing.Tracer, RequestIDInstrument, Se
             kind: kind,
             rpcID: rpcID,
             requestID: context.requestID,
+            cloudApp: context.cloudApp,
             parentID: parentID,
             spanID: newSpanID,
             context: nextContext,
@@ -168,6 +169,11 @@ extension RequestSummaryTracer {
             var attributes: Tracing.SpanAttributes
             var links: [Tracing.SpanLink]
             var operationName: String
+            var spanID: UInt64
+            var endTimeManual: UInt64?
+            // This is only relevant for the CloudboardDRequestSummary
+            var durationMicrosIncludingJobHelperExit: Int64?
+            var parentID: UInt64?
         }
 
         enum RecordingState {
@@ -180,12 +186,7 @@ extension RequestSummaryTracer {
 
         let rpcID: UUID
         let requestID: String?
-        var spanID: String
-        var endTimeManual: UInt64?
-        // This is only relevant for the CloudboardDRequestSummary
-        var durationMicrosIncludingJobHelperExit: Int64?
-
-        var parentID: String?
+        let cloudApp: String?
 
         let function: String
         let fileID: String
@@ -209,8 +210,9 @@ extension RequestSummaryTracer {
             kind: Tracing.SpanKind,
             rpcID: UUID,
             requestID: String?,
-            parentID: String?,
-            spanID: String,
+            cloudApp: String?,
+            parentID: UInt64?,
+            spanID: UInt64,
             context: ServiceContext,
             tracer: RequestSummaryTracer,
             function: String,
@@ -223,8 +225,7 @@ extension RequestSummaryTracer {
 
             self.rpcID = rpcID
             self.requestID = requestID
-            self.parentID = parentID
-            self.spanID = spanID
+            self.cloudApp = cloudApp
 
             self.function = function
             self.fileID = fileID
@@ -239,7 +240,9 @@ extension RequestSummaryTracer {
                     errors: [],
                     attributes: .init(),
                     links: [],
-                    operationName: operationName
+                    operationName: operationName,
+                    spanID: spanID,
+                    parentID: parentID
                 )
             )
             self.logger = logger
@@ -252,9 +255,11 @@ extension RequestSummaryTracer {
                     break
                 case .open:
                     let rpcID = storage.context.rpcID
+                    let parentID = storage.parentID
+                    let spanID = storage.spanID
                     self.logger?
                         .fault(
-                            "[rpcID: \(rpcID, privacy: .public), parentID: \(self.parentID ?? "", privacy: .public), spanID: \(self.spanID, privacy: .public)] Reference to unended span dropped"
+                            "[rpcID: \(rpcID, privacy: .public), parentID: \(parentID?.hexEncoded ?? "", privacy: .public), spanID: \(spanID, privacy: .public)] Reference to unended span dropped"
                         )
                 }
             }
@@ -286,12 +291,28 @@ extension RequestSummaryTracer {
             set { self.storage.withLock { $0.attributes = newValue } }
         }
 
-        public func setStatus(_ status: Tracing.SpanStatus) {
-            self.storage.withLock { $0.status = status }
+        public var endTimeManual: UInt64? {
+            get { self.storage.withLock { $0.endTimeManual } }
+            set { self.storage.withLock { $0.endTimeManual = newValue } }
         }
 
-        public func setManualEndTime(_ instant: any TracerInstant) {
-            self.endTimeManual = instant.nanosecondsSinceEpoch
+        public var durationMicrosIncludingJobHelperExit: Int64? {
+            get { self.storage.withLock { $0.durationMicrosIncludingJobHelperExit } }
+            set { self.storage.withLock { $0.durationMicrosIncludingJobHelperExit = newValue } }
+        }
+
+        public var spanID: UInt64 {
+            get { self.storage.withLock { $0.spanID } }
+            set { self.storage.withLock { $0.spanID = newValue } }
+        }
+
+        public var parentID: UInt64? {
+            get { self.storage.withLock { $0.parentID } }
+            set { self.storage.withLock { $0.parentID = newValue } }
+        }
+
+        public func setStatus(_ status: Tracing.SpanStatus) {
+            self.storage.withLock { $0.status = status }
         }
 
         public func addEvent(_ event: Tracing.SpanEvent) {
@@ -311,17 +332,20 @@ extension RequestSummaryTracer {
         }
 
         public func end(at instant: @autoclosure () -> some TracerInstant) {
+            let endTimeNanos = self.endTimeManual ?? instant().nanosecondsSinceEpoch
             let tracer = self.storage.withLock { storage -> RequestSummaryTracer? in
                 switch storage.recordingState {
                 case .open(let tracer):
                     storage
-                        .recordingState = .closed(endTimeNanos: self.endTimeManual ?? instant().nanosecondsSinceEpoch)
+                        .recordingState = .closed(endTimeNanos: endTimeNanos)
                     return tracer
                 case .closed:
                     let rpcID = storage.context.rpcID
+                    let parentID = storage.parentID
+                    let spanID = storage.spanID
                     self.logger?
                         .fault(
-                            "[rpcID: \(rpcID, privacy: .public), parentID: \(self.parentID ?? "", privacy: .public), spanID: \(self.spanID, privacy: .public)] Span already closed"
+                            "[rpcID: \(rpcID, privacy: .public), parentID: \(parentID?.hexEncoded ?? "", privacy: .public), spanID: \(spanID, privacy: .public)] Span already closed"
                         )
                     return nil
                 }
@@ -335,9 +359,11 @@ extension RequestSummaryTracer {
             self.storage.withLock { storage in
                 guard case .closed(let stopTimeNanos) = storage.recordingState else {
                     let rpcID = storage.context.rpcID
+                    let parentID = storage.parentID
+                    let spanID = storage.spanID
                     self.logger?
                         .fault(
-                            "[rpcID: \(rpcID, privacy: .public), parentID: \(self.parentID ?? "", privacy: .public), spanID: \(self.spanID, privacy: .public)] endTimeNanos queried for closed span"
+                            "[rpcID: \(rpcID, privacy: .public), parentID: \(parentID?.hexEncoded ?? "", privacy: .public), spanID: \(spanID, privacy: .public)] endTimeNanos queried for closed span"
                         )
                     return 0
                 }
@@ -348,12 +374,12 @@ extension RequestSummaryTracer {
 }
 
 struct SpanIDKey: ServiceContextKey {
-    typealias Value = String
+    typealias Value = UInt64
     static var nameOverride: String? { "spanID" }
 }
 
 struct ParentSpanIDKey: ServiceContextKey {
-    typealias Value = String
+    typealias Value = UInt64
     static var nameOverride: String? { "parentSpanID" }
 }
 
@@ -363,12 +389,12 @@ struct WorkerIDKey: ServiceContextKey {
 }
 
 extension ServiceContext {
-    var spanID: String? {
+    var spanID: UInt64? {
         get { self[SpanIDKey.self] }
         set { self[SpanIDKey.self] = newValue }
     }
 
-    var parentSpanID: String? {
+    var parentSpanID: UInt64? {
         get { self[ParentSpanIDKey.self] }
         set { self[ParentSpanIDKey.self] = newValue }
     }
@@ -396,14 +422,15 @@ struct CloudBoardDRequestSummary: RequestSummary {
     var type: String = "RequestSummary"
     var serviceName: String = "cloudboardd"
     var namespace: String = "cloudboard"
+    var cloudApp: String?
     var rpcID: UUID?
     var headers: HPACKHeaders?
     var startTimeNanos: Int64?
     var endTimeNanos: Int64?
     var error: Error?
     var requestID: String?
-    var spanID: String?
-    var parentSpanID: String?
+    var spanID: UInt64?
+    var parentSpanID: UInt64?
     var automatedDeviceGroup: String?
     var requestChunkCount: Int = 0
     var isNack: Bool = false
@@ -421,7 +448,9 @@ struct CloudBoardDRequestSummary: RequestSummary {
     var connectionCancelled: Bool = false
     var ropesTerminationCode: Int?
     var ropesTerminationReason: String?
+    var keyID: String?
     var durationMicrosIncludingJobHelperExit: Int64?
+    var requestExecutionError: String?
 
     private enum CodingKeys: String, CodingKey {
         case spanID
@@ -429,6 +458,7 @@ struct CloudBoardDRequestSummary: RequestSummary {
         case type = "tracing.type"
         case serviceName = "service.name"
         case namespace = "service.namespace"
+        case cloudApp
         case rpcID
         case headers = "requestHeaders"
         case durationMicros
@@ -447,6 +477,7 @@ struct CloudBoardDRequestSummary: RequestSummary {
         case connectionCancelled
         case ropesTerminationCode
         case ropesTerminationReason
+        case requestExecutionError
     }
 
     public init() {}
@@ -490,6 +521,10 @@ struct CloudBoardDRequestSummary: RequestSummary {
                 self.requestID = requestID
             }
 
+            if let cloudApp = span.cloudApp {
+                self.cloudApp = cloudApp
+            }
+
             if let requestChunkSize = span.attributes.requestSummary.workloadRequestAttributes.chunkSize {
                 invokeWorkloadRequestChunkSizes.append(requestChunkSize)
                 self.requestChunkTotalSize += requestChunkSize
@@ -525,6 +560,10 @@ struct CloudBoardDRequestSummary: RequestSummary {
                 .ropesTerminationReason {
                 self.ropesTerminationReason = ropesTerminationReason
             }
+            if let keyID =
+                span.attributes.requestSummary.workloadRequestAttributes.keyID {
+                self.keyID = keyID
+            }
             if let error = span.errors.first {
                 self.populate(error: error)
             }
@@ -540,6 +579,7 @@ struct CloudBoardDRequestSummary: RequestSummary {
         let span = invokeWorkloadResponseSpans.first
         self.responseChunkCount = span?.attributes.requestSummary.responseChunkAttributes.chunksCount ?? 0
         self.responseFinalChunkSeen = span?.attributes.requestSummary.responseChunkAttributes.isFinal ?? false
+        self.requestExecutionError = span?.attributes.requestSummary.requestExecutionErrorAttributes.errorMessage ?? ""
         if let error = span?.errors.first {
             self.populate(error: error)
         }
@@ -560,11 +600,12 @@ struct CloudBoardDRequestSummary: RequestSummary {
         logger.log("""
         ttl=RequestSummary
         request.uuid=\(self.requestID ?? "UNKNOWN", privacy: .public)
+        request.cloudApp=\(self.cloudApp ?? "UNKNOWN", privacy: .public)
         tracing.name=\(self.operationName, privacy: .public)
         tracing.type=\(self.type, privacy: .public)
         tracing.trace_id=\(self.requestID?.replacingOccurrences(of: "-", with: "").lowercased() ?? "", privacy: .public)
-        tracing.span_id=\(self.spanID ?? "", privacy: .public)
-        tracing.parent_span_id=\(self.parentSpanID ?? "", privacy: .public)
+        tracing.span_id=\(self.spanID?.hexEncoded ?? "", privacy: .public)
+        tracing.parent_span_id=\(self.parentSpanID?.hexEncoded ?? "", privacy: .public)
         tracing.start_time_unix_nano=\(self.startTimeNanos ?? 0, privacy: .public)
         tracing.end_time_unix_nano=\(self.endTimeNanos ?? 0, privacy: .public)
         service.name=\(self.serviceName, privacy: .public)
@@ -578,6 +619,7 @@ struct CloudBoardDRequestSummary: RequestSummary {
         tracing.clock_skew_alignment=\("left", privacy: .public)
         error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
         error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        keyId=\(self.keyID ?? "", privacy: .public) 
         rpcId=\(self.rpcID ?? .zero, privacy: .public)
         requestChunkCount=\(self.requestChunkCount, privacy: .public)
         requestChunkTotalSize=\(self.requestChunkTotalSize, privacy: .public)
@@ -595,22 +637,26 @@ struct CloudBoardDRequestSummary: RequestSummary {
         connectionCancelled=\(self.connectionCancelled, privacy: .public)
         ropesTerminationCode=\(self.ropesTerminationCode.map { "\($0)" } ?? "", privacy: .public)
         ropesTerminationReason=\(self.ropesTerminationReason.map { "\($0)" } ?? "", privacy: .public)
+        requestExecutionError=\(self.requestExecutionError ?? "", privacy: .public)
         """)
     }
 
     func measure(to metrics: any MetricsSystem) {
         metrics.emit(Metrics.CloudBoardProvider.RequestCounter(
             action: .increment,
+            cloudApp: self.cloudApp ?? "UNKNOWN",
             automatedDeviceGroup: !(self.automatedDeviceGroup?.isEmpty ?? true)
         ))
         if let durationMicros {
             if let error {
                 metrics.emit(Metrics.CloudBoardProvider.FailedRequestCounter(
                     action: .increment,
+                    cloudApp: self.cloudApp ?? "UNKNOWN",
                     failureReason: error,
                     automatedDeviceGroup: !(self.automatedDeviceGroup?.isEmpty ?? true)
                 ))
                 metrics.emit(Metrics.CloudBoardProvider.RequestTimeHistogram(
+                    cloudApp: self.cloudApp ?? "UNKNOWN",
                     duration: .microseconds(durationMicros),
                     featureId: self.requestFeatureID,
                     bundleId: self.requestBundleID,
@@ -620,6 +666,7 @@ struct CloudBoardDRequestSummary: RequestSummary {
                 ))
             } else {
                 metrics.emit(Metrics.CloudBoardProvider.RequestTimeHistogram(
+                    cloudApp: self.cloudApp ?? "UNKNOWN",
                     duration: .microseconds(durationMicros),
                     featureId: self.requestFeatureID,
                     bundleId: self.requestBundleID,

@@ -95,6 +95,7 @@ const uint32_t kTagSize = 16;
 const uint64_t kMaxSecondsPerCryptoKey = 86400;
 const uint64_t kMaxBuffersPerCryptoKey = 1000000;
 
+// Let's wait upto 5us at a time when getting data from nodes.
 const uint64_t kDefaultMaxWaitBatchNodeNS = 5000;
 
 const uint64_t kMaxNHIQueueByteSize = (15 * 1024 * 1024);

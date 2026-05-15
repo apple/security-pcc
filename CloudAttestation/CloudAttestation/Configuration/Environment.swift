@@ -26,18 +26,16 @@ public enum Environment: String, Sendable, Codable {
     case dev
     case ephemeral
     case perf
+    case quarantine
     case qa
     case staging
     case uat
     case carry
+    case liveon
     case production
     // For internal testing
     case qa2Primary
     case qa2Internal
-
-    @_spi(Private)
-    @available(*, deprecated)
-    public static var override: Self? = nil
 
     public static var `default`: Self {
         if os_variant_is_darwinos("com.apple.CloudAttestation") {
@@ -87,7 +85,7 @@ public enum Environment: String, Sendable, Codable {
         switch self {
         case .staging, .production, .qa2Primary:
             true
-        case .dev, .ephemeral, .perf, .qa, .uat, .carry, .qa2Internal:
+        case .dev, .ephemeral, .perf, .quarantine, .qa, .uat, .carry, .liveon, .qa2Internal:
             false
         }
     }
@@ -96,9 +94,9 @@ public enum Environment: String, Sendable, Codable {
         switch self {
         case .qa2Primary, .qa2Internal:
             URL(string: url.replacingOccurrences(of: "prod", with: "qa2"))!
-        case .dev, .ephemeral, .perf, .qa, .staging:
+        case .dev, .ephemeral, .perf, .quarantine, .qa, .staging:
             URL(string: url.replacingOccurrences(of: "prod", with: "qa1"))!
-        case .uat, .carry:
+        case .uat, .carry, .liveon:
             URL(string: url.replacingOccurrences(of: "prod", with: "carry"))!
         case .production:
             URL(string: url)!
@@ -121,11 +119,11 @@ extension Environment: Comparable {
             0
         case .perf:
             1
-        case .qa:
+        case .quarantine, .qa:
             2
         case .staging:
             3
-        case .uat, .carry:
+        case .uat, .carry, .liveon:
             4
         case .production:
             5

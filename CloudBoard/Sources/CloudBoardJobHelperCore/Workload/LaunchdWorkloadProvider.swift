@@ -12,14 +12,13 @@
 // EA1937
 // 10/02/2024
 
-internal import CloudBoardAsyncXPC
+import CloudBoardAsyncXPC
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
 import CloudBoardJobAPI
 import CloudBoardJobAuthDAPI
 import CloudBoardJobHelperAPI
 import CloudBoardMetrics
-import CloudBoardPreferences
 import Foundation
 import os
 
@@ -29,7 +28,8 @@ import os
 package struct LaunchdWorkloadProvider: CloudBoardJobHelperWorkloadProvider {
     let launchdJobFinder: any LaunchdJobFinderProtocol
     let metrics: any MetricsSystem
-    let cloudAppClientFactory: any CloudAppXPCClientFactoryProtocol
+    let cloudAppClientFactory: any ManagedAppXPCClientFactoryProtocol
+    let supportAppClientFactory: any ManagedAppXPCClientFactoryProtocol
 
     public init(
         launchdJobFinder: any LaunchdJobFinderProtocol,
@@ -37,77 +37,130 @@ package struct LaunchdWorkloadProvider: CloudBoardJobHelperWorkloadProvider {
     ) {
         self.init(
             launchdJobFinder: launchdJobFinder,
-            cloudAppClientFactory: CloudAppXPCClientFactory(),
+            cloudAppClientFactory: ManagedAppXPCClientFactory(),
+            supportAppClientFactory: ManagedAppXPCClientFactory(),
             metrics: metrics
         )
     }
 
     internal init(
         launchdJobFinder: any LaunchdJobFinderProtocol,
-        cloudAppClientFactory: any CloudAppXPCClientFactoryProtocol,
+        cloudAppClientFactory: any ManagedAppXPCClientFactoryProtocol,
+        supportAppClientFactory: any ManagedAppXPCClientFactoryProtocol,
         metrics: any MetricsSystem
     ) {
         self.launchdJobFinder = launchdJobFinder
         self.metrics = metrics
         self.cloudAppClientFactory = cloudAppClientFactory
+        self.supportAppClientFactory = supportAppClientFactory
     }
 
-    @available(*, deprecated, message: "use getCloudAppWorkload and provide requestSecrets and ensembleKeyDistributor")
-    package func getCloudAppWorkload(
-        cloudAppNameOverride: String?,
+    @available(*, deprecated, message: "use getCloudApp and provide requestSecrets and ensembleKeyDistributor")
+    package func getCloudApp(
+        cloudAppName: String,
         jobUUID: UUID,
         cbJobHelperLogMetadata: CloudBoardJobHelperLogMetadata
-    ) throws -> CloudAppWorkloadProtocol {
-        try self.getCloudAppWorkload(
-            cloudAppNameOverride: cloudAppNameOverride,
+    ) throws -> ManagedCloudAppProtocol {
+        try self.getCloudApp(
+            cloudAppName: cloudAppName,
             requestSecrets: RequestSecrets(),
             ensembleKeyDistributor: EnsembleKeyDistributor(),
+            pirHelper: NoOpPIRHelper(),
             jobUUID: jobUUID,
             cbJobHelperLogMetadata: cbJobHelperLogMetadata
         )
     }
 
-    package func getCloudAppWorkload(
-        cloudAppNameOverride: String?,
+    package func getCloudApp(
+        cloudAppName: String,
         requestSecrets: RequestSecrets,
         ensembleKeyDistributor: EnsembleKeyDistributorProtocol,
+        pirHelper: PIRHelperProtocol,
         jobUUID: UUID,
         cbJobHelperLogMetadata: CloudBoardJobHelperLogMetadata
-    ) throws -> CloudAppWorkloadProtocol {
+    ) throws -> ManagedCloudAppProtocol {
         do {
-            let (definition, appName) = try self.launchdJobFinder.getCloudAppJobDefinition(
-                cloudAppNameOverride: cloudAppNameOverride
+            let (definition, appName) = try self.launchdJobFinder.getJobDefinition(
+                type: .cloudBoardApp,
+                name: cloudAppName
             )
             CloudBoardJobHelper.logger.log("Using app \(appName, privacy: .public)")
-            return try CloudAppWorkload(
+            return try ManagedCloudApp(
+                cloudAppName: cloudAppName,
                 definition: definition,
                 xpcClientFactory: self.cloudAppClientFactory,
                 requestSecrets: requestSecrets,
                 ensembleKeyDistributor: ensembleKeyDistributor,
-                log: CloudBoardJobHelper.logger,
+                pirHelper: pirHelper,
                 metrics: self.metrics,
                 jobUUID: jobUUID,
                 spanID: cbJobHelperLogMetadata.spanID
             )
         } catch let error as LaunchdJobFinderError {
             switch error {
-            case .noCloudAppFound:
+            case .noAppFound:
                 CloudboardJobHelperCheckpoint(
                     logMetadata: cbJobHelperLogMetadata,
-                    message: "Failed to discover any managed CloudApps"
-                ).log(to: CloudBoardJobHelper.logger, level: .error)
-                fatalError("Failed to discover any managed CloudApps")
-            case .noApplicableCloudApp:
+                    message: "Failed to discover any managed cloud apps"
+                ).log(forCloudApp: cloudAppName, to: CloudBoardJobHelper.tracingLogger, level: .error)
+                fatalError("Failed to discover any managed cloud apps")
+            case .noApplicableApp:
                 CloudboardJobHelperCheckpoint(
                     logMetadata: cbJobHelperLogMetadata,
-                    message: "No cloud app found"
-                ).log(to: CloudBoardJobHelper.logger, level: .error)
-                fatalError("No cloud app found")
+                    message: "No matching cloud app found"
+                ).log(forCloudApp: cloudAppName, to: CloudBoardJobHelper.tracingLogger, level: .error)
+                fatalError("No matching cloud app found")
             case .tooManyManagedJobs(app: let app, count: let count):
                 CloudBoardJobHelper.logger.error(
                     "Found \(count, privacy: .public) instances of \(app, privacy: .public)"
                 )
                 fatalError("Found too many instance of a cloud app")
+            }
+        }
+    }
+
+    package func getSupportApp(
+        forCloudApp cloudApp: String,
+        name: String,
+        requestSecrets: RequestSecrets,
+        jobUUID: UUID,
+        cbJobHelperLogMetadata: CloudBoardJobHelperLogMetadata,
+        terminationHandler: @Sendable @escaping (_ cleanTermination: Bool) async -> Void
+    ) throws -> ManagedSupportAppProtocol {
+        do {
+            let (definition, appName) = try self.launchdJobFinder.getJobDefinition(
+                type: .cloudBoardSupportApp,
+                name: name
+            )
+            CloudBoardJobHelper.logger.log("Using support app \(appName, privacy: .public)")
+            return try ManagedSupportApp(
+                definition: definition,
+                xpcClientFactory: self.supportAppClientFactory,
+                requestSecrets: requestSecrets,
+                metrics: self.metrics,
+                jobUUID: jobUUID,
+                terminationHandler: terminationHandler,
+                spanID: cbJobHelperLogMetadata.spanID
+            )
+        } catch let error as LaunchdJobFinderError {
+            switch error {
+            case .noAppFound:
+                CloudboardJobHelperCheckpoint(
+                    logMetadata: cbJobHelperLogMetadata,
+                    message: "Failed to discover any managed support apps"
+                ).log(forCloudApp: cloudApp, forSupportApp: name, to: CloudBoardJobHelper.logger, level: .error)
+                fatalError("Failed to discover any managed support apps")
+            case .noApplicableApp:
+                CloudboardJobHelperCheckpoint(
+                    logMetadata: cbJobHelperLogMetadata,
+                    message: "No matching support app found"
+                ).log(forCloudApp: cloudApp, forSupportApp: name, to: CloudBoardJobHelper.logger, level: .error)
+                fatalError("No matching support app found")
+            case .tooManyManagedJobs(app: let app, count: let count):
+                CloudBoardJobHelper.logger.error(
+                    "Found \(count, privacy: .public) instances of \(app, privacy: .public)"
+                )
+                fatalError("Found too many instance of a support app")
             }
         }
     }

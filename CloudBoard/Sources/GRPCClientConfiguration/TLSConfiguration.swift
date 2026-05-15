@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 import CloudBoardIdentity
 import CloudBoardLogging
 import Dispatch
@@ -58,7 +56,7 @@ extension GRPCTLSConfiguration {
         category: "TLSValidator"
     )
 
-    public typealias IdentityCallback = @Sendable () -> IdentityManager.ResolvedIdentity?
+    public typealias IdentityCallback = @Sendable () throws -> IdentityManager.ResolvedIdentity?
 
     public static func grpcTLSConfiguration(
         hostnameOverride: String?,
@@ -135,7 +133,16 @@ extension NWProtocolTLS.Options {
             { _, challengeComplete in
                 GRPCTLSConfiguration.validatorLogger.debug("Loading identity for TLS challenge.")
 
-                guard let identity = callback() else {
+                let identity: IdentityManager.ResolvedIdentity?
+                do {
+                    identity = try callback()
+                } catch {
+                    GRPCTLSConfiguration.validatorLogger
+                        .error("Identity callback failed with error: \(error, privacy: .public)")
+                    identity = nil
+                }
+
+                guard let identity else {
                     GRPCTLSConfiguration.validatorLogger.error("Unable to load TLS identity, failing handshake.")
                     challengeComplete(nil)
                     return

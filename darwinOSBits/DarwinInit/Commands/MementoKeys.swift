@@ -17,6 +17,7 @@
 //  DarwinInit
 //
 
+import Foundation
 import ArgumentParserInternal
 import os
 import System

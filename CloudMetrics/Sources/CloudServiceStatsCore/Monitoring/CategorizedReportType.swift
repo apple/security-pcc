@@ -14,7 +14,7 @@
 
 //  Copyright © 2024 Apple Inc. All rights reserved.
 
-import SystemStatus
+import DarwinPrivate
 
 enum CategorizedReportType: String {
     case jetsamSoftMemoryLimit

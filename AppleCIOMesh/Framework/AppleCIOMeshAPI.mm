@@ -978,6 +978,16 @@ crypto_thread_assigned_receive(void * arg)
 					break;
 				}
 
+#ifdef HACK_REALTIME_CONSTRAINT_MISS
+				// We could be looping for a while waiting for the next batch. This is a place we may need
+				// to maintain our realtime priority while missing realtime constraints.
+				uint64_t tmp = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+				if (tmp - rtGoTime >= 25000000) {
+					usleep(500);
+					rtGoTime = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+				}
+#endif
+
 				bool ret = [mh->service waitOnNextBatchIncomingChunkOf:mbs->baseBufferId + (uint64_t)readIdx
 				                                              fromNode:whoami_local
 				                                         withBatchSize:(uint64_t)numReadRemaining
@@ -2162,7 +2172,7 @@ StopReaders_Private(MeshHandle_t * mh)
 
 	for (uint32_t i = 0; mbs && i < mbs->numBuffers; i++) {
 		if ([mh->service interruptWaitingThreads:(mbs->baseBufferId + i)] == NO) {
-			MESHLOG("Failed to interrupt waiting threads for bufferId: %llu\n", (mbs->baseBufferId + i));
+			MESHLOG("Failed to interrupt waiting threads for bufferId: 0x%llx\n", (mbs->baseBufferId + i));
 		}
 	}
 
@@ -2998,7 +3008,7 @@ MeshSetupBuffers_Private(MeshHandle_t * mh,
 						                             withAccessMode:0x2
 						                                   fromNode:assignment.localNodeRank];
 						if (!test) {
-							MESHLOGx("Failed to assign input for bufferId: %d, offset: %lld for node: %d\n",
+							MESHLOGx("Failed to assign input for bufferId: 0x%llx, offset: %lld for node: %d\n",
 							         (mbs->baseBufferId + j), offset, assignment.localNodeRank);
 						}
 					}
@@ -3173,7 +3183,7 @@ MeshReleaseBuffers(MeshHandle_t * mh, MeshBufferState_t * mbs)
 		}
 
 		CHECK(ctr < MAX_CTR,
-		      "application bug: MeshReleaseBuffers called while only %d/%d readers are blocked (baseBufferId %lld and %d "
+		      "application bug: MeshReleaseBuffers called while only %d/%d readers are blocked (baseBufferId 0x%llx and %d "
 		      "buffers ctr %d).\n",
 		      atomic_load(&mh->reader_blocked), atomic_load(&mh->num_threads), mbs->baseBufferId, (int)mbs->numBuffers, ctr);
 	}
@@ -3181,7 +3191,8 @@ MeshReleaseBuffers(MeshHandle_t * mh, MeshBufferState_t * mbs)
 	// free'ing things in reverse order is a little bit better for the driver
 	for (int32_t i = (int32_t)mbs->numBuffers - 1; i >= 0; i--) {
 		if ([mh->service deallocateSharedMemory:(mbs->baseBufferId + (uint32_t)i) ofSize:mbs->bufferSize] == NO) {
-			MESHLOG("Failed to deallocate shared memory bufId %lld size %lld\n", mbs->baseBufferId + (uint32_t)i, mbs->bufferSize);
+			MESHLOG("Failed to deallocate shared memory bufId 0x%llx size %lld\n", mbs->baseBufferId + (uint32_t)i,
+			        mbs->bufferSize);
 		}
 
 		if (mbs->bufferInfo[i].shadow != mbs->bufferInfo[i].bufferPtr) {
@@ -3255,6 +3266,14 @@ MeshClearBuffers(MeshHandle_t * mh, MeshBufferState_t * mbs)
 		memset_s(mbs->bufferInfo[i].shadow, mbs->bufferSize, 0, mbs->bufferSize);
 	}
 
+	if (![mh->service resetBuffer:mbs->baseBufferId]) {
+		MESHLOG("Failed to reset bufferId 0x%llx", mbs->baseBufferId);
+		return EINVAL;
+	}
+
+	mbs->curBufferIdx = 0;
+	atomic_store(&mbs->currentReadIdx, 0);
+
 	return 0;
 }
 
@@ -3262,13 +3281,13 @@ extern "C" int
 MeshBroadcastAndGather(MeshHandle_t * mh, MeshBufferState_t * mbs)
 {
 	if (!mbs->sync0Complete) {
-		os_signpost_event_emit(mh->stats.signpostHandle, mh->stats.zeroSyncSignpost, "0Sync", "mesh buffer state baseBufferId %lld",
-		                       mbs->baseBufferId);
+		os_signpost_event_emit(mh->stats.signpostHandle, mh->stats.zeroSyncSignpost, "0Sync",
+		                       "mesh buffer state baseBufferId 0x%llx", mbs->baseBufferId);
 		mbs->sync0Complete = true;
 	}
 
 	if (!isNodeParticipating(mh->myNodeId, mbs->nodeMask)) {
-		MESHLOG("I am not participating in bufferId:%llu, not BAGing\n", mbs->baseBufferId);
+		MESHLOG("I am not participating in bufferId:0x%llx, not BAGing\n", mbs->baseBufferId);
 		return 0;
 	}
 
@@ -3294,7 +3313,7 @@ MeshBroadcastAndGather(MeshHandle_t * mh, MeshBufferState_t * mbs)
 	// Making sure there isn't a current active BAG when starting this BAG
 	bool expectedBroadcastActive = false;
 	if (!atomic_compare_exchange_strong(&mbs->broadcastActive, &expectedBroadcastActive, true)) {
-		MESHLOG("MeshBufferState already doing broadcastAndGather for bufferId %llu bufferIdx:%u.\n", mbs->baseBufferId,
+		MESHLOG("MeshBufferState already doing broadcastAndGather for bufferId 0x%llx bufferIdx:%u.\n", mbs->baseBufferId,
 		        mbs->curBufferIdx);
 		return EBUSY;
 	}
@@ -3427,7 +3446,7 @@ MeshBroadcastAndGather(MeshHandle_t * mh, MeshBufferState_t * mbs)
 			}
 
 			if (mh->verbose_level >= LogDebug) {
-				MESHLOG("sender: broadcasting bufferId %lld at offset %lld for %lld nextBufId: %lld nextOffset %lld\n",
+				MESHLOG("sender: broadcasting bufferId 0x%llx at offset %lld for %lld nextBufId: 0x%llx nextOffset %lld\n",
 				        mbs->baseBufferId + bufferIdx, ongoingOffset, mbs->chunkSize, mbs->baseBufferId + nextBufferIdx,
 				        outgoingOffset + nextChunkOffset);
 			}
@@ -3678,7 +3697,7 @@ MeshAssignBuffersToReaders_Private(MeshHandle_t * mh, MeshBufferState_t * mbs, i
 	}
 
 	if (MeshBufferState_t * tmp = (MeshBufferState_t *)atomic_load(&mh->activateChainedBuffers)) {
-		MESHLOG("Assigning multiple buffers to readers. Previous BufferId:%llu, New BufferId:%llu\n", tmp->baseBufferId,
+		MESHLOG("Assigning multiple buffers to readers. Previous BufferId:0x%llx, New BufferId:0x%llx\n", tmp->baseBufferId,
 		        mbs->baseBufferId);
 		return EINPROGRESS;
 	}
@@ -3934,12 +3953,12 @@ MeshReleaseBuffer(MeshHandle_t * mh, uint64_t bufferId, uint64_t bufferSize)
 	SendToAllBuffer_t * sendToAllBuffer = lookupSendToAllBuffer(mh, bufferId);
 
 	if (sendToAllBuffer == nullptr) {
-		MESHLOG("No buffer with ID %lld to deallocate\n", bufferId);
+		MESHLOG("No buffer with ID 0x%llx to deallocate\n", bufferId);
 		return -1;
 	}
 
 	if ([mh->service deallocateSharedMemory:bufferId ofSize:sendToAllBuffer->totalBufSize] == NO) {
-		MESHLOG("Failed to deallocate shared memory bufId %lld size %lld\n", bufferId, bufferSize);
+		MESHLOG("Failed to deallocate shared memory bufId 0x%llx size %lld\n", bufferId, bufferSize);
 		return -1;
 	}
 
@@ -3970,7 +3989,7 @@ MeshSendToAllPeers(MeshHandle_t * mh, const uint64_t sendToAllBufferId, void * s
 	SendToAllBuffer_t * sendToAllBuffer = lookupSendToAllBuffer(mh, sendToAllBufferId);
 
 	if (sendToAllBuffer == nullptr) {
-		MESHLOG("No buffer with ID %lld to deallocate\n", sendToAllBufferId);
+		MESHLOG("No buffer with ID 0x%llx to deallocate\n", sendToAllBufferId);
 		return false;
 	}
 
@@ -3989,7 +4008,7 @@ MeshSendToAllPeers(MeshHandle_t * mh, const uint64_t sendToAllBufferId, void * s
 		uint64_t offset = chunk * chunkSize;
 		ret             = [mh->service prepareDataChunkTransferFor:sendToAllBufferId atOffset:offset];
 		if (!ret) {
-			MESHLOG("Failed to prepare outgoing buffer for bufferId %lld : ret=%d\n", sendToAllBufferId, ret);
+			MESHLOG("Failed to prepare outgoing buffer for bufferId 0x%llx : ret=%d\n", sendToAllBufferId, ret);
 			return false;
 		}
 
@@ -3997,7 +4016,7 @@ MeshSendToAllPeers(MeshHandle_t * mh, const uint64_t sendToAllBufferId, void * s
 
 		if (mh->cryptoKeyArray.key_count == 0) {
 			os_log_error(OS_LOG_DEFAULT,
-			             "MeshSendToAllPeers: Crypto key not set when preparing outgoing buffer for bufferId %lld\n",
+			             "MeshSendToAllPeers: Crypto key not set when preparing outgoing buffer for bufferId 0x%llx\n",
 			             sendToAllBufferId);
 			return false;
 		}
@@ -4058,7 +4077,7 @@ MeshSendToAllPeers(MeshHandle_t * mh, const uint64_t sendToAllBufferId, void * s
 
 		ret = [mh->service sendAssignedDataChunkFrom:sendToAllBufferId atOffset:offset withTags:&tag[0][0]];
 		if (!ret) {
-			MESHLOG("Failed to broadcast outgoing buffer for bufferId %llu at offset %llu: ret=%d\n", sendToAllBufferId, offset,
+			MESHLOG("Failed to broadcast outgoing buffer for bufferId 0x%llx at offset %llu: ret=%d\n", sendToAllBufferId, offset,
 			        ret);
 			return false;
 		}
@@ -4093,7 +4112,7 @@ MeshReceiveFromLeaderEx(
 	SendToAllBuffer_t * sendToAllBuffer = lookupSendToAllBuffer(mh, bufferId);
 
 	if (sendToAllBuffer == nullptr) {
-		MESHLOG("No buffer with ID %lld to deallocate\n", bufferId);
+		MESHLOG("No buffer with ID 0x%llx to deallocate\n", bufferId);
 		return false;
 	}
 
@@ -4170,12 +4189,12 @@ MeshReceiveFromLeaderEx(
 			// The data is already encrypted.
 			bool ret = [mh->service prepareDataChunkTransferFor:bufferId atOffset:totalOffset];
 			if (!ret) {
-				MESHLOG("Failed to prepare outgoing buffer for bufferId %lld : ret=%d\n", bufferId, ret);
+				MESHLOG("Failed to prepare outgoing buffer for bufferId 0x%llx : ret=%d\n", bufferId, ret);
 				return false;
 			}
 			ret = [mh->service sendAssignedDataChunkFrom:bufferId atOffset:totalOffset withTags:rxtags[0]];
 			if (!ret) {
-				MESHLOG("Failed to broadcast outgoing buffer for bufferId %llu at offset %llu: ret=%d\n", bufferId, offset, ret);
+				MESHLOG("Failed to broadcast outgoing buffer for bufferId 0x%llx at offset %llu: ret=%d\n", bufferId, offset, ret);
 				return false;
 			}
 
@@ -4183,20 +4202,20 @@ MeshReceiveFromLeaderEx(
 			// receive from CIO only
 			bool ret = [mh->service prepareDataChunkTransferFor:bufferId atOffset:totalOffset];
 			if (!ret) {
-				MESHLOG("Failed to prepare incoming buffer for bufferId %llu : ret=%d\n", bufferId, ret);
+				MESHLOG("Failed to prepare incoming buffer for bufferId 0x%llx : ret=%d\n", bufferId, ret);
 				return false;
 			}
 
 			char tag[kTagSize];
 			ret = [mh->service waitOnSharedMemory:bufferId atOffset:totalOffset withTag:tag];
 			if (!ret) {
-				MESHLOG("Failed to receive incoming buffer for bufferId %llu : ret=%d\n", bufferId, ret);
+				MESHLOG("Failed to receive incoming buffer for bufferId 0x%llx : ret=%d\n", bufferId, ret);
 				return false;
 			}
 
 			if (mh->cryptoKeyArray.key_count == 0) {
 				os_log_error(OS_LOG_DEFAULT,
-				             "MeshReceiveFromLeader: Crypto key not set when preparing outgoing buffer for bufferId %lld\n",
+				             "MeshReceiveFromLeader: Crypto key not set when preparing outgoing buffer for bufferId 0x%llx\n",
 				             bufferId);
 				return false;
 			}

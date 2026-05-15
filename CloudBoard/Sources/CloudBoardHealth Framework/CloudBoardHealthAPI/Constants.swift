@@ -12,15 +12,13 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 internal import CloudBoardCommon
 
 internal let kCloudBoardHealthAPIXPCLocalServiceEntitlement =
     "com.apple.private.cloudos.cloudboardhealth"
 
 internal var kCloudBoardHealthAPIXPCServiceName: String {
-    if let isLeader = NodeInfo.load().isLeader, isLeader == false {
+    if let isLeader = NodeInfo.isLeader(), isLeader == false {
         return "com.apple.cloudos.cloudboardd_follower.healthendpoint"
     }
     return "com.apple.cloudos.cloudboardd.healthendpoint"

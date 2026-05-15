@@ -12,11 +12,11 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CFPreferenceCoder
 import CloudBoardCommon
+import CloudBoardLogging
 import Foundation
+import os
 
 extension CFPreferences {
     static var cbJobHelperPreferencesDomain: String {
@@ -24,17 +24,23 @@ extension CFPreferences {
     }
 }
 
-public struct CBJobHelperConfiguration: Codable, Hashable {
+public struct CBJobHelperConfiguration: Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
-        case cloudAppName = "CloudAppName"
+        case _cloudAppName = "CloudAppName"
         case _enforceTGTValidation = "EnforceTGTValidation"
         case _proxyConfiguration = "ProxyConfiguration"
+        case _enablePIR = "EnablePIR"
+        case _effortPrivacy = "EffortPrivacy"
         // deliberately *not* serialising _secureConfig
     }
 
     /// Name to search for in the `CloudBoardJobName` field in the `_AdditionalProperties` launchd plist to discover
     /// the cloud app process.
-    var cloudAppName: String?
+    var _cloudAppName: String?
+    var cloudAppName: String {
+        get { self._cloudAppName ?? "TIECloudApp" }
+        set { self._cloudAppName = newValue }
+    }
 
     var _enforceTGTValidation: Bool?
     /// If true, cb_jobhelper fails requests that fail Token Granting Token (TGT) validation. Otherwise, requests with
@@ -51,7 +57,27 @@ public struct CBJobHelperConfiguration: Codable, Hashable {
         set { self._proxyConfiguration = newValue }
     }
 
+    var _enablePIR: Bool?
+    var enablePIR: Bool {
+        get { self._enablePIR ?? false }
+        set { self._enablePIR = newValue }
+    }
+
+    var _effortPrivacy: EffortPrivacyConfiguration?
+    var effortPrivacy: EffortPrivacyConfiguration {
+        get { self._effortPrivacy ?? EffortPrivacyConfiguration() }
+        set { self._effortPrivacy = newValue }
+    }
+
     private var _secureConfig: SecureConfig? = nil
+    /// The secure config is only available once it has been hooked up and validated
+    /// This happens very early on in the setup so most consuming code can just assume this is set
+    var secureConfig: SecureConfig {
+        /// Attempting to do this in a real run means we didn't apply security checks, this should be instantly terminal
+        precondition(self._secureConfig != nil, "Attempt to access secureconfig when it has not been hooked up")
+        return self._secureConfig!
+    }
+
     /// What sort of role this helper will be providing
     /// If not supplied this is assumed to be a worker
     /// we cannot determine if we are a nack processing instance from this
@@ -70,7 +96,7 @@ public struct CBJobHelperConfiguration: Codable, Hashable {
         enforceTGTValidation: Bool? = nil
     ) {
         self._secureConfig = secureConfig
-        self.cloudAppName = cloudAppName
+        self._cloudAppName = cloudAppName
         self._enforceTGTValidation = enforceTGTValidation
     }
 
@@ -132,4 +158,46 @@ public struct CBJobHelperConfiguration: Codable, Hashable {
 /// We retain the ProxyConfiguration object for a while in case some other proxy specific config comes up
 extension CBJobHelperConfiguration {
     struct ProxyConfiguration: Codable, Hashable, Sendable {}
+
+    /// Configuration for privacy-preserving effort degradation
+    /// These values control how ideal effort calculations are converted into noisier,
+    /// granular values before being sent to ROPES for routing decisions.
+    public struct EffortPrivacyConfiguration: Codable, Hashable, Sendable {
+        enum CodingKeys: String, CodingKey {
+            case denominator = "Denominator"
+            case probabilityOfOneWayMovement = "ProbabilityOfOneWayMovement"
+        }
+
+        /// Maximum granularity denominator for degraded effort values.
+        /// Degraded effort is expressed as numerator/denominator where denominator
+        /// must be of form 2^n - 1 (i.e., 1, 3, 7, 15, 31).
+        /// Must be in range [1, 31]
+        public var denominator: UInt8?
+
+        /// Probability of moving up or down one granularity bucket to add noise.
+        /// This creates symmetric noise that maintains mean(input) = mean(output)
+        /// while making exact effort values unpredictable.
+        /// Must be in the range [0.0, 1.0]
+        public var probabilityOfOneWayMovement: Double?
+
+        /// Non-throwing initializer when no values are provided (uses all defaults)
+        public init() {
+            self.denominator = nil
+            self.probabilityOfOneWayMovement = nil
+        }
+
+        public init(
+            denominator: UInt8? = nil,
+            probabilityOfOneWayMovement: Double? = nil
+        ) throws {
+            if let denominator {
+                try PolicyControlledEffortDegrader.validateDenominator(denominator)
+            }
+            if let probability = probabilityOfOneWayMovement {
+                try PolicyControlledEffortDegrader.validateProbability(probability)
+            }
+            self.denominator = denominator
+            self.probabilityOfOneWayMovement = probabilityOfOneWayMovement
+        }
+    }
 }

@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 /// Represents a message sent over a ``CloudBoardAsyncXPCConnection``
 package protocol CloudBoardAsyncXPCMessage: Sendable {
     /// Type of a value returned when a message is handled successfully.

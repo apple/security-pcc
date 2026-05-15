@@ -55,6 +55,10 @@ EA1937
 						"description": "Variant names for the cryptexes",
 						"type": "string"
 					},
+					"jetsam_properties_variant": {
+						"description": "Jetsam properties variant name for the cryptex.",
+						"type": "string"
+					},
 					"size": {
 						"description": "Sizes of the compressed cryptexes",
 						"type": "integer"
@@ -70,7 +74,11 @@ EA1937
 						"enum": ["tatsu", "diavlo", "factory", "none"]
 					},
 					"daw_token": {
-						"description": "Daw token for authenticating with Knox when downloading and fetching decryption key for a Knox cryptex.",
+						"description": "Daw token for authenticating with Knox when downloading and fetching decryption key for a Knox cryptex. Note: DAW token support was deprecated on 9/30/2025. If you use this key to download from Knox, your download will fail.",
+						"type": "string"
+					},
+					"oidc_token": {
+						"description": "OIDC token for authenticating with Knox when downloading and fetching decryption key for a Knox cryptex.",
 						"type": "string"
 					},
 					"wg_username": {
@@ -89,7 +97,7 @@ EA1937
 						"description": "Enable setting the network service type to background rather than default for Knox cryptex downloads. Set to 'true' to enable. Default is 'false'.",
 						"type": "boolean"
 					},
-					"network-retry-count": {
+					"network_retry_count": {
 						"description": "Configure the number of retries with exponential backoff for network failures such as HTTP 429 when downloading and decrypting a cryptex from Knox. The max number of retries is 15. This does not apply to authorization failures.",
 						"type": "integer",
 						"minimum": 0
@@ -127,11 +135,15 @@ EA1937
 						"description": "Chunk size (in bytes) to use when performing parallel range request downloads. If set, darwin-init will assume range requests are supported without verifying via a HEAD request. Note: If unspecified, but darwin-init detects range requests are supported a default of 16 MiB is used.",
 						"type": "integer"
 					},
-					"original_knox_url": {
-						"description": "Stashes the equivalent knox:// url for non-production use cases (e.g. VRE). This key is ignored by darwin-init and not actually used to download the cryptex.",
-						"type": "string",
-						"format": "uri-template"
-					}
+                    "original_knox_url": {
+                        "description": "Stashes the equivalent knox:// url for non-production use cases (e.g. VRE). This key is ignored by darwin-init and not actually used to download the cryptex.",
+                        "type": "string",
+                        "format": "uri-template"
+                    },
+                    "identifier": {
+                        "description": "Bundle identifier of the Cryptex.",
+                        "type": "string"
+                    }
 				},
 				"required": ["url"]
 			}
@@ -505,9 +517,9 @@ EA1937
 			"type": "boolean"
 		},
 		"userspace-reboot": {
-			"description": "Reboot userspace after preflight, root install, and postflight. Use \"rem\" for Restricted Execution Mode. Use \"rem-dev\" for Restricted Execution Mode without blowing the fuse that enforces trust cache REM policy. This fuse state is attested to, so \"rem-dev\" is not useful in production deployments. Use an empty string (\"\") or \"none\" to disable userspace reboots on systems where it is the default.",
+			"description": "Reboot userspace after preflight, root install, and postflight. Use \"rem\" for Restricted Execution Mode. Use \"rem-dev\" for Restricted Execution Mode without blowing the fuse that enforces trust cache REM policy. This fuse state is attested to, so \"rem-dev\" is not useful in production deployments. Use \"default\" to trigger a userspace reboot back into the default boot mode. Use \"none\" to disable userspace reboots on systems where it is the default.",
 			"type": "string",
-			"enum": ["none", "", "rem", "rem-dev"]
+			"enum": ["none", "", "rem", "rem-dev", "default"]
 		},
 		"pre-init-cmds": {
 			"description": "Specify one or more scripts to execute in bash before all other darwin-init operations.",
@@ -550,9 +562,28 @@ EA1937
 			"minimum": 0,
 			"type": "integer"
 		},
+		"cryptex-retain": {
+			"description": "Cryptexes to retain after update install.",
+			"type": "array",
+			"items": {
+				"type": "object"
+			}
+		},
+		"cryptex-cache-invalidation-id": {
+			"description": "Sets the identifier for the current workload used to guard access to cryptex cache contents. If the specified value does not match the identifier on disk, the cryptex cache is purged before the config is applied.",
+			"type": "string"
+		},
 		"apply-timeout": {
 			"description": "Set the timeout to enforce when applying this config.",
 			"type": "string"
+		},
+		"volumes": {
+			"description": "Volumes to mount. The key is the name of the volume to mount; typically rDNS. The value is a URL to the secret that protects the volume.",
+			"type": "object",
+			"additionalProperties": {
+				"type": "string",
+				"format": "uri-reference"
+			}
 		},
 		"feature_flags": {
 			"description": "Configuration for feature flags updates. Definitions must be provided via OS or cryptex. Note that `config-security-policy` imposes requirements on feature flag attributes.",

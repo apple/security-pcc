@@ -68,32 +68,29 @@ enum NetworkConfig {
      
     - Returns true or false indicating if the config was successfully applied
      */
-    static func setConfig(retryLimit: Int?, config: NSDictionary?, interface: String) -> Bool {
+    static func setConfig(retryLimit: Int, config: NSDictionary?, interface: String) -> Bool {
         let manager = SCNSManager.create()
         guard let netif = manager.copyInterface(name: interface) else {
             return false
         }
-        
+
         // Poll until service has been laid down by configd or limit reached
         var retryCount = 0
-        let delay: UInt32 = 1
         var service = manager.copyService(interface: interface, netif: netif)
         while service == nil {
-            // Retry if no limit is set
-            guard let retryLimit = retryLimit else { continue }
             // Give up if we reach the retry limit
-            guard retryCount >= retryLimit else {
+            guard retryLimit >= retryCount else {
                 logger.error("Reached retry limit when trying to find service for interface \(interface)")
                 return false
             }
             logger.error("Did not reach retry limit. Refreshing manager and trying to find service for interface again")
             retryCount += 1
-            let waitSec = delay + UInt32(retryCount - 1)
+            let waitSec = UInt32(retryCount)
             sleep(waitSec)
             manager.refresh()
             service = manager.copyService(interface: interface, netif: netif)
         }
-        
+
         // Set the nested config for each protocol specified in client's network config
         var changed = false
         let protocols = getProtocols(config: config)

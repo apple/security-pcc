@@ -12,10 +12,10 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2023 Apple Inc. All rights reserved.
-
 import CFPreferenceCoder
+import CloudBoardCommon
 import Foundation
+import os
 
 extension CFPreferences {
     static var nullCloudAppPreferencesDomain: String {
@@ -29,24 +29,54 @@ struct NullCloudAppConfig: Codable, Hashable, Sendable {
         case proxyConfiguration = "ProxyConfiguration"
     }
 
+    /// If not specified a default will be chosen based on being a proxy
     internal var nullAppRole: String?
     internal var proxyConfiguration: ProxyConfiguration?
 
-    static func fromPreferences() throws -> NullCloudAppConfig {
-        NullCloudApp.log
-            .info("Loading configuration from preferences \(CFPreferences.nullCloudAppPreferencesDomain)")
-        let preferences = CFPreferences(domain: CFPreferences.nullCloudAppPreferencesDomain)
-        do {
-            return try .fromPreferences(preferences)
-        } catch {
-            NullCloudApp.log.error("Error loading configuration from preferences: \(error)")
-            throw error
+    private var _secureConfig: SecureConfig? = nil
+    internal var secureConfig: SecureConfig {
+        /// Attempting to do this in a real run means we didn't apply security checks,
+        /// this should be instantly terminal
+        precondition(self._secureConfig != nil, "Attempt to access secureconfig when it has not been hooked up")
+        return self._secureConfig!
+    }
+
+    private mutating func applySecureConfig(_ secureConfig: SecureConfig) throws {
+        self._secureConfig = secureConfig
+        // after setting up everything else validate
+        if secureConfig.shouldEnforceAppleInfrastructureSecurityConfig {
+            self.enforceSecurityConfig()
         }
     }
 
-    static func fromPreferences(_ preferences: CFPreferences) throws -> NullCloudAppConfig {
-        let decoder = CFPreferenceDecoder()
-        return try decoder.decode(NullCloudAppConfig.self, from: preferences)
+    private mutating func enforceSecurityConfig() {
+        // nothing to enforce  - Roles only access config they need and
+        // none of the values are security/privacy controllers
+    }
+
+    static func fromPreferences(
+        logger: Logger,
+        preferences: CFPreferences = CFPreferences(domain: CFPreferences.nullCloudAppPreferencesDomain),
+        secureConfigLoader: SecureConfigLoader = .real
+    ) throws -> NullCloudAppConfig {
+        logger.info("Loading configuration from preferences \(preferences)")
+        var config: NullCloudAppConfig
+        do {
+            config = try CFPreferenceDecoder().decode(NullCloudAppConfig.self, from: preferences)
+        } catch {
+            logger.error("Error loading configuration from preferences: \(error)")
+            throw error
+        }
+        let secureConfig: SecureConfig
+        do {
+            logger.info("Loading secure config from SecureConfigDB")
+            secureConfig = try secureConfigLoader.load()
+        } catch {
+            logger.error("Error loading secure config: \(error)")
+            throw error
+        }
+        try config.applySecureConfig(secureConfig)
+        return config
     }
 }
 

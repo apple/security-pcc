@@ -19,6 +19,7 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
+import AppleIntelligenceReporting
 import Foundation
 
 extension TrustedRequest {
@@ -40,5 +41,153 @@ extension TrustedRequest {
         bundleIdentifierOverride: String? = nil
     ) {
         self.init(id: id, workloadType: workloadType, workloadParameters: workloadParameters, featureIdentifier: featureIdentifier, sessionIdentifier: sessionIdentifier, bundleIdentifierOverride: bundleIdentifierOverride, originatingBundleIdentifier: nil)
+    }
+}
+
+@available(*, deprecated, message: "TrustedCloudComputeError has been removed; use PrivateCloudComputeError")
+public enum TrustedCloudComputeError: Swift.Error, Sendable, Codable, AppleIntelligenceError {
+    case deniedDueToRateLimit(rateLimitInfo: RateLimitInfo)
+    case deniedDueToAvailability(availabilityInfo: AvailabilityInfo)
+    case timeoutError(timeoutErrorInfo: TimeoutErrorInfo)
+    case invalidRequestError(invalidRequestErrorInfo: InvalidRequestErrorInfo)
+    case unauthorizedError(unauthorizedErrorInfo: UnauthorizedErrorInfo)
+    case serverError(serverErrorInfo: ServerErrorInfo)
+    case internalError(internalErrorInfo: InternalErrorInfo)
+    case networkError(networkErrorInfo: NetworkErrorInfo)
+
+    public var rawCode: Int { 0 }
+    public var descriptionWithoutUnderlying: String { "" }
+    public var underlyingErrors: [any AppleIntelligenceError] { [] }
+    public var category: AppleIntelligenceErrorCategory { .internalError }
+    public var retryable: Bool { false }
+    public var retryAfterDate: Date? { nil }
+    public var description: String { "" }
+
+    public struct RateLimitInfo: CustomStringConvertible, Sendable, Codable {
+        public var bundleID: String?
+        public var featureID: String?
+        public var workloadType: String?
+        public var workloadTags: [WorkloadTag]
+        public struct WorkloadTag: Sendable, Codable {
+            public var key: String
+            public var value: String
+            public init(key: String, value: String) {
+                self.key = key
+                self.value = value
+            }
+        }
+        public var count: UInt
+        public var duration: TimeInterval
+        public var retryAfterDate: Date
+        public init(
+            bundleID: String?,
+            featureID: String?,
+            workloadType: String?,
+            workloadTags: [WorkloadTag],
+            count: UInt,
+            duration: TimeInterval,
+            retryAfterDate: Date
+        ) {
+            self.bundleID = bundleID
+            self.featureID = featureID
+            self.workloadType = workloadType
+            self.workloadTags = workloadTags
+            self.count = count
+            self.duration = duration
+            self.retryAfterDate = retryAfterDate
+        }
+        public var description: String { "" }
+    }
+
+    public struct AvailabilityInfo: CustomStringConvertible, Sendable, Codable {
+        public var reason: Reason?
+        public var retryAfterDate: Date
+        public init(
+            reason: Reason?,
+            retryAfterDate: Date
+        ) {
+            self.reason = reason
+            self.retryAfterDate = retryAfterDate
+        }
+        public enum Reason: Sendable, Codable {
+            case unknownWorkload
+            case noNodesAvailable
+            case nodesBusy
+            case nodeAttestationChanged
+            case nodesOverUtilized
+            case workloadNotFound
+            case attestationsUnavailable
+        }
+        public var description: String { "" }
+    }
+
+    public struct TimeoutErrorInfo: CustomStringConvertible, Sendable, Codable {
+        public var reason: Reason?
+        public var retryAfterDate: Date
+        public init(
+            reason: Reason?,
+            retryAfterDate: Date
+        ) {
+            self.reason = reason
+            self.retryAfterDate = retryAfterDate
+        }
+        public enum Reason: Sendable, Codable {
+            case setupRequestTimeout
+            case decryptionKeyTimeout
+            case maxRequestLifetimeReached
+            case requestChunkTimeout
+        }
+        public var description: String { "" }
+    }
+
+    public struct InvalidRequestErrorInfo: CustomStringConvertible, Sendable, Codable {
+        public var reason: Reason?
+        public init(reason: Reason?) {
+            self.reason = reason
+        }
+        public enum Reason: Sendable, Codable {
+            case invalidWorkload
+        }
+        public var description: String { "" }
+    }
+
+    public struct UnauthorizedErrorInfo: CustomStringConvertible, Sendable, Codable {
+        public var reason: Reason?
+        public init(reason: Reason?) {
+            self.reason = reason
+        }
+        public enum Reason: Sendable, Codable {
+            case tenantBlocked
+            case softwareBlocked
+            case workloadBlocked
+            case featureIdBlocked
+        }
+        public var description: String { "" }
+    }
+
+    public struct ServerErrorInfo: CustomStringConvertible, Sendable, Codable {
+        public var retryable: Bool
+        public var retryAfterDate: Date?
+        public var description: String { "" }
+    }
+
+    public struct InternalErrorInfo: CustomStringConvertible, Sendable, Codable {
+        public var message: String
+        public init(message: String) {
+            self.message = message
+        }
+        public var description: String { "" }
+    }
+
+    public struct NetworkErrorInfo: CustomStringConvertible, Sendable, Codable {
+        public var domain: String
+        public var code: Int
+        public var message: String
+        public init(domain: String, code: Int, message: String) {
+            self.domain = domain
+            self.code = code
+            self.message = message
+        }
+        public var description: String { "" }
     }
 }

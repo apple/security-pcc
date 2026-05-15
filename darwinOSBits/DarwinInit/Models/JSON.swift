@@ -23,7 +23,8 @@ import Foundation
 public indirect enum JSON {
     case null
     case bool(Bool)
-    case number(Double)
+	case int(Int128)
+	case number(Double)
     case string(String)
     case array([JSON])
     case dictionary([String: JSON])
@@ -33,7 +34,9 @@ extension JSON: Decodable {
     public init(from decoder: Decoder) throws {
         if let bool = try? Bool(from: decoder) {
             self = .bool(bool)
-        } else if let number = try? Double(from: decoder) {
+		} else if let int = try? Int128(from: decoder) {
+			self = .int(int)
+		} else if let number = try? Double(from: decoder) {
             self = .number(number)
         } else if let string = try? String(from: decoder) {
             self = .string(string)
@@ -55,7 +58,9 @@ extension JSON: Encodable {
             try container.encodeNil()
         case let .bool(bool):
             try bool.encode(to: encoder)
-        case let .number(number):
+		case let .int(int):
+			try int.encode(to: encoder)
+		case let .number(number):
             try number.encode(to: encoder)
         case let .string(string):
             try string.encode(to: encoder)
@@ -88,6 +93,12 @@ extension JSON {
             return nil
         case let .bool(bool):
             return bool as CFBoolean
+        case let .int(int):
+            return if int.signum() < 0 {
+                Int64(clamping: int) as CFNumber
+            } else {
+                UInt64(clamping: int) as CFNumber
+            }
         case let .number(double):
             return double as CFNumber
         case let .string(string):
@@ -101,7 +112,7 @@ extension JSON {
     
     var dictionaryValue: CFDictionary? {
         switch self {
-        case .null, .bool, .number, .string, .array:
+		case .null, .bool, .int, .number, .string, .array:
             return nil
         case let .dictionary(dictionary):
             return dictionary.compactMapValues(\._childDictionaryValue) as CFDictionary
@@ -114,7 +125,13 @@ extension JSON {
             return nil
         case let .bool(bool):
             return bool as CFBoolean
-        case let .number(double):
+        case let .int(int):
+            return if int.signum() < 0 {
+                Int64(clamping: int) as CFNumber
+            } else {
+                UInt64(clamping: int) as CFNumber
+            }
+		case let .number(double):
             return double as CFNumber
         case let .string(string):
             return string as CFString
@@ -123,5 +140,57 @@ extension JSON {
         case let .dictionary(dictionary):
             return dictionary.compactMapValues(\._childDictionaryValue) as CFDictionary
         }
+    }
+}
+
+extension JSON: CustomStringConvertible {
+
+    private func description<S: Sequence>(
+        for seq: S,
+        prefix: String,
+        postfix: String,
+        at level: Int,
+        block: (S.Element) -> String
+    ) -> String {
+        var desc = prefix + "\n"
+
+        desc += seq.map(block).joined(separator: ",\n")
+
+        desc += "\n"
+        desc +=  String(repeating: "  ", count: level - 1)
+        desc += postfix
+
+        return desc
+    }
+
+    private func description(for array: [JSON], level: Int) -> String {
+        description(for: array, prefix: "[", postfix: "]", at: level) {
+            String(repeating: "  ", count: level) +
+            $0.description(level: level + 1)
+        }
+    }
+
+    private func description(for dict: [String: JSON], level: Int) -> String {
+        description(for: dict, prefix: "{", postfix: "}", at: level) { (key, value) in
+            String(repeating: "  ", count: level) +
+            "\"\(key)\": " +
+            value.description(level: level + 1)
+        }
+    }
+
+    private func description(level: Int) -> String {
+        return switch self {
+        case .null: "null"
+        case let .bool(bool): bool ? "true" : "false"
+        case let .int(int): String(int, radix: 10)
+        case let .number(double): "\(double)"
+        case let .string(string): "\"\(string)\""
+        case let .array(array): description(for: array, level: level)
+        case let .dictionary(dict): description(for: dict, level: level)
+        }
+    }
+
+    public var description: String {
+        return self.description(level: 1)
     }
 }

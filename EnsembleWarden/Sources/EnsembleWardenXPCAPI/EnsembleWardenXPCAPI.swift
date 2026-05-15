@@ -20,11 +20,13 @@
 //
 
 package import CryptoKit
+package import EnsembleWardenCommon
 private import Foundation
 @preconcurrency package import IOSurface
+@_spi(Private) @preconcurrency private import XPC
 
-package protocol EnsembleWardenXPCRequest: Codable {
-    associatedtype Response: EnsembleWardenXPCResponse
+package protocol EnsembleWardenXPCRequest: Codable, Sendable {
+    associatedtype Response: Codable & Sendable
 }
 
 package protocol EnsembleWardenXPCResponse: Codable {}
@@ -33,6 +35,7 @@ extension [IOSurface]: @retroactive Encodable {}
 extension [IOSurface]: @retroactive Decodable {}
 extension [IOSurface]: EnsembleWardenXPCResponse {}
 
+/// Types that we pass across the XPC boundary between the EnsembleWarden framework and daemon.
 package enum EnsembleWardenDaemonXPC {
 
     package struct ExplicitSuccess: EnsembleWardenXPCResponse {
@@ -44,43 +47,59 @@ package enum EnsembleWardenDaemonXPC {
         package init() {}
     }
 
+    /// Start message supplies the daemon with the handles to the crypto
+    /// it will use for encrypting/decrypting.
     package struct Start: EnsembleWardenXPCRequest {
-        package typealias Response = ExplicitSuccess
-        package var serializedKeyEncryptionKey: Data
-        package var keyID: UUID
+        package typealias Response = CodableResult<[Int: UUID], EnsembleWardenError>
+        // xpc_connection_t is not Codable so we have to do this dance with XPCCodableObject.
+        package var ensemblePorterConnection: XPCCodableObject?
+        package var followerToken: UUID?
         package var requestID: UUID
-        package var spanID: UInt64
 
-        package init(keyEncryptionKey: SymmetricKey, keyID: UUID, requestID: UUID, spanID: UInt64) {
-            self.keyID = keyID
-            self.requestID = requestID
-            self.spanID = spanID
-            self.serializedKeyEncryptionKey = keyEncryptionKey.withUnsafeBytes { Data($0) }
+        package init(ensemblePorterConnection: xpc_connection_t?,
+                     followerToken: UUID?,
+                     requestID: UUID) {
+        if let ensemblePorterConnection {
+            let dict = xpc_dictionary_create(nil, nil, 0)
+            xpc_dictionary_set_connection(
+                dict,
+                EnsembleWardenConstants.ensemblePorterConnectionNameInXPCDict,
+                ensemblePorterConnection)
+            self.ensemblePorterConnection = XPCCodableObject(copying: dict)
         }
-
-        package var keyEncryptionKey: SymmetricKey {
-            SymmetricKey(data: self.serializedKeyEncryptionKey)
-        }
-
+        self.followerToken = followerToken
+        self.requestID = requestID
     }
+}
 
+    /// Sent from the framework to the daemon each time KV$s have been produced
+    /// that need to be encrypted and sent to transferd.
+    ///
+    /// N.b. the message contains `IOSurface`s. These are references to shared
+    /// memory buffers. The reference is quick to move.
     package struct Publish: EnsembleWardenXPCRequest, Sendable {
-        package typealias Response = ExplicitSuccess
+        package typealias Response = CodableResult<ExplicitSuccess, EnsembleWardenError>
         package var serializedXPCRequest: Data
         package var ioSurfaces: [IOSurface]
+        package var purpose: TransferPurpose
         package var requestID: UUID
         package var spanID: UInt64
 
-        package init(serializedXPCRequest: Data, ioSurfaces: [IOSurface], requestID: UUID, spanID: UInt64) {
+        package init(serializedXPCRequest: Data, ioSurfaces: [IOSurface], purpose: TransferPurpose,
+                     requestID: UUID, spanID: UInt64) {
             self.serializedXPCRequest = serializedXPCRequest
             self.ioSurfaces = ioSurfaces
+            self.purpose = purpose
             self.requestID = requestID
             self.spanID = spanID
         }
     }
 
+    /// Sent from the framework to daemon whenever an unencrypted KV$ is required.
+    ///
+    /// This message encodes the KV$ that is required to be fetched.
     package struct Fetch: EnsembleWardenXPCRequest {
-        package typealias Response = [IOSurface]
+        package typealias Response = CodableResult<[IOSurface], EnsembleWardenError>
         package var serializedXPCRequest: Data
         package var requestID: UUID
         package var spanID: UInt64
@@ -92,10 +111,33 @@ package enum EnsembleWardenDaemonXPC {
         }
     }
 
-    package struct Finish: EnsembleWardenXPCRequest {
-        package typealias Response = ExplicitSuccess
+    /// Sent from the framework to the daemon to prefault IOSurfaces into memory.
+    ///
+    /// This encourages the kernel to page in the memory backing the IOSurfaces
+    /// before they are needed on the hot path.
+    package struct Prefault: EnsembleWardenXPCRequest, Sendable {
+        package typealias Response = CodableResult<ExplicitSuccess, EnsembleWardenError>
+        package var ioSurfaces: [IOSurface]
+        package var requestID: UUID
+        package var spanID: UInt64
 
-        package init() {}
+        package init(ioSurfaces: [IOSurface], requestID: UUID, spanID: UInt64) {
+            self.ioSurfaces = ioSurfaces
+            self.requestID = requestID
+            self.spanID = spanID
+        }
+    }
+
+    /// Sent from the framework to daemon to drop all cached data in EnsembleTransport.
+    package struct DropAll: EnsembleWardenXPCRequest {
+        package typealias Response = CodableResult<ExplicitSuccess, EnsembleWardenError>
+
+        package init() {
+        }
+    }
+
+    package enum TransferPurpose: Codable, Sendable {
+        case ftET
     }
 
     package enum Request: Codable, Sendable {
@@ -103,17 +145,121 @@ package enum EnsembleWardenDaemonXPC {
         case start(Start)
         case publish(Publish)
         case fetch(Fetch)
-        case finish(Finish)
-    }
-
-    package enum Response: Codable, Sendable {
-        case error(EnsembleWardenXPCError)
-        case success([IOSurface])
-    }
-
-    package enum EnsembleWardenXPCError: Error, Codable {
-        case unknownMessageType
-        case unexpectedFailure
-        case invalidEntitlements
+        case prefault(Prefault)
+        case dropAll(DropAll)
     }
 }
+
+// Fetch/Publish messages for EnsembleTransport backend. Eventually
+// EnsembleTransport will become the only backend and the other
+// Publish/Fetch messages can be removed.
+extension EnsembleWardenDaemonXPC {
+    /// Sent from the framework to the daemon each time KV$s have been produced
+    /// that need to be encrypted and sent to EnsembleTransport.
+    ///
+    /// N.b. the message contains `IOSurface`s. These are references to shared
+    /// memory buffers. The reference is quick to move.
+    package struct Publish2: EnsembleWardenXPCRequest, Sendable {
+        package typealias Response =
+            CodableResult<ExplicitSuccess, EnsembleWardenError>
+        package var identifier: String
+        package var privateData: IOSurface
+        package var privateMetadata: IOSurface?
+        package var ttl: Duration
+        package var purpose: TransferPurpose
+        package var requestID: UUID
+        package var spanID: UInt64
+
+        package init(
+            identifier: String,
+            privateData: IOSurface,
+            privateMetadata: IOSurface?,
+            ttl: Duration,
+            purpose: TransferPurpose,
+            requestID: UUID,
+            spanID: UInt64) {
+            self.identifier = identifier
+            self.privateData = privateData
+            self.privateMetadata = privateMetadata
+            self.ttl = ttl
+            self.purpose = purpose
+            self.requestID = requestID
+            self.spanID = spanID
+        }
+    }
+
+    /// Sent from the framework to daemon whenever an unencrypted KV$ is
+    /// required.
+    ///
+    /// This message encodes the KV$ that is required to be fetched.
+    package struct Fetch2: EnsembleWardenXPCRequest {
+        package typealias Response =
+            CodableResult<IOSurface, EnsembleWardenError>
+        package var identifier: String
+        package var range: ClosedRange<Int>?
+        package var host: String
+        package var requestID: UUID
+        package var spanID: UInt64
+
+        package init(
+            identifier: String,
+            range: ClosedRange<Int>?,
+            host: String,
+            requestID: UUID,
+            spanID: UInt64
+        ) {
+            self.identifier = identifier
+            self.range = range
+            self.host = host
+            self.requestID = requestID
+            self.spanID = spanID
+        }
+    }
+
+    /// Sent from the framework to daemon whenever an unencrypted KV$
+    /// metadata is required.
+    ///
+    /// This message encodes the KV$ metadata that is required to be fetched.
+    package struct FetchMetadata: EnsembleWardenXPCRequest {
+        package typealias Response =
+            CodableResult<IOSurface?, EnsembleWardenError>
+        package var identifier: String
+        package var host: String
+        package var requestID: UUID
+        package var spanID: UInt64
+
+        package init(
+            identifier: String,
+            host: String,
+            requestID: UUID,
+            spanID: UInt64
+        ) {
+            self.identifier = identifier
+            self.host = host
+            self.requestID = requestID
+            self.spanID = spanID
+        }
+    }
+
+    package struct Delete: EnsembleWardenXPCRequest {
+        package typealias Response =
+            CodableResult<ExplicitSuccess, EnsembleWardenError>
+        package var identifier: String
+        package var host: String?
+        package var requestID: UUID
+        package var spanID: UInt64
+
+        package init(
+            identifier: String,
+            host: String?,
+            requestID: UUID,
+            spanID: UInt64
+        ) {
+            self.identifier = identifier
+            self.host = host
+            self.requestID = requestID
+            self.spanID = spanID
+        }
+    }
+}
+

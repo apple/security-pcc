@@ -12,9 +12,8 @@
 // EA1937
 // 10/02/2024
 
-//  Copyright © 2024 Apple Inc. All rights reserved.
-
 internal import CloudBoardCommon
+internal import CloudBoardLogging
 import os
 
 public actor CloudBoardHealthMonitor {

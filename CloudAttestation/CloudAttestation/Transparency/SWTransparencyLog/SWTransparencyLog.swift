@@ -20,13 +20,15 @@
 //
 import os.log
 import CryptoKit
-@_weakLinked import Transparency
-@_weakLinked import libnarrativecert
+#if canImport(libnarrativecert)
+@_weakLinked internal import libnarrativecert
+#endif
 import Security
+import InternalSwiftProtobuf
 
 typealias ATLogProofs = PrivateCloudCompute_TransparencyLog_ATLogProofs
 typealias ATLogProofRequest = PrivateCloudCompute_TransparencyLog_ATLogProofRequest
-typealias ATLogProofResponse = PrivateCloudCompute_TransparencyLog_ATLogProofResponse
+typealias ATLogProofBatchResponse = PrivateCloudCompute_TransparencyLog_ATLogProofBatchResponse
 typealias LogConsistency = PrivateCloudCompute_TransparencyLog_LogConsistency
 
 public struct SWTransparencyLog: TransparencyLog {
@@ -40,14 +42,13 @@ public struct SWTransparencyLog: TransparencyLog {
         self.verifier = SWTransparencyVerifier()
     }
 
-    private var narrativeSupported: Bool {
-        guard #_hasSymbol(NarrativeCert.self) else {
-            return false
+    public func proveInclusion(of digests: [Data]) async throws -> [TransparencyLogProofs] {
+        guard digests.count > 0 else {
+            return []
         }
-        return true
-    }
 
-    public func proveInclusion(of digest: Data) async throws -> TransparencyLogProofs {
+        Self.logger.log("Fetching inclusion proofs for digests \(digests.map { $0.hexString }, privacy: .public)")
+
         let url: URL
         let urlSessionDelegate: URLSessionDelegate?
 
@@ -82,7 +83,7 @@ public struct SWTransparencyLog: TransparencyLog {
         req.setValue("application/protobuf", forHTTPHeaderField: "Content-Type")
         let proofReq = ATLogProofRequest.with { builder in
             builder.version = .v3
-            builder.dataHash = digest
+            builder.dataHashes = digests
             builder.application = self.environment.transparencyPrimaryTree ? .privateCloudCompute : .privateCloudComputeInternal
         }
         req.httpBody = try proofReq.serializedData()
@@ -112,35 +113,27 @@ public struct SWTransparencyLog: TransparencyLog {
             throw TransparencyLogError.httpError(statusCode: httpResponse.statusCode)
         }
 
-        let resp = try ATLogProofResponse(serializedBytes: data)
+        let resp = try ATLogProofBatchResponse(serializedBytes: data)
         switch resp.status {
         case .ok:
-            guard resp.hasProofs, resp.proofs != ATLogProofs() else {
-                throw TransparencyLogError.invalidProof
+            guard resp.responses.count == digests.count else {
+                throw TransparencyLogError.requestLimitExceeded(requested: digests.count)
             }
 
-            return TransparencyLogProofs(proofs: resp.proofs, expiry: Int64(resp.expiryMs))
+            return try resp.responses.map {
+                guard $0.status == .ok else {
+                    throw $0.status.transparencyLogError ?? .internalError
+                }
 
-        case .unknownStatus:
-            throw TransparencyLogError.unknownStatus
+                guard $0.hasProofs, $0.proofs != ATLogProofs() else {
+                    throw TransparencyLogError.invalidProof
+                }
 
-        case .mutationPending:
-            throw TransparencyLogError.mutationPending
+                return TransparencyLogProofs(proofs: $0.proofs, expiry: Int64($0.expiryMs), digest: $0.dataHash)
+            }
 
-        case .internalError:
-            throw TransparencyLogError.internalError
-
-        case .alreadyExists:  // Not used for software transparency
-            throw TransparencyLogError.internalError
-
-        case .invalidRequest:
-            throw TransparencyLogError.invalidRequest
-
-        case .notFound:
-            throw TransparencyLogError.notFound
-
-        case .UNRECOGNIZED(let int):
-            throw TransparencyLogError.unrecognized(status: int)
+        default:
+            throw resp.status.transparencyLogError ?? .internalError
         }
     }
 
@@ -149,8 +142,9 @@ public struct SWTransparencyLog: TransparencyLog {
     }
 
     func loadNarrativeCredential() throws -> URLCredential {
-        guard self.narrativeSupported else {
-            Self.logger.error("Narrative is not supported on this system")
+        #if canImport(libnarrativecert)
+        guard #_hasSymbol(NarrativeCert.self) else {
+            Self.logger.error("Narrative is not available on this OS")
             throw TransparencyLogError.clientError(Error.narrativeUnsupported)
         }
 
@@ -168,5 +162,32 @@ public struct SWTransparencyLog: TransparencyLog {
 
         Self.logger.error("Unable to load acdc or adb narrative identity")
         throw TransparencyLogError.clientError(Error.noAvailableNarrativeIdentities)
+        #else
+        Self.logger.error("Narrative is not available on SDK")
+        throw TransparencyLogError.clientError(Error.narrativeUnsupported)
+        #endif
+    }
+}
+
+extension Status {
+    var transparencyLogError: TransparencyLogError? {
+        switch self {
+        case .unknownStatus:
+            return .unknownStatus
+        case .ok:
+            return nil
+        case .mutationPending:
+            return .mutationPending
+        case .alreadyExists:
+            return .internalError  // Not used for software transparency
+        case .internalError:
+            return .internalError
+        case .invalidRequest:
+            return .invalidRequest
+        case .notFound:
+            return .notFound
+        case .UNRECOGNIZED(let int):
+            return .unrecognized(status: int)
+        }
     }
 }

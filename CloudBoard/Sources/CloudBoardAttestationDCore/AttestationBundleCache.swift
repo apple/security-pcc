@@ -12,8 +12,6 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2025 Apple Inc. All rights reserved.
-
 import CloudBoardLogging
 import Foundation
 import os
@@ -78,6 +76,8 @@ actor OnDiskAttestationBundleCache: AttestationBundleCache {
     init(directoryURL: URL) throws {
         self.cacheFileDirectoryURL = directoryURL
         do {
+            // Ensure cache directory exists and create missing parent directories if needed.
+            // If the directory already exists, the function succeeds without error.
             try self.fileManager.createDirectory(
                 at: self.cacheFileDirectoryURL,
                 withIntermediateDirectories: true

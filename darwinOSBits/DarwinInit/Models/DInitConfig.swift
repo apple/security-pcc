@@ -20,7 +20,8 @@
 import ArgumentParserInternal
 import Foundation
 
-struct DInitConfig {
+@_spi(Private)
+public struct DInitConfig {
     var caRoots: DInitCARoots?
     var cryptexConfig: [DInitCryptexConfig]?
     var diavloConfig: DInitDiavloConfig?
@@ -54,8 +55,8 @@ struct DInitConfig {
     var lockCryptexes: Bool?
 
     var rebootAfterSetup: Bool?
-    var USRAfterSetup: DInitUSRPurpose?
-    
+    var USRAfterSetup: DInitUSR?
+
     var preInitCommands: [String]?
     var preInitCritical: Bool?
     
@@ -67,11 +68,14 @@ struct DInitConfig {
     
     var retainPreviouslyCachedCryptexesUnsafely: Bool?
     var cryptexCacheMaxTotalSize: Int?
+    var retainedCryptexes: [DInitCryptexConfig]?
     
     var configSecurityPolicy: String?
     var configSecurityPolicyVersion: Int?
 
 	var diagnosticsSubmissionEnabled: Bool?
+
+    var volumes: [String: URL]?
 
 	// Same format as the --timeout input to darwin-init apply
 	var applyTimeoutArgument: String?
@@ -88,17 +92,10 @@ struct DInitConfig {
 	}
     
     var bandwidthLimit: UInt64?
-    
-    func parseConfigSecurityPolicy() throws -> ConfigSecurityPolicy? {
-        guard let configSecurityPolicy else {
-            return nil
-        }
-        if let result = ConfigSecurityPolicy(rawValue: configSecurityPolicy) {
-            return result
-        } else {
-            throw ValidationError("Unknown config security policy: \(configSecurityPolicy)")
-        }
-    }
+
+    @LoaderInjected
+    var origin: ConfigOrigin?
+    var cryptexCacheInvalidationId: String?
 }
 
 extension DInitConfig {
@@ -115,13 +112,13 @@ extension DInitConfig {
             let data = try encoder.encode(self)
             return String(decoding: data, as: UTF8.self)
         } catch {
-            throw DInitError.unableToSerializeConfig(self, error)
+            throw DInitError.unableToSerializeConfig([], error)
         }
     }
 }
 
 extension DInitConfig: CustomStringConvertible {
-    var description: String {
+    public var description: String {
         return (try? self.jsonString(redactCredentialStrings: true)) ?? "<failed to encode DInitConfig>"
     }
 }
@@ -176,6 +173,8 @@ extension DInitConfig {
         
         case cryptexCacheMaxTotalSize = "cryptex-cache-max-total-size"
         
+        case retainedCryptexes = "cryptex-retain"
+
         case configSecurityPolicy = "config-security-policy"
         case configSecurityPolicyVersion = "config-security-policy-version"
 
@@ -184,11 +183,15 @@ extension DInitConfig {
 		case applyTimeoutArgument = "apply-timeout"
         
         case bandwidthLimit = "cryptex-download-bandwidth-limit"
+        
+        case volumes = "volumes"
+        
+        case cryptexCacheInvalidationId = "cryptex-cache-invalidation-id"
     }
 }
 
 extension DInitConfig: Decodable {
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         caRoots = try container.decodeIfPresent(DInitCARoots.self, forKey: .caRoots)
         if let _cryptexConfig = try? container.decodeIfPresent(DInitCryptexConfig.self, forKey: .cryptexConfig) {
@@ -225,7 +228,7 @@ extension DInitConfig: Decodable {
         enableSSHPasswordAuthentication = try container.decodeIfPresent(DInitBool.self, forKey: .enableSSHPasswordAuthentication)?.rawValue
         
         rebootAfterSetup = try container.decodeIfPresent(DInitBool.self, forKey: .rebootAfterSetup)?.rawValue
-        USRAfterSetup = try container.decodeIfPresent(DInitUSRPurpose.self, forKey: .USRAfterSetup)
+        USRAfterSetup = try container.decodeIfPresent(DInitUSR.self, forKey: .USRAfterSetup)
         
         preInitCommands = try container.decodeIfPresent([String].self, forKey: .preInitCommands)
         preInitCritical = try container.decodeIfPresent(DInitBool.self, forKey: .preInitCritical)?.rawValue
@@ -240,6 +243,8 @@ extension DInitConfig: Decodable {
         
         cryptexCacheMaxTotalSize = try container.decodeIfPresent(Int.self, forKey: .cryptexCacheMaxTotalSize)
         
+        retainedCryptexes = try container.decodeIfPresent([DInitCryptexConfig].self, forKey: .retainedCryptexes)
+
         configSecurityPolicy = try container.decodeIfPresent(String.self, forKey: .configSecurityPolicy)
         
         configSecurityPolicyVersion = try container.decodeIfPresent(Int.self, forKey: .configSecurityPolicyVersion)
@@ -253,11 +258,15 @@ extension DInitConfig: Decodable {
         featureFlagsConfig = try container.decodeIfPresent([DInitFeatureFlags].self, forKey: .featureFlagsConfig)
 
 		lockCryptexes = try container.decodeIfPresent(Bool.self, forKey: .lockCryptexes)
+
+		volumes = try container.decodeIfPresent([String: URL].self, forKey: .volumes)
+        
+        cryptexCacheInvalidationId = try container.decodeIfPresent(String.self, forKey: .cryptexCacheInvalidationId)
     }
 }
 
 extension DInitConfig: Encodable {
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(caRoots, forKey: .caRoots)
         try container.encodeIfPresent(cryptexConfig, forKey: .cryptexConfig)
@@ -304,6 +313,8 @@ extension DInitConfig: Encodable {
         
         try container.encodeIfPresent(cryptexCacheMaxTotalSize, forKey: .cryptexCacheMaxTotalSize)
         
+        try container.encodeIfPresent(retainedCryptexes, forKey: .retainedCryptexes)
+
         try container.encodeIfPresent(configSecurityPolicy, forKey: .configSecurityPolicy)
         
         try container.encodeIfPresent(configSecurityPolicyVersion, forKey: .configSecurityPolicyVersion)
@@ -315,6 +326,10 @@ extension DInitConfig: Encodable {
         try container.encodeIfPresent(bandwidthLimit, forKey: .bandwidthLimit)
 
 		try container.encodeIfPresent(lockCryptexes, forKey: .lockCryptexes)
+
+        try container.encodeIfPresent(volumes, forKey: .volumes)
+
+        try container.encodeIfPresent(cryptexCacheInvalidationId, forKey: .cryptexCacheInvalidationId)
     }
 }
 

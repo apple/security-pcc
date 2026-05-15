@@ -23,16 +23,15 @@ internal import OSPrivate.os.transactionPrivate
 import os
 import RemoteServiceDiscovery
 import System
-@_spi(Private) import DarwinInitClient
 
 final class Apply: AsyncParsableCommand {
-	struct Failure: Error, CustomStringConvertible {
-		var description: String
+    struct Failure: Error, CustomStringConvertible {
+        var description: String
 
-		init(_ description: String) {
-			self.description = description
-		}
-	}
+        init(_ description: String) {
+            self.description = description
+        }
+    }
 
     static let configuration = CommandConfiguration(
         abstract: "Apply a configuration to the running system",
@@ -81,206 +80,397 @@ final class Apply: AsyncParsableCommand {
 			"""))
 	var failureAction: DInitFailureAction?
 
+	@Flag(name: [.short, .long], help: .init("Suppress logging output to stdout/console",
+		discussion: """
+			When enabled, prevents darwin-init logs from being printed to stdout/stderr or console. \
+			Without this flag, non-system mode logs to stderr and system mode logs to console. \
+			Logs are always sent to the system logging infrastructure (os_log) regardless of this flag.
+			"""))
+	var quiet: Bool = false
+
     func validate() throws {
-		if let timeout = timeout, timeout <= .zero {
-			throw ValidationError("timeout value must be greater than 0")
-		}
+        if let timeout = timeout, timeout <= .zero {
+            throw ValidationError("timeout value must be greater than 0")
+        }
 #if !os(macOS)
-		guard failureAction != .shutdown else {
-			throw ValidationError("Failure action \"shutdown\" only allowed on macOS")
-		}
+        guard failureAction != .shutdown else {
+            throw ValidationError("Failure action \"shutdown\" only allowed on macOS")
+        }
 #endif
     }
 
-    static func validateConfig(policyString: String, config: DInitConfig) throws {
-        // Ensure only valid policy is set: customer, customerProxy or carry
-        guard let policy = ConfigSecurityPolicy(rawValue: policyString) else {
-            throw PrivateCloudOSValidationError("Unknown \(DInitConfig.CodingKeys.configSecurityPolicy.rawValue): \(policyString)")
+    static func validateConfigs(
+        policyString: String,
+        configs: [Config],
+        on computer: some Computer
+    ) async throws {
+        let validator = PCCRegoValidator(configs: configs, bundlePath: computer.regoBundle)
+        let result = try await validator.validate()
+
+        // Report any warnings even if valid
+        if !result.warnings.isEmpty {
+            // Also print for validate CLI subcommand
+            print("Detected the following warnings under \(policyString) security policy: \(result.warnings)")
+            logger.error("Detected the following warnings under \(policyString) security policy: \(result.warnings)")
         }
-        let version = config.configSecurityPolicyVersion
-        switch policy {
-        case .carry:
-            var validator = CarryValidator(policy: policyString, requestedVersion: version, config: config)
-            try validator.validate()
-        case .customer:
-            var validator = CustomerValidator(policy: policyString, requestedVersion: version, config: config)
-            try validator.validate()
-        case .customerProxy:
-            var validator = CustomerProxyValidator(policy: policyString, requestedVersion: version, config: config)
-            try validator.validate()
-        case .none:
-            logger.warning("darwin-init passed none value for config validation, no validation will be performed")
+
+        guard result.isValid else {
+            throw PCCRegoValidatorError("Configs invalid with respect to \(policyString) security policy due to the following errors: \(result.errors)")
+        }
+
+        logger.log("Configs valid with respect to \(policyString) security policy")
+    }
+
+    func run() async throws {
+        let computer = RealComputer.shared
+        try await run(on: computer)
+    }
+
+    fileprivate func configureLoggingHooks(_ computer: any Computer) {
+        if quiet {
+            logger.debug("Quiet mode enabled: suppressing stdout logging output")
             return
+        }
+
+        // When not in system mode, log to stderr
+        var file = stderr
+        var logFile: UnsafeMutablePointer<FILE>?
+        if system {
+            guard let consoleFile = computer.console else {
+                logger.error("Failed to fopen(/dev/console). Logging hook was NOT set.")
+                return
+            }
+            file = consoleFile
+
+            logFile = kDInitLogFilepath.withPlatformString { fopen($0, "w") }
+            if let logFile {
+                setvbuf(logFile, nil, _IOLBF, 0)
+            } else {
+                logger.error("Failed to open log file at \(kDInitLogFilepath). File logging disabled.")
+            }
+        }
+
+        Logger.addHook(.info) { _, msgstr in
+            fputs(msgstr, file)
+            if let logFile {
+                fputs(msgstr, logFile)
+            }
         }
     }
 
-	func run() async throws {
-		// Create an os_transaction that lives for the entire lifetime of the apply.
-		let applyTransaction = os_transaction_create("com.apple.darwin-init.apply")
-		// TODO: rdar://100902294 Use withExtendedLifetime
-		defer { _fixLifetime(applyTransaction) }
+    func run(on computer: any Computer) async throws {
+        // Create an os_transaction that lives for the entire lifetime of the apply.
+        let applyTransaction = os_transaction_create("com.apple.darwin-init.apply")
+        // TODO: rdar://100902294 Use withExtendedLifetime
+        defer { _fixLifetime(applyTransaction) }
 
-		// Check if configuration has already been applied by looking for cookie
-		// Do this before running apply so this sort of failure doesn't trigger
-		// a failure action. If the failure action is reboot and we reboot after
-		// this failure, the device will enter a boot loop as nothing removes the
-		// file at kDInitDoneFilepath if ephemeral data mode is turned off.
-		if try system && kDInitDoneFilepath.fileExists() {
-			logger.warning("darwin-init has already run, exiting")
-			return
-		}
+        // Check if configuration has already been applied by looking for cookie
+        // Do this before running apply so this sort of failure doesn't trigger
+        // a failure action. If the failure action is reboot and we reboot after
+        // this failure, the device will enter a boot loop as nothing removes the
+        // file at kDInitDoneFilepath if ephemeral data mode is turned off.
+        if try system && computer.fileSystem.fileExists(at: kDInitDoneFilepath) {
+            logger.warning("darwin-init has already run, exiting")
+            return
+        }
 
-		if system, #available(macOS 13.3, iOS 16.4, tvOS 16.4, watchOS 9.4, *) {
-			let file = fopen("/dev/console", "a")
-			if let file = file {
-				_ = os_log_set_hook(OSLogType.info) { type, msg in
-					let msgstr = os_log_copy_decorated_message(type, msg)
-					fputs(msgstr, file)
-					free(msgstr)
-				}
-			} else {
-				logger.error("Failed to fopen(/dev/console). Logging hook was NOT set.")
-			}
-		}
+        configureLoggingHooks(computer)
 
-		// Set default failure action from CLI, then fall back to platform default.
-		failureAction = failureAction
-			?? (Computer.isBMC() ? .reboot : .exit)
+        // Disable BMC and Darwin Cloud SSH login on physical devices using ESC credentials as early as possible
+        if computer.isBMC || (!computer.isVM && computer.isDarwinCloud) {
+            if !EngineeringSSHCA.disableGlobalAccess() {
+                logger.error("darwin-init failed to disable ESC SSH")
+            }
+        }
 
-		// Apply the configuration with a deadline
+        /// Set locale to `en_US_POSIX`
+        if !computer.setLocale("en_US_POSIX") {
+            logger.error("Unable to set locale")
+        }
 
-		do {
-			try await apply()
-		} catch {
-			if system {
-				let status = DarwinInitApplyStatus.failure(info: DarwinInitApplyFailureInfo(errorString: "\(error)"))
-				try status.save()
-			}
+        // Set default failure action from CLI, then fall back to platform default.
+        failureAction = failureAction ?? (computer.isBMC ? .reboot : .exit)
 
-			guard let failureAction = failureAction, failureAction != .exit else {
-				logger.error("darwin-init apply failed: \(error). No failure action specified, exiting...")
-				throw ExitCode.failure
-			}
-			
-			let timeoutBeforeSleep = if case DInitConfigLoader.Error.unableToLoad(_, _) = error, Computer.isBMC() {
-				kDInitSleepBeforeFailureActionOnLoadFailure
-			} else {
-				kDInitDefaultSleepBeforeFailureAction
-			}
-			
-			logger.error("darwin-init apply failed: \(error). Sleeping for \(timeoutBeforeSleep) before running failure action.")
-			try await Task.sleep(for: timeoutBeforeSleep)
+        // Apply the configuration with a deadline
 
-			// Don't reboot / shutdown if there's host attached to the BMC at debug port.
-			// Check this after sleeping for some time to avoid racing with RSD
-			if Computer.isBMC() {
-				if remote_device_copy_unique_of_type(REMOTE_DEVICE_TYPE_NCM_HOST) != nil {
-					logger.log("Not running the failure action because a host is attached on the debug port.")
-					throw ExitCode.failure
-				}
-			}
-			try? failureAction.execute()
-			throw ExitCode.failure
-		}
+        do {
+            try await apply(on: computer)
+        } catch {
+            logger.error("darwin-init apply failed: \(error)")
+
+            if system {
+                let status = DarwinInitApplyStatus.failure(info: .init(errorString: "\(error)"))
+                try computer.fileSystem.write(json: status, to: kDInitStatusFilepath)
+            }
+
+            guard let failureAction, failureAction != .exit else {
+                logger.error("No failure action specified, exiting...")
+                throw ExitCode.failure
+            }
+
+            let timeoutBeforeSleep = if case ConfigLoader.Error.unableToLoad(_, _) = error, computer.isBMC {
+                kDInitSleepBeforeFailureActionOnLoadFailure
+            } else {
+                kDInitDefaultSleepBeforeFailureAction
+            }
+
+            logger.error("Sleeping for \(timeoutBeforeSleep) before running failure action.")
+            try await Task.sleep(for: timeoutBeforeSleep)
+
+            // Don't reboot / shutdown if there's host attached to the BMC at debug port.
+            // Check this after sleeping for some time to avoid racing with RSD
+            if computer.isBMC && computer.isHostAttached {
+                logger.log("Not running the failure action because a host is attached on the debug port.")
+                throw ExitCode.failure
+            }
+
+            switch failureAction {
+            case .reboot:
+                try computer.reboot()
+            case .shutdown:
+                try computer.shutdown()
+            case .exit:
+                throw ExitCode.failure
+            }
+        }
+    }
+
+    func prepare(configs: [Config], on computer: any Computer) async throws -> Globals {
+        var featureFlagsPresent: Bool = false
+
+        var builder = GlobalsBuilder()
+        Globals.setup(builder: &builder, computer: computer)
+
+        var cryptexes: [URL] = []
+
+        // Collect the global state from all configurations
+        for (i, config) in configs.enumerated() {
+
+            do {
+                try builder.update(from: config, at: i)
+            } catch {
+                throw Failure(
+                    "Conflicting global value, will NOT apply config: \(error)"
+                )
+            }
+
+            let urls = config.cryptex?.cryptexes?.map { (id, item) in item.url } ?? []
+            cryptexes.append(contentsOf: urls)
+
+            let retainedURLs = config.cryptex?.cache?.retainedCryptexes?.map { (id, item) in item.url } ?? []
+            cryptexes.append(contentsOf: retainedURLs)
+
+            featureFlagsPresent = (config.featureFlags != nil) ? true : featureFlagsPresent
+        }
+
+        var globals = builder.realize()
+
+        if system && globals.USRAfterSetup == nil {
+            logger.info("Using machine's default USR action")
+            globals.USRAfterSetup = computer.defaultUSRAction
+        }
+
+        if featureFlagsPresent && !globals.willUserspaceReboot {
+            if globals.USRAfterSetup == nil {
+                logger.info("Setting USRAction to userReboot because featureFlags were specified and USR was not set")
+                globals.USRAfterSetup = .userReboot
+            } else {
+                logger.info("Failed to set USRAction to userReboot because USR was specifically set to none")
+            }
+        }
+
+        logger.debug("Globals: \(globals)")
+
+        // Ensure that current workload has access to cryptex cache contents before applying config
+        do {
+            let id = globals.cryptexCacheInvalidationId
+            logger.log("Verifying that cryptex cache only contains contents accessible to current workload...")
+            // verify will only throw if purging the cache or reading/writing the invalidation ID fails
+            let invalidator = CryptexCacheInvalidator()
+            try invalidator.verify(invalidationId: id)
+        } catch {
+            // ...So, trigger a crash if we hit a filesystem error so we can get a crash report
+            fatalError("Failed to enforce cryptex cache only contains contents accessible to current workload due to: \(error)")
+        }
+        logger.log("Successfully enforced that cryptex cache only contains contents accessible to current workload")
+
+        if globals.retainCachedCryptexes == false {
+            let cacheDelegate = CryptexCacheDelegate()
+
+            logger.info("Purge cache entries from previous workload")
+
+            // If we fail to create the cache here, we will very likely fail to create it
+            // it later when downloading cryptexes so not purging the cache should be ok
+            if let cryptexCache = CryptexCache(at: CryptexCache.defaultCacheDirectoryPath,
+                                               delegate: cacheDelegate,
+                                               maxTotalSize: 0) {
+                do {
+                    try await cryptexCache.purge(retainingEntriesForURLs: cryptexes)
+                } catch {
+                    logger.error("Failed to purge cache entries from previous workload: \(error)")
+                }
+            }
+        }
+
+        if system {
+            logger.log("Committing secure config parameters")
+            try LibSecureConfig.commitSecureConfigParameters(
+                parameters: globals.secureConfigParameters,
+                securityPolicy: globals.configSecurityPolicy,
+                to: computer
+            )
+        }
+
+        return globals
+    }
+
+    func apply(on computer: any Computer) async throws {
+        let system = self.system
+
+        // Create persist storage
+        do {
+            try computer.fileSystem.mkdir(kDInitPersistStorage)
+        } catch Errno.fileExists {
+            logger.info("darwin-init persist storage already created")
+        }
+
+        // Load config from source
+        let loader = ConfigLoader(computer: computer)
+        let configs = try await loader.load(from: source)
+
+        // Initial pass over the configurations
+        let globals = try await prepare(configs: configs, on: computer)
+
+        var errorReports: [ErrorReport] = []
+
+        let writer = ResultWriter(fileSystem: computer.fileSystem)
+
+        // validate all configs in the array under the global security policy (may only be set in config 0)
+        if let policyString = globals.configSecurityPolicy {
+            logger.log("Validating configs under \(policyString) policy...")
+            do {
+                try await Apply.validateConfigs(policyString: policyString, configs: configs, on: computer)
+            } catch {
+                throw Failure("Validation failed, will NOT apply configs: \(error)")
+            }
+        }
+
+        for config in configs {
+            // Config timeout takes precedence over --timeout CLI argument
+            let timeout = config.applyTimeout ?? timeout ?? kDefaultApplyTimeout
+
+            logger.info("Effective timeout is \(timeout)")
+            let errorReportsSnapshot = errorReports
+            errorReports = try await withDeadline(.now + timeout, clock: .continuous) { [writer] in
+                var errorReports = errorReportsSnapshot
+
+                // Actually apply the individual config
+                let result: Config
+                let errorReporter = ErrorReporter()
+                result = try await self.apply(config, on: computer, env: globals, reporter: errorReporter)
+                try await writer.add(result)
+
+                let errorReport: ErrorReport
+                if let origin = config.origin, origin.isV1 {
+                    errorReport = ErrorReport(inputConfig: config, errors: errorReporter.errors, originalJson: origin.source)
+                } else {
+                    errorReport = ErrorReport(inputConfig: config, errors: errorReporter.errors)
+                }
+                errorReports.append(errorReport)
+
+                // Check if applied config matches expected config
+                let fullyApplied = result == config
+                if !fullyApplied {
+                    let errorReportJson = try errorReport.jsonString()
+                    logger.error("Failed to fully apply config. Error report below:\n\(errorReportJson)\n")
+                }
+
+                if system {
+                    // Write what we have applied so far to the cookie file
+                    try await writer.write(to: kDInitDoneFilepath)
+
+                    try computer.fileSystem.write(json: errorReports, to: kDInitErrorReportFilepath, redacted: false)
+                }
+
+                return errorReports
+            }
+        }
+
+        // Check if we have fully applied all configurations
+        if await writer.results != configs {
+            throw Failure("Failed to fully apply config")
+        }
+
+        if globals.willLockCryptexes {
+            do {
+                try computer.lockCryptexes()
+            } catch {
+                throw Failure("Locking sealed software hash registers failed \(error)")
+            }
+        }
+
+        // Last opportunity to write 'success' before we reboot.
+        // Any failures to reboot should still be caught and written out.
+        if system {
+            let status = DarwinInitApplyStatus.success
+            try computer.fileSystem.write(json: status, to: kDInitStatusFilepath)
+        }
+
+        // Run rebootAfterSetup if needed
+        if globals.rebootAfterSetup == true {
+            try computer.reboot()
+        } else if let usr = globals.USRAfterSetup {
+            if globals.willUserspaceReboot {
+                try computer.userspaceReboot(usr)
+            } else {
+                logger.log("Skipping userspace-reboot by request of configuration")
+            }
+        }
 	}
 
-	@Sendable
-	func apply() async throws {
-		// Disable BMC and Darwin Cloud SSH login on physical devices using ESC credentials as early as possible
-		if (Computer.isBMC() || (!Computer.isVM() && Computer.isDarwinCloud())) && !EngineeringSSHCA.disableGlobalAccess() {
-			logger.error("darwin-init failed to disable ESC SSH")
-		}
+    @Sendable
+    func apply(_ config: Config, on computer: any Computer, env globals: Globals, reporter: ErrorReporter)  async throws -> Config {
 
-		let system = self.system
+        if system {
+            logger.log("Committing configuration.")
+            try LibSecureConfig.commit(config: config, to: computer)
+        }
 
-		// Load config from source
-		let loadedConfig = try await DInitConfigLoader.load(from: source)
+        // Override failureAction with values loaded from config or NVRAM
+        if let failureAction = config.finish?.onFailure {
+            logger.log("Setting failureAction to \(failureAction.rawValue)")
+            self.failureAction = failureAction
+        }
 
-		// Config timeout takes precedence over --timeout CLI argument
-		let timeout = try loadedConfig.config.applyTimeout ?? timeout ?? .seconds(60) * 30
+        // Serialize config
+        var prettyJson = try config.jsonString(redacted: true)
 
-		logger.info("Effective timeout is \(timeout)")
-		try await withDeadline(.now + timeout, clock: .continuous) {
-			/// Set locale to `en_US_POSIX`
-			if !Computer.setLocale() {
-				logger.error("Unable to set locale")
-			}
+        // Apply config
+        logger.log("Applying configuration: \(prettyJson)")
+        var result: Config
 
-			if system {
-				logger.log("Committing configuration.")
-				try LibSecureConfig.commitConfig(loadedConfig.config)
-			}
+        do throws(Config.CriticalError) {
+            result = try await config.apply(on: computer, env: globals, reporter: reporter)
+        } catch {
+            logger.error("Critical error during apply: \(error)")
+            throw error
+        }
 
-			// Override failureAction with values loaded from config or NVRAM
-			if let failureAction = (loadedConfig.config.resultConfig?.failureAction ?? 
-									loadedConfig.arguments?.failureAction)  {
-				self.failureAction = failureAction
-			}
+        // If we're running at boot and made it this far, then secure-config params registration succeeded
+        if system {
+            result.secureConfig = config.secureConfig
+        }
 
-			// Create persist storage
-			do {
-				try kDInitPersistStorage.createDirectory()
-			} catch Errno.fileExists {
-				logger.info("darwin-init persist storage already created")
-			}
+        // Serialize applied config
+        prettyJson = try result.jsonString(redacted: true)
+        logger.log("Applied configuration: \(prettyJson)")
 
-			// Serialize config
-            var prettyJson = try loadedConfig.config.jsonString(redactCredentialStrings: true)
+        // Print the applied configuration to stdout if we're not in system mode
+        if (!system && !quiet) {
+            print(prettyJson)
+        }
 
-			// validate entire config under specified policy and only apply if valid
-			if let policyString = loadedConfig.config.configSecurityPolicy {
-				logger.log("Validating config under \(policyString) policy: \(prettyJson)")
-				do {
-					try Apply.validateConfig(policyString: policyString, config: loadedConfig.config)
-				} catch {
-					throw Failure("Validation failed, will NOT apply config: \(error)")
-				}
-				logger.log("darwin-init config is valid with respect to \(policyString) policy.")
-			}
+        return result
+    }
 
-			// Apply config
-			logger.log("Applying configuration: \(prettyJson)")
-			var result = await loadedConfig.config.apply()
-			// If we're running at boot and made it this far, then secure-config params registration succeeded
-			if system {
-				result.secureConfigParameters = loadedConfig.config.secureConfigParameters
-			}
-
-			// Serialize applied config
-            prettyJson = try result.jsonString(redactCredentialStrings: true)
-			logger.log("Applied configuration: \(prettyJson)")
-
-			let fullyApplied = (result == loadedConfig.config)
-
-			if system {
-				// Write applied config to cookie file
-                try kDInitDoneFilepath.save(try result.jsonString(redactCredentialStrings: false))
-			}
-
-			// Check if applied config matches expected config
-			guard fullyApplied else {
-				throw Failure("Failed to fully apply config")
-			}
-
-			// Last opportunity to write 'success' before we reboot.
-			// Any failures to reboot should still be caught and written out.
-			if system {
-				let status = DarwinInitApplyStatus.success
-				try status.save()
-			}
-
-			// Run rebootAfterSetup if needed
-			if loadedConfig.config.rebootAfterSetup == true {
-				try Computer.reboot()
-			} else if let purpose = loadedConfig.config.USRAfterSetup {
-                if purpose == .empty || purpose == .none {
-					logger.log("Skipping userspace-reboot by request of configuration")
-				} else {
-					try Computer.userspaceReboot(purpose)
-				}
-			} else if system, let purpose = Computer.defaultUSRAction() {
-				try Computer.userspaceReboot(purpose)
-			}
-		}
-	}
 }

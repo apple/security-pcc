@@ -21,10 +21,10 @@
 //  Copyright © 2022 Apple Inc. All rights reserved.
 //
 
+import ArgumentParserInternal
 @_exported import CloudMetricsFramework
 import Darwin
 import PrometheusParser
-import ArgumentParserInternal
 
 @main
 package struct CloudMetricsdTestCommand: AsyncParsableCommand {
@@ -42,9 +42,9 @@ package struct CloudMetricsdTestCommand: AsyncParsableCommand {
     internal var continuousCounter: String?
 
     @Option(help: """
-                    How frequently to update the metric (in seconds) \
-                    when '--continuous-counter' or '--continuous-histogram' has bee passed.
-                    """)
+    How frequently to update the metric (in seconds) \
+    when '--continuous-counter' or '--continuous-histogram' has bee passed.
+    """)
     internal var updateFrequency: Int = 1
 
     @Option(help: "How much to increment the counter when '--continuous-counter' has bee passed.")
@@ -52,6 +52,9 @@ package struct CloudMetricsdTestCommand: AsyncParsableCommand {
 
     @Option(help: "")
     internal var continousHistogram: String?
+
+    @Option(help: "")
+    internal var longLived: Bool = false
 
     package init() {}
 
@@ -71,32 +74,43 @@ package struct CloudMetricsdTestCommand: AsyncParsableCommand {
             // No arguments passed, run the generic test
             let counter = Counter(label: continuousCounterName)
             let timer = DispatchSource.makeTimerSource()
-            timer.schedule(deadline: .now() + .seconds(updateFrequency), repeating: .seconds(updateFrequency))
+            timer.schedule(deadline: .now() + .seconds(self.updateFrequency), repeating: .seconds(self.updateFrequency))
             timer.setEventHandler {
-                counter.increment(by: incrementStep)
+                counter.increment(by: self.incrementStep)
             }
             timer.activate()
             return await withUnsafeContinuation { _ in }
         } else if let continuousHistogramName = self.continousHistogram {
-            let histogram = try Histogram(label: continuousHistogramName,
-                                          dimensions: [("dim1", "val1"), ("dim2", "val2")],
-                                          buckets: [0.5, 9.5, 25.0, 50.0, 75.0, 90.0])
+            let histogram = try Histogram(
+                label: continuousHistogramName,
+                dimensions: [("dim1", "val1"), ("dim2", "val2")],
+                buckets: [0.5, 9.5, 25.0, 50.0, 75.0, 90.0]
+            )
             let timer = DispatchSource.makeTimerSource()
-            timer.schedule(deadline: .now() + .seconds(updateFrequency), repeating: .seconds(updateFrequency))
+            timer.schedule(deadline: .now() + .seconds(self.updateFrequency), repeating: .seconds(self.updateFrequency))
             timer.setEventHandler {
                 histogram.record(Double.random(in: 0.0 ..< 100.0))
             }
             timer.activate()
             return await withUnsafeContinuation { _ in }
         } else {
-            try runTest()
+            try self.runTest()
+        }
+
+        if self.longLived {
+            while true {}
         }
     }
 
     internal func runTest() throws {
+        let gauge = Gauge(label: "exampleGauge")
+        gauge.record(Double(5))
+
         // No arguments passed, run the generic test
-        let counter = Counter(label: "exampleCounter",
-                              dimensions: [("dim1", "val1"), ("dim2", "val2")])
+        let counter = Counter(
+            label: "exampleCounter",
+            dimensions: [("dim1", "val1"), ("dim2", "val2")]
+        )
 
         print("Make our counter start from 5\n")
         counter.reset(value: 5)
@@ -104,16 +118,20 @@ package struct CloudMetricsdTestCommand: AsyncParsableCommand {
         print("Incrementing counter\n")
         counter.increment(by: 1)
 
-        let floatingPointCounter = FloatingPointCounter(label: "exampleFloatingPointCounter",
-                                                        dimensions: [("dim1", "val1"), ("dim2", "val2")])
+        let floatingPointCounter = FloatingPointCounter(
+            label: "exampleFloatingPointCounter",
+            dimensions: [("dim1", "val1"), ("dim2", "val2")]
+        )
         print("Make our counter start from 7.5\n")
         floatingPointCounter.reset(value: 7.5)
 
         print("Incrementing counter\n")
         floatingPointCounter.increment(by: 1.5)
 
-        let histogram = try Histogram(label: "exampleHistogram",
-                                      dimensions: [("dim1", "val1"), ("dim2", "val2")],
-                                      buckets: [0.5, 9.5, 25.0, 50.0, 75.0, 90.0])
+        let histogram = try Histogram(
+            label: "exampleHistogram",
+            dimensions: [("dim1", "val1"), ("dim2", "val2")],
+            buckets: [0.5, 9.5, 25.0, 50.0, 75.0, 90.0]
+        )
     }
 }

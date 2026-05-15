@@ -12,12 +12,9 @@
 // EA1937
 // 10/02/2024
 
-// Copyright © 2024 Apple. All rights reserved.
-
+import CloudBoardDomain
 import CloudBoardLogging
 import CloudBoardMetrics
-
-private let prefix = CloudBoardJobHelper.metricsClientName
 
 extension HistogramBuckets {
     fileprivate static let chunkSize: HistogramBuckets = [
@@ -218,32 +215,40 @@ extension HistogramBuckets {
 }
 
 enum Metrics {
+    struct ProcessInfo: CloudBoardMetrics.Uptime.ProcessInfo {
+        static let prefix: String = "cb_jobhelper"
+        static let type = CloudBoardMetrics.Uptime.ProcessType.process
+    }
+
+    /// This is poorly named - it is now covered by ``CloudBoardMetrics/Uptime`` but this remains
+    /// for a short time to ensure both old and new metrics are present for the transition
+    @available(*, deprecated, message: "This is being entirely replaced by CloudBoardMetrics.Uptime")
     enum Daemon {
         struct LaunchCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_daemon_launch_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_daemon_launch_total"
             var action: CounterAction
         }
 
         struct UptimeGauge: Gauge {
-            static let label: MetricLabel = "\(prefix)_daemon_uptime"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_daemon_uptime"
             var value: Int
         }
 
         struct ErrorExitCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_daemon_exit_error"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_daemon_exit_error"
             var action: CounterAction
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
         }
 
         struct TotalExitCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_daemon_exit_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_daemon_exit_total"
             var action: CounterAction
         }
     }
 
     enum Messenger {
         struct TotalRequestsReceivedCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_messenger_requests_received_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_messenger_requests_received_total"
             enum DimensionKey: String, RawRepresentable {
                 case automatedDeviceGroup
                 case featureId
@@ -272,7 +277,7 @@ enum Metrics {
         }
 
         struct RequestChunkReceivedSizeHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_messenger_request_chunk_received_size_bytes"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_messenger_request_chunk_received_size_bytes"
             static let buckets: HistogramBuckets = .chunkSize
             var value: Int
             var dimensions: MetricDimensions<DimensionKey>
@@ -296,7 +301,7 @@ enum Metrics {
         }
 
         struct TotalResponseChunksReceivedCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_messenger_response_chunks_received_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_messenger_response_chunks_received_total"
             enum DimensionKey: String, RawRepresentable {
                 case automatedDeviceGroup
                 case featureId
@@ -325,7 +330,7 @@ enum Metrics {
         }
 
         struct TotalResponseChunksSentCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_messenger_response_chunks_sent_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_messenger_response_chunks_sent_total"
             enum DimensionKey: String, RawRepresentable {
                 case automatedDeviceGroup
                 case featureId
@@ -354,7 +359,7 @@ enum Metrics {
         }
 
         struct TotalResponseChunksInBuffer: Gauge {
-            static let label: MetricLabel = "\(prefix)_messenger_response_chunks_in_buffer_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_messenger_response_chunks_in_buffer_total"
             enum DimensionKey: String, RawRepresentable {
                 case automatedDeviceGroup
                 case featureId
@@ -377,7 +382,7 @@ enum Metrics {
         }
 
         struct TotalResponseChunkReceivedSizeHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_messenger_response_chunk_received_size_bytes"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_messenger_response_chunk_received_size_bytes"
             static let buckets: HistogramBuckets = .chunkSize
             var value: Int
             var dimensions: MetricDimensions<DimensionKey>
@@ -401,7 +406,7 @@ enum Metrics {
         }
 
         struct TotalResponseChunksBufferedSizeHistogram: Histogram {
-            static let label: MetricLabel = "\(prefix)_messenger_response_chunk_buffered_size_bytes"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_messenger_response_chunk_buffered_size_bytes"
             static let buckets: HistogramBuckets = .chunkSize
             var value: Int
             var dimensions: MetricDimensions<DimensionKey>
@@ -425,13 +430,13 @@ enum Metrics {
         }
 
         struct OverallErrorCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_messenger_error"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_messenger_error"
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
             var action: CounterAction
         }
 
         struct KeyUnwrapDuration: Histogram {
-            static let label: MetricLabel = "\(prefix)_key_unwrap_duration_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_key_unwrap_duration_seconds"
             static let buckets: HistogramBuckets = .keyUnwrapTime
             var dimensions: MetricDimensions<DimensionKey>
             var value: Double
@@ -464,7 +469,7 @@ enum Metrics {
         // Duration from receiving the request to find a worker from cloudApp till we inform the cloudApp that a worker
         // has been found
         struct FindWorkerDuration: Histogram {
-            static let label: MetricLabel = "\(prefix)_find_worker_duration_seconds"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_find_worker_duration_seconds"
             static let buckets: HistogramBuckets = .findWorkerDuration
             var value: Double
 
@@ -474,7 +479,7 @@ enum Metrics {
         }
 
         struct TotalRequestsReceivedCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_workload_manager_requests_received_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_workload_manager_requests_received_total"
             enum DimensionKey: String, RawRepresentable {
                 case automatedDeviceGroup
             }
@@ -491,7 +496,7 @@ enum Metrics {
         }
 
         struct TotalResponsesSentCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_workload_manager_responses_sent_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_workload_manager_responses_sent_total"
             var action: CounterAction
             var dimensions: MetricDimensions<DimensionKey>
 
@@ -517,7 +522,7 @@ enum Metrics {
         }
 
         struct SuccessResponsesSentCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_workload_manager_responses_sent_success"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_workload_manager_responses_sent_success"
             var action: CounterAction
             var dimensions: MetricDimensions<DimensionKey>
 
@@ -543,7 +548,7 @@ enum Metrics {
         }
 
         struct FailureResponsesSentCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_workload_manager_responses_sent_failure"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_workload_manager_responses_sent_failure"
             var dimensions: MetricDimensions<DimensionKey>
             var action: CounterAction
 
@@ -576,8 +581,142 @@ enum Metrics {
             }
         }
 
+        struct TotalSubrequestReceivedCounter: Counter {
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_workload_manager_subrequest_total"
+            var dimensions: MetricDimensions<DimensionKey>
+            var action: CounterAction
+
+            init(dimensions: MetricDimensions<DimensionKey>, action: CounterAction) {
+                self.action = action
+                self.dimensions = dimensions
+            }
+
+            enum DimensionKey: String, RawRepresentable {
+                case automatedDeviceGroup
+                case featureId
+                case bundleId
+                case inferenceId
+            }
+
+            init(
+                action: CounterAction,
+                automatedDeviceGroup: Bool,
+                featureId: String?, bundleId: String?, inferenceId: String?
+            ) {
+                self.action = action
+                self.dimensions = [
+                    .automatedDeviceGroup: automatedDeviceGroup.description,
+                    .featureId: featureId ?? "",
+                    .bundleId: bundleId ?? "",
+                    .inferenceId: inferenceId ?? "",
+                ]
+            }
+        }
+
+        enum SubrequestStatus: String, Sendable {
+            case ok
+            case discarded
+            case failed
+        }
+
+        struct SubrequestFailureCounter: Counter {
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_workload_manager_subrequest_failure"
+            var dimensions: MetricDimensions<DimensionKey>
+            var action: CounterAction
+
+            init(dimensions: MetricDimensions<DimensionKey>, action: CounterAction) {
+                self.action = action
+                self.dimensions = dimensions
+            }
+
+            enum DimensionKey: String, RawRepresentable {
+                case automatedDeviceGroup
+                case featureId
+                case bundleId
+                case inferenceId
+                case status
+                case errorDescription
+            }
+
+            init(
+                action: CounterAction,
+                automatedDeviceGroup: Bool,
+                featureId: String?,
+                bundleId: String?,
+                inferenceId: String?,
+                status: InternalSubresponseStatus
+            ) {
+                self.action = action
+                if case .error(let error) = status {
+                    self.dimensions = [
+                        .automatedDeviceGroup: automatedDeviceGroup.description,
+                        .featureId: featureId ?? "",
+                        .bundleId: bundleId ?? "",
+                        .inferenceId: inferenceId ?? "",
+                        .status: status.description,
+                        .errorDescription: error.errorMessage, // Provided as a static string so safe to emit here
+                    ]
+                } else {
+                    self.dimensions = [
+                        .automatedDeviceGroup: automatedDeviceGroup.description,
+                        .featureId: featureId ?? "",
+                        .bundleId: bundleId ?? "",
+                        .inferenceId: inferenceId ?? "",
+                        .status: status.description,
+                    ]
+                }
+            }
+        }
+
+        struct SubrequestDuration: Histogram {
+            static let label: MetricLabel =
+                "\(ProcessInfo.prefix)_workload_manager_subrequest_duration_seconds"
+            static let buckets: HistogramBuckets = .requestTime
+            var dimensions: MetricDimensions<DimensionKey>
+            var value: Double
+
+            enum DimensionKey: String, RawRepresentable {
+                case automatedDeviceGroup
+                case featureId
+                case bundleId
+                case inferenceId
+                case status
+                case errorDescription
+            }
+
+            init(
+                duration: Duration,
+                automatedDeviceGroup: Bool,
+                featureId: String?,
+                bundleId: String?,
+                inferenceId: String?,
+                status: InternalSubresponseStatus
+            ) {
+                self.value = Double(duration.microsecondsClamped) / 1_000_000
+                switch status {
+                case .ok, .discarded:
+                    self.dimensions = [
+                        .automatedDeviceGroup: automatedDeviceGroup.description,
+                        .featureId: featureId ?? "",
+                        .bundleId: bundleId ?? "",
+                        .inferenceId: inferenceId ?? "",
+                        .status: status.description,
+                    ]
+                case .error(let error):
+                    self.dimensions = [
+                        .automatedDeviceGroup: automatedDeviceGroup.description,
+                        .featureId: featureId ?? "",
+                        .bundleId: bundleId ?? "",
+                        .inferenceId: inferenceId ?? "",
+                        .status: status.description,
+                        .errorDescription: error.errorMessage,
+                    ]
+                }
+            }
+        }
+
         struct TGTValidationCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_tgt_validation_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_tgt_validation_total"
             var action: CounterAction
             var dimensions: MetricDimensions<DimensionKey>
 
@@ -603,7 +742,7 @@ enum Metrics {
         }
 
         struct TGTValidationErrorCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_tgt_validation_error_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_tgt_validation_error_total"
             var dimensions: MetricDimensions<DimensionKey>
             var action: CounterAction
 
@@ -637,19 +776,20 @@ enum Metrics {
         }
 
         struct OverallErrorCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_workload_manager_error"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_workload_manager_error"
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
             var action: CounterAction
         }
 
         /// How many times workloadmanager finished without processing any request messages
         struct UnusedTerminationCounter: Counter {
-            static let label: MetricLabel = "\(prefix)_workload_manager_unused_termination_total"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_workload_manager_unused_termination_total"
             var action: CounterAction
         }
 
         struct WorkloadDurationFromFirstRequestMessage: Histogram {
-            static let label: MetricLabel = "\(prefix)_workload_manager_duration_from_first_request_seconds"
+            static let label: MetricLabel =
+                "\(ProcessInfo.prefix)_workload_manager_duration_from_first_request_seconds"
             static let buckets: HistogramBuckets = .requestTime
             var dimensions: MetricDimensions<DimensionKey>
             var value: Double
@@ -680,23 +820,45 @@ enum Metrics {
 
     enum Workload {
         struct OverallErrorCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_workload_error"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_workload_error"
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
             var action: CounterAction
         }
 
         struct CloudAppExitCounter: ExitCounter {
-            static let label: MetricLabel = "\(prefix)_cloudapp_process_exit"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_cloudapp_process_exit"
             var dimensions: MetricDimensions<DefaultExitDimensionKeys>
+            var action: CounterAction
+        }
+
+        struct SupportAppExitCounter: ExitCounter {
+            public enum DimensionKeys: String, DimensionKeysWithExitCode, RawRepresentable, Hashable, Sendable {
+                case appName
+                case exitCode
+                case reasonNamespace
+            }
+
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_supportapp_process_exit"
+            var dimensions: MetricDimensions<DimensionKeys>
             var action: CounterAction
         }
     }
 
     enum CloudAppRequestStream {
         struct OverallErrorCounter: ErrorCounter {
-            static let label: MetricLabel = "\(prefix)_cloud_app_request_stream_error"
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_cloud_app_request_stream_error"
             var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
             var action: CounterAction
+        }
+    }
+}
+
+extension InternalSubresponseStatus: CustomStringConvertible {
+    public var description: String {
+        switch self {
+        case .ok: "ok"
+        case .discarded: "discarded"
+        case .error: "error"
         }
     }
 }
