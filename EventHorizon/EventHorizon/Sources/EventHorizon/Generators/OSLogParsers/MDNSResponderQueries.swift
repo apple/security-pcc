@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,14 +21,12 @@ private let log = EHLog.withCategory("MDNSResponderQueries")
 
 public final class MDNSResponderQueries: OSLogStreamer.PredicatePlugin {
     public static let allEvents: [any EHUEFEvent.Type] = [ Event.self ]
-    let parser = Mutex<Parser>(Parser())
+    let parser = Parser()
     public func parse(_ fromOSLogEvent: OSLogStreamer.OSLogEvent) -> (any EHUEFEvent)? {
-        parser.withLock {
-            $0.parse(fromOSLogEvent)
-        }
+        parser.parse(fromOSLogEvent)
     }
 
-    static let predicate: String = "((process == \"mDNSResponder\" AND subsystem == \"com.apple.mDNSResponder\" AND category == \"Default\") AND (eventMessage CONTAINS[cd] \"DNSServiceQueryRecord\"))"
+    static let predicate: String = "(process == \"mDNSResponder\" AND subsystem == \"com.apple.mDNSResponder\" AND category == \"Default\")"
     public func getPredicate() -> String {
         return Self.predicate
     }
@@ -114,12 +112,12 @@ public final class MDNSResponderQueries: OSLogStreamer.PredicatePlugin {
         return resolved
     }
 
-    struct Parser: OSLogStreamer.EventParser {
+    struct Parser: OSLogStreamer.EventParser, @unchecked Sendable {
         let rrule = /\[(?<queryid>R\d+)(-.+?)?\] DNSServiceQueryRecord (?<rowtype>START|result) -- (qname: (?<qname>.+?)(, +))?(event: (?<event>.+?)(, +))?(expired: (?<expired>.+?)(, +))?(qtype: (?<qtype>.+?)(, +))?(flags: (?<flags>.+?)(, +))?((ifindex|interface index): (?<interface>.+?)(, +))?(client pid: (?<pid>\d+) \((?<processname>.+?)\)(, +|$))?(name hash: (?<namehash>.+?)(, +|$))?(type: (?<rtype>.+?)(, +))?(rdata: (?<rdata>.+?)($))?/
 
         func parse(_ fromOSLogEvent: OSLogStreamer.OSLogEvent) -> (any EHUEFEvent)? {
-            var e = Event()
             if let result = try? rrule.firstMatch(in: fromOSLogEvent.composedMessage) {
+                var e = Event()
                 e.rowtype = String(result.rowtype) == "START" ? Event.QueryType.start.rawValue : Event.QueryType.result.rawValue
                 e.timestamp = fromOSLogEvent.timestamp.timeIntervalSince1970
                 e.queryID = String(result.queryid)
@@ -163,8 +161,7 @@ public final class MDNSResponderQueries: OSLogStreamer.PredicatePlugin {
             case start
             case result
         }
-        public var fields: [String: EHValueType] = [:]
-        public var tags = Set<String>()
+        public var metadata = EHEventMetadata()
 
         public var event_category: EHUEFCategory = .system
         public var event_type: String = "DNSServiceQueryRecord"
@@ -251,5 +248,81 @@ extension MDNSResponderQueries.Event: EventNormalizer.DnsNormalizable {
             "interfaceIndex": .int(Int(self.interfaceIndex)),
             "flags": .string(self.flags)
         ]
+    }
+}
+
+
+extension MDNSResponderQueries.Event: EHFieldExtractable {
+    public func fieldValue(for field: String) -> Any? {
+        switch field {
+        case "tags": return tags
+        case "fields": return fields
+        case "event_category": return event_category
+        case "event_type": return event_type
+        case "rowtype": return rowtype
+        case "timestamp": return timestamp
+        case "queryID": return queryID
+        case "process": return process
+        case "processID": return processID
+        case "qname": return qname
+        case "qtype": return qtype
+        case "flags": return flags
+        case "interfaceIndex": return interfaceIndex
+        case "namehash": return namehash
+        case "rdata": return rdata
+        case "qnameSE": return qnameSE
+        case "subqname": return subqname
+        case "subqnameSE": return subqnameSE
+        default: return nil
+        }
+    }
+}
+
+
+import AST
+
+private enum RK {
+    static let event_type: AST.RegoValue = .string("event_type")
+    static let event_category: AST.RegoValue = .string("event_category")
+    static let tags: AST.RegoValue = .string("tags")
+    static let fields: AST.RegoValue = .string("fields")
+    static let rowtype: AST.RegoValue = .string("rowtype")
+    static let timestamp: AST.RegoValue = .string("timestamp")
+    static let queryID: AST.RegoValue = .string("queryID")
+    static let process: AST.RegoValue = .string("process")
+    static let processID: AST.RegoValue = .string("processID")
+    static let qname: AST.RegoValue = .string("qname")
+    static let qtype: AST.RegoValue = .string("qtype")
+    static let flags: AST.RegoValue = .string("flags")
+    static let interfaceIndex: AST.RegoValue = .string("interfaceIndex")
+    static let namehash: AST.RegoValue = .string("namehash")
+    static let rdata: AST.RegoValue = .string("rdata")
+    static let qnameSE: AST.RegoValue = .string("qnameSE")
+    static let subqname: AST.RegoValue = .string("subqname")
+    static let subqnameSE: AST.RegoValue = .string("subqnameSE")
+}
+
+extension MDNSResponderQueries.Event: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = [:]
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.rowtype] = .string(rowtype)
+        obj[RK.timestamp] = .number(RegoNumber(decimal: Decimal(timestamp)))
+        obj[RK.queryID] = .string(queryID)
+        obj[RK.process] = .string(process)
+        obj[RK.processID] = .number(RegoNumber(int: Int64(processID)))
+        obj[RK.qname] = .string(qname)
+        obj[RK.qtype] = .string(qtype)
+        obj[RK.flags] = .string(flags)
+        obj[RK.interfaceIndex] = .number(RegoNumber(int: Int64(interfaceIndex)))
+        obj[RK.namehash] = .string(namehash)
+        obj[RK.rdata] = .string(rdata)
+        obj[RK.qnameSE] = .number(RegoNumber(decimal: Decimal(qnameSE)))
+        obj[RK.subqname] = .string(subqname)
+        obj[RK.subqnameSE] = .number(RegoNumber(decimal: Decimal(subqnameSE)))
+        return .object(obj)
     }
 }

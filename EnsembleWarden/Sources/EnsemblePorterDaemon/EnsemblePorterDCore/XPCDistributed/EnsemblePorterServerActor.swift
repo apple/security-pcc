@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -126,6 +126,31 @@ package distributed actor EnsemblePorterServerFetchActor<IntraEnsembleTransponde
         self.actorSystem = actorSystem
     }
 
+    /// Retrieves a turn key
+    ///
+    /// - Parameter turnNumber: The turn-based key identifier for the data to retrieve
+    /// - Returns: A result containing either the requested data or an error
+    package distributed func fetchKey(forTurnNumber turnNumber: Int) -> CodableResult<Data, EnsemblePorterError> {
+        // TODO: Actually implement this.
+        logger.log("fetchKey(forTurnNumber:) called")
+        return .success(.init(count: 0))
+    }
+
+    /// Gets the number of available turn keys
+    ///
+    /// - Returns: A result containing either the number of turn keys or an error
+    package distributed func getNumberOfTurnKeys() -> CodableResult<Int, EnsemblePorterError> {
+        logger.log("getNumberOfTurnKeys called")
+        do {
+            let count = try logic.getNumberOfTurnKeys()
+            return .success(count)
+        } catch let error as EnsemblePorterError {
+            return .failure(error)
+        } catch {
+            logger.error("Unexpected error during getNumberOfTurnKeys. error=\(String(reportable: error), privacy: .public)")
+            return .failure(.unexpectedError)
+        }
+    }
 
     package distributed func fetchFollowerTokens(requestID: UUID, spanID: UInt64) async -> EnsemblePorterCommon.CodableResult<FollowerTokens, EnsemblePorterCommon.EnsemblePorterError> {
         let logic = self.logic

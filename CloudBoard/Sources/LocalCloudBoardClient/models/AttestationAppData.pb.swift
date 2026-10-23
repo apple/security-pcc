@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,11 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+#if canImport(FoundationEssentials)
+internal import FoundationEssentials
+#else
 import Foundation
+#endif
 internal import InternalSwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file

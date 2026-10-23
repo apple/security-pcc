@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -57,6 +57,9 @@ private actor HostNameWrapper {
 
     nonisolated
     private func _getDarwinHostName() -> String? {
+        #if os(Linux)
+        return Host.current().localizedName
+        #else
         var buffer = [CChar](repeating: 0, count: 256)
         let retVal = buffer.withUnsafeMutableBufferPointer { ptr -> CInt in
             return Darwin.gethostname(ptr.baseAddress, ptr.count)
@@ -75,6 +78,7 @@ private actor HostNameWrapper {
         }
         os_log(.error, log: log, "Failed to fetch darwin hostname with retval: \(retVal), errno: \(code), error: \(err_s, privacy: .private)")
         return nil
+        #endif
     }
 
     nonisolated
@@ -83,6 +87,6 @@ private actor HostNameWrapper {
     }
 }
 
-func getHostName() -> String {
+public func getHostName() -> String {
     return hostNameWrapper.hostname()
 }

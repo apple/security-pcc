@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,12 +24,13 @@ import Foundation_Private.NSBackgroundActivityScheduler
 import OSLog
 import PrivateCloudCompute
 
+private let logger = Logger(for: .updateServerDrivenConfiguration)
+
 /// Fetches and stores locally server-driven configuration.
 final class UpdateServerDrivenConfigScheduledActivity<
     ServerDrivenConfiguration: ServerDrivenConfigurationProtocol,
     SystemInfo: SystemInfoProtocol
 >: Sendable, ScheduledActivity {
-    private let logger = tc2Logger(forCategory: .updateServerDrivenConfiguration)
     private let serverDrivenConfig: ServerDrivenConfiguration
     private let systemInfo: SystemInfo
     private let config: any Configuration

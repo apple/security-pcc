@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -387,7 +387,10 @@ enum Network {
             url.lastPathComponent
         }
         
-        let destinationPath = destinationDirectory.appending(name)
+        guard let destinationPath = destinationDirectory.lexicallyResolving(FilePath(name)) else {
+            logger.error("Download URL last path component '\(name)' would escape destination directory — rejecting")
+            return nil
+        }
 
         if let localFilePath = FilePath(url) {
             do {

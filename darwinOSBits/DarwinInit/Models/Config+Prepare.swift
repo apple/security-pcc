@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,6 +18,7 @@
 //
 //
 
+import DarwinInitConfig
 import Foundation
 import System
 
@@ -72,7 +73,7 @@ extension Config {
 
         let manager = CryptexManager(from: cryptex, auth: authentication, diavlo: diavlo?.url)
         let items = cryptexes.map { id, cryptex in
-            CryptexManager.CryptexConfig(from: cryptex, identifier: id)
+            CryptexConfig(from: cryptex, identifier: id)
         }
 
         let cacheDelegate = CryptexCacheDelegate()
@@ -85,15 +86,10 @@ extension Config {
             CryptexCache.logger.log("[\(cryptex.identifier)] Prefetching")
 
             do {
-                let accessParams = try await manager.resolveCryptexCacheAccessParameter(cryptex: cryptex)
-
-                try await cache.access(entryBackedByResourceAt: cryptex.url,
-                                       authentication: manager.downloadAuth,
-                                       downloadConfiguration: manager.downloadConfig,
-                                       delegateParameter: accessParams)
+                try await manager.prefetch(cryptex: cryptex, into: cache)
             } catch {
                 CryptexCache.logger.error("[\(cryptex.identifier)] Failed to handle cache access: \(error)")
-                return PrepareError(url: cryptex.url, error: error)
+                return PrepareError(url: cryptex.config.url, error: error)
             }
 
             return nil

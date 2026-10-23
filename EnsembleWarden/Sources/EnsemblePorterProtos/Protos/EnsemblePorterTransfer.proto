@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -36,11 +36,18 @@ message StartNewProcessRequest {
 message StartNewProcessReply {
     bytes instance_uuid = 1;
     bytes public_key = 2;
-    bytes key_attestation = 3;
 }
 
 message ShutdownRequest {
     bytes instance_uuid = 1;
+}
+
+message Heartbeat {
+    bytes instance_uuid = 1;
+}
+
+message HeartbeatResponse {
+    bool success = 1;
 }
 
 message PorterMessage {
@@ -51,6 +58,7 @@ message PorterMessage {
         StartNewProcessReply start_new_process_reply = 3;
         PerProcessMessage per_process_message = 4;
         ShutdownRequest shutdown = 5;
+        Heartbeat heartbeat = 6;
     }
     bytes request_id = 20;
     uint64 span_id = 21;

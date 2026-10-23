@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -16,559 +16,881 @@
 //  AttestationStore.swift
 //  PrivateCloudCompute
 //
-//  Copyright © 2024 Apple Inc. All rights reserved.
+//  Copyright © 2026 Apple Inc. All rights reserved.
 //
 
 import Foundation
 import PrivateCloudCompute
-import SwiftData
-import os.lock
+@_spi(Private) import SwiftData
+import os
 
+private let logger = Logger(for: .attestationStore)
+private let signposter = OSSignposter(logger: logger)
+
+// MARK: - Protocol
+
+/// Protocol for the attestation store with reusable pool model.
 protocol AttestationStoreProtocol: Sendable {
-    func saveValidatedAttestation(
+    /// Saves a validated attestation to the staging area.
+    ///
+    /// All attestations are first saved to the staging area with a prefetch ID.
+    /// Use `finalizePendingPrefetch` to commit them to the main store.
+    ///
+    /// If the validated attestation already exists, this will create an entry to track
+    /// the prefetch against the existing attestation.
+    ///
+    /// - Parameters:
+    ///   - validatedAttestation: The attestation to save.
+    ///   - parameters: The workload parameters.
+    func stageValidatedAttestation(
         _ validatedAttestation: ValidatedAttestation,
+        pendingPrefetchID: UUID
+    ) async throws
+
+    /// Finalizes a pending prefetch.
+    ///
+    /// This atomically:
+    /// 1. Deletes old attestations for the workload
+    /// 2. Moves staged attestations to the committed store
+    /// 3. Links them to the workload
+    ///
+    /// - Parameters:
+    ///   - parameters: The workload parameters.
+    ///   - pendingPrefetchID: The prefetch identifier. Must corresponding to the identifier used in `stageValidatedAttestation`
+    ///   - isPrewarm: Whether these attestations were obtained via an on-demand prewarm (true) or a background/scheduled prefetch (false).
+    func finalizePendingPrefetch(
         for parameters: Workload,
-        prefetched: Bool,
-        batch: UInt,
-        fetchTime: Date
-    ) async -> Bool
+        pendingPrefetchID: UUID,
+        isPrewarm: Bool
+    ) async throws
+
+    /// Discards a pending prefetch batch.
+    ///
+    /// Deletes all staging entries with the matching prefetch ID.
+    /// The existing committed pool remains unchanged.
+    func discardPendingPrefetch(id: UUID) async throws
+
+    /// Gets attestations for a request.
+    ///
+    /// Selects random attestations from the committed pool.
+    ///
+    /// - Parameters:
+    ///   - parameters: The workload parameters.
+    ///   - serverRequestID: The server request ID for tracking.
+    ///   - maxAttestations: Maximum number of attestations to return.
+    /// - Returns: Set of ValidatedAttestation (nodeIDs are unique by nature of Set).
+    /// - Throws: `storeEmpty`, `storeBelowMinimum`, or `storeExpired`.
     func getAttestationsForRequest(
-        nodeKind: NodeKind,
         parameters: Workload,
         serverRequestID: UUID,
         maxAttestations: Int
-    ) async -> [String: ValidatedAttestation]
-    func deleteAllAttestationStoreEntries() async
-    func deleteEntriesWithExpiredAttestationBundles() async
-    func deleteEntryForNode(nodeIdentifier: String) async -> Bool
-    func deleteEntries(
-        withParameters parameters: Workload,
-        batchId: UInt
-    ) async
-    func nodeExists(udid: String) async -> Bool
-    func trackNodeForParameters(
-        forParameters parameters: Workload,
-        withUdid udid: String,
-        prefetched: Bool,
-        batchID: UInt,
-        fetchTime: Date
-    ) async -> Bool
+    ) async throws -> Set<ValidatedAttestation>
+
+    /// Retrieves validated attestation for given node id if it exists.
+    /// Note: the bundle is not included in this to save runtime memory where it is not needed.
+    ///
+    /// - Parameters:
+    ///   - nodeId: The node id
+    func validatedAttestation(for nodeID: String) async throws -> ValidatedAttestation?
+
+    /// Checks if sufficient attestations exist for a workload.
+    ///
+    /// - Parameters:
+    ///   - forParameters: The workload parameters.
+    ///   - clientCacheSize: The required number of attestations.
+    ///   - fetchTime: Only considers attestations fetched at or after this time.
     func attestationsExist(
         forParameters: Workload,
         clientCacheSize: Int,
         fetchTime: Date
     ) async -> Bool
-    func deleteAttestationsUsedByTrustedRequest(
-        serverRequestID: UUID
-    ) async -> UInt
-    func getAttestationBundlesUsedByTrustedRequest(
-        serverRequestID: UUID
-    ) async -> [String: Data]
+
+    /// Deletes a specific node by ROPES identifier (nodeID).
+    func deleteEntryForNode(nodeID: String) async -> Bool
+
+    /// Deletes all expired attestations.
+    func deleteEntriesWithExpiredAttestationBundles(now: Date) async throws
+
+    /// Deletes all attestation store entries (full reset).
+    func deleteAllAttestationStoreEntries() async throws
+
+    /// Deletes attestations used by a trusted request and
+    /// - Returns: the number of attestations deleted
+    func deleteAttestationsUsedByTrustedRequest(serverRequestID: UUID) async -> UInt
+
+    /// Gets the attestation bundles used by a trusted request.
+    /// - Returns: Dictionary mapping nodeID to attestation bundle data.
+    func getAttestationBundlesUsedByTrustedRequest(serverRequestID: UUID) async -> [String: Data]
+
+    /// Returns all available nodes and their attestations for debugging/testing purposes.
+    /// Only returns nodes that are in the committed pool (linked to workloads).
+    /// - Returns: Set of ValidatedAttestation.
+    func getAllAvailableNodes() async -> Set<ValidatedAttestation>
 }
 
-private let logger = tc2Logger(forCategory: .attestationStore)
+// MARK: - Implementation
 
 extension AttestationStore {
-    typealias Workload = AttestationStore.SchemaV2.Workload
-    typealias Node = AttestationStore.SchemaV2.Node
+    typealias AvailableNode = AttestationStore.SchemaV3.AvailableNode
+    typealias NodeMetadata = AttestationStore.SchemaV3.NodeMetadata
+    typealias NodeBundle = AttestationStore.SchemaV3.NodeBundle
+    typealias PrefetchStaging = AttestationStore.SchemaV3.PrefetchStaging
+    typealias WorkloadEntry = AttestationStore.SchemaV3.WorkloadEntry
+    typealias WorkloadRequests = AttestationStore.SchemaV3.WorkloadRequests
 }
 
 @ModelActor
 final actor AttestationStore: AttestationStoreProtocol, Sendable {
-    init?(environment: TC2Environment, dir: URL) {
-        let storesDir = Self.storesDir(rootDir: dir, environment: environment)
-        Self.removeOldStoreFiles(storesDir: storesDir)
 
-        let storeFileURL = storesDir.appendingPathComponent("attestationstore_v2.sqlite", isDirectory: false)
-        logger.log("attestation store path: \(storeFileURL)")
+    /// How long a PrefetchStaging or WorkloadRequests entry must exist before
+    /// it no longer blocks deletion of expired metadata. Entries older than this
+    /// threshold are considered "stale" and will not block metadata deletion.
+    private static let staleEntryThreshold: TimeInterval = 24 * 60 * 60  // 1 day
+
+    private static let dbFilename = "db.sqlite"
+
+    init(dir: URL) {
+        let storesDir = Self.storesDir(rootDir: dir)
+
+        let storeFileURL = storesDir.appendingPathComponent(Self.dbFilename, isDirectory: false)
+        logger.log("attestation store v3 path: \(storeFileURL)")
         let configuration = ModelConfiguration(url: storeFileURL)
-        guard let currentVersionedSchema = SchemaMigrationPlan.schemas.last else {
-            logger.error("failed to init attestation store, missing schema")
-            return nil
-        }
-        let schema = Schema(versionedSchema: currentVersionedSchema)
+
+        let schema = Schema(versionedSchema: AttestationStore.SchemaV3.self)
         do {
-            let container = try ModelContainer(for: schema, migrationPlan: SchemaMigrationPlan.self, configurations: configuration)
+            let container = try ModelContainer(for: schema, configurations: configuration)
             self.init(modelContainer: container)
         } catch {
-            logger.error("failed to init attestation store, error=\(error)")
-            return nil
+            fatalError("failed to init attestation store v3, error=\(error)")
         }
     }
 
-    private static func removeOldStoreFiles(storesDir: URL) {
-        // In CrystalGlowE we updated the scheme discarding all previously
-        // stored data by renaming underlying storage filename. Let's remove
-        // the files used by old schema.
-        let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: storesDir.relativePath) else {
-            // Very first launch and `Stores_production` directory hasn't been created yet.
-            return
+    private static func storesDir(rootDir: URL) -> URL {
+        return rootDir.appendingPathComponent("attestationstore_v3", isDirectory: true)
+    }
+
+    // MARK: - Transaction
+
+    /// Opaque token proving the caller is executing within a modelContext transaction.
+    /// Only constructible via `ModelContext.withAttestationStoreTransaction(_:)`.
+    struct Transaction {
+        fileprivate init() {}
+    }
+
+    // MARK: - Fetch Helpers
+
+    /// Returns NodeMetaData for given `nodeId`
+    private func fetchMetadata(nodeID: String) throws -> NodeMetadata? {
+        let predicate = #Predicate<NodeMetadata> { $0.nodeID == nodeID }
+        return try modelContext.fetch(FetchDescriptor(predicate: predicate)).first
+    }
+
+    /// Returns NodeBundle for given `nodeId`
+    private func fetchBundle(nodeID: String) throws -> NodeBundle? {
+        let predicate = #Predicate<NodeBundle> { $0.nodeID == nodeID }
+        return try modelContext.fetch(FetchDescriptor(predicate: predicate)).first
+    }
+
+    /// Returns true if an AvailableNode with `nodeId` exists
+    private func nodeExists(nodeID: String) throws -> Bool {
+        let predicate = #Predicate<AvailableNode> { $0.nodeID == nodeID }
+        return try modelContext.fetchCount(FetchDescriptor(predicate: predicate)) > 0
+    }
+
+    // MARK: - Query Helpers
+
+    /// Returns true if the node has any WorkloadEntry references.
+    private func hasWorkloadEntriesForNode(nodeID: String) throws -> Bool {
+        let predicate = #Predicate<WorkloadEntry> { $0.nodeID == nodeID }
+        return try modelContext.fetchCount(FetchDescriptor(predicate: predicate)) > 0
+    }
+
+    /// Returns true if the node has any PrefetchStaging references.
+    private func hasStagingEntriesForNode(nodeID: String) throws -> Bool {
+        let predicate = #Predicate<PrefetchStaging> { $0.nodeID == nodeID }
+        return try modelContext.fetchCount(FetchDescriptor(predicate: predicate)) > 0
+    }
+
+    /// Returns true if the node has any WorkloadRequests references.
+    private func hasRequestEntriesForNode(nodeID: String) throws -> Bool {
+        let predicate = #Predicate<WorkloadRequests> { $0.nodeID == nodeID }
+        return try modelContext.fetchCount(FetchDescriptor(predicate: predicate)) > 0
+    }
+
+    // MARK: - Delete Helpers
+
+    /// Deletes all WorkloadEntry records for a node.
+    private func deleteWorkloadEntriesForNode(nodeID: String, _ transaction: Transaction) throws {
+        let predicate = #Predicate<WorkloadEntry> { $0.nodeID == nodeID }
+        try modelContext.delete(model: WorkloadEntry.self, where: predicate)
+    }
+
+    /// Deletes all PrefetchStaging records for a node.
+    private func deleteStagingEntriesForNode(nodeID: String, _ transaction: Transaction) throws {
+        let predicate = #Predicate<PrefetchStaging> { $0.nodeID == nodeID }
+        try modelContext.delete(model: PrefetchStaging.self, where: predicate)
+    }
+
+    /// Deletes all WorkloadRequests records for a node.
+    private func deleteRequestEntriesForNode(nodeID: String, _ transaction: Transaction) throws {
+        let predicate = #Predicate<WorkloadRequests> { $0.nodeID == nodeID }
+        try modelContext.delete(model: WorkloadRequests.self, where: predicate)
+    }
+
+    /// Deletes the AvailableNode record for a node.
+    /// Invariant: AvailableNode should only exist when linked to at least one WorkloadEntry.
+    private func deleteNodeRecord(nodeID: String, _ transaction: Transaction) throws {
+        let predicate = #Predicate<AvailableNode> { $0.nodeID == nodeID }
+        try modelContext.delete(model: AvailableNode.self, where: predicate)
+    }
+
+    /// Deletes NodeMetadata and its NodeBundle for a node.
+    /// Warning: Only call this after verifying no references exist, or when doing complete cleanup.
+    private func deleteMetadataRecord(nodeID: String, _ transaction: Transaction) throws {
+        // Always delete bundles before metadata to avoid materializing them in memory (rdar://176278017)
+        try modelContext.delete(model: NodeBundle.self, where: #Predicate { $0.nodeID == nodeID })
+        try modelContext.delete(model: NodeMetadata.self, where: #Predicate { $0.nodeID == nodeID })
+    }
+
+    /// Deletes all references and then the node and metadata for a nodeID.
+    /// - Warning: This will delete staging entries and request tracking entries,
+    ///   which may break in-flight prefetches or request diagnostics. Only use this
+    ///   for complete cleanup of a node from the store (e.g., operator-requested deletion).
+    private func deleteNodeCompletely(nodeID: String, _ transaction: Transaction) throws {
+        // Log if deleting node with active references
+        let hasStaging = try hasStagingEntriesForNode(nodeID: nodeID)
+        let hasRequests = try hasRequestEntriesForNode(nodeID: nodeID)
+        if hasStaging || hasRequests {
+            logger.warning("deleteNodeCompletely: node=\(nodeID) has active references (staging=\(hasStaging) requests=\(hasRequests))")
         }
 
-        do {
-            let files = try fileManager.contentsOfDirectory(at: storesDir, includingPropertiesForKeys: nil)
-            for file in files where file.lastPathComponent.hasPrefix("attestation_store_v0.2.sqlite") {
-                removeDaemonStateFile(url: file)
-            }
-        } catch {
-            logger.error("error obtaining contents of stores directory error=\(error)")
+        try deleteWorkloadEntriesForNode(nodeID: nodeID, transaction)
+        try deleteRequestEntriesForNode(nodeID: nodeID, transaction)
+        try deleteStagingEntriesForNode(nodeID: nodeID, transaction)
+        try deleteNodeRecord(nodeID: nodeID, transaction)
+        try deleteMetadataRecord(nodeID: nodeID, transaction)
+    }
+
+    /// Cleans up orphaned entities that are no longer referenced.
+    private func cleanupOrphanedNodes(_ transaction: Transaction) throws {
+        try signposter.withIntervalSignpost(.cleanupUnreferencedNodes, id: signposter.makeSignpostID()) {
+            let workloadEntries = try modelContext.fetch(FetchDescriptor<WorkloadEntry>())
+            let availableNodes = try modelContext.fetch(FetchDescriptor<AvailableNode>())
+            let staging = try modelContext.fetch(FetchDescriptor<PrefetchStaging>())
+            let requests = try modelContext.fetch(FetchDescriptor<WorkloadRequests>())
+            let metadata = try modelContext.fetch(FetchDescriptor<NodeMetadata>())
+
+            let workloadNodeIDs = Set(workloadEntries.map(\.nodeID))
+            let availableNodeIDs = Set(availableNodes.map(\.nodeID))
+            let stagingNodeIDs = Set(staging.map(\.nodeID))
+            let requestNodeIDs = Set(requests.map(\.nodeID))
+            let metadataNodeIDs = Set(metadata.map(\.nodeID))
+
+            // AvailableNode must only exist while linked to a WorkloadEntry.
+            let orphanedNodeIDs = availableNodeIDs.subtracting(workloadNodeIDs)
+
+            // NodeMetadata (and its NodeBundle) is orphaned when nothing references its nodeID.
+            let referencedNodeIDs = workloadNodeIDs.union(stagingNodeIDs).union(requestNodeIDs)
+            let orphanedMetadataNodeIDs = metadataNodeIDs.subtracting(referencedNodeIDs)
+
+            try modelContext.delete(model: AvailableNode.self, where: #Predicate { orphanedNodeIDs.contains($0.nodeID) })
+
+            try modelContext.delete(model: NodeBundle.self, where: #Predicate { orphanedMetadataNodeIDs.contains($0.nodeID) })
+            try modelContext.delete(model: NodeMetadata.self, where: #Predicate { orphanedMetadataNodeIDs.contains($0.nodeID) })
         }
     }
 
-    static func migrate(from source: URL, to destination: URL) {
-        // We're only going to migrate a production attestation store.
-        // Unfortunately we do not yet know, at migration, which env we're in.
-        let sourceFile = storesDir(rootDir: source, environment: .production)
-        let destinationFile = storesDir(rootDir: destination, environment: .production)
-        moveDaemonStateFile(from: sourceFile, to: destinationFile)
-    }
+    // MARK: - Save
 
-    private static func storesDir(rootDir: URL, environment: TC2Environment) -> URL {
-        // Next time we have an opportunity to discard previous version of attestation store, we should at least remove
-        // addition of environment name into the directory name since in non-prod environments root dir will be already
-        // specific to the environment. Additionally, it may make sense to rename the directory to `AttestationStore`
-        // or even consider removing it.
-        let dirName = "Stores_\(environment.name)"
-        return rootDir.appendingPathComponent(dirName, isDirectory: true)
-    }
-
-    /// This will only be ever called for a brand new Attestation that doesn't have an entry in the TC2NodeStore
-    func saveValidatedAttestation(
+    func stageValidatedAttestation(
         _ validatedAttestation: ValidatedAttestation,
+        pendingPrefetchID: UUID
+    ) throws {
+        let signpostID = signposter.makeSignpostID()
+        try signposter.withIntervalSignpost(.stageValidatedAttestation, id: signpostID) {
+            let udid = validatedAttestation.udid
+
+            guard let validatedCellID = validatedAttestation.validatedCellID else {
+                logger.error("missing validatedAttestation.validatedCellID")
+                throw AttestationStoreError(code: .invalidAttestation)
+            }
+
+            let hasBundle = validatedAttestation.attestation.attestationBundle != nil
+            let hasExistingMetadata = try fetchMetadata(nodeID: validatedAttestation.attestation.nodeID) != nil
+            guard hasBundle || hasExistingMetadata else {
+                logger.error("missing validatedAttestation.attestation.attestationBundle for new attestation")
+                throw AttestationStoreError(code: .invalidAttestation)
+            }
+
+            let nodeID = validatedAttestation.attestation.nodeID
+
+            logger.log("stageValidatedAttestation: nodeID=\(nodeID) pendingPrefetchID=\(pendingPrefetchID)")
+
+            // Even though there is a unique constraint in our scheme, an error is not automatically thrown
+            // SwiftData executes an UPSERT instead of throwing an error in this case
+
+            // Check for duplicate nodeID within this prefetch
+            // We do this first because duplicate nodeId implies duplicate udid but not the inverse
+            let duplicateNodePredicate = #Predicate<PrefetchStaging> {
+                $0.prefetchID == pendingPrefetchID && $0.nodeID == nodeID
+            }
+            let duplicateNodeCount = try modelContext.fetchCount(FetchDescriptor(predicate: duplicateNodePredicate))
+            if duplicateNodeCount > 0 {
+                throw AttestationStoreError(code: .duplicateNodeIdInPrefetch)
+            }
+
+            // Check for duplicate UDID within this prefetch
+            let duplicatePredicate = #Predicate<PrefetchStaging> {
+                $0.prefetchID == pendingPrefetchID && $0.udid == udid
+            }
+            let duplicateCount = try modelContext.fetchCount(FetchDescriptor(predicate: duplicatePredicate))
+            if duplicateCount > 0 {
+                throw AttestationStoreError(code: .duplicateUdidInPrefetch)
+            }
+
+            try modelContext.withAttestationStoreTransaction { _ in
+                if try fetchMetadata(nodeID: nodeID) == nil, let bundle = validatedAttestation.attestation.attestationBundle {
+                    signposter.emitEvent("InsertNewNodeBundle", id: signpostID)
+                    // Create NodeMetadata and NodeBundle
+                    let newMetadata = NodeMetadata(
+                        nodeID: nodeID,
+                        udid: udid,
+                        attestationExpiry: validatedAttestation.attestationExpiry,
+                        publicKey: validatedAttestation.publicKey,
+                        cloudOSVersion: validatedAttestation.attestation.cloudOSVersion,
+                        cloudOSReleaseType: validatedAttestation.attestation.cloudOSReleaseType,
+                        cellID: validatedCellID,
+                        ensembleID: validatedAttestation.attestation.ensembleID
+                    )
+                    modelContext.insert(newMetadata)
+
+                    let nodeBundle = NodeBundle(nodeID: nodeID, attestationBundle: bundle)
+                    nodeBundle.metadata = newMetadata
+                    modelContext.insert(nodeBundle)
+                }
+
+                // Create staging entry
+                let staging = PrefetchStaging(
+                    nodeID: nodeID,
+                    prefetchID: pendingPrefetchID,
+                    udid: udid
+                )
+                modelContext.insert(staging)
+            }
+        }
+    }
+
+    // MARK: - Two-Phase Commit
+
+    func finalizePendingPrefetch(
         for parameters: PrivateCloudCompute.Workload,
-        prefetched: Bool,
-        batch: UInt,
-        fetchTime: Date
-    ) -> Bool {
-        logger.log("saveValidatedAttestation: \(validatedAttestation.attestation.nodeID) batch: \(batch) prefetched: \(prefetched) fetchTime: \(fetchTime) cloudOSVersion: \(validatedAttestation.attestation.cloudOSVersion)")
+        pendingPrefetchID: UUID,
+        isPrewarm: Bool
+    ) throws {
+        try signposter.withIntervalSignpost(.finalizeAttestations, id: signposter.makeSignpostID()) {
+            let (workloadType, workloadID) = parameters.prefetchAttributes
+            logger.log("finalizePendingPrefetch: workload=\(workloadType)/\(workloadID) id=\(pendingPrefetchID)")
 
-        guard let udid = validatedAttestation.udid else {
-            logger.error("missing validatedAttestation.udid")
-            return false
-        }
-        guard let validatedCellID = validatedAttestation.validatedCellID else {
-            logger.error("missing validatedAttestation.validatedCellID")
-            return false
-        }
-        guard let bundle = validatedAttestation.attestation.attestationBundle else {
-            logger.error("missing validatedAttestation.attestation.attestationBundle")
-            return false
-        }
-
-        // First create an entry in the TC2NodeStore for this attestation
-        let newNodeEntry = AttestationStore.Node(
-            udid: udid,
-            kind: .init(validatedAttestation.nodeKind),
-            ropesNodeIdentifier: validatedAttestation.attestation.nodeID,
-            attestationBundle: bundle,
-            attestationExpiry: validatedAttestation.attestationExpiry,
-            publicKey: validatedAttestation.publicKey,
-            cloudOSVersion: validatedAttestation.attestation.cloudOSVersion,
-            cloudOSReleaseType: validatedAttestation.attestation.cloudOSReleaseType,
-            cellID: validatedCellID,
-            ensembleID: validatedAttestation.attestation.ensembleID
-        )
-        modelContext.insert(newNodeEntry)
-
-        // Then link the parameters to use this Node
-        if let params = fetchParamsEntry(parameters: parameters, batchId: batch) {
-            if !params.nodeUdids.contains(udid) {
-                params.nodeUdids.append(udid)
+            let stagingPredicate = #Predicate<PrefetchStaging> { $0.prefetchID == pendingPrefetchID }
+            let stagingCount = try modelContext.fetchCount(FetchDescriptor(predicate: stagingPredicate))
+            guard stagingCount > 0 else {
+                logger.warning("finalizePendingPrefetch: no staging entries found for id=\(pendingPrefetchID)")
+                throw AttestationStoreError(code: .noStagingEntriesForPrefetch)
             }
-        } else {
-            // Create a new tracking entry for this set of parameters
-            logger.log("Linking \(udid) to ...")
-            createNewParamsEntry(
-                parameters: parameters,
-                withNode: udid,
-                isPrefetched: prefetched,
-                batchId: batch,
-                time: fetchTime)
-        }
 
-        do {
-            try modelContext.save()
-            return true
-        } catch {
-            logger.error("failed to insert entry: \(error)")
-            return false
-        }
-    }
-
-    func getAllNodesAndAttestations() -> [String: ValidatedAttestation] {
-        do {
-            // A validated attestation is created for every parameter we have fetched so far
-            var attestations: [String: ValidatedAttestation] = [:]
-            let prefetchEntries = try modelContext.fetch(FetchDescriptor<AttestationStore.Workload>())
-            for prefetchEntry in prefetchEntries {
-                let nodeUdids = prefetchEntry.nodeUdids
-                let queryNodePredicate = #Predicate<AttestationStore.Node> { entry in
-                    nodeUdids.contains(entry.udid)
+            try modelContext.withAttestationStoreTransaction { tx in
+                // Batch delete old workload entries for this workload
+                let oldWorkloadPredicate = #Predicate<WorkloadEntry> {
+                    $0.type == workloadType && $0.workloadID == workloadID
                 }
-                do {
-                    let nodes = try modelContext.fetch(FetchDescriptor(predicate: queryNodePredicate))
-                    for node in nodes {
-                        attestations[node.ropesNodeIdentifier] = .init(
-                            entry: node
-                        )
+                try modelContext.delete(model: WorkloadEntry.self, where: oldWorkloadPredicate)
+
+                // Create AvailableNode and WorkloadEntry for each staging entry
+                // NodeMetadata/NodeBundle were already created during save
+                let stagingEntries = try modelContext.fetch(FetchDescriptor(predicate: stagingPredicate))
+
+                for staging in stagingEntries {
+                    let nodeID = staging.nodeID
+
+                    // Create AvailableNode if it doesn't exist (node may be reused across workloads)
+                    if try !nodeExists(nodeID: nodeID) {
+                        let newNode = AvailableNode(nodeID: nodeID)
+                        modelContext.insert(newNode)
                     }
-                } catch {
-                    // It is possible that the parameter set can be tracking nodes that no longer exist
-                    logger.error("failed to query attestations error: \(error)")
+
+                    let workload = WorkloadEntry(
+                        type: workloadType,
+                        workloadID: workloadID,
+                        nodeID: nodeID,
+                        isPrewarm: isPrewarm,
+                        fetchTime: staging.fetchTime
+                    )
+                    modelContext.insert(workload)
                 }
+
+                // Batch delete staging entries
+                try modelContext.delete(model: PrefetchStaging.self, where: stagingPredicate)
+
+                // Cleanup orphaned nodes (nodes with no workload entries)
+                try cleanupOrphanedNodes(tx)
             }
-            return attestations
-        } catch {
-            logger.error("failed to query attestations error: \(error)")
-            return [:]
+
+            modelContext.reset()
         }
     }
+
+    func discardPendingPrefetch(id: UUID) throws {
+        try signposter.withIntervalSignpost(.discardPendingAttestations, id: signposter.makeSignpostID()) {
+            logger.log("discardPendingPrefetch: id=\(id)")
+
+            try modelContext.withAttestationStoreTransaction { tx in
+                let stagingPredicate = #Predicate<PrefetchStaging> { $0.prefetchID == id }
+                try modelContext.delete(model: PrefetchStaging.self, where: stagingPredicate)
+                try cleanupOrphanedNodes(tx)
+            }
+
+            modelContext.reset()
+        }
+    }
+
+    // MARK: - Get Attestations
 
     func getAttestationsForRequest(
-        nodeKind: NodeKind,
         parameters: PrivateCloudCompute.Workload,
         serverRequestID: UUID,
         maxAttestations: Int
-    ) -> [String: ValidatedAttestation] {
-        logger.log("getAttestationsForRequest id=\(serverRequestID) nodeKind=\(nodeKind)")
+    ) throws -> Set<ValidatedAttestation> {
+        let (workloadType, workloadID) = parameters.prefetchAttributes
+        return try signposter.withIntervalSignpost(
+            .retrieveCachedAttestations,
+            id: signposter.makeSignpostID()
+        ) {
+            let now = Date()
 
-        let today = Date()
-        let (workloadType, inferenceId) = parameters.prefetchAttributes
+            logger.log("getAttestationsForRequest: workload=\(workloadType)/\(workloadID) serverRequestID=\(serverRequestID) max=\(maxAttestations)")
 
-        let prefetchPredicate = #Predicate<AttestationStore.Workload> { entry in
-            entry.type == workloadType && entry.inferenceId == inferenceId && entry.usedByTrustedRequestWithId == nil
-        }
+            // Find workload entries for this workload
+            let workloadPredicate = #Predicate<WorkloadEntry> {
+                $0.type == workloadType && $0.workloadID == workloadID
+            }
+            let workloadEntries = try modelContext.fetch(FetchDescriptor(predicate: workloadPredicate))
 
-        do {
-            // A validated attestation is created for every parameter we have fetched so far
-            var attestations: [String: ValidatedAttestation] = [:]
-            let sortByFetchTime = SortDescriptor(\AttestationStore.Workload.fetchTime, order: .forward)
-            let prefetchDescriptor = FetchDescriptor(predicate: prefetchPredicate, sortBy: [sortByFetchTime])
-            let prefetchEntries = try modelContext.fetch(prefetchDescriptor)
+            guard !workloadEntries.isEmpty else {
+                throw AttestationStoreError(code: .storeEmpty, workloadType: workloadType, workloadID: workloadID)
+            }
 
-            let rawKind = AttestationStore.Node.Kind(nodeKind).rawValue
+            // Get unique nodeIDs and filter for unexpired nodes FIRST
+            let nodeIDs = Set(workloadEntries.map { $0.nodeID })
+            var unexpiredNodeIDs: [String] = []
 
-            outerLoop: for batchToUse in prefetchEntries {
-                var count = 0
-                let nodeUdids = batchToUse.nodeUdids
-                let queryNodePredicate: Predicate<AttestationStore.Node>
-                if nodeKind == .direct {
-                    // treat rawKind not being set as `.direct` too
-                    queryNodePredicate = #Predicate<AttestationStore.Node> { entry in
-                        (entry.rawKind == nil || entry.rawKind == rawKind) && nodeUdids.contains(entry.udid) && entry.attestationExpiry >= today
-                    }
-                } else {
-                    queryNodePredicate = #Predicate<AttestationStore.Node> { entry in
-                        entry.rawKind == rawKind && nodeUdids.contains(entry.udid) && entry.attestationExpiry >= today
-                    }
-
+            for nodeID in nodeIDs {
+                let metadataPredicate = #Predicate<NodeMetadata> {
+                    $0.nodeID == nodeID && $0.attestationExpiry >= now
                 }
-                do {
-                    let nodes = try modelContext.fetch(FetchDescriptor(predicate: queryNodePredicate)).shuffled()
-                    innerLoop: for node in nodes {
-                        attestations[node.ropesNodeIdentifier] = .init(
-                            entry: node
-                        )
-                        count += 1
-                        if count >= maxAttestations {
-                            break innerLoop
-                        }
-                    }
-                    if !attestations.isEmpty {
-                        batchToUse.usedByTrustedRequestWithId = serverRequestID
-                        logger.log("getAttestationsForRequest \(serverRequestID) returned batch: \(batchToUse.batchId) nodes count: \(attestations.count)")
-                        if modelContext.hasChanges {
-                            try modelContext.save()
-                        }
-                        break
-                    }
-                } catch {
-                    logger.error("failed to query nodes, error: \(error)")
+                if try modelContext.fetchCount(FetchDescriptor(predicate: metadataPredicate)) > 0 {
+                    unexpiredNodeIDs.append(nodeID)
                 }
             }
 
-            return attestations
-        } catch {
-            logger.error("failed to query unexpired attestations: \(error)")
-            return [:]
-        }
-    }
-
-    func deleteEntriesWithExpiredAttestationBundles() {
-        logger.log("deleteEntriesWithExpiredAttestationBundles")
-
-        // This will just delete the node entries from the NodeStore
-        // Parameter store may have stale entries, but that should be ok since there will be no underlying node
-        let today = Date()
-
-        let queryPredicate = #Predicate<AttestationStore.Node> { entry in
-            today > entry.attestationExpiry
-        }
-
-        do {
-            try modelContext.delete(model: AttestationStore.Node.self, where: queryPredicate)
-        } catch {
-            logger.error("failed to delete expired attestations: \(error)")
-        }
-    }
-
-    func deleteEntries(
-        withParameters parameters: PrivateCloudCompute.Workload,
-        batchId: UInt
-    ) {
-        let (workloadType, inferenceId) = parameters.prefetchAttributes
-        logger.log("deleteEntries workloadType=\(workloadType) inferenceId=\(inferenceId) batchId=\(batchId)")
-
-        let queryPredicate = #Predicate<AttestationStore.Workload> { entry in
-            entry.type == workloadType && entry.inferenceId == inferenceId && entry.batchId == batchId
-        }
-
-        do {
-            try modelContext.delete(model: AttestationStore.Workload.self, where: queryPredicate)
-        } catch {
-            logger.error("failed to delete entries: \(error)")
-        }
-    }
-
-    func deleteAllAttestationStoreEntries() {
-        logger.log("deleteAllAttestationStoreEntries")
-
-        do {
-            try modelContext.delete(model: AttestationStore.Node.self)
-            try modelContext.delete(model: AttestationStore.Workload.self)
-        } catch {
-            logger.error("failed to delete all entries: \(error)")
-        }
-    }
-
-    /// Delete a node entry by looking up the ROPES provided identifier
-    /// This is called in the invoke path where ROPES may tell the client that a few attestations sent by the client are unusable
-    func deleteEntryForNode(nodeIdentifier: String) -> Bool {
-        logger.log("deleteEntryForNode: \(nodeIdentifier)")
-
-        let queryPredicate = #Predicate<AttestationStore.Node> { entry in
-            entry.ropesNodeIdentifier == nodeIdentifier
-        }
-
-        do {
-            try modelContext.delete(model: AttestationStore.Node.self, where: queryPredicate)
-        } catch {
-            logger.error("failed to delete entry for node with ropes identifier: \(nodeIdentifier) with error: \(error)")
-            return false
-        }
-
-        return true
-    }
-
-    func nodeExists(udid: String) -> Bool {
-        logger.log("nodeExists: checking if \(udid) node exists")
-
-        // Return true if we have this node (unexpired) at all in our NodeStore to ensure we save on validation effort
-        let today = Date()
-
-        let queryPredicate = #Predicate<AttestationStore.Node> { entry in
-            entry.udid == udid && entry.attestationExpiry >= today
-        }
-
-        do {
-            return try modelContext.fetchCount(FetchDescriptor(predicate: queryPredicate)) > 0
-        } catch {
-            logger.error("failed to query nodes: \(error)")
-        }
-
-        return false
-    }
-
-    /// Checks to see if node with uniqueIdentifier is tracked in a given batch and for a parameters set, if not, it will add the tracking
-    /// Returns true if parameters set already tracks this node in this batch
-    /// This is to ensure that we calculate duplicates in a batch and not across batches
-    func trackNodeForParameters(
-        forParameters parameters: PrivateCloudCompute.Workload,
-        withUdid udid: String,
-        prefetched: Bool,
-        batchID: UInt,
-        fetchTime: Date
-    ) -> Bool {
-        logger.log("trackNodeForParameters: checking if \(udid) node tracks params")
-
-        do {
-            // let's ensure that the parameters cache is tracking this entry
-            if nodeExistsInBatch(parameters: parameters, udid: udid, batchID: batchID) {
-                return true
-            } else {
-                if let params = fetchParamsEntry(parameters: parameters, batchId: batchID) {
-                    params.nodeUdids.append(udid)
-                } else {
-                    // Create a new tracking entry for this set of parameters and batch
-                    logger.log("Linking \(udid) to ...")
-                    createNewParamsEntry(
-                        parameters: parameters,
-                        withNode: udid,
-                        isPrefetched: prefetched,
-                        batchId: batchID,
-                        time: fetchTime
-                    )
-                }
+            // Check count after filtering expired
+            guard !unexpiredNodeIDs.isEmpty else {
+                throw AttestationStoreError(code: .storeExpired, workloadType: workloadType, workloadID: workloadID)
             }
-            try modelContext.save()
-        } catch {
-            logger.error("failed to query nodes: \(error)")
-        }
 
-        return false
+            if unexpiredNodeIDs.count > maxAttestations {
+                logger.log("workload=\(workloadType)/\(workloadID) found more than \(maxAttestations) nodes; dropping \(unexpiredNodeIDs.count - maxAttestations)")
+            } else if unexpiredNodeIDs.count < maxAttestations {
+                logger.log("workload=\(workloadType)/\(workloadID) found less than \(maxAttestations) nodes)")
+            }
+
+            // Shuffle and take max
+            unexpiredNodeIDs.shuffle()
+            let selectedNodeIDs = unexpiredNodeIDs.prefix(maxAttestations)
+
+            // Fetch metadata for selected nodes and record usage
+            let requestIDString = serverRequestID.uuidString
+
+            let result: Set<ValidatedAttestation> = try modelContext.withAttestationStoreTransaction { _ in
+                var result: Set<ValidatedAttestation> = []
+                for nodeID in selectedNodeIDs {
+                    guard let metadata = try fetchMetadata(nodeID: nodeID) else {
+                        continue
+                    }
+                    let bundle = try fetchBundle(nodeID: metadata.nodeID)
+                    if let attestation = ValidatedAttestation(metadata: metadata, bundle: bundle?.attestationBundle) {
+                        result.insert(attestation)
+
+                        // Record this node as used by the request (uses nodeID as foreign key)
+                        let record = WorkloadRequests(requestID: requestIDString, nodeID: nodeID)
+                        modelContext.insert(record)
+                    }
+                }
+                return result
+            }
+
+            logger.log("getAttestationsForRequest: returning \(result.count) attestations")
+            return result
+        }
     }
 
-    /// Fetches an entry for a particular parameter set - if it exists in the store
-    private func fetchParamsEntry(parameters: PrivateCloudCompute.Workload, batchId: UInt) -> AttestationStore.Workload? {
-        let (workloadType, inferenceId) = parameters.prefetchAttributes
-        logger.log("fetchParamsEntry workloadType=\(workloadType) inferenceId=\(inferenceId)")
+    // MARK: - Queries
 
-        let queryPredicate = #Predicate<AttestationStore.Workload> { entry in
-            entry.type == workloadType && entry.inferenceId == inferenceId && entry.batchId == batchId
-        }
-
-        // Uniqueness attribute cannot be a combination of keys in SwiftData
-        // Because of that, we will need to ensure that only one set of parameters are tracked per batch fetched
-
-        // See WWDC Video - This is possible with #Unique
-        do {
-            let prefetchEntries = try modelContext.fetch(FetchDescriptor(predicate: queryPredicate))
-            return prefetchEntries.first
-        } catch {
-            logger.error("failed to query entries: \(error)")
+    func validatedAttestation(for nodeID: String) throws -> ValidatedAttestation? {
+        guard let metadata = try fetchMetadata(nodeID: nodeID) else {
             return nil
         }
+
+        return ValidatedAttestation(metadata: metadata)
     }
 
-    /// Create a new entry in the parameters table to track a set of previously unknown parameters
-    private func createNewParamsEntry(parameters: PrivateCloudCompute.Workload, withNode nodeUdid: String, isPrefetched: Bool, batchId: UInt, time: Date) {
-        // Create a new tracking entry for this set of parameters
-        let (workloadType, inferenceId) = parameters.prefetchAttributes
-        logger.log("createNewParamsEntry workloadType=\(workloadType) inferenceId=\(inferenceId)")
+    func attestationsExist(
+        forParameters parameters: PrivateCloudCompute.Workload,
+        clientCacheSize: Int,
+        fetchTime: Date
+    ) -> Bool {
+        return signposter.withIntervalSignpost(.checkAttestationsExist, id: signposter.makeSignpostID()) {
+            let (workloadType, workloadID) = parameters.prefetchAttributes
+            let now = Date()
 
-        let newPrefetchEntry = AttestationStore.Workload(
-            type: workloadType,
-            inferenceId: inferenceId,
-            model: "",  // field could be removed in a future schema iteration
-            adapter: "",  // field could be removed in a future schema iteration
-            isPrefetched: isPrefetched,
-            fetchTime: time,
-            nodeUdid: nodeUdid,
-            batchId: batchId
-        )
-        modelContext.insert(newPrefetchEntry)
-    }
+            logger.log("attestationsExist: workload=\(workloadType)/\(workloadID) clientCacheSize=\(clientCacheSize) fetchTime=\(fetchTime)")
 
-    private func nodeExistsInBatch(parameters: PrivateCloudCompute.Workload, udid: String, batchID: UInt) -> Bool {
-        let (workloadType, inferenceId) = parameters.prefetchAttributes
-        logger.log("nodeExistsInBatch workloadType=\(workloadType) inferenceId=\(inferenceId)")
-
-        let queryPredicate = #Predicate<AttestationStore.Workload> { entry in
-            entry.type == workloadType && entry.inferenceId == inferenceId && entry.batchId == batchID
-        }
-
-        do {
-            let prefetchEntry = try modelContext.fetch(FetchDescriptor(predicate: queryPredicate))
-            if let prefetchEntry = prefetchEntry.first {
-                if prefetchEntry.nodeUdids.contains(udid) {
-                    return true
-                }
+            // Find workload entries fetched before the specified time
+            let workloadPredicate = #Predicate<WorkloadEntry> {
+                $0.type == workloadType && $0.workloadID == workloadID && $0.fetchTime >= fetchTime
             }
-        } catch {
-            logger.error("failed to query entries: \(error)")
-        }
 
-        return false
+            do {
+                let workloadEntries = try modelContext.fetch(FetchDescriptor(predicate: workloadPredicate))
+                let nodeIDs = Set(workloadEntries.map { $0.nodeID })
+
+                // Count unexpired nodes
+                var unexpiredCount = 0
+                for nodeID in nodeIDs {
+                    let metadataPredicate = #Predicate<NodeMetadata> {
+                        $0.nodeID == nodeID && $0.attestationExpiry >= now
+                    }
+                    if try modelContext.fetchCount(FetchDescriptor(predicate: metadataPredicate)) > 0 {
+                        unexpiredCount += 1
+                    }
+                }
+
+                return unexpiredCount >= clientCacheSize
+            } catch {
+                logger.error("attestationsExist failed: \(error)")
+                return false
+            }
+        }
     }
 
-    func attestationsExist(forParameters workload: PrivateCloudCompute.Workload, clientCacheSize: Int, fetchTime: Date) -> Bool {
-        let (workloadType, inferenceId) = workload.prefetchAttributes
-        logger.log("attestationsExist workloadType=\(workloadType) inferenceId=\(inferenceId) clientCacheSize=\(clientCacheSize) fetchTime=\(fetchTime)")
+    // MARK: - Deletion
 
-        let queryPredicate = #Predicate<AttestationStore.Workload> { entry in
-            entry.type == workloadType && entry.inferenceId == inferenceId && entry.fetchTime >= fetchTime && entry.usedByTrustedRequestWithId == nil
-        }
+    func deleteEntryForNode(nodeID: String) async -> Bool {
+        return signposter.withIntervalSignpost(.deleteNode, id: signposter.makeSignpostID()) {
+            logger.log("deleteEntryForNode: \(nodeID)")
 
-        do {
-            let entries = try modelContext.fetch(FetchDescriptor(predicate: queryPredicate))
-            let nodes = entries.flatMap(\.nodeUdids)
-            if nodes.count >= clientCacheSize {
+            do {
+                try modelContext.withAttestationStoreTransaction { tx in
+                    try deleteNodeCompletely(nodeID: nodeID, tx)
+                }
+                modelContext.reset()
                 return true
+            } catch {
+                logger.error("deleteEntryForNode failed: \(error)")
+                return false
             }
-        } catch {
-            logger.error("failed to fetch entries from prefetch store: \(error)")
         }
-
-        return false
     }
 
-    // Why is this doing a fetch only to do a batch delete after?
-    // suggestion, just do the batch delete, if you need metrics, do a fetchCount
-    func deleteAttestationsUsedByTrustedRequest(
-        serverRequestID: UUID
-    ) -> UInt {
-        logger.log("deleteAttestationsUsedForTrustedRequest: \(serverRequestID)")
+    /// Deletes expired attestations while preserving metadata that is still actively referenced.
+    ///
+    /// This method implements nuanced deletion behavior:
+    /// 1. Always deletes: stale WorkloadRequests tracking rows (older than the stale threshold).
+    /// 2. Always deletes: AvailableNode and WorkloadEntry associations for expired metadata.
+    /// 3. Conditionally deletes: NodeMetadata and its NodeBundle, but only for expired nodes with
+    ///    no recent PrefetchStaging or WorkloadRequests reference.
+    ///
+    /// The rationale for preserving metadata with recent references:
+    /// - PrefetchStaging: A prefetch operation is in progress. Stale prefetch means a prefetch was never
+    ///   finalized.
+    /// - WorkloadRequests: A request is in-flight or recently completed. The metadata may
+    ///   be needed for diagnostics, retries, or attestation bundle retrieval. In this case, stale means
+    ///   it was never explicitly removed (possible crash).
+    func deleteEntriesWithExpiredAttestationBundles(now: Date = .now) throws {
+        try signposter.withIntervalSignpost(.deleteExpiredAttestations, id: signposter.makeSignpostID()) {
+            logger.log("deleteEntriesWithExpiredAttestationBundles")
 
-        let queryPredicate = #Predicate<AttestationStore.Workload> { entry in
-            entry.usedByTrustedRequestWithId == serverRequestID
+            let staleCutoff = now.addingTimeInterval(-Self.staleEntryThreshold)
+
+            // rdar://177748000: prune the WorkloadRequests table to avoid pulling too many into memory in the fetch below
+            try deleteStaleWorkloadRequests(now: now)
+
+            let expiredMetadata = try modelContext.fetch(FetchDescriptor<NodeMetadata>(predicate: #Predicate { $0.attestationExpiry < now }))
+            guard !expiredMetadata.isEmpty else { return }
+            let recentStaging = try modelContext.fetch(FetchDescriptor<PrefetchStaging>(predicate: #Predicate { $0.fetchTime > staleCutoff }))
+            let recentRequests = try modelContext.fetch(FetchDescriptor<WorkloadRequests>(predicate: #Predicate { $0.usedAt > staleCutoff }))
+
+            let expiredNodeIDs = Set(expiredMetadata.map(\.nodeID))
+            let recentStagingNodeIDs = Set(recentStaging.map(\.nodeID))
+            let recentRequestNodeIDs = Set(recentRequests.map(\.nodeID))
+
+            // Keep metadata + bundle for any expired node still backing a recent
+            // prefetch or request for telemetry; the rest are deletable.
+            let recentlyReferencedNodeIDs = recentStagingNodeIDs.union(recentRequestNodeIDs)
+            let deletableNodeIDs = expiredNodeIDs.subtracting(recentlyReferencedNodeIDs)
+
+            try modelContext.delete(model: WorkloadEntry.self, where: #Predicate { expiredNodeIDs.contains($0.nodeID) })
+            try modelContext.delete(model: AvailableNode.self, where: #Predicate { expiredNodeIDs.contains($0.nodeID) })
+            try modelContext.delete(model: NodeBundle.self, where: #Predicate { deletableNodeIDs.contains($0.nodeID) })
+            try modelContext.delete(model: NodeMetadata.self, where: #Predicate { deletableNodeIDs.contains($0.nodeID) })
+
+            try modelContext.save()
+            modelContext.reset()
         }
-
-        var deletedBatch: UInt = 0
-        do {
-            let prefetchEntries = try modelContext.fetch(FetchDescriptor(predicate: queryPredicate))
-            if let prefetchEntry = prefetchEntries.first {
-                deletedBatch = prefetchEntry.batchId
-                logger.log("deleting batch: \(deletedBatch) used by request: \(serverRequestID)")
-                try modelContext.delete(model: AttestationStore.Workload.self, where: queryPredicate)
-            }
-        } catch {
-            logger.error("failed to delete entries: \(error)")
-        }
-
-        return deletedBatch
     }
 
-    func getAttestationBundlesUsedByTrustedRequest(
-        serverRequestID: UUID
-    ) -> [String: Data] {
-        logger.log("getAttestationBundlesUsedByTrustedRequest: \(serverRequestID)")
-        let queryPredicate = #Predicate<AttestationStore.Workload> { entry in
-            entry.usedByTrustedRequestWithId == serverRequestID
-        }
+    private func deleteStaleWorkloadRequests(now: Date) throws {
+        let cutoff = now.addingTimeInterval(-Self.staleEntryThreshold)
+        try modelContext.delete(model: WorkloadRequests.self, where: #Predicate { $0.usedAt < cutoff })
+        try modelContext.save()
+        modelContext.reset()
+    }
 
-        var bundles: [String: Data] = [:]
-        let today = Date()
-        do {
-            let prefetchEntries = try modelContext.fetch(FetchDescriptor(predicate: queryPredicate))
-            if let prefetchEntry = prefetchEntries.first {
-                let nodeUdids = prefetchEntry.nodeUdids
-                let queryNodePredicate = #Predicate<AttestationStore.Node> { entry in
-                    nodeUdids.contains(entry.udid) && entry.attestationExpiry >= today
+    func deleteAllAttestationStoreEntries() throws {
+        try signposter.withIntervalSignpost(.deleteAllAttestations, id: signposter.makeSignpostID()) {
+            logger.log("deleteAllAttestationStoreEntries")
+
+            try modelContext.delete(model: WorkloadEntry.self)
+            try modelContext.delete(model: WorkloadRequests.self)
+            try modelContext.delete(model: PrefetchStaging.self)
+            try modelContext.delete(model: AvailableNode.self)
+            try modelContext.delete(model: NodeBundle.self)
+            try modelContext.delete(model: NodeMetadata.self)
+
+            try modelContext.save()
+            modelContext.reset()
+        }
+    }
+
+    // MARK: - Request Tracking
+
+    func deleteAttestationsUsedByTrustedRequest(serverRequestID: UUID) -> UInt {
+        // Note: this is different than the legacy signpost "DeleteUsedAttestationBatch". This measures the time to
+        // delete the attestations corresponding to a request for the purposes of no longer keeping them around
+        // since we have already consume them in telemetry.
+        return signposter.withIntervalSignpost(.deleteUsedAttestations, id: signposter.makeSignpostID()) {
+            let requestIDString = serverRequestID.uuidString
+            logger.log("deleteAttestationsUsedByTrustedRequest: \(requestIDString)")
+
+            let queryPredicate = #Predicate<WorkloadRequests> { $0.requestID == requestIDString }
+
+            do {
+                // Get count before batch-delete
+                let count = try modelContext.fetchCount(FetchDescriptor(predicate: queryPredicate))
+
+                try modelContext.withAttestationStoreTransaction { _ in
+                    // Batch-delete the request entries
+                    try modelContext.delete(model: WorkloadRequests.self, where: queryPredicate)
                 }
+
+                // Orphan cleanup is best-effort - don't fail the whole operation if it fails
                 do {
-                    let nodes = try modelContext.fetch(FetchDescriptor(predicate: queryNodePredicate))
-                    for node in nodes {
-                        bundles[node.ropesNodeIdentifier] = node.attestationBundle
+                    try modelContext.withAttestationStoreTransaction { tx in
+                        try cleanupOrphanedNodes(tx)
                     }
                 } catch {
-                    logger.error("failed to query attestations error: \(error)")
+                    logger.warning("deleteAttestationsUsedByTrustedRequest: orphan cleanup failed (will retry later): \(error)")
+                }
+
+                modelContext.reset()
+
+                logger.log("deleteAttestationsUsedByTrustedRequest: deleted \(count) records")
+                return UInt(count)
+            } catch {
+                logger.error("deleteAttestationsUsedByTrustedRequest failed: \(error)")
+                return 0
+            }
+        }
+    }
+
+    func getAttestationBundlesUsedByTrustedRequest(serverRequestID: UUID) -> [String: Data] {
+        return signposter.withIntervalSignpost(.getAttestationsUsedByTrustedRequest, id: signposter.makeSignpostID()) {
+            let requestIDString = serverRequestID.uuidString
+            logger.log("getAttestationBundlesUsedByTrustedRequest: \(requestIDString)")
+
+            let queryPredicate = #Predicate<WorkloadRequests> { $0.requestID == requestIDString }
+
+            do {
+                let requests = try modelContext.fetch(FetchDescriptor(predicate: queryPredicate))
+
+                // Collect all bundles for the nodes used by this request
+                var bundles: [String: Data] = [:]
+                for request in requests {
+                    let requestNodeID = request.nodeID
+                    if let bundle = try fetchBundle(nodeID: requestNodeID) {
+                        bundles[requestNodeID] = bundle.attestationBundle
+                    } else {
+                        logger.warning("getAttestationBundlesUsedByTrustedRequest: missing bundle for tracked node=\(requestNodeID)")
+                    }
+                }
+
+                return bundles
+            } catch {
+                logger.error("getAttestationBundlesUsedByTrustedRequest failed: \(error)")
+                return [:]
+            }
+        }
+    }
+
+    func getAllAvailableNodes() -> Set<ValidatedAttestation> {
+        logger.log("getAllAvailableNodes")
+
+        do {
+            let allNodes = try modelContext.fetch(FetchDescriptor<AvailableNode>())
+            var result: Set<ValidatedAttestation> = []
+
+            for node in allNodes {
+                if let metadata = try fetchMetadata(nodeID: node.nodeID),
+                    let attestation = ValidatedAttestation(metadata: metadata)
+                {
+                    result.insert(attestation)
                 }
             }
-        } catch {
-            logger.error("failed to delete entries: \(error)")
-        }
 
-        return bundles
+            return result
+        } catch {
+            logger.error("getAllAvailableNodes failed: \(error)")
+            return []
+        }
     }
 }
 
-extension AttestationStore.Node.Kind {
-    init(_ nodeKind: NodeKind) {
-        self =
-            switch nodeKind {
-            case .direct: .direct
-            case .proxy: .proxy
+// MARK: - ModelContext Transaction Helper
+
+extension ModelContext {
+    /// Executes `body` inside a SwiftData transaction, supplying an `AttestationStore.Transaction`
+    /// token that can be forwarded to helpers requiring transaction context.
+    ///
+    /// Any `AttestationStoreError` thrown by `body` is re-thrown as-is. All other errors are
+    /// wrapped in `AttestationStoreError(code: .persistenceError)`.
+    fileprivate func withAttestationStoreTransaction<T>(
+        _ body: (AttestationStore.Transaction) throws -> T
+    ) throws -> T {
+        // ModelContext.transaction(_:) is Void-returning, so capture the result via a local.
+        // If body throws, modelContext.transaction propagates the throw (triggering rollback)
+        // and we rethrow from the catch blocks — the guard branch is unreachable.
+        var capturedResult: T?
+        do {
+            try transaction {
+                capturedResult = try body(AttestationStore.Transaction())
             }
+        } catch let error as AttestationStoreError {
+            throw error  // already wrapped, pass through
+        } catch {
+            throw AttestationStoreError(code: .persistenceError, underlyingError: error)
+        }
+        guard let result = capturedResult else {
+            // Unreachable: transaction either ran the block (setting capturedResult)
+            // or threw (caught and rethrown above).
+            throw AttestationStoreError(code: .persistenceError)
+        }
+        return result
+    }
+}
+
+// MARK: - Error Types
+
+/// Errors that can occur during AttestationStore operations.
+package struct AttestationStoreError: Error {
+
+    package enum Code: Int, Sendable {
+        /// The store has no attestations for the requested workload.
+        case storeEmpty = 1000
+        /// All attestations in the store have expired.
+        case storeExpired = 1002
+        /// A duplicate UDID was detected within a single prefetch.
+        case duplicateUdidInPrefetch = 2000
+        /// A duplicate nodeID was detected within a single prefetch.
+        case duplicateNodeIdInPrefetch = 2003
+        /// The attestation is missing required fields.
+        case invalidAttestation = 2001
+        /// No staging entries found for the given prefetch ID.
+        case noStagingEntriesForPrefetch = 2002
+        /// A persistence error occurred.
+        case persistenceError = 3000
+    }
+
+    /// The specific error code
+    package let code: Code
+
+    /// The original error that caused this error, if any
+    package let underlyingError: (any Error)?
+
+    /// Workload type associated with this error, if applicable
+    package let workloadType: String?
+
+    /// Inference ID associated with this error, if applicable
+    package let workloadID: String?
+
+    init(
+        code: Code,
+        underlyingError: (any Error)? = nil,
+        workloadType: String? = nil,
+        workloadID: String? = nil
+    ) {
+        self.code = code
+        self.underlyingError = underlyingError
+        self.workloadType = workloadType
+        self.workloadID = workloadID
+    }
+
+    package var localizedDescription: String { "\(code)" }
+}
+
+extension AttestationStoreError: CustomNSError {
+    package static var errorDomain: String {
+        return "AttestationStoreError"
+    }
+
+    package var errorCode: Int {
+        return code.rawValue
+    }
+
+    package static let workloadTypeKey = "workloadType"
+    package static let workloadIDKey = "workloadID"
+
+    package var errorUserInfo: [String: Any] {
+        var userInfo: [String: Any] = [NSLocalizedDescriptionKey: localizedDescription]
+        if let underlyingError {
+            userInfo[NSUnderlyingErrorKey] = underlyingError
+        }
+        if let workloadType {
+            userInfo[Self.workloadTypeKey] = workloadType
+        }
+        if let workloadID {
+            userInfo[Self.workloadIDKey] = workloadID
+        }
+        return userInfo
+    }
+}
+
+extension AttestationStoreError: LocalizedError {
+    private static let component = "Private Cloud Compute | All"
+    package var failureReason: String? {
+        switch code {
+        case .storeEmpty:
+            "The attestation store has no attestations for the requested workload."
+        case .storeExpired:
+            "All attestations in the store have expired."
+        case .duplicateUdidInPrefetch:
+            "A duplicate UDID was detected within a single prefetch."
+        case .duplicateNodeIdInPrefetch:
+            "A duplicate nodeID was detected within a single prefetch."
+        case .invalidAttestation:
+            "The attestation is missing required fields."
+        case .noStagingEntriesForPrefetch:
+            "No staging entries were found for the prefetch."
+        case .persistenceError:
+            "A database persistence error occurred."
+        }
     }
 }

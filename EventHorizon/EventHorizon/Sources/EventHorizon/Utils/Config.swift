@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,7 +13,9 @@
 // 10/02/2024
 
 
+#if canImport(SecureConfigDB)
 @_weakLinked import SecureConfigDB
+#endif
 #if canImport(os)
 import os
 #endif
@@ -24,14 +26,17 @@ public protocol ConfigProvider {
     var name: String {get}
 }
 
-class SecureConfigProvider: ConfigProvider {
+public class SecureConfigProvider: ConfigProvider {
     public let name = "SecureConfigProvider"
     let log: EHLog.EHLoggerType
+    #if canImport(SecureConfigDB)
     private let configParams: SecureConfigParameters?
+    #endif
 
-    init(allowedInCustomerMode: Bool = true) {
+    public init(allowedInCustomerMode: Bool = true) {
         let llog = EHLog.withCategory("SecureConfigProvider")
         log = llog
+    #if canImport(SecureConfigDB)
         configParams = {
             if #_hasSymbol(SecureConfigParameters.self) {
                 do {
@@ -49,9 +54,11 @@ class SecureConfigProvider: ConfigProvider {
             }
             return nil
         }()
+    #endif
     }
 
-    func get<T>(key: String, domain: String?) -> T? {
+    public func get<T>(key: String, domain: String?) -> T? {
+        #if canImport(SecureConfigDB)
         if #_hasSymbol(SecureConfigParameters.self) {
             if let configParams {
                 do {
@@ -63,6 +70,7 @@ class SecureConfigProvider: ConfigProvider {
                 }
             }
         }
+        #endif
         return nil
     }
 }
@@ -70,6 +78,7 @@ class SecureConfigProvider: ConfigProvider {
 public class CFPrefsProvider: ConfigProvider {
     public let name = "CFPrefsProvider"
     let log = EHLog.withCategory(CFPrefsProvider.self)
+    #if !os(Linux)
     public func preferencesValue(_ key: String, domain: String) throws -> CFPropertyList? {
         guard let value = CFPreferencesCopyValue(key as CFString, domain as CFString, kCFPreferencesAnyUser, kCFPreferencesAnyHost) else {
             os_log(.error, log: log, "Unable to get CFPreferences key \(key) from domain \(domain)")
@@ -96,17 +105,50 @@ public class CFPrefsProvider: ConfigProvider {
         }
         return value as? T
     }
+    #endif
     public init() {}
     public func get<T>(key: String, domain: String?) -> T? {
+        #if !os(Linux)
         return self.preferencesValueAs(key, domain: domain ?? "")
+        #else
+        return nil
+        #endif
     }
 }
 
 class EnvironmentConfigResolver: ConfigProvider {
     public let name = "EnvironmentConfigResolver"
     init() {}
+
+    static func envVarName(for key: String) -> String {
+        var k = key
+        if k.hasPrefix("com.apple.eventhorizond.") {
+            k = String(k.dropFirst("com.apple.eventhorizond.".count))
+        } else if k.hasPrefix("com.apple.securitymonitorlited.") {
+            k = String(k.dropFirst("com.apple.securitymonitorlited.".count))
+        } else if k.hasPrefix("com.apple.lsecuritymonitorlited.") {
+            k = String(k.dropFirst("com.apple.lsecuritymonitorlited.".count))
+        }
+        k = k.replacingOccurrences(of: ".", with: "_")
+        let chars = Array(k)
+        var result = ""
+        for i in chars.indices {
+            let char = chars[i]
+            if char.isUppercase && i > 0 && chars[i - 1] != "_" {
+                let prevIsLower = chars[i - 1].isLowercase
+                let nextIsLower = (i + 1 < chars.count) && chars[i + 1].isLowercase
+                if prevIsLower || (chars[i - 1].isUppercase && nextIsLower) {
+                    result += "_"
+                }
+            }
+            result += String(char)
+        }
+        return "EH_" + result.uppercased()
+    }
+
     func get<E>(key: String, domain: String?) -> E? {
-        if let v = ProcessInfo.processInfo.environment[key.uppercased()] ?? ProcessInfo.processInfo.environment[key.uppercased()] {
+        let envKey = Self.envVarName(for: key)
+        if let v = ProcessInfo.processInfo.environment[envKey] {
             if E.self == Int?.self, let intValue = Int(v) {
                 return intValue as? E
             } else if E.self == Bool?.self {
@@ -133,12 +175,12 @@ class DefaultConfigProvider<T>: ConfigProvider {
     }
 }
 
-class EHConfigResolver {
+public class EHConfigResolver {
     let providers: [any ConfigProvider]
-    init(_ providers: ConfigProvider...) {
+    public init(_ providers: ConfigProvider...) {
         self.providers = providers
     }
-    func resolve<T>(key: String, domain: String?) -> T? {
+    public func resolve<T>(key: String, domain: String?) -> T? {
         for provider in providers {
             if let value: T? = provider.get(key: key, domain: domain), value != nil {
                 return value

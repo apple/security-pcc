@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,19 +24,19 @@ import PrivateCloudCompute
 import Synchronization
 import os.log
 
+private let logger = Logger(for: .metricReporter)
+
 protocol FeatureUsageAnalyzerStoreHelperProtocol: Sendable {
     func writeToFile(lines: [String]) async throws
     func readFromFile() async throws -> Data
 }
 
 final class FeatureUsageAnalyzerStoreHelper: FeatureUsageAnalyzerStoreHelperProtocol {
-    private static let filename = "featureUsage_v1.log"
+    static let filename = "featureUsage_v1.log"
     private let storeURL: URL
     /// this is the fileHandle for write
     /// It is only being modified or used on tasks we put on a sequential queue
     private let fileHandle: Mutex<FileHandle?>
-
-    let logger = tc2Logger(forCategory: .metricReporter)
 
     /// sequential queue for executing file IO tasks
     private let queue = DispatchSerialQueue(label: "com.apple.privatecloudcompute.featureusageanalyzer.blockingio", target: blockingIOQueue)
@@ -61,7 +61,7 @@ final class FeatureUsageAnalyzerStoreHelper: FeatureUsageAnalyzerStoreHelperProt
         try await doThrowingBlockingIOWork(onQueue: self.queue) {
             try self.fileHandle.withLock {
                 if $0 == nil {
-                    let path = self.storeURL.path()
+                    let path = self.storeURL.path(percentEncoded: false)
                     if !FileManager.default.fileExists(atPath: path) {
                         FileManager.default.createFile(atPath: path, contents: nil)
                     }
@@ -94,17 +94,16 @@ final class FeatureUsageAnalyzerStoreHelper: FeatureUsageAnalyzerStoreHelperProt
                 }
 
                 // if there's no such file
-                if !FileManager.default.fileExists(atPath: self.storeURL.path()) {
+                let path = self.storeURL.path(percentEncoded: false)
+                if !FileManager.default.fileExists(atPath: path) {
                     return Data()
                 }
 
                 // mmap file into data
-                // note that Data(contentsOf: only accept URL created with URL(filePath:
-                // which is adding "file://" prefix to the URL
-                let data = try Data(contentsOf: .init(filePath: self.storeURL.path()), options: .mappedIfSafe)
+                let data = try Data(contentsOf: self.storeURL, options: .mappedIfSafe)
 
                 // remove file
-                try FileManager.default.removeItem(atPath: self.storeURL.path())
+                try FileManager.default.removeItem(at: self.storeURL)
                 return data
             }
         }

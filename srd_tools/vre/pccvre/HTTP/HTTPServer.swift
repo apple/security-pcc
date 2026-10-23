@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -221,7 +221,7 @@ extension HTTPServer {
             // Form the complete access path and make sure it's
             // actually a file we can serve.
             let path = accessPath.appending(requestPath)
-            guard FileManager.default.fileExists(atPath: path.string) else {
+            guard Globals.computer.fileSystem.fileExists(atPath: path.string) else {
                 return self.respond(on: connection, withError: .noSuchFileOrDirectory)
             }
 

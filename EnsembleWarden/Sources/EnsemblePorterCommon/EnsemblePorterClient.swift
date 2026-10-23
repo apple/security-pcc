@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -35,6 +35,20 @@ package protocol EnsemblePorterClient: Sendable {
     ///   - spanID: spanID
     func provide(additionalCryptoPayload: Data, requestID: UUID, spanID: UInt64) async throws
 
+    /// Fetches data using the specified turn key
+    /// - Parameters:
+    ///   - turnNumber: The index of the turn key
+    ///   - requestID: requestID
+    ///   - spanID: spanID
+    /// - Returns: The fetched data. Needs to be a Data since CryptoKit types aren't Codable.
+    func fetchKey(forTurnNumber turnNumber: Int, requestID: UUID, spanID: UInt64) async throws -> SymmetricKey
+
+    /// Gets the number of available turn keys
+    /// - Parameters:
+    ///   - requestID: requestID
+    ///   - spanID: spanID
+    /// - Returns: The number of available turn keys
+    func getNumberOfTurnKeys(requestID: UUID, spanID: UInt64) async throws -> Int
 
     /// Fetches the per-process tokens that were generated for follower nodes
     /// - Parameters:

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -26,8 +26,9 @@ import PrivateCloudCompute
 extension RateLimiterRequestMetadata {
     init(configuration: TrustedRequestConfiguration, parameters: Workload) {
         self.init(
-            bundleID: configuration.bundleID,
+            bundleID: configuration.bundleID.rawValue,
             featureID: configuration.featureID ?? "",
+            qos: configuration.serverQoS,
             workloadType: parameters.type,
             workloadTags: parameters.parameters
         )
@@ -37,6 +38,7 @@ extension RateLimiterRequestMetadata {
 extension RateLimitConfiguration {
     init?(
         now: Date,
+        source: RateLimitSource,
         proto: Proto_Ropes_RateLimit_RateLimitConfiguration,
         config: TrustedRequestConfiguration
     ) {
@@ -52,9 +54,11 @@ extension RateLimitConfiguration {
         // ungroup. That's what the flatmap is doing. It's not sensible to change to thie view
         // of list (key, list (value)) model unless everything does in the Thimble framework.
         self.init(
+            source: source,
             filter: RateLimitFilter(
                 bundleID: proto.bundleID.isEmpty ? nil : proto.bundleID,
                 featureID: proto.featureID.isEmpty ? nil : proto.featureID,
+                qos: .init(proto.qos),
                 workloadType: proto.workloadType.isEmpty ? nil : proto.workloadType,
                 workloadTags: proto.params.flatMap { (key, params) in
                     params.value.map { RateLimitFilter.WorkloadTag(key: key, value: $0) }

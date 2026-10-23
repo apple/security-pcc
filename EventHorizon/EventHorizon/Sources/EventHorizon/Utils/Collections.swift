@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -89,10 +89,9 @@ extension String {
     }
 
     init<T>(cBuffer: T) {
-        self = withUnsafePointer(to: cBuffer) {
-            $0.withMemoryRebound(to: UInt8.self, capacity: MemoryLayout.size(ofValue: cBuffer)) { ptr in
-                let buffer = UnsafeBufferPointer(start: ptr, count: MemoryLayout.size(ofValue: cBuffer))
-                return String(cUInt8Array: Array(buffer))
+        self = withUnsafePointer(to: cBuffer) { ptr in
+            ptr.withMemoryRebound(to: CChar.self, capacity: MemoryLayout<T>.size) { charPtr in
+                String(cString: charPtr)
             }
         }
     }

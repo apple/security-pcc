@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -35,6 +35,10 @@ extension CLI.TransparencyLogCmd {
         @Option(name: [.customLong("interval"), .customShort("i")],
                 help: "Number of seconds to wait in between updates if using --continuous.")
         var interval: UInt = 30
+
+        @Flag(name: [.customLong("application-tree-only"), .customShort("a")],
+              help: "Only download and verify the Application Tree (AT); skip the Per Application (PAT) and Top Level (TLT) trees. This proves AT self-consistency only, not that AT is anchored into PAT/TLT.")
+        var applicationTreeOnly: Bool = false
 
         @IgnoreDecodable
         private var tui: TUI = .init()
@@ -73,11 +77,12 @@ extension CLI.TransparencyLogCmd {
             var auditor = try Auditor(for: log, storageURL: storageURL)
             auditor.delegate = self
 
+            let mode: Auditor.UpdateMode = applicationTreeOnly ? .applicationTreeOnly : .full
+
             repeat {
-                try await auditor.update()
-                try await tui.setReleaseDigests(render: true, auditor.releaseDigests)
+                try await auditor.update(mode: mode)
                 await tui.setOperation(render: true, "checkpointing leaves to storage...")
-                try auditor.save()
+                try auditor.save(mode: mode)
                 await tui.setOperation(render: true, "checkpointing leaves to storage... done")
 
                 if interval == 0 || !continuous {
@@ -189,12 +194,6 @@ extension CLI.TransparencyLogCmd {
 extension CLI.TransparencyLogCmd.AuditCmd {
     actor TUI {
         /*
-         Releases:
-         <Release 1>
-         <Release 2>
-         ...
-         <Release N>
-         ============================================== <- and below only rendered if Stdout has tty
          Top Level Tree: (current/count)
             {CurrentHash | Invalid | Valid root digest: <Digest>}
          Per Application Tree: (current/count)
@@ -204,14 +203,12 @@ extension CLI.TransparencyLogCmd.AuditCmd {
          {Current Operation}
          */
 
-        var releaseDigests: [(index: Int, digest: Data)]
         var tltStatus: TreeDetails
         var patStatus: TreeDetails
         var atStatus: TreeDetails
         var operation: String?
 
         init() {
-            self.releaseDigests = []
             self.tltStatus = .init()
             self.patStatus = .init()
             self.atStatus = .init()
@@ -220,13 +217,6 @@ extension CLI.TransparencyLogCmd.AuditCmd {
 
         func setOperation(render: Bool = false, _ operation: String) {
             self.operation = operation
-            if render {
-                self.render()
-            }
-        }
-
-        func setReleaseDigests(render: Bool = false, _ releaseDigests: [(index: Int, digest: Data)]) {
-            self.releaseDigests = releaseDigests
             if render {
                 self.render()
             }
@@ -269,19 +259,11 @@ extension CLI.TransparencyLogCmd.AuditCmd {
 
         func render() {
             if isatty(FileHandle.standardOutput.fileDescriptor) == 0 {
-                renderNoTTY()
                 return
             }
 
             clearPreviousLines(count: linesToClear)
             linesToClear = 0
-
-            printAndCount("Releases:")
-            printAndCount(String(repeating: "-", count: 40))
-            for releaseDigest in releaseDigests {
-                printAndCount("\(releaseDigest.index + 1): \(releaseDigest.digest.hexString)")
-            }
-            printAndCount(String(repeating: "=", count: 40))
 
             func printStatus(_ status: TreeDetails.Status?) {
                 switch status {
@@ -306,22 +288,6 @@ extension CLI.TransparencyLogCmd.AuditCmd {
             printAndCount("Application Tree: (\(atStatus.position ?? 0)/\(atStatus.count ?? 0))")
             printStatus(atStatus.status)
             printAndCount(operation ?? "...")
-        }
-
-        var printedHeader = false
-        var lastReleasesCount = 0
-
-        private func renderNoTTY() {
-            if !printedHeader {
-                print("Releases:")
-                print(String(repeating: "-", count: 40))
-                printedHeader = true
-            }
-
-            for releaseDigest in releaseDigests[lastReleasesCount...] {
-                print("\(releaseDigest.index + 1): \(releaseDigest.digest.hexString)")
-            }
-            lastReleasesCount = releaseDigests.count
         }
 
         private func printAndCount(

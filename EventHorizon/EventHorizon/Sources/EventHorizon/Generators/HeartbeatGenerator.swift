@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -32,9 +32,7 @@ public final class HeartbeatGenerator: EHGenerator, AllEventsIterable, Sendable 
 
     public struct HeartbeatEvent: EHUEFEvent {
         public init() {}
-        public var tags = Set<String>()
-
-        public var fields: [String: EHValueType] = [:]
+        public var metadata = EHEventMetadata()
         public var event_category: EHUEFCategory = .system
         public var event_type: String = "heartbeat"
 
@@ -49,6 +47,33 @@ public final class HeartbeatGenerator: EHGenerator, AllEventsIterable, Sendable 
     }
 
     private func getMemoryUsage() -> MemoryUsageInfo? {
+        #if os(Linux)
+        guard let statusContents = URL(string: "/proc/self/status")?.readContentsAtPath() else {
+            return nil
+        }
+        let lines = statusContents.split(separator: "\n")
+        var stats = MemoryUsageInfo()
+        var fields = 0
+        for line in lines {
+            if line.hasPrefix("VmSize:") {
+                let components = line.components(separatedBy: .whitespaces).filter { $0.trimmingCharacters(in: .whitespaces).length > 0 }
+                if components.count >= 2, let size = UInt64(components[1]) {
+                    stats.virtual_size = size * 1024
+                }
+                fields += 1
+            } else if line.hasPrefix("VmRSS:") {
+                let components = line.components(separatedBy: .whitespaces).filter { $0.trimmingCharacters(in: .whitespaces).length > 0 }
+                if components.count >= 2, let size = UInt64(components[1]) {
+                    stats.resident_size = size * 1024
+                }
+                fields += 1
+            }
+            if fields >= 2 {
+                break
+            }
+        }
+        return stats
+        #else
         var ti = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info>.size) / 4
         let result: kern_return_t = withUnsafeMutablePointer(to: &ti) {
@@ -61,6 +86,7 @@ public final class HeartbeatGenerator: EHGenerator, AllEventsIterable, Sendable 
             return nil
         }
         return MemoryUsageInfo(resident_size: ti.resident_size, virtual_size: ti.virtual_size)
+        #endif
     }
 
     public func configure(_ pipeline: EHPipeline) throws {
@@ -68,7 +94,13 @@ public final class HeartbeatGenerator: EHGenerator, AllEventsIterable, Sendable 
 
     private let interval: TimeInterval
 
-    public init(interval: TimeInterval = 5, metricOnly: Bool = false) {
+    private let intervalOverrideStorage: Mutex<Int?> = .init(nil)
+    public var intervalOverride: Int? {
+        get { intervalOverrideStorage.withLock { $0 } }
+        set { intervalOverrideStorage.withLock { $0 = newValue } }
+    }
+
+    public init(interval: TimeInterval, metricOnly: Bool = false) {
         self.interval = interval
         self.metricOnly = metricOnly
     }
@@ -76,8 +108,22 @@ public final class HeartbeatGenerator: EHGenerator, AllEventsIterable, Sendable 
     private let serviceTask: Mutex<Task<(), Error>?> = .init(nil)
 
     public func start(_ pipeline: EHPipeline) throws {
+        let logger = log
+        let effectiveInterval: TimeInterval = {
+            if let override = intervalOverride {
+                if override > 0 {
+                    return TimeInterval(override)
+                }
+                os_log(.error, log: logger,
+                       "Invalid HeartbeatGenerator intervalOverride: %d. Must be positive, using init value %.1f.",
+                       override, interval)
+            }
+            return interval
+        }()
         serviceTask.withLock {
             $0 = Task {
+                let initialOffset = effectiveInterval > 0 ? Double.random(in: 0..<effectiveInterval) : 0
+                var firstIteration = true
                 repeat {
                     var heartbeat = HeartbeatEvent()
                     heartbeat.timestamp = Date().timeIntervalSince1970
@@ -92,9 +138,57 @@ public final class HeartbeatGenerator: EHGenerator, AllEventsIterable, Sendable 
                     if !metricOnly {
                         await pipeline.process(heartbeat)
                     }
-                    try await Task.sleep(for: .seconds(Int(interval)))
+                    if firstIteration {
+                        firstIteration = false
+                        try await Task.sleep(for: .seconds(initialOffset + effectiveInterval))
+                    } else {
+                        try await Task.sleep(for: .seconds(Int(effectiveInterval)))
+                    }
                 } while !Task.isCancelled
             }
         }
+    }
+}
+
+
+extension HeartbeatGenerator.HeartbeatEvent: EHFieldExtractable {
+    public func fieldValue(for field: String) -> Any? {
+        switch field {
+        case "tags": return tags
+        case "fields": return fields
+        case "event_category": return event_category
+        case "event_type": return event_type
+        case "timestamp": return timestamp
+        case "resident_size": return resident_size
+        case "virtual_size": return virtual_size
+        default: return nil
+        }
+    }
+}
+
+
+import AST
+
+private enum RK {
+    static let event_type: AST.RegoValue = .string("event_type")
+    static let event_category: AST.RegoValue = .string("event_category")
+    static let tags: AST.RegoValue = .string("tags")
+    static let fields: AST.RegoValue = .string("fields")
+    static let timestamp: AST.RegoValue = .string("timestamp")
+    static let resident_size: AST.RegoValue = .string("resident_size")
+    static let virtual_size: AST.RegoValue = .string("virtual_size")
+}
+
+extension HeartbeatGenerator.HeartbeatEvent: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = [:]
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.timestamp] = .number(RegoNumber(decimal: Decimal(timestamp)))
+        obj[RK.resident_size] = .number(RegoNumber(value: resident_size))
+        obj[RK.virtual_size] = .number(RegoNumber(value: virtual_size))
+        return .object(obj)
     }
 }

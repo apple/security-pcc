@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -30,6 +30,7 @@ internal import InternalSwiftProtobuf
 internal import OSLog
 @_spi(OSMetric) private import os
 internal import Synchronization
+@preconcurrency private import XPC
 @_spi(WorkAroundResolvableCrash) @_weakLinked private import XPCDistributed
 
 package final class EnsemblePorter: Sendable {
@@ -39,16 +40,22 @@ package final class EnsemblePorter: Sendable {
     private let implementation: EnsemblePorterImpl<MockEnsembleTransponder>
 #endif
 
-    package init(autoShutdownTimeout: Duration? = nil,
-                 clientType: ClientType = .defaultClient) throws {
+    package init(clientType: ClientType = .defaultClient,
+                 maxConsecutiveHeartbeatFailures: Int = EnsemblePorterConstants.maxConsecutiveHeartbeatFailures,
+                 heartbeatSendInterval: Duration = EnsemblePorterConstants.heartbeatSendInterval,
+                 heartbeatSendTimeout: TimeInterval = EnsemblePorterConstants.heartbeatSendTimeout) throws {
 #if canImport(AppleComputeEnsembler)
         self.implementation = try .init(intraEnsembleTransponder: EnsembledTransponder(),
-                                        autoShutdownTimeout: autoShutdownTimeout,
-                                        clientType: clientType)
+                                        clientType: clientType,
+                                        maxConsecutiveHeartbeatFailures: maxConsecutiveHeartbeatFailures,
+                                        heartbeatSendInterval: heartbeatSendInterval,
+                                        heartbeatSendTimeout: heartbeatSendTimeout)
 #else
         self.implementation = .init(intraEnsembleTransponder: MockEnsembleTransponder(),
-                                    autoShutdownTimeout: autoShutdownTimeout,
-                                    clientType: clientType)
+                                    clientType: clientType,
+                                    maxConsecutiveHeartbeatFailures: maxConsecutiveHeartbeatFailures,
+                                    heartbeatSendInterval: heartbeatSendInterval,
+                                    heartbeatSendTimeout: heartbeatSendTimeout)
 #endif
     }
 
@@ -62,6 +69,10 @@ package final class EnsemblePorter: Sendable {
 
     package func run(machServiceName: String) async throws {
         try await self.implementation.run(machServiceName: machServiceName)
+    }
+
+    package func runAnonymous(endpointHandler: @escaping @Sendable (XPCEndpoint) -> Void) async throws {
+        try await self.implementation.runAnonymous(endpointHandler: endpointHandler)
     }
 
     package func prewarmFollowers() async throws {
@@ -153,8 +164,10 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
         /// Continuations will be resumed when the server is running.
         case running(
             logic: EnsemblePorterLogic<IntraEnsembleTransponder>,
-            shutdownContinuation: CheckedContinuation<Void, Never>,
-            autoShutdownContinuation: AsyncStream<Void>.Continuation)
+            shutdownContinuation: CheckedContinuation<Void, Never>)
+        case shuttingDown(
+            logic: EnsemblePorterLogic<IntraEnsembleTransponder>,
+            shutdownContinuation: CheckedContinuation<Void, Never>)
         case stopped
     }
 
@@ -168,27 +181,37 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
     /// Our current state
     internal let state = Mutex<State>(.prewarming([]))
 
-    /// The time after which the porter will shut itself down.
-    ///
-    /// Porters handles key materials. We don't want to keep them knocking around. Ideally we will shutdown as soon
-    /// as we have given out all the keys. But what if warden never asks for the keys? We don't want to stay around
-    /// forever. We therefore shutdown after this long.
-    private let autoShutdownTimeout: Duration?
-
     internal let logger = Logger(subsystem: EnsemblePorterConstants.loggerSubsystem, category: "EnsemblePorter")
 
+    /// Unstructured heartbeat task started during prewarm and cancelled during shutdown.
+    private let heartbeatTask: Mutex<Task<Void, Never>?> = .init(nil)
+
+    /// Maximum consecutive heartbeat failures before giving up on a follower.
+    private let maxConsecutiveHeartbeatFailures: Int
+
+    /// How often the leader sends heartbeats to each follower.
+    private let heartbeatSendInterval: Duration
+
+    /// Network timeout for a single heartbeat send.
+    private let heartbeatSendTimeout: TimeInterval
 
     /// Creates a new EnsemblePorter instance.
     /// - Parameters:
     ///   - intraEnsembleTransponder: The transport implementation to use to send data between SoCs in an ensemble.
-    ///   - autoShutdownTimeout: The time after which we should automatically shutdown the daemon. Mainly used on followers where cb_jobhelper won't do the job management.
     ///   - clientType: The client mechanism to use
+    ///   - maxConsecutiveHeartbeatFailures: Maximum consecutive heartbeat failures before giving up on a follower.
+    ///   - heartbeatSendInterval: How often the leader sends heartbeats to each follower.
+    ///   - heartbeatSendTimeout: Network timeout for a single heartbeat send.
     package init(intraEnsembleTransponder: IntraEnsembleTransponder,
-                 autoShutdownTimeout: Duration? = nil,
-                 clientType: ClientType = .defaultClient) {
+                 clientType: ClientType = .defaultClient,
+                 maxConsecutiveHeartbeatFailures: Int = EnsemblePorterConstants.maxConsecutiveHeartbeatFailures,
+                 heartbeatSendInterval: Duration = EnsemblePorterConstants.heartbeatSendInterval,
+                 heartbeatSendTimeout: TimeInterval = EnsemblePorterConstants.heartbeatSendTimeout) {
         self.intraEnsembleTransponder = intraEnsembleTransponder
-        self.autoShutdownTimeout = autoShutdownTimeout
         self.clientType = clientType
+        self.maxConsecutiveHeartbeatFailures = maxConsecutiveHeartbeatFailures
+        self.heartbeatSendInterval = heartbeatSendInterval
+        self.heartbeatSendTimeout = heartbeatSendTimeout
     }
 
     /// Waits for the server to be running (ready to accept connections).
@@ -210,7 +233,10 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
                 case .starting(let followerInfo, var continuations):
                     continuations.append(continuation)
                     state = .starting(followerInfo: followerInfo, continuations)
-                case .running:
+                case .running, .shuttingDown:
+                    // Resume for .shuttingDown too — callers will get .notRunning when
+                    // they try to use the porter, but we must not block forever if
+                    // teardown races with waitForRunning.
                     continuation.resume()
                 case .stopped:
                     self.logger.warning("waitForRunning() called but the server already stopped")
@@ -222,57 +248,25 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
 
     /// Starts the EnsemblePorter service using the default mach service name.
     package func run(machServiceName: String? = nil) async throws {
-        let followerInfo: [FollowerInfo] = try self.state.withLock { state in
-            switch state {
-            case .prewarming(let continuations):
-                // Allow transition from prewarming directly to starting when there are no followers to prewarm
-                state = .starting(followerInfo: [], continuations)
-                return []
-            case .prewarmed(let followerInfo, let continuations):
-                state = .starting(followerInfo: followerInfo, continuations)
-                return followerInfo
-            default:
-                throw EnsemblePorterError.invalidStateTransition(existing: String(describing: state), proposed: "starting")
+        try await self.startService { logic in
+            self.logger.log("Validating if leader or follower")
+            let isLeader = try await self.intraEnsembleTransponder.nodeInfo().leader
+
+            let defaultServiceName: String
+            if isLeader {
+                defaultServiceName = EnsemblePorterConstants.xpcKeyFetcherClientName
+            } else {
+                defaultServiceName = EnsemblePorterConstants.xpcKeyFetcherFollowerClientName
             }
-        }
-        defer {
-            self.state.withLock { $0 = .stopped }
-        }
+            let serviceName = machServiceName ?? defaultServiceName
+            self.logger.log("""
+                Resolved mach service to use. \
+                leader=\(isLeader, privacy: .public) \
+                service_name=\(serviceName, privacy: .public)
+                """)
 
-        self.logger.log("EnsemblePorter started. client_type=\(String(describing: self.clientType), privacy: .public)")
-        defer {
-            self.logger.log("EnsemblePorter ended")
+            try await self.run(machServiceName: serviceName, logic: logic)
         }
-        logger.log("Validating if leader or follower")
-        let isLeader: Bool
-        do {
-            isLeader = try await self.intraEnsembleTransponder.nodeInfo().leader
-        } catch {
-            self.metrics.incrementFollowerSend(success: false, error: .ensembledError)
-            throw error
-        }
-        self.metrics.processStarts.increment()
-
-        // Generate follower tokens and create logic
-        let logic = EnsemblePorterLogic(keySafe: .init(metrics: self.metrics),
-                                        intraEnsembleTransponder: self.intraEnsembleTransponder,
-                                        followerInfo: followerInfo,
-                                        metrics: self.metrics)
-
-        let defaultServiceName: String
-        if isLeader {
-            defaultServiceName = EnsemblePorterConstants.xpcKeyFetcherClientName
-        } else {
-            defaultServiceName = EnsemblePorterConstants.xpcKeyFetcherFollowerClientName
-        }
-        let serviceName = machServiceName ?? defaultServiceName
-        self.logger.log("""
-            Resolved mach service to use. \
-            leader=\(isLeader, privacy: .public) \
-            service_name=\(serviceName, privacy: .public)
-            """)
-
-        try await self.run(machServiceName: serviceName, logic: logic)
     }
 
     /// Starts the EnsemblePorter service with a specific mach service name and logic.
@@ -281,7 +275,6 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
     ///   - machServiceName: The mach service name to use for the service. This is is overridden during testing.
     ///   - logic: The EnsemblePorterLogic instance to use
     private func run(machServiceName: String, logic: EnsemblePorterLogic<IntraEnsembleTransponder>) async throws {
-        let (startAutoShutdownStream, startAutoShutdownContinuation) = AsyncStream<Void>.makeStream()
         try await withThrowingTaskGroup { group in
             group.addTask {
                 do {
@@ -291,30 +284,14 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
                     case .xpcSession:
                         try await self.runWithXPCSession(
                             machServiceName: machServiceName,
-                            logic: logic,
-                            autoShutdownContinuation: startAutoShutdownContinuation)
+                            logic: logic)
                     }
                 } catch {
                     self.logger.error("EnsemblePorter threw top-level error. error=\(String(reportable: error), privacy: .public)")
                     throw error
                 }
             }
-            if let autoShutdownTimeout = self.autoShutdownTimeout {
-                group.addTask {
-                    // Have a timeout where we shutdown as a last-ditch attempt at ensuring we're not keeping keys around.
-                    for await _ in startAutoShutdownStream.prefix(1) {}
-                    try Task.checkCancellation()
-                    self.logger.log("""
-                        Starting auto-shutdown timer. \
-                        timer_duration_s=\(autoShutdownTimeout.components.seconds)
-                        """)
-                    defer {
-                        self.logger.log("auto-shutdown task complete.")
-                    }
-                    try await Task.sleep(for: autoShutdownTimeout)
-                    self.logger.log("Auto-shutdown timer fired.")
-                }
-            }
+
             defer {
                 self.logger.log("Task group cancelling")
                 group.cancelAll()
@@ -342,8 +319,7 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
     }
 
     private func runWithXPCSession(machServiceName: String,
-                                   logic: EnsemblePorterLogic<IntraEnsembleTransponder>,
-                                   autoShutdownContinuation: AsyncStream<Void>.Continuation) async throws {
+                                   logic: EnsemblePorterLogic<IntraEnsembleTransponder>) async throws {
         self.logger.log("""
             Initialising XPCSession server. \
             mach_service_name=\(machServiceName, privacy: .public)
@@ -358,14 +334,79 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
             metrics: self.metrics
         )
 
+        await self.serveXPCSession(logic: logic) {
+            try await server.run()
+        }
+    }
+
+    /// Starts the EnsemblePorter service using an anonymous XPC listener.
+    ///
+    /// The endpoint is vended via `endpointHandler` before blocking, allowing the caller to
+    /// connect clients without a launchd-registered mach service name. Intended for tests.
+    package func runAnonymous(endpointHandler: @escaping @Sendable (XPCEndpoint) -> Void) async throws {
+        try await self.startService { logic in
+            self.logger.log("Initialising anonymous XPCSession server.")
+
+            let handler = EnsemblePorterXPCServerHandler(logic: logic)
+            let server = EnsemblePorterXPCServer(
+                handler: handler,
+                xpcServiceName: "<anonymous>",
+                entitlement: EnsemblePorterConstants.provideKeysEntitlement,
+                metrics: self.metrics
+            )
+
+            await self.serveXPCSession(logic: logic) {
+                try await server.runAnonymous(endpointHandler: endpointHandler)
+            }
+        }
+    }
+
+    /// Shared lifecycle for `run()` and `runAnonymous()`: transitions state, creates the
+    /// `EnsemblePorterLogic`, and runs the provided server task.
+    private func startService(
+        _ serverTask: @Sendable (EnsemblePorterLogic<IntraEnsembleTransponder>) async throws -> Void
+    ) async throws {
+        let followerInfo: [FollowerInfo] = try self.state.withLock { state in
+            switch state {
+            case .prewarming(let continuations):
+                state = .starting(followerInfo: [], continuations)
+                return []
+            case .prewarmed(let followerInfo, let continuations):
+                state = .starting(followerInfo: followerInfo, continuations)
+                return followerInfo
+            default:
+                throw EnsemblePorterError.invalidStateTransition(existing: String(describing: state), proposed: "starting")
+            }
+        }
+        defer {
+            self.cancelHeartbeat()
+            self.state.withLock { $0 = .stopped }
+        }
+
+        self.logger.log("EnsemblePorter started. client_type=\(String(describing: self.clientType), privacy: .public)")
+        defer {
+            self.logger.log("EnsemblePorter ended")
+        }
+
+        self.metrics.processStarts.increment()
+
+        let logic = EnsemblePorterLogic(keySafe: .init(metrics: self.metrics),
+                                        intraEnsembleTransponder: self.intraEnsembleTransponder,
+                                        followerInfo: followerInfo,
+                                        metrics: self.metrics)
+
+        try await serverTask(logic)
+    }
+
+    /// Shared XPC session serving logic: runs the server task alongside a state-management
+    /// task that transitions to `.running` and waits for cancellation/shutdown.
+    private func serveXPCSession(logic: EnsemblePorterLogic<IntraEnsembleTransponder>,
+                                 serverTask: @escaping @Sendable () async throws -> Void) async {
         await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
-                try await server.run()
+                try await serverTask()
             }
             group.addTask {
-                // Wait for server to be running, then update our state
-                await server.waitForRunning()
-
                 // Wait for cancellation
                 await withTaskCancellationHandler(operation: {
                     await withCheckedContinuation { shutdownContinuation in
@@ -381,15 +422,14 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
                                 waiting = continuations
                             case .starting(_, let continuations):
                                 waiting = continuations
-                            case .running:
+                            case .running, .shuttingDown:
                                 waiting = []
                             case .stopped:
                                 waiting = []
                             }
                             state = .running(
                                 logic: logic,
-                                shutdownContinuation: shutdownContinuation,
-                                autoShutdownContinuation: autoShutdownContinuation)
+                                shutdownContinuation: shutdownContinuation)
                             return waiting
                         }
                         // Resume all waiting continuations now that state is .running
@@ -398,9 +438,13 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
                 }, onCancel: {
                     // Resume the continuation on cancellation to allow clean shutdown
                     self.state.withLock { state in
-                        if case .running(_, let shutdownContinuation, _) = state {
+                        switch state {
+                        case .running(_, let shutdownContinuation),
+                            .shuttingDown(_, let shutdownContinuation):
                             shutdownContinuation.resume()
                             state = .stopped
+                        default:
+                            break
                         }
                     }
                 })
@@ -417,9 +461,9 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
         await self.waitForRunning()
         let logic = try self.state.withLock { state in
             switch state {
-            case .running(let logic, _, _):
+            case .running(let logic, _):
                 return logic
-            default:
+            case .prewarming, .prewarmed, .notStarted, .starting, .stopped, .shuttingDown:
                 throw EnsemblePorterError.notRunning
             }
         }
@@ -461,10 +505,9 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
     package func provide(encryptedCryptoMaterial: Data, leaderPublicKey: Data, requestID: UUID, spanID: UInt64) async throws {
         let logic: EnsemblePorterLogic<IntraEnsembleTransponder> = try self.state.withLock { state in
             switch state {
-            case .running(let logic, _, let autoShutdownContinuation):
-                autoShutdownContinuation.yield()
+            case .running(let logic, _):
                 return logic
-            case .prewarming, .prewarmed, .notStarted, .starting, .stopped:
+            case .prewarming, .prewarmed, .notStarted, .starting, .stopped, .shuttingDown:
                 throw EnsemblePorterError.notRunning
             }
         }
@@ -479,33 +522,85 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
     package func teardownFollowers() async throws {
         self.logger.log("EnsemblePorter teardown starting")
 
-        let logic: EnsemblePorterLogic<IntraEnsembleTransponder> = try self.state.withLock { state in
+        var waitersToResume: [CheckedContinuation<Void, Never>] = []
+        var phase: EnsemblePorterMetrics.ShutdownFollowersPhase = .requestComplete
+        let logic: EnsemblePorterLogic<IntraEnsembleTransponder>? = self.state.withLock { state in
             switch state {
-            case .running(let logic, _, _):
+            case .running(let logic, let continuation):
+                state = .shuttingDown(logic: logic, shutdownContinuation: continuation)
+                phase = .requestComplete
                 return logic
-            case .prewarming, .prewarmed, .notStarted, .starting, .stopped:
-                throw EnsemblePorterError.notRunning
+            case .prewarmed(let followerInfo, let waiters),
+                 .notStarted(let followerInfo, let waiters),
+                 .starting(let followerInfo, let waiters):
+                waitersToResume = waiters
+                state = .stopped
+                phase = .preRequest
+                return EnsemblePorterLogic(
+                    keySafe: .init(metrics: self.metrics),
+                    intraEnsembleTransponder: self.intraEnsembleTransponder,
+                    followerInfo: followerInfo,
+                    metrics: self.metrics)
+            case .prewarming(let waiters):
+                // Prewarm still in flight: we don't yet know which followers exist.
+                waitersToResume = waiters
+                state = .stopped
+                return nil
+            case .shuttingDown, .stopped:
+                return nil
             }
         }
+        for waiter in waitersToResume {
+            waiter.resume()
+        }
 
-        // Check if this is a leader by checking if we have followers
-        guard !logic.followerInfo.isEmpty else {
+        guard let logic, !logic.followerInfo.isEmpty else {
             self.logger.log("No followers to shutdown")
             return
         }
 
+        self.cancelHeartbeat()
         self.logger.log("Shutting down followers.")
 
+        let start = ContinuousClock.now
         do {
-            try await logic.shutdownAllFollowers()
+            // Teardown runs outside any request context (e.g. from CloudBoardSupportApp.teardown()
+            // or after a .prewarmed → .stopped transition). Establish a sentinel Prism context with
+            // an all-zero requestID so the inner shutdown path can read PrismTracing.requestID/spanID
+            // without tripping its "no requestID for activityID" assertion.
+            try await PrismTracing.withResumed(requestID: Self.noRequestSentinelID) {
+                try await logic.shutdownAllFollowers()
+            }
+            self.metrics.recordShutdownFollowers(
+                phase: phase,
+                success: true,
+                durationSeconds: Self.elapsedSeconds(since: start))
             self.logger.log("EnsemblePorter teardown completed successfully")
         } catch {
+            self.metrics.recordShutdownFollowers(
+                phase: phase,
+                success: false,
+                error: error,
+                durationSeconds: Self.elapsedSeconds(since: start))
             self.logger.error("""
                 EnsemblePorter teardown failed. \
                 error=\(String(reportable: error), privacy: .public)
                 """)
             throw error
         }
+    }
+
+    private static func elapsedSeconds(since start: ContinuousClock.Instant) -> Double {
+        let elapsed = ContinuousClock.now - start
+        return Double(elapsed.components.seconds)
+            + Double(elapsed.components.attoseconds) / 1e18
+    }
+
+    /// Sentinel requestID used when EnsemblePorter performs work outside any per-request context
+    /// (prewarm, teardown). Surfacing all-zero in traces makes these calls easy to identify versus
+    /// real per-request work.
+    package static var noRequestSentinelID: UUID {
+        UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
     }
 
     /// Call when this turn only uses the FT/ET key (no multi-turn keys from CloudBoard).
@@ -517,9 +612,9 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
         await self.waitForRunning()
         let logic: EnsemblePorterLogic<IntraEnsembleTransponder> = try self.state.withLock { state in
             switch state {
-            case .running(let logic, _, _):
+            case .running(let logic, _):
                 return logic
-            case .prewarming, .prewarmed, .notStarted, .starting, .stopped:
+            case .prewarming, .prewarmed, .notStarted, .starting, .stopped, .shuttingDown:
                 throw EnsemblePorterError.notRunning
             }
         }
@@ -546,9 +641,9 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
         await self.waitForRunning()
         let logic: EnsemblePorterLogic<IntraEnsembleTransponder> = try self.state.withLock { state in
             switch state {
-            case .running(let logic, _, _):
+            case .running(let logic, _):
                 return logic
-            case .prewarming, .prewarmed, .notStarted, .starting, .stopped:
+            case .prewarming, .prewarmed, .notStarted, .starting, .stopped, .shuttingDown:
                 throw EnsemblePorterError.notRunning
             }
         }
@@ -559,4 +654,276 @@ package final class EnsemblePorterImpl<IntraEnsembleTransponder: EnsembleTranspo
             cryptoMaterials: cryptoMaterials
         )
     }
+
+    // MARK: - Heartbeat
+
+    /// Starts the heartbeat task that runs until the porter shuts down.
+    ///
+    /// Called at the end of `prewarmFollowers()` so heartbeats begin immediately
+    /// after follower instances are created, avoiding timeout during the gap
+    /// between prewarm and `run()`.
+    internal func startHeartbeat(followerInfo: [FollowerInfo]) {
+        guard !followerInfo.isEmpty else { return }
+        let task = Task {
+            self.logger.log("Heartbeat task started. follower_count=\(followerInfo.count, privacy: .public)")
+            defer { self.logger.log("Heartbeat task ended") }
+            await withTaskGroup(of: Void.self) { group in
+                for follower in followerInfo {
+                    group.addTask {
+                        var consecutiveFailures = 0
+                        while !Task.isCancelled {
+                            let roundStart = ContinuousClock.now
+                            do {
+                                try await self.sendHeartbeat(
+                                    to: follower,
+                                    priorConsecutiveFailures: consecutiveFailures)
+                                consecutiveFailures = 0
+                            } catch let error as EnsemblePorterError where error == .instanceNotFound {
+                                if self.isShuttingDown || Task.isCancelled {
+                                    self.logger.warning("""
+                                        Heartbeat rejected during shutdown - ignoring. \
+                                        rank=\(follower.rank, privacy: .public)
+                                        """)
+                                    break
+                                }
+                                // The controller explicitly rejected the heartbeat — the follower
+                                // porter instance is gone.  Exit immediately so CB brings up a new
+                                // support app.
+                                self.logger.error("""
+                                    Heartbeat rejected by controller - instance not found. \
+                                    Shutting down sibling followers, then exiting. \
+                                    rank=\(follower.rank, privacy: .public)
+                                    """)
+                                // Best-effort: free sibling followers' slots immediately
+                                // instead of waiting for each follower's controller heartbeat-
+                                // timeout watchdog. Stops the failure cascading into
+                                // eviction-and-crash for unrelated leaders. (rdar://179488696)
+                                await self.shutdownOtherFollowers(
+                                    except: follower.rank, in: followerInfo)
+                                self.metrics.incrementHeartbeatExit(reason: .instanceNotFound)
+                                self.logger.error("""
+                                    Exiting ensembleporterd. \
+                                    reason=instance_not_found \
+                                    rank=\(follower.rank, privacy: .public)
+                                    """)
+                                exit(EX_UNAVAILABLE)
+                            } catch {
+                                consecutiveFailures += 1
+                                self.logger.warning("""
+                                    Heartbeat failed. \
+                                    rank=\(follower.rank, privacy: .public) \
+                                    consecutive_failures=\(consecutiveFailures, privacy: .public) \
+                                    error=\(String(reportable: error), privacy: .public)
+                                    """)
+                                if consecutiveFailures >= self.maxConsecutiveHeartbeatFailures {
+                                    if self.isShuttingDown || Task.isCancelled {
+                                        self.logger.warning("""
+                                            Heartbeat failed during shutdown - ignoring. \
+                                            rank=\(follower.rank, privacy: .public) \
+                                            consecutive_failures=\(consecutiveFailures, privacy: .public)
+                                            """)
+                                        break
+                                    }
+                                    self.logger.error("""
+                                        Heartbeat failed too many consecutive times. \
+                                        Shutting down sibling followers, then exiting. \
+                                        rank=\(follower.rank, privacy: .public) \
+                                        max_consecutive_failures=\(self.maxConsecutiveHeartbeatFailures, privacy: .public)
+                                        """)
+                                    // Best-effort: free sibling followers' slots immediately
+                                    // instead of waiting for each follower's controller
+                                    // heartbeat-timeout watchdog. (rdar://179488696)
+                                    await self.shutdownOtherFollowers(
+                                        except: follower.rank, in: followerInfo)
+                                    // Spoken to the CloudBoard team. Exiting is the recommended approach.
+                                    // By exiting CB will inform tie-cloud-app that the support app is unhealthy
+                                    // and ask it what to do.
+                                    // rdar://179642532
+                                    self.metrics.incrementHeartbeatExit(reason: .maxConsecutiveFailures)
+                                    self.logger.error("""
+                                        Exiting ensembleporterd. \
+                                        reason=max_consecutive_failures \
+                                        rank=\(follower.rank, privacy: .public) \
+                                        consecutive_failures=\(consecutiveFailures, privacy: .public)
+                                        """)
+                                    exit(EX_UNAVAILABLE)
+                                }
+                            }
+                            let elapsed = ContinuousClock.now - roundStart
+                            let remaining = self.heartbeatSendInterval - elapsed
+                            if remaining > .zero {
+                                try? await Task.sleep(for: remaining)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.heartbeatTask.withLock { $0 = task }
+    }
+
+    /// Cancels the heartbeat task if it is running.
+    private func cancelHeartbeat() {
+        self.heartbeatTask.withLock { task in
+            task?.cancel()
+            task = nil
+        }
+    }
+
+    /// Returns `true` when the porter has entered the `.shuttingDown` or `.stopped` state.
+    ///
+    /// Used by the heartbeat loop to distinguish "follower removed because we are
+    /// tearing down" from "follower unexpectedly vanished."  We also check `.stopped`
+    /// because `startService()`'s defer block calls `cancelHeartbeat()` and then
+    /// transitions directly to `.stopped`, racing with in-flight heartbeat iterations.
+    private var isShuttingDown: Bool {
+        self.state.withLock {
+            switch $0 {
+            case .shuttingDown, .stopped:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    /// Sends a heartbeat message to a single follower using the transponder directly.
+    ///
+    /// Used to keep follower instances alive for the entire request lifetime.
+    /// Records round-trip duration metrics for each heartbeat attempt.
+    /// - Parameter priorConsecutiveFailures: Streak length *before* this attempt. Used to
+    ///   tag the per-attempt metric with the bucketed `consecutive_failures` dimension —
+    ///   on failure the recorded streak is `priorConsecutiveFailures + 1`; on success the
+    ///   streak resets to `0` for the recorded sample.
+    /// - Throws: If the heartbeat send fails or the follower reports the instance is unknown.
+    internal func sendHeartbeat(to follower: FollowerInfo, priorConsecutiveFailures: Int = 0) async throws {
+        let heartbeatMessage = Protos.PorterMessage.with {
+            $0.messageType = .heartbeat(.with {
+                $0.instanceUuid = Data(uuid: follower.instanceUUID)
+            })
+        }
+        let start = ContinuousClock.now
+        do {
+            let responseData = try await self.intraEnsembleTransponder.sendData(
+                appID: EnsemblePorterConstants.ensembledAppID,
+                data: heartbeatMessage.serializedData(),
+                destination: follower.rank,
+                timeout: self.heartbeatSendTimeout,
+                // Heartbeats run in a detached background task with no active request span, so we
+                // don't attach a tracing context — otherwise every ping would manufacture a
+                // spurious requestID/span for ensembled to record.
+                includeTracingContext: false)
+            let elapsed = ContinuousClock.now - start
+
+            // Check if the controller reported the instance as unknown/removed
+            let response = try Protos.HeartbeatResponse(serializedBytes: responseData)
+            guard response.success else {
+                self.metrics.recordHeartbeatRoundTrip(
+                    rank: follower.rank,
+                    success: false,
+                    consecutiveFailures: priorConsecutiveFailures + 1,
+                    durationSeconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
+                self.logger.warning("""
+                    Heartbeat rejected by controller - instance not found. \
+                    rank=\(follower.rank, privacy: .public) \
+                    instance_uuid=\(follower.instanceUUID, privacy: .public)
+                    """)
+                throw EnsemblePorterError.instanceNotFound
+            }
+
+            self.metrics.recordHeartbeatRoundTrip(
+                rank: follower.rank,
+                success: true,
+                consecutiveFailures: 0,
+                durationSeconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
+        } catch {
+            self.logger.error("""
+                Error sending heartbeat. \
+                error=\(String(reportable: error), privacy: .public) \
+                rank=\(follower.rank, privacy: .public) \
+                instance_uuid=\(follower.instanceUUID, privacy: .public)
+                """)
+            let elapsed = ContinuousClock.now - start
+            self.metrics.recordHeartbeatRoundTrip(
+                rank: follower.rank,
+                success: false,
+                consecutiveFailures: priorConsecutiveFailures + 1,
+                durationSeconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
+            throw error
+        }
+    }
+
+    /// Sends a best-effort shutdown to every follower except the one whose heartbeat just failed.
+    ///
+    /// Without this, the failed-heartbeat path leaves the leader's other follower porter slots
+    /// occupied until each follower's controller heartbeat-timeout watchdog fires. By sending an
+    /// explicit shutdown we free those slots immediately, which stops one heartbeat failure from
+    /// cascading into eviction-and-crash for unrelated concurrent leaders sharing the same
+    /// follower pool. (rdar://179488696)
+    ///
+    /// Failures here are expected and ignored — at the point this is invoked we're already
+    /// in a failure path. Successes/failures are reported via `heartbeatFailureShutdown*` metrics.
+    internal func shutdownOtherFollowers(
+        except failedRank: Int,
+        in followers: [FollowerInfo]
+    ) async {
+        let start = ContinuousClock.now
+        // Each task returns nil on success or the failing error; we keep the first error
+        // for the aggregate metric. The function itself never throws — sibling shutdown is
+        // best-effort (we are already on the failure path).
+        let firstError: Error? = await withTaskGroup(of: Error?.self) { group in
+            for follower in followers where follower.rank != failedRank {
+                group.addTask {
+                    let shutdownMessage = Protos.PorterMessage.with {
+                        $0.messageType = .shutdown(.with {
+                            $0.instanceUuid = Data(uuid: follower.instanceUUID)
+                        })
+                    }
+                    let taskStart = ContinuousClock.now
+                    do {
+                        let serialized = try shutdownMessage.serializedData()
+                        _ = try await self.intraEnsembleTransponder.sendData(
+                            appID: EnsemblePorterConstants.ensembledAppID,
+                            data: serialized,
+                            destination: follower.rank,
+                            timeout: self.heartbeatSendTimeout)
+                        let elapsed = ContinuousClock.now - taskStart
+                        self.metrics.heartbeatFailureShutdownDurationSuccess.set(
+                            Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+                        )
+                        self.logger.log("""
+                            Sibling-follower shutdown sent after heartbeat failure. \
+                            rank=\(follower.rank, privacy: .public) \
+                            instance_uuid=\(follower.instanceUUID, privacy: .public)
+                            """)
+                        return nil
+                    } catch {
+                        let elapsed = ContinuousClock.now - taskStart
+                        self.metrics.heartbeatFailureShutdownDurationFailure.set(
+                            Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+                        )
+                        self.logger.warning("""
+                            Sibling-follower shutdown failed after heartbeat failure. \
+                            rank=\(follower.rank, privacy: .public) \
+                            error=\(String(reportable: error), privacy: .public)
+                            """)
+                        return error
+                    }
+                }
+            }
+            var captured: Error? = nil
+            for await taskError in group {
+                if captured == nil, let taskError {
+                    captured = taskError
+                }
+            }
+            return captured
+        }
+        self.metrics.recordShutdownFollowers(
+            phase: .heartbeatFailure,
+            success: firstError == nil,
+            error: firstError,
+            durationSeconds: Self.elapsedSeconds(since: start))
+    }
+
 }

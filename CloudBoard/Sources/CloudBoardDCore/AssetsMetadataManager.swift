@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -65,6 +65,7 @@ actor AssetsMetadataManager {
             return try await self.sleepIndefinitely()
         }
 
+        self.serviceHealthMonitor.enterMaintenance(.waitingForInitialAssets)
         try await self.assetsMetadataClient.connect()
 
         try await withThrowingTaskGroup(of: String.self) { group in
@@ -139,6 +140,7 @@ actor AssetsMetadataManager {
         AssetsMetadata=\(allAssetsMetadata, privacy: .public)
         """)
         self.jobHelperInstanceProvider?.updateAssetsMetadata(allAssetsMetadata, isInitial: true)
+        self.serviceHealthMonitor.exitMaintenance(.waitingForInitialAssets)
     }
 
     private func onNewerAssetsReceived() async throws {

@@ -1,0 +1,2679 @@
+# Copyright © 2026 Apple Inc. All Rights Reserved.
+
+# APPLE INC.
+# PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
+# PLEASE READ THE FOLLOWING PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT (“AGREEMENT”) CAREFULLY BEFORE DOWNLOADING OR USING THE APPLE SOFTWARE ACCOMPANYING THIS AGREEMENT(AS DEFINED BELOW). BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT, DO NOT DOWNLOAD OR USE THE APPLE SOFTWARE. THESE TERMS AND CONDITIONS CONSTITUTE A LEGAL AGREEMENT BETWEEN YOU AND APPLE.
+# IMPORTANT NOTE: BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING ON YOUR OWN BEHALF AND/OR ON BEHALF OF YOUR COMPANY OR ORGANIZATION TO THE TERMS OF THIS AGREEMENT.
+# 1. As used in this Agreement, the term “Apple Software” collectively means and includes all of the Apple Private Cloud Compute materials provided by Apple here, including but not limited to the Apple Private Cloud Compute software, tools, data, files, frameworks, libraries, documentation, logs and other Apple-created materials. In consideration for your agreement to abide by the following terms, conditioned upon your compliance with these terms and subject to these terms, Apple grants you, for a period of ninety (90) days from the date you download the Apple Software, a limited, non-exclusive, non-sublicensable license under Apple’s copyrights in the Apple Software to download, install, compile and run the Apple Software internally within your organization only on a single Apple-branded computer you own or control, for the sole purpose of verifying the security and privacy characteristics of Apple Private Cloud Compute. This Agreement does not allow the Apple Software to exist on more than one Apple-branded computer at a time, and you may not distribute or make the Apple Software available over a network where it could be used by multiple devices at the same time. You may not, directly or indirectly, redistribute the Apple Software or any portions thereof. The Apple Software is only licensed and intended for use as expressly stated above and may not be used for other purposes or in other contexts without Apple's prior written permission. Except as expressly stated in this notice, no other rights or licenses, express or implied, are granted by Apple herein.
+# 2. The Apple Software is provided by Apple on an "AS IS" basis. APPLE MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS, SYSTEMS, OR SERVICES. APPLE DOES NOT WARRANT THAT THE APPLE SOFTWARE WILL MEET YOUR REQUIREMENTS, THAT THE OPERATION OF THE APPLE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, THAT DEFECTS IN THE APPLE SOFTWARE WILL BE CORRECTED, OR THAT THE APPLE SOFTWARE WILL BE COMPATIBLE WITH FUTURE APPLE PRODUCTS, SOFTWARE OR SERVICES. NO ORAL OR WRITTEN INFORMATION OR ADVICE GIVEN BY APPLE OR AN APPLE AUTHORIZED REPRESENTATIVE WILL CREATE A WARRANTY.
+# 3. IN NO EVENT SHALL APPLE BE LIABLE FOR ANY DIRECT, SPECIAL, INDIRECT, INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE, REPRODUCTION, COMPILATION OR OPERATION OF THE APPLE SOFTWARE, HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# 4. This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from Apple if you fail to comply with any term(s) of this Agreement. Upon termination, you agree to cease all use of the Apple Software and destroy all copies, full or partial, of the Apple Software. This Agreement constitutes the entire understanding of the parties with respect to the subject matter contained herein, and supersedes all prior negotiations, representations, or understandings, written or oral. This Agreement will be governed and construed in accordance with the laws of the State of California, without regard to its choice of law rules.
+# You may report security issues about Apple products to product-security@apple.com, as described here: https://www.apple.com/support/security/. Non-security bugs and enhancement requests can be made via https://bugreport.apple.com as described here: https://developer.apple.com/bug-reporting/
+# EA1937
+# 10/02/2024
+
+openapi: 3.0.0
+info:
+  title: Whisper API
+  contact:
+    name: Whisper
+    email: whisper@group.apple.com
+  version: "2.1.2"
+servers:
+  - url: https://whisper.iss.apple.com
+    description: Whisper AODC partition
+  - url: https://whisper.isg.apzones.com
+    description: Whisper APZ partition
+  - url: https://whisper-gg.isg.apzones.com
+    description: Whisper GG partition
+paths:
+  /v1/version:
+    get:
+      tags:
+        - version
+      summary: Returns whisper server version information.
+      operationId: version
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionResponse'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /status:
+    get:
+      tags:
+        - Healthcheck
+      summary: Returns whisper service health information.
+      operationId: Status
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/namespaces:
+    get:
+      tags:
+        - Namespaces
+      summary: List namespaces
+      description: Lists the namespaces in which the caller has admin/auditor role. Policy APRNs are not supported due to operational complexities. Note that namespaces to which the caller is granted admin role through policy APRNs only will not be included.
+      operationId: ListNamespaces
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NamespaceListItem'
+                x-content-type: application/json
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/namespaces/{namespace_name}:
+    get:
+      tags:
+        - Namespaces
+      summary: Describes the details of a specific namespace.
+      parameters:
+        - name: namespace_name
+          in: path
+          description: "Name of the namespace."
+          example: myNamespace
+          required: true
+          style: simple
+          explode: false
+          schema:
+            $ref: '#/components/schemas/NamespaceName'
+        - name: additional-roles
+          in: query
+          description: 'Roles to be returned in addition to "admin". Currently Supported value is "all". Unrecognized value will be ignored'
+          example: all
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+      operationId: DescribeNamespace
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DescribeNamespaceResponse'
+        "400":
+          description: Invalid input parameters values.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin/auditor role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    put:
+      tags:
+        - Namespaces
+      summary: Updates information about a namespace.
+      parameters:
+        - name: namespace_name
+          in: path
+          description: "Name of the namespace."
+          example: myNamespace
+          required: true
+          style: simple
+          explode: false
+          schema:
+            $ref: '#/components/schemas/NamespaceName'
+      operationId: UpdateNamespace
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateNamespaceRequest'
+      responses:
+        "204":
+          description: A successful response.
+          content: {}
+        "400":
+          description: Invalid request data or input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    post:
+      tags:
+        - Namespaces
+      summary: Creates a new custom namespace.
+      description: "Note: Legacy namespaces cannot be created."
+      parameters:
+        - name: namespace_name
+          in: path
+          description: "Name of the namespace."
+          example: myNamespace
+          required: true
+          style: simple
+          explode: false
+          schema:
+            $ref: '#/components/schemas/CustomNamespaceName'
+      operationId: CreateNamespace
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateNamespaceRequest'
+      responses:
+        "201":
+          description: A successful response.
+          content: {}
+        "400":
+          description: Invalid request data or input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "409":
+          description: Namespace with the given name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    delete:
+      tags:
+        - Namespaces
+      summary: Deletes the given custom namespace.
+      description: 'A namespace cannot be deleted if it has secrets, buckets or policies. Note: Legacy namespaces cannot be deleted.'
+      parameters:
+        - name: namespace_name
+          in: path
+          description: "Name of the namespace."
+          example: myNamespace
+          required: true
+          style: simple
+          explode: false
+          schema:
+            $ref: '#/components/schemas/CustomNamespaceName'
+      operationId: DeleteNamespace
+      responses:
+        "204":
+          description: A successful response.
+          content: { }
+        "400":
+          description: Invalid parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/namespaces/{namespace_name}/roles/{role}/principals/{principal_name}:
+    parameters:
+      - name: namespace_name
+        in: path
+        description: Name of the namespace
+        example: myNamespace
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/NamespaceName'
+      - name: role
+        in: path
+        description: Name of the role
+        example: admin
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/RoleType'
+      - name: principal_name
+        in: path
+        description: APRN of the principal. Policy APRN for selected domains can also be specified.
+        example: 'aprn:apple:certmgr:::group-v2:/ig/11111111/uv/'
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/APRN'
+    put:
+      tags:
+        - Namespaces
+      summary: Assigns role to a principal.
+      operationId: AssignRole
+      responses:
+        "204":
+          description: A successful response. If role is already assigned to the principal, server will still return this response.
+          content: {}
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    delete:
+      tags:
+        - Namespaces
+      summary: Unassigns role from a principal.
+      operationId: UnassignRole
+      responses:
+        "204":
+          description: A successful response.
+          content: {}
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Invalid role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/namespaces/{namespace_name}/principals/{principal_name}:
+    parameters:
+      - name: namespace_name
+        in: path
+        description: "Name of the namespace."
+        example: myNamespace
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/NamespaceName'
+      - name: principal_name
+        in: path
+        description: APRN of the principal. Policy APRN for selected domains can also be specified.
+        example: 'aprn:apple:certmgr:::group-v2:/ig/11111111/uv/'
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/APRN'
+    put:
+      tags:
+        - Namespaces
+      summary: Create or update principal in a namespace
+      operationId: CreateOrUpdatePrincipal
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePrincipalRequest'
+      responses:
+        "204":
+          description: A successful response. If role(s) are already assigned to the principal, server will still return this response.
+          content: { }
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+
+  /v1/secrets:
+    parameters:
+      - $ref: '#/components/parameters/namespaceParam'
+    get:
+      tags:
+        - Secrets
+      summary: Lists secrets in a namespace.
+      description: Secret content is not
+        included.
+      operationId: ListSecrets
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ListSecretItem'
+                x-content-type: application/json
+        "400":
+          description: Invalid parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: 'Caller does not have admin/auditor role or the namespace with the given name not found. 
+         If the namespace is a custom namespace, a user with read access to secrets through bucket(s) in that namespace is also authorized to perform this operation. Only the secrets accessible to the user will be returned.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    put:
+      tags:
+        - Secrets
+      summary: Creates a new secret.
+      description: "A secret can be created either using specified content in the request or using Whisper generated contents. To let Whisper generate secret content, use the following guidelines:\n
+      * Create SECRET_GENERATION type policy (or use one if already created).\n 
+      * Provide the policy name as policies without adding content in the request.\n  
+      * If the content field is also provided, it takes precedence and Whisper will not generate the secret; instead the supplied content will be used to create the secret."
+      operationId: CreateSecret
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSecretRequest'
+        required: true
+      responses:
+        "201":
+          description: A successful response.
+          content: {}
+        "400":
+          description: Invalid request data or parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "409":
+          description: Secret with the given name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/secrets/{secret_name}:
+    parameters:
+      - name: secret_name
+        in: path
+        description: Name of the secret.
+        example: mySecret
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/SecretName'
+      - $ref: '#/components/parameters/namespaceParam'
+    get:
+      tags:
+        - Secrets
+      summary: Describes a secret.
+      description: Returns information about a secret. Secret content is not included.
+      operationId: ReadSecret
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadSecretResponse'
+        "400":
+          description: Invalid request data or input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin/auditor role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Secret with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    post:
+      tags:
+        - Secrets
+      summary: Updates a secret and set it as the current version.
+      operationId: UpdateSecret
+      parameters:
+        - name: preserveCurrentVersion
+          in: query
+          description: "By default, when updating secret content, the new version will be set as current. 
+          However, you can provide this optional query parameter as true to prevent this. 
+          This parameter has no effect when secret content is not being updated."
+          example: true
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: boolean
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSecretRequest'
+        required: true
+      responses:
+        "200":
+          description: A successful response.
+          content: { }
+        "400":
+          description: Invalid request data or input parameters value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Secret with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    delete:
+      tags:
+        - Secrets
+      summary: Deletes a secret.
+      operationId: DeleteSecret
+      responses:
+        "200":
+          description: A successful response.
+          content: { }
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Secret with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/secrets/{secret_name}/versions:
+    parameters:
+      - name: secret_name
+        example: mySecret
+        in: path
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/SecretName'
+      - $ref: '#/components/parameters/namespaceParam'
+    get:
+      tags:
+        - Secrets
+      summary: Lists versions for a secret.
+      operationId: ListSecretVersions
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ListSecretVersionsItem'
+                x-content-type: application/json
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: 'Caller does not have admin/auditor role or the namespace with the given name not found. 
+          If the namespace is a custom namespace, a user with read access to the secrets through bucket(s) in that namespace is also authorized to call this operation.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Secret with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    post:
+      tags:
+        - Secrets
+      summary: Sets a given version of a secret as current version.
+      operationId: SetSecretVersion
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetSecretVersionRequest'
+        required: true
+      responses:
+        "200":
+          description: A successful response.
+          content: { }
+        "400":
+          description: Invalid request data or input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Secret content with the given name and version not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/secrets/{secret_name}/rotate:
+    parameters:
+      - name: secret_name
+        example: mySecret
+        in: path
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/SecretName'
+      - $ref: '#/components/parameters/namespaceParam'
+      - name: preserveCurrentVersion
+        in: query
+        description: "By default, when rotating a secret, the new version will be set as the current version. 
+        However, you can provide this optional query parameter as true to override this behavior and preserve the current version."
+        example: true
+        required: false
+        style: form
+        explode: true
+        schema:
+          type: boolean
+    post:
+      tags:
+        - Secrets
+      summary: Generates new version of secret and sets it as current version.
+      description: "A policy of type SECRET_GENERATION should exist in the namespace and assigned to the secret."
+      operationId: RotateSecret
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                type: string
+              example: "/v1/secrets/e17aeb95-78f4-4ec4-920c-dc11ccb1860b"
+        "400":
+          description: Invalid input parameters value; No policy of type SECRET_GENERATION assigned to the secret found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Secret with the given not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /v1/buckets:
+    parameters:
+      - $ref: '#/components/parameters/namespaceParam'
+    get:
+      tags:
+        - Buckets
+      summary: Lists buckets in a namespace.
+      operationId: ListBuckets
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ListBucketItem'
+                x-content-type: application/json
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: 'Caller does not have admin/auditor role or the namespace with the given name not found. 
+          If the namespace is a custom namespace, a user who is a member of one or more buckets is also authorized to perform this operation. However, only the buckets that the user is a member of will be returned.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    put:
+      tags:
+        - Buckets
+      summary: Creates a bucket.
+      operationId: CreateBucket
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBucketRequest'
+        required: true
+      responses:
+        "201":
+          description: A successful response.
+          content: {}
+        "400":
+          description: Invalid request data.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "409":
+          description: Bucket with the given name already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/buckets/{bucket_name}:
+    parameters:
+      - name: bucket_name
+        example: myBucket
+        in: path
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/BucketName'
+      - $ref: '#/components/parameters/namespaceParam'
+    get:
+      tags:
+        - Buckets
+      summary: Describes a bucket.
+      operationId: ReadBucket
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadBucketResponse'
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin/auditor role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    post:
+      tags:
+        - Buckets
+      summary: Updates a bucket.
+      operationId: UpdateBucket
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBucketRequest'
+        required: true
+      responses:
+        "200":
+          description: A successful response.
+          content: { }
+        "400":
+          description: Invalid request data or input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Bucket with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    delete:
+      tags:
+        - Buckets
+      summary: Deletes a bucket.
+      operationId: DeleteBucket
+      responses:
+        "200":
+          description: A successful response.
+          content: { }
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Bucket with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/access/principal:
+    parameters:
+      - $ref: '#/components/parameters/namespaceParam'
+    put:
+      tags:
+        - Access
+      summary: Assigns a principal to a bucket.
+      description: Assigns a principal to a bucket. Bucket is created if not present.
+      operationId: AddPrincipalToBucket
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddPrincipalToBucketRequest'
+        required: true
+      responses:
+        "200":
+          description: A successful response.
+          content: {}
+        "400":
+          description: Invalid request data or input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Bucket not found after an attempt to create it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "409":
+          description: Principal already assigned to the bucket
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: 'Request body not present or is invalid; 
+          Principal is not in APRN format in a non-legacy namespace.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    delete:
+      tags:
+        - Access
+      summary: Unassigns a principal from a bucket.
+      operationId: RemovePrincipalFromBucket
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemovePrincipalFromBucketRequest'
+        required: true
+      responses:
+        "200":
+          description: A successful response.
+          content: {}
+        "400":
+          description: Invalid request data or input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Bucket not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "409":
+          description: Principal is not assigned to the bucket
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/access/secret:
+    parameters:
+      - $ref: '#/components/parameters/namespaceParam'
+    put:
+      tags:
+        - Access
+      summary: Assigns a secret to a bucket.
+      description: Assigns a secret to a bucket. Bucket is created if not present.
+      operationId: AddSecretToBucket
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddSecretToBucketRequest'
+        required: true
+      responses:
+        "200":
+          description: A successful response.
+          content: {}
+        "400":
+          description: Invalid request data or input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Bucket (after an attempt to create it) or Secret not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "409":
+          description: Secret already assigned to the bucket.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    delete:
+      tags:
+        - Access
+      summary: Unassigns a secret from a bucket.
+      operationId: RemoveSecretFromBucket
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoveSecretFromBucketRequest'
+        required: true
+      responses:
+        "200":
+          description: A successful response.
+          content: {}
+        "400":
+          description: Invalid request data or input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Bucket or Secret with the given names not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "409":
+          description: Secret not assigned to the bucket.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/my-secrets:
+    parameters:
+      - $ref: '#/components/parameters/namespaceParam'
+    get:
+      tags:
+        - SecretsDelivery
+      summary: Lists secrets the caller has read access to.
+      description: Secret content is not included.
+      operationId: MySecrets
+      parameters:
+        - name: buckets
+          in: query
+          description: buckets to limit the secrets list to; Can be specified multiple
+            times
+          example:
+            - myBucket1
+            - myBucket2
+            - myBucket3
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+        - name: expand
+          in: query
+          description: 'additional optional properties to be returned. Supported values are: "currentVersion". Unrecognized values will be ignored'
+          example:
+            - currentVersion
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MySecretsResponseItem'
+                x-content-type: application/json
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "403":
+          description: Caller does not have read access to any of the buckets (or any of the
+            specified buckets) in the namespace. A namespace or bucket that is not found is treated
+            as inaccessible.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/my-secrets/{secret_name}:
+    parameters:
+      - $ref: '#/components/parameters/namespaceParam'
+      - name: secret_name
+        example: mySecret
+        in: path
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/SecretName'
+    get:
+      tags:
+        - SecretsDelivery
+      summary: Returns the content of a secret.
+      description: The caller must have read access to the secret.
+      operationId: MySecret
+      parameters:
+        - name: version
+          in: query
+          description: "version of the secret to be fetched. if not specified, secret\
+            \ with current version is returned"
+          example: 0
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: expand
+          in: query
+          description: 'additional optional properties to be returned. Supported values are "version". Unrecognized values will be ignored'
+          example:
+            - version
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MySecretResponse'
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have read access to the secret. If the specified secret or
+            the namespace is not found, it is treated as inaccessible.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: If version is specified and the specified version of the secret is not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/my-secrets-batch:
+    parameters:
+      - $ref: '#/components/parameters/namespaceParam'
+      - name: buckets
+        in: query
+        description: buckets to limit the secrets list to; Can be specified multiple
+          times
+        example:
+          - myBucket1
+          - myBucket2
+          - myBucket3
+        required: false
+        style: form
+        explode: true
+        schema:
+          type: array
+          items:
+            type: string
+      - name: limit
+        in: query
+        description: Maximum number of secrets to be returned.
+        example: 20
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+          default: 100
+      - name: offset
+        in: query
+        description: 'This query param represents page index value starting from 0. Available page index values are calculated by server that depends on total accessible secrets and value of limit.
+        This parameter should be omitted while calling the API first time, server will supply a value in "self" and "next" link in the response which can be used for subsequent calls.'
+        required: false
+        schema:
+          type: integer
+          format: int64
+    get:
+      tags:
+        - SecretsDelivery
+      summary: Lists secrets along with secret contents.
+      description: "Subject to the caller having read access to the the secrets.\n 
+      Note: the content corresponding to the secret's currentVersion is returned."
+      operationId: MySecretsBatch
+      parameters:
+        - name: expand
+          in: query
+          description: 'additional optional properties to be returned. Supported values are: "version". Unrecognized values will be ignored'
+          example:
+            - version
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        "200":
+          description: "A successful response."
+          content:
+            application/json:
+              schema:
+                  $ref: '#/components/schemas/MySecretsBatchResponse'
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "403":
+          description: Caller does not have read access to any of the buckets (or any of the
+            specified buckets) in the namespace. A namespace or bucket that is not found is treated 
+            as inaccessible.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/policies:
+    parameters:
+      - $ref: '#/components/parameters/namespaceParam'
+      - name: policyType
+        in: query
+        description: type of the policy.
+        example: SECRET_GENERATION
+        required: false
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/PolicyType'
+    get:
+      tags:
+        - Policies
+      summary: Lists policies
+      description: lists policies in a given namespace.
+      operationId: ListPolicies
+      responses:
+        "200":
+          description: "A successful response."
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Policy'
+                x-content-type: application/json
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin/auditor role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    post:
+      tags:
+        - Policies
+      summary: Creates a policy
+      operationId: CreatePolicy
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePolicyRequest'
+        required: true
+      responses:
+        "201":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Policy'
+        "400":
+          description: Invalid request data or input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "409":
+          description: Policy with the given name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/policies/{policy_name}:
+    parameters:
+      - name: policy_name
+        in: path
+        description: name of the policy.
+        example: myPolicy
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/PolicyName'
+      - $ref: '#/components/parameters/namespaceParam'
+    get:
+      tags:
+        - Policies
+      summary: Describes a policy
+      description: Returns the definition of a policy.
+      operationId: DescribePolicy
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Policy'
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin/auditor role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Policy with the give name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    put:
+      tags:
+        - Policies
+      summary: Updates definition of a policy.
+      operationId: UpdatePolicy
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePolicyRequest'
+        required: true
+      responses:
+        "200":
+          description: A successful response.
+          content: { }
+        "400":
+          description: Invalid request data or input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Policy with the give name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "422":
+          description: Request body not present or is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+    delete:
+      tags:
+        - Policies
+      summary: deletes a policy.
+      operationId: DeletePolicy
+      responses:
+        "204":
+          description: A successful response.
+          content: { }
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Policy with the give name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+  /v1/policies/{policy_name}/secrets:
+    parameters:
+      - name: policy_name
+        in: path
+        description: name of the policy.
+        example: myPolicy
+        required: true
+        style: simple
+        explode: false
+        schema:
+          $ref: '#/components/schemas/PolicyName'
+      - $ref: '#/components/parameters/namespaceParam'
+    get:
+      tags:
+        - Policies
+      summary: Lists secrets associated with a given policy.
+      operationId: ListsSecretsForPolicy
+      responses:
+        "200":
+          description: A successful response.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+                x-content-type: application/json
+        "400":
+          description: Invalid input parameters value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Caller does not have admin/auditor role or the namespace with the given name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "404":
+          description: Policy with the give name not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        default:
+          description: An unexpected error response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/runtimeError'
+components:
+  schemas:
+    VersionResponse:
+      type: object
+      properties:
+        version:
+          type: string
+      example:
+        version: 1.13.0
+    StatusResponseResult:
+      type: object
+      properties:
+        healthy:
+          type: boolean
+        time:
+          type: integer
+          format: int64
+        duration:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+      example:
+        cassandraStatus:
+          healthy: true
+          time: 1670304166670
+          duration: 18
+          timestamp: "2022-12-06T05:22:46.670Z"
+
+    NamespaceListItem:
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/NamespaceName'
+      example:
+        name: myNamespace
+
+    runtimeError:
+      type: object
+      properties:
+        errors:
+          type: array
+          items:
+            type: string
+        code:
+          type: integer
+          format: int32
+        message:
+          type: string
+      example:
+          "code": XXX,
+          "message": "Error message"
+
+    AddPrincipalToBucketRequest:
+      type: object
+      properties:
+        entityName:
+          $ref: '#/components/schemas/PrincipalName'
+        bucketName:
+          $ref: '#/components/schemas/BucketName'
+      required:
+        - entityName
+        - bucketName
+      example:
+        entityName: aprn:apple:certmgr:::group-v2:/ig/11111111/uv/
+        bucketName: myBucket
+    AddSecretToBucketRequest:
+      type: object
+      properties:
+        entityName:
+          $ref: '#/components/schemas/SecretName'
+        bucketName:
+          $ref: '#/components/schemas/BucketName'
+      required:
+        - entityName
+        - bucketName
+      example:
+        entityName: mySecret
+        bucketName: myBucket
+    ListBucketItem:
+      type: object
+      properties:
+        namespace:
+          $ref: '#/components/schemas/NamespaceName'
+        name:
+          $ref: '#/components/schemas/BucketName'
+        description:
+          $ref: '#/components/schemas/Description'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        createdBy:
+          type: string
+          description: Name of the principal that created the bucket.
+        createdAt:
+          type: integer
+          format: int64
+          description: Bucket creation timestamp.
+        updatedBy:
+          type: string
+          description: Name of the principal that last updated the bucket.
+        updatedAt:
+          type: integer
+          format: int64
+          description: Last bucket update timestamp.
+      example:
+        namespace: myNamespace
+        name: myBucket
+        description: Bucket containing secrets For myApplication.
+        metadata: "{}"
+        createdBy: aprn:apple:certmgr:::group-v2:/ig/222222/uv/
+        createdAt: 1528482268165
+        updatedBy: aprn:apple:certmgr:::group-v2:/ig/222222/uv/
+        updatedAt: 1528482269165
+    CreateBucketRequest:
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/BucketName'
+        description:
+          $ref: '#/components/schemas/Description'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+      required:
+        - name
+      example:
+        name: myBucket
+        description: "Just a regular, run-of-the-mill bucket"
+        metadata: "{}"
+    CreateSecretRequest:
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/SecretName'
+        description:
+          $ref: '#/components/schemas/Description'
+        content:
+          pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+          type: string
+          format: byte
+          # 1048576 * 4/3
+          maxLength: 1398101
+          description: |-
+            Content is the base64 of the secret. It can only be omitted if request has a policy of type SECRET_GENERATION in policies field. 
+            If both are present, content will take precedence.
+
+            Example:
+            > echo 'sup3r-s3cr3t-p4ssw0rd' | base64
+            c3VwM3ItczNjcjN0LXA0c3N3MHJkCg==
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        buckets:
+          type: array
+          items:
+            type: string
+          description: List of pre-existing buckets the secret should be assigned to upon creation. Any bucket found to be not existing will be ignored.
+        policies:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyName'
+          description: List of pre-existing Policies the secret should be governed by upon creation.
+      required:
+        - name
+      example:
+        name: mySecret
+        description: "Just a regular, run-of-the-mill secret"
+        content: c3VwM3ItczNjcjN0LXA0c3N3MHJkCg==
+        metadata: "{}"
+        buckets: ["myBucket"]
+        policies: ["myPolicy"]
+    MySecretResponse:
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/SecretName'
+        secret:
+          description: |-
+            Base64-encoded content of the secret.
+            > echo "c3VwM3ItczNjcjN0LXA0c3N3MHJkCg==" | base64 --decode
+            sup3r-s3cr3t-p4ssw0rd
+          pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+          type: string
+          format: byte
+        secretLength:
+          type: integer
+          format: int32
+          description: length of the value of secret field.
+        version:
+          type: integer
+          format: int64
+          description: version number of the Secret content.
+        creationDate:
+          type: string
+          format: date-time
+          description: creation date of the secret.
+        updateDate:
+          type: string
+          format: date-time
+          description: Date of the last update made to the secret.
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+      example:
+        name: mySecret
+        secret: c3VwM3ItczNjcjN0LXA0c3N3MHJkCg==
+        secretLength: 22
+        version: 0
+        creationDate: 2018-06-08T17:34:34.654Z
+    MySecretsResponseItem:
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/SecretName'
+        currentVersion:
+          type: integer
+          format: int64
+          description: Current version of the secret.
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        creationDate:
+          type: string
+          format: date-time
+          description: creation date of the secret.
+        updateDate:
+          type: string
+          format: date-time
+          description: Date of the last update made to the secret.
+      example:
+        name: mySecret
+        metadata: "{}"
+        creationDate: 2018-06-08T17:34:34.654Z
+
+    MySecretsBatchResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/MySecretResponse'
+          description: List of secrets.
+        limit:
+          type: integer
+          format: int32
+          description: Maximum number of secrets that user requested.
+        _links:
+          type: object
+          properties:
+            self:
+              type: string
+              description: URL to get the returned list of secrets again.
+            next:
+              type: string
+              description: URL to get the next set of secrets.
+      example:
+        results:
+          - name: "d1769a6a-c538-44bd-bcf7-738def8fe8ba"
+            secret: "c3VwM3ItczNjcjN0LXA0c3N3MHJkCg=="
+            secretLength: 22
+            creationDate: "2022-12-05T18:44:42.816Z"
+            metadata: "{}"
+
+          - name: "16c23dda-820d-4497-b003-e0426b99f138"
+            secret: "c3VwM3ItczNjcjN0LXA0c3N3MHJkCg=="
+            secretLength: 22
+            creationDate: "2022-12-05T18:44:45.921Z"
+            metadata: "{}"
+        limit: 2
+        _links:
+          self: "https://whisper.iss.apple.com/v1/my-secrets-batch?offset=0&limit=2"
+          next: "https://whisper.iss.apple.com/v1/my-secrets-batch?offset=1&limit=2"
+
+    ReadBucketResponse:
+      type: object
+      properties:
+        namespace:
+          $ref: '#/components/schemas/NamespaceName'
+        name:
+          $ref: '#/components/schemas/BucketName'
+        description:
+          $ref: '#/components/schemas/Description'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        createdBy:
+          type: string
+          description: Name of the principal that created the Bucket.
+        createdAt:
+          type: integer
+          format: int64
+          description: Bucket creation timestamp.
+        updatedBy:
+          type: string
+          description: Name of the principal that last updated the bucket.
+        updatedAt:
+          type: integer
+          format: int64
+          description: Last bucket update timestamp.
+        secrets:
+          description: List of secrets assigned to the bucket.
+          type: array
+          items:
+            $ref: '#/components/schemas/SecretName'
+        principals:
+          type: array
+          items:
+            type: string
+            description: List of principals assigned to the buckets. Only these principals can read secret contents.
+      example:
+        namespace: myNamespace
+        name: myBucket
+        description: Automatically created.
+        createdAt: 1528482268165
+        createdBy: 'aprn:apple:certmgr:::group-v2:/ig/111111/uv/'
+        secrets:
+          - mySecret
+        principals:
+          - 'aprn:apple:certmgr:::group-v2:/ig/222222/uv/'
+        metadata: "{}"
+
+    DescribeNamespaceResponse:
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/NamespaceName'
+        description:
+          $ref: '#/components/schemas/Description'
+        secretsCount:
+          type: integer
+          format: int32
+          description: Number of secrets in the Namespace.
+        bucketsCount:
+          type: integer
+          format: int32
+          description: Number of buckets in the Namespace.
+        dekVersion:
+          type: integer
+          format: int32
+          description: version of the Server managed Data encryption key used to encrypt secrets in a Namespace.
+        createdBy:
+          type: string
+          description: Name of the principal that created the Namespace.
+        createdAt:
+          type: integer
+          format: int64
+          description: Namespace creation timestamp.
+        updatedBy:
+          type: string
+        updatedAt:
+          type: integer
+          format: int64
+          description: Namespace last update timestamp.
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleBinding'
+          description: List of Role Bindings for the namespace.
+      example:
+        name: "myNamespace"
+        secrets: 1
+        buckets: 1
+        dekVersion: 0
+        createdBy: "aprn:apple:certmgr:::group-v2:/ig/1111111/uv/"
+        createdAt: 1528482268165
+        updatedBy: 'aprn:apple:certmgr:::group-v2:/ig/1111111/uv/'
+        updatedAt: 1528482269165
+        roles: [
+            {
+               name: "admin",
+               principals: [ 'aprn:apple:certmgr:::group-v2:/ig/1111111/uv/' ]
+            }
+        ]
+    ReadSecretResponse:
+      type: object
+      properties:
+        namespace:
+          $ref: '#/components/schemas/NamespaceName'
+        name:
+          $ref: '#/components/schemas/SecretName'
+        description:
+          $ref: '#/components/schemas/Description'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        createdAt:
+          type: integer
+          format: int64
+          description: Secret Creation timestamp.
+        createdBy:
+          type: string
+          description: Name of the principal that created the Secret.
+        updatedAt:
+          type: integer
+          format: int64
+          description: Secret update timestamp.
+        updatedBy:
+          type: string
+          description: Name of the principal that last updated the Secret.
+        currentVersion:
+          type: integer
+          format: int64
+          description: Current version of the secret.
+        buckets:
+          type: array
+          items:
+            type: string
+          description: List of buckets the secret is assigned to.
+        principals:
+          type: array
+          items:
+            type: string
+          description: Complete list of principal names that can read the secret.
+        policies:
+          description: List of policies the secret is governed by.
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyName'
+      example:
+        namespace: "1227495"
+        name: mySecret
+        createdAt: 1528479274654
+        createdBy: 'aprn:apple:certmgr:::group-v2:/ig/1111111/uv/'
+        updatedAt: 1528482268165
+        updatedBy: 'aprn:apple:certmgr:::group-v2:/ig/1111111/uv/'
+        currentVersion: 0
+        metadata: "{}"
+        buckets:
+          - myBucket
+        principals:
+          - 'aprn:apple:certmgr:::group-v2:/ig/1111111/uv/'
+    RemovePrincipalFromBucketRequest:
+      type: object
+      properties:
+        entityName:
+          $ref: '#/components/schemas/PrincipalName'
+        bucketName:
+          $ref: '#/components/schemas/BucketName'
+      required:
+        - entityName
+        - bucketName
+      example:
+        entityName: 'aprn:apple:certmgr:::group-v2:/ig/1111111/uv/'
+        bucketName: myBucket
+    RemoveSecretFromBucketRequest:
+      type: object
+      properties:
+        entityName:
+          $ref: '#/components/schemas/SecretName'
+        bucketName:
+          $ref: '#/components/schemas/BucketName'
+      required:
+        - entityName
+        - bucketName
+      example:
+        entityName: mySecret
+        bucketName: myBucket
+    ListSecretItem:
+      type: object
+      properties:
+        namespace:
+          $ref: '#/components/schemas/NamespaceName'
+        name:
+          $ref: '#/components/schemas/SecretName'
+        description:
+          $ref: '#/components/schemas/Description'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        currentVersion:
+          type: integer
+          format: int64
+          description: Current version of the secret content.
+        createdBy:
+          type: string
+          description: Name of the principal that created the Secret.
+        createdAt:
+          type: integer
+          format: int64
+          description: Secret creation Timestamp.
+        updatedBy:
+          type: string
+          description: Name of the Principal that last updated the Secret.
+        updatedAt:
+          type: integer
+          format: int64
+          description: Secret last update timestamp.
+      example:
+        namespace: myNamespace
+        name: mySecret
+        currentVersion: 0
+        createdBy: aprn:apple:certmgr:::group-v2:/ig/8143122/uv/
+        createdAt: 1528479274654
+        metadata: "{}"
+    ListSecretVersionsItem:
+      type: object
+      properties:
+        secretName:
+          $ref: '#/components/schemas/SecretName'
+        version:
+          type: integer
+          format: int64
+          description: version number of the Secret content.
+        createdBy:
+          type: string
+          description: Name of the principal that created the Secret content corresponding to the version.
+        createdAt:
+          type: integer
+          format: int64
+          description: Secret content corresponding to the version creation timestamp.
+      example:
+        secretName: mySecret
+        version: 0
+        createdBy: 'aprn:apple:certmgr:::group-v1:/ig/5615404/uv'
+        createdAt: 1528479274628
+    SetSecretVersionRequest:
+      type: object
+      properties:
+        version:
+          description: Secret content version to be set as current version.
+          type: integer
+          format: int64
+      required:
+        - version
+      example:
+        version: 1
+    StatusResponse:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/Status'
+        message:
+          type: string
+          description: Message explaining the status.
+        results:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/StatusResponseResult'
+      example:
+        status: ok
+        message: ok
+        results:
+          cassandraStatus:
+            healthy: true
+            time: 1666643268383
+            duration: 2
+            timestamp: 2022-10-24T20:27:48.383Z
+          deadlocks:
+            healthy: true
+            time: 1666643268384
+            duration: 0
+            timestamp: 2022-10-24T20:27:48.384Z
+    UpdateBucketRequest:
+      type: object
+      properties:
+        updatedDescription:
+          $ref: '#/components/schemas/Description'
+        updatedMetadata:
+          $ref: '#/components/schemas/Metadata'
+      example:
+        updatedDescription: "Just a run-of-the-mill bucket"
+        updatedMetadata: "{}"
+    UpdateSecretRequest:
+      type: object
+      properties:
+        updatedDescription:
+          $ref: '#/components/schemas/Description'
+        updatedContent:
+          maxLength: 1398101
+          pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+          type: string
+          description: |-
+            base64 encoded new secret content
+            Example:
+            > echo 'my-r0t4t3d-p4ssw0rd' | base64
+            bXktcjB0NHQzZC1wNHNzdzByZAo=
+          format: byte
+        updatedMetadata:
+          $ref: '#/components/schemas/Metadata'
+        policies:
+          description: New list of policies for the Secret.
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyName'
+      example:
+        updatedDescription: Just a rotated secret
+        updatedContent: bXktcjB0NHQzZC1wNHNzdzByZAo=
+        updatedMetadata: "{}"
+    Policy:
+      type: object
+      properties:
+        namespace:
+          $ref: '#/components/schemas/NamespaceName'
+        policyName:
+          $ref: '#/components/schemas/PolicyName'
+        policyType:
+          $ref: '#/components/schemas/PolicyType'
+        policyData:
+          type: object
+          description: Policy Data. Schema of policy data is determined by policy type.
+        createdAt:
+          type: integer
+          format: int64
+        createdBy:
+          type: string
+        updatedAt:
+          type: integer
+          format: int64
+        updatedBy:
+          type: string
+      example:
+          namespace: myNamespace,
+          policyName: myPolicy,
+          policyType: SECRET_GENERATION,
+          policyData:
+            secretGenerationRule:
+              minDigits: 1
+              minLength: 8
+              maxLength: 20
+              minNumberOfUpperCases: 1
+              minNumberOfLowerCases: 1
+              minNumberOfSpecialChars: 1
+              includeSpecialChars: true
+              allowedSpecialCharacters: "@#$%^&!?*-_=+.,:;~(){}[]<>"
+          createdAt: 1670289796088
+          createdBy: "aprn:apple:certmgr:::group-v2:/ig/1111111/uv/"
+    CreatePolicyRequest:
+      type: object
+      properties:
+        policyName:
+          $ref: '#/components/schemas/PolicyName'
+        policyType:
+          $ref: '#/components/schemas/PolicyType'
+        policyData:
+          description: 'Policy Data. Schema of policy data is determined by policy type.\n
+          "policyData" must not be null, but can be an empty object which will result in a policy without any rule.\n
+          "policyData" can have an empty "secretGenerationRule" (if the "policyType" is "SECRET_GENERATION") object which will result in a policy with default "secretGenerationRule".'
+          oneOf:
+          -  $ref: '#/components/schemas/SecretGenerationPolicyType'
+      required:
+        - policyName
+        - policyType
+        - policyData
+      example:
+        policyName: myPolicy
+        policyType: "SECRET_GENERATION"
+        policyData:
+          secretGenerationRule:
+            minDigits: 1
+            minLength: 8
+            maxLength: 20
+            minNumberOfUpperCases: 1
+            minNumberOfLowerCases: 1
+            minNumberOfSpecialChars: 1
+            includeSpecialChars: true
+            allowedSpecialCharacters: "@#$%^&!?*-_=+.,:;~(){}[]<>"
+
+    SecretGenerationPolicyType:
+        type: object
+        properties:
+          secretGenerationRule:
+            type: object
+            properties:
+              minLength:
+                type: integer
+                format: int32
+                minimum: 4
+                maximum: 64
+              maxLength:
+                type: integer
+                format: int32
+                minimum: 4
+                maximum: 64
+              minNumberOfUpperCases:
+                type: integer
+                format: int32
+                minimum: 1
+                maximum: 64
+              minNumberOfLowerCases:
+                type: integer
+                format: int32
+                minimum: 1
+                maximum: 64
+              minDigits:
+                type: integer
+                format: int32
+                minimum: 1
+                maximum: 64
+              includeSpecialChars:
+                type: boolean
+                description: if set to false, generated secrets will not include special characters
+              minNumberOfSpecialChars:
+                type: integer
+                format: int32
+                minimum: 1
+                maximum: 64
+              allowedSpecialCharacters:
+                type: string
+                description: "Allowed special characters are: @#$%^&!?*-_=+.,:;~(){}[]<>"
+
+    UpdatePolicyRequest:
+      type: object
+      properties:
+        policyType:
+          $ref: '#/components/schemas/PolicyType'
+        policyData:
+          description: Policy Data. Schema of policy data is determined by policy type.
+          oneOf:
+            - $ref: '#/components/schemas/SecretGenerationPolicyType'
+      required:
+        - policyType
+        - policyData
+      example:
+        policyType: "SECRET_GENERATION"
+        policyData:
+          secretGenerationRule:
+            minDigits: 1
+            minLength: 8
+            maxLength: 20
+            minNumberOfUpperCases: 1
+            minNumberOfLowerCases: 1
+            minNumberOfSpecialChars: 1
+            includeSpecialChars: true
+            allowedSpecialCharacters: "@#$%^&!?*-_=+.,:;~(){}[]<>"
+    RoleBinding:
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/RoleType'
+        principals:
+          description: List of Principal names in APRN format.
+          type: array
+          items:
+            $ref: '#/components/schemas/APRN'
+      required:
+        - name
+        - principals
+      example:
+        name: admin
+        principals: [
+          "aprn:apple:certmgr:::group-v2:/ig/11111111/uv/"
+        ]
+
+    CreateNamespaceRequest:
+      type: object
+      properties:
+        description:
+          $ref: '#/components/schemas/Description'
+    UpdateNamespaceRequest:
+      type: object
+      properties:
+        description:
+          $ref: '#/components/schemas/Description'
+      required:
+        - description
+    UpdatePrincipalRequest:
+      type: object
+      properties:
+        roles:
+          $ref: '#/components/schemas/NamespaceRoles'
+      required:
+        - roles
+    RoleType:
+      type: string
+      description: 'Name of the role. Supported values are: "admin", "auditor".'
+    PolicyType:
+      type: string
+      description: 'Type of policy. Supported values are: "SECRET_GENERATION".'
+    Status:
+      type: string
+      description: 'Status of the service. Supported values are: "ok", "critical".'
+
+    SecretName:
+      description: Name of the Secret.
+      type: string
+      pattern: ^[a-zA-Z_0-9\-:][a-zA-Z_0-9\-.:]+$
+      maxLength: 256
+    BucketName:
+      description: Name of the Bucket.
+      type: string
+      pattern: ^[a-zA-Z_0-9\-:][a-zA-Z_0-9\-.:]+$
+      maxLength: 256
+    PolicyName:
+      description: Name of the Policy.
+      type: string
+      minLength: 3
+      maxLength: 256
+      # must begin with a letter and end with a letter or a number.
+      # must consist only lowercase letters, numbers, dots (.), and hyphens (-).
+      pattern: ^[a-zA-Z][a-zA-Z_0-9\-.:]+[a-zA-Z0-9]$
+    Description:
+      type: string
+      maxLength: 1024
+    Metadata:
+      type: string
+      maxLength: 2048
+    APRN:
+      description: Name of the Principal in APRN format.
+      type: string
+      pattern: '^aprn:.+'
+    PrincipalName:
+      description: Name of the Principal in APRN or legacy format. Legacy Principal format is allowed only in legacy Namespaces.
+      type: string
+      pattern: '(^aprn:.+)|(.+:.+)'
+    NamespaceName:
+      description: Name of the namespace
+      type: string
+      pattern: '([0-9]+)|(^[a-z].*[a-z0-9]$)|(default)'
+    CustomNamespaceName:
+      description: Name of the custom namespace
+      type: string
+      pattern: ^(?!default$)[a-z][a-z0-9.-]{1,62}[a-z0-9]$
+    NamespaceRoles:
+      description: List of roles
+      type: array
+      items:
+        $ref: '#/components/schemas/RoleType'
+  parameters:
+    namespaceParam:
+      name: namespace
+      in: query
+      description: "namespace, if not specified, legacy namespace derived from the\
+                        \ client certificate."
+      required: false
+      style: form
+      explode: true
+      schema:
+        $ref: '#/components/schemas/NamespaceName'
+  responses:
+    TooManyRequests:
+      description: The rate limit for this API has been exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/runtimeError'
+    Unauthorized:
+      description: Request does not contain valid authentication data.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/runtimeError'
+

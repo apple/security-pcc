@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,7 +18,11 @@ public final class ProcessCollector: EHTransform {
     public let name = "ProcessCollector"
     public static let processTree = ProcessTree()
 
-    static let debugLogInterval = 10    // seconds
+    nonisolated(unsafe) public var debugLogInterval: Int?
+
+    #if canImport(Darwin)
+    nonisolated(unsafe) private var memoryPressureSource: (any DispatchSourceMemoryPressure)?
+    #endif
 
     public init() {}
 
@@ -37,12 +41,48 @@ public final class ProcessCollector: EHTransform {
 
     }
 
-    public func configure() throws {
-        Task {
-            while true {
-                await Self.processTree.logSnapshot()
-                try await Task.sleep(for: .seconds(ProcessCollector.debugLogInterval))
+    public func configure() async throws {
+        if let interval = debugLogInterval, interval > 0 {
+            let debugLog = EHLog.withCategory(ProcessTree.self)
+            Task {
+                while true {
+                    if EHLog.isDebugEnabled(debugLog) {
+                        await Self.processTree.logSnapshot()
+                    }
+                    try await Task.sleep(for: .seconds(interval))
+                }
             }
         }
+
+        Task {
+            while true {
+                try await Task.sleep(for: .seconds(ProcessTree.exitSweepIntervalSeconds))
+                let liveProcesses: [Int64: Double]?
+                if let processes = await ProcessEnumerator.instance.enumerateLiveProcesses() {
+                    var map: [Int64: Double] = Dictionary(minimumCapacity: processes.count)
+                    for proc in processes {
+                        map[proc.pid] = proc.startTime
+                    }
+                    liveProcesses = map
+                } else {
+                    liveProcesses = nil
+                }
+                await Self.processTree.sweepExitedProcesses(liveProcesses: liveProcesses)
+            }
+        }
+
+        #if canImport(Darwin)
+        let pressureSource = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: .global()
+        )
+        pressureSource.setEventHandler {
+            Task {
+                await Self.processTree.sweepExitedProcesses(retentionSeconds: 0)
+            }
+        }
+        pressureSource.activate()
+        self.memoryPressureSource = pressureSource
+        #endif
     }
 }

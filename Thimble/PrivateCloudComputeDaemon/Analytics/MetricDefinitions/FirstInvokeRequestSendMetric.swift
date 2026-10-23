@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -32,22 +32,19 @@ struct FirstInvokeRequestSendMetric: CloudTelemetryReportable {
         case environment = "env"
         case clientRequestId = "clientrequestid"
         case clientInfo = "appleclientinfo"
-        case locale = "applelocale"
     }
 
     init(
         eventTime: Date,
         environment: String,
         clientRequestId: UUID,
-        clientInfo: String,
-        locale: Locale
+        clientInfo: String
     ) {
         fields = [
             .eventTime: .int(Int64(eventTime.timeIntervalSince1970)),
             .environment: .string(environment),
             .clientRequestId: .string(clientRequestId.uuidString),
             .clientInfo: .string(clientInfo),
-            .locale: .string(locale.identifier),
         ]
     }
 

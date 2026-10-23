@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Apple Inc. All Rights Reserved. -->
+<!-- Copyright © 2026 Apple Inc. All Rights Reserved. -->
 
 <!-- APPLE INC. -->
 <!-- PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT -->
@@ -63,6 +63,7 @@
 		<string>/private/var/preferences/com.apple.acdc.cloudmetricsd.MetricDestinations.plist</string>
 		<string>/private/var/preferences/com.apple.acdc.cloudmetricsd.plist</string>
 		<string>/private/var/PrivateCloudSupport/opt/audit-lists/</string>
+		<string>/private/var/db/audit-lists-dev/</string>
 	</array>
 	<key>com.apple.security.exception.shared-preference.read-only</key>
 	<array>

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -16,6 +16,8 @@
 //  DInitNetworkConfig.swift
 //  DarwinInit
 //
+
+import DarwinInitConfig
 
 struct DInitNetworkConfig {
     var interface: String

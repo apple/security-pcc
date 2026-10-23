@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -340,6 +340,21 @@ extension PCCHarness {
             }
         }
 
+        private func filterProxyResponse(
+            _ context: LogContext,
+            _ observer: ProxyDialBackMessageObserver?,
+            _ message: ProtoInvokeProxyDialBackResponse
+        ) -> ProtoInvokeProxyDialBackResponse? {
+            let wrapped = ObservedInvokeProxyDialBackResponse(message)
+            switch observer?.onResponseFromProxy(wrapped) ?? .passthrough {
+            case .passthrough:
+                return message
+            case .drop:
+                Self.logger.info("\(context, privacy: .public) dropping \(wrapped, privacy: .public)")
+                return nil
+            }
+        }
+
         private func handleProxyWorkflowMessages(
             proxyEndpoint: ProxyCloudAppEndpoint,
             context: ProxyWorkflowContext,
@@ -370,8 +385,17 @@ extension PCCHarness {
             // onward.
             let wrappedProxyDialBackMessageIterator = UnsafeTransfer(iterator)
 
-            // Notify observer for response from proxy
-            observer?.onResponseFromProxy(.init(dekMessageFromProxy))
+            guard let dekMessageFromProxy = self.filterProxyResponse(
+                context.log, observer, dekMessageFromProxy
+            ) else {
+                // currently no tests need to do this, but keeping the functionality there for consistency
+                // log an error so anyone going through this path understands it may not actually work as they expect
+                Self.logger
+                    .error(
+                        "\(context.log) dropping the DEK isn't a supported path - unintended consequences may happen"
+                    )
+                return
+            }
 
             guard dekMessageFromProxy.proxyToComputeMessage.isInitialized,
                   dekMessageFromProxy.proxyToComputeMessage.decryptionKey.isInitialized else {
@@ -476,8 +500,11 @@ extension PCCHarness {
         ) async throws {
             var iterator = proxyDialBackMessageIterator.wrappedValue
             proxyMessages: while let dialBackMessage = try await iterator.next() {
-                // Notify observer for response from proxy
-                observer?.onResponseFromProxy(.init(dialBackMessage))
+                guard let dialBackMessage = self.filterProxyResponse(
+                    logContext, observer, dialBackMessage
+                ) else {
+                    continue
+                }
 
                 switch dialBackMessage.type {
                 case .proxyToComputeMessage(let proxyToComputeMessage):
@@ -889,15 +916,18 @@ extension PCCHarness {
                 throw LocalCloudBoardClientError.internalError("Proxy closed stream")
             }
 
-            observer?.onResponseFromProxy(.init(selectionResponse))
+            let selectableEnsembles: Com_Apple_Cloudboard_Api_V1_EnsembleNegotiation?
+            if let selectionResponse = self.filterProxyResponse(logContext, observer, selectionResponse) {
+                guard selectionResponse.proxyToComputeMessage.isInitialized,
+                      case .selectableEnsembles = selectionResponse.proxyToComputeMessage.type else {
+                    Self.logger.error("\(logContext) Invalid selection response from proxy")
+                    throw LocalCloudBoardClientError.internalError("Invalid selection response")
+                }
 
-            guard selectionResponse.proxyToComputeMessage.isInitialized,
-                  case .selectableEnsembles = selectionResponse.proxyToComputeMessage.type else {
-                Self.logger.error("\(logContext) Invalid selection response from proxy")
-                throw LocalCloudBoardClientError.internalError("Invalid selection response")
+                selectableEnsembles = selectionResponse.proxyToComputeMessage.selectableEnsembles
+            } else {
+                selectableEnsembles = nil
             }
-
-            let selectableEnsembles = selectionResponse.proxyToComputeMessage.selectableEnsembles
 
             // Determine which ensemble to use based on injection strategy
             let ensembleToUse: Proto_Ropes_Common_EnsembleInstanceId?
@@ -911,6 +941,11 @@ extension PCCHarness {
                     }
                 case .differentFromProxySelection:
                     // Inject a different candidate than what proxy selected
+                    guard let selectableEnsembles else {
+                        throw LocalCloudBoardClientError.internalError(
+                            "Test injection error: Cannot use .differentFromProxySelection when dropping the proxy selection"
+                        )
+                    }
                     guard let proxySelection = selectableEnsembles.ensembles.first else {
                         Self.logger
                             .error(
@@ -940,25 +975,29 @@ extension PCCHarness {
                     }
                 }
             } else {
-                // No injection, use proxy's selection
-                ensembleToUse = nil
+                // No injection, use proxy's selection (if present)
+                ensembleToUse = selectableEnsembles?.ensembles.first
             }
 
             let raceResult = try await withThrowingTaskGroup(of: PickRaceResult?.self) { group in
                 // Task 1: Try to reserve proxy's selection (or injected ensemble)
                 group.addTask {
-                    // Use injected ensemble if configured, otherwise use proxy's selection
-                    let selectedEnsemble = ensembleToUse ?? selectableEnsembles.ensembles.first
-
-                    guard let selectedEnsemble else {
+                    if selectableEnsembles == nil {
+                        // a timeout of 30s is included since this is intended for unit test functionality
+                        Self.logger.info("\(logContext) proxy selection was dopped so waiting for queue")
+                        try await Task.sleep(for: .seconds(30))
+                        Self.logger.error("\(logContext) timed out on waiting for the queue")
+                        return .proxyFailed
+                    }
+                    guard let ensembleToUse else {
                         Self.logger.error("\(logContext) Proxy returned no selectable ensembles")
                         return .proxyFailed
                     }
 
                     // Map selected ensemble back to candidate
                     guard let matchedCandidate = allCandidates.first(where: { candidate in
-                        candidate.ensembleId == selectedEnsemble.ensembleID &&
-                            candidate.bootId == selectedEnsemble.bootID
+                        candidate.ensembleId == ensembleToUse.ensembleID &&
+                            candidate.bootId == ensembleToUse.bootID
                     }) else {
                         Self.logger.error("\(logContext) Could not map proxy selection to candidate")
                         return .proxyFailed
@@ -1135,7 +1174,9 @@ extension PCCHarness {
             )
 
             // Create state machine and start selection
-            var stateMachine = GatewayEnsembleSelectionStateMachine()
+            var stateMachine = GatewayEnsembleSelectionStateMachine(
+                desiredPickScale: self.gatewayConfig.negotiatePickDesiredScale
+            )
             var action = stateMachine.start(
                 constraints: setup.negotiateConstraints,
                 allCandidates: setup.allCandidates,
@@ -1284,13 +1325,20 @@ extension PCCHarness.ComputeNodeSelectionContext.InvokeProxyInitiate {
             nil
         }
 
+        let negotiate: PCCHarness.NegotiateEnsembleChoice? = if proto.hasNegotiate {
+            .init(proto: proto.negotiate)
+        } else {
+            nil
+        }
+
         self = .init(
             taskID: proto.taskID,
             groupID: proto.groupID,
             serviceName: proto.workload.type,
             workloadParameters: proto.workload.param.asMap(),
             isDiscardable: proto.isDiscardable,
-            reuseConstraints: reuseConstraints
+            reuseConstraints: reuseConstraints,
+            negotiate: negotiate
         )
     }
 }

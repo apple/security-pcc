@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -31,5 +31,16 @@ package struct FeatureFlagChecker: FeatureFlagCheckerProtocol {
 
     package func isEnabled(_ key: PrivateCloudComputeFeatureFlags) -> Bool {
         return FeatureFlags.isFeatureEnabled(key)
+    }
+}
+
+extension FeatureFlagCheckerProtocol {
+    /// When enabled, enforce the required inline attestation count for anti-targetability.
+    package func isEnforceAntiTargetabilityForInlineAttestationsEnabled(environment: TC2Environment) -> Bool {
+        if case .production = environment {
+            self.isEnabled(.enforceAntiTargetability)
+        } else {
+            self.isEnabled(.enforceAntiTargetabilityOnPreProduction)
+        }
     }
 }

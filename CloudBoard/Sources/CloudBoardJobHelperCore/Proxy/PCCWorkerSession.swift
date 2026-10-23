@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -27,7 +27,6 @@ import os
 
 enum PCCWorkerSessionError: Error {
     case failedToDecodeResponse
-    case authTokensUnavailable
     case invalidApplicationDataChunkSize
 }
 
@@ -51,6 +50,7 @@ final class PCCWorkerSession: Sendable {
     let query: FindWorkerQuery
     let responseBypassMode: ResponseBypassMode
     let findWorkerDurationMeasurement: OSAllocatedUnfairLock<ContinuousTimeMeasurement>
+    let findWorkerStartTime: Date
     let cryptoMaterials: [InternalCryptoMaterial]
 
     let isFinal: Bool
@@ -63,6 +63,7 @@ final class PCCWorkerSession: Sendable {
         responseBypassMode: ResponseBypassMode,
         isFinal: Bool,
         findWorkerDurationMeasurement: OSAllocatedUnfairLock<ContinuousTimeMeasurement>,
+        findWorkerStartTime: Date,
         cryptoMaterials: [InternalCryptoMaterial],
         negotiation: SelectionNegotiation.InitiatedNegotiation
     ) {
@@ -74,6 +75,7 @@ final class PCCWorkerSession: Sendable {
 
         self.stateMachine = .init(uncheckedState: .init())
         self.findWorkerDurationMeasurement = findWorkerDurationMeasurement
+        self.findWorkerStartTime = findWorkerStartTime
         self.cryptoMaterials = cryptoMaterials
     }
 
@@ -99,27 +101,14 @@ final class PCCWorkerSession: Sendable {
         return (encapsulatedKey, bypassCapability)
     }
 
-    func encapsulateAuthToken(tgt: Data, ottSalt: Data) throws -> Data {
-        let authTokenMessage = try ProtoPrivateCloudComputeRequest.serialized(
-            with: .open(.with {
-                $0.tokenGrantingToken = tgt
-                $0.ottSalt = ottSalt
-            })
-        )
-        return try self.stateMachine.withLock {
-            try $0.encapsulateMessage(authTokenMessage, isFinal: false)
-        }
-    }
-
     func encapsulateProxyInvokeOpen(
-        tgt: Data,
-        ottSalt: Data,
-        chunkingConfig: ApplicationDataChunkingConfiguration
+        chunkingConfig: ApplicationDataChunkingConfiguration,
+        workloadType: String,
+        optedInToShareDiagnosticsAndUsageWithApple: Bool
     ) throws -> Data {
         let proxyInvokeOpenMessage = try ProtoPrivateCloudComputeRequest.serialized(
             with: .proxyInvokeOpen(.with {
-                $0.tokenGrantingToken = tgt
-                $0.ottSalt = ottSalt
+                $0.optedInToShareDiagnosticsAndUsageWithApple = optedInToShareDiagnosticsAndUsageWithApple
                 $0.opaqueCryptoMaterial = self.cryptoMaterials.map { cryptoMaterial in
                     .with {
                         $0.id = cryptoMaterial.id
@@ -141,6 +130,7 @@ final class PCCWorkerSession: Sendable {
                         throw PCCWorkerSessionError.invalidApplicationDataChunkSize
                     }
                 }
+                $0.workloadType = workloadType
             })
         )
         return try self.stateMachine.withLock {
@@ -176,6 +166,17 @@ final class PCCWorkerSession: Sendable {
 
     func workerFound() -> Bool {
         return self.stateMachine.withLock { $0.receivedAttestationOrFinished() }
+    }
+
+    func requestDataState() -> WorkerRequestDataStatus {
+        return self.stateMachine.withLock { $0.requestDataState() }
+    }
+
+    func responseDataState() -> WorkerResponseDataStatus {
+        if self.responseBypassMode == .matchRequestCiphersuiteSharedAeadState {
+            return .bypassed
+        }
+        return self.stateMachine.withLock { $0.responseDataState() }
     }
 }
 
@@ -353,6 +354,28 @@ struct PCCWorkerSessionStateMachine {
             return false
         case .ready, .finished:
             return true
+        }
+    }
+
+    func requestDataState() -> WorkerRequestDataStatus {
+        switch self.state {
+        case .awaitingAttestation, .awaitingDEK:
+            return .notFinished
+        case .ready(let requestStreamFinished, _):
+            return requestStreamFinished ? .finished : .notFinished
+        case .finished:
+            return .finished
+        }
+    }
+
+    func responseDataState() -> WorkerResponseDataStatus {
+        switch self.state {
+        case .awaitingAttestation, .awaitingDEK:
+            return .notFinished
+        case .ready(_, let responseStreamFinished):
+            return responseStreamFinished ? .finished : .notFinished
+        case .finished:
+            return .finished
         }
     }
 }

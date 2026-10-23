@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -35,6 +35,7 @@ struct CLI: AsyncParsableCommand {
         Image4Cmd.self,
         CryptexCmd.self,
         AttestationCmd.self,
+        HTTPServerCmd.self,
     ]
 
     #if UTILITY
@@ -62,11 +63,16 @@ struct CLI: AsyncParsableCommand {
                                    visibility: .hidden))
         var helperPath: String?
 
+        @Option(name: [.customLong("pccvre-attestation-helper")],
+                help: ArgumentHelp("Alternate path to 'pccvre-attestation-helper' command.",
+                                   visibility: .hidden))
+        var attestationHelperPath: String?
+
         func validate() throws {
             CLI.setupDebugStderr(debugEnable: debugEnable)
 
             if let vrevmPath {
-                guard FileManager.default.isExecutableFile(atPath: vrevmPath) else {
+                guard Globals.computer.fileSystem.isExecutableFile(atPath: vrevmPath) else {
                     throw CLIError("executable not found")
                 }
                 // set default "vrevm" command path for all VRE VM activities
@@ -74,10 +80,17 @@ struct CLI: AsyncParsableCommand {
             }
 
             if let helperPath {
-                guard FileManager.default.isExecutableFile(atPath: helperPath) else {
+                guard Globals.computer.fileSystem.isExecutableFile(atPath: helperPath) else {
                     throw CLIError("executable not found")
                 }
                 PCCVREHelper.configuredPath = helperPath
+            }
+
+            if let attestationHelperPath {
+                guard Globals.computer.fileSystem.isExecutableFile(atPath: attestationHelperPath) else {
+                    throw CLIError("executable not found")
+                }
+                PCCVREAttestationHelper.configuredPath = attestationHelperPath
             }
         }
     }
@@ -95,14 +108,165 @@ struct CLI: AsyncParsableCommand {
                 help: "Index of the attestation to use when parsing an Apple Intelligence Report. Must be used in combination with --request-index.")
         var attestationIndex: Int?
 
-        func validate() throws {
-            guard case .appleIntelligenceReport = format else {
-                return
-            }
+        enum BundleVersion: String, ExpressibleByArgument, CaseIterable {
+            /// Detect from the bundle's protobuf field-2047 `version` marker.
+            case auto
+            /// Force in-process decoding via the legacy CloudAttestation framework.
+            case v1
+            /// Force routing to `pccvre-attestation-helper`.
+            case v2
+        }
 
-            if requestIndex == nil || attestationIndex == nil {
+        @Option(name: [.customLong("bundle-version")],
+                help: "Attestation bundle schema version: 'auto' (detect from the bundle's field-2047 version marker), 'v1' (force in-process legacy CloudAttestation decoding), or 'v2' (force routing to pccvre-attestation-helper).")
+        var bundleVersion: BundleVersion = .auto
+
+        func validate() throws {
+            if (requestIndex == nil) != (attestationIndex == nil) {
+                throw ValidationError("--request-index and --attestation-index must be supplied together.")
+            }
+            if case .appleIntelligenceReport = format {} else {
+                if requestIndex != nil || attestationIndex != nil {
+                    throw ValidationError("--request-index/--attestation-index are only valid with --input-format apple-intelligence-report.")
+                }
+            }
+            // Dispatch passes the *extracted node's raw bytes* to the helper
+            // (so it doesn't re-read/re-parse the original file), which means
+            // the node must be selectable up front for AIR inputs.
+            if case .appleIntelligenceReport = format, requestIndex == nil {
                 throw ValidationError("Both --request-index and --attestation-index need to be supplied for --input-format apple-intelligence-report.")
             }
+            if bundleVersion == .v2, case .attestationBundle(.json) = format {
+                throw ValidationError("--bundle-version v2 requires raw protobuf input; JSON-encoded bundles can't be routed to the helper.")
+            }
+        }
+
+        /// Reads the input, resolves it down to raw protobuf bundle bytes
+        /// (handling base64 wrapping and Apple-Intelligence-Report node
+        /// selection), and decides whether to route to the helper (v2) or
+        /// decode in-process (v1).
+        ///
+        /// Auto-detection sniffs protobuf field 2047 (`version`) per
+        /// cloudattestationv2's `Docs/SubprocessContract.md`: value `2` →
+        /// helper, anything else → in-process. `--bundle-version` overrides.
+        ///
+        /// All errors are wrapped in a `CLIError("read attestation bundle: …")`
+        /// so callers don't need their own do/catch around the dispatch.
+        func loadAndDispatch(file: String) throws -> AttestationDispatch {
+            do {
+                let fileData: Data
+                if file == "-" {
+                    fileData = try FileHandle.standardInput.readToEnd() ?? Data()
+                } else {
+                    fileData = try Data(contentsOf: URL(filePath: file))
+                }
+
+                // Resolve down to the selected node's raw protobuf bytes once,
+                // so neither the v1 decoder nor the helper has to re-read or
+                // re-parse the original file (which can be a multi-MB AIR JSON).
+                let nodeBytes: Data?
+                switch format {
+                case .attestationBundle(.protobuf):
+                    nodeBytes = Data(base64Encoded: fileData) ?? fileData
+                case .attestationBundle(.json):
+                    nodeBytes = nil  // JSON-encoded bundles can't be byte-sniffed
+                case .appleIntelligenceReport:
+                    nodeBytes = try Self.airNodeBytes(
+                        fileData: fileData,
+                        requestIndex: requestIndex,
+                        attestationIndex: attestationIndex
+                    )
+                }
+
+                let routeV2: Bool
+                switch bundleVersion {
+                case .v1:   routeV2 = false
+                case .v2:   routeV2 = true
+                case .auto: routeV2 = nodeBytes.map(ProtoSniff.isV2AttestationBundle) == true
+                }
+                if routeV2 {
+                    guard let nodeBytes else {
+                        // validate() blocks --bundle-version v2 with JSON input,
+                        // and AIR-without-indices; reaching here means an AIR
+                        // node body that isn't valid base64.
+                        throw CLIError("could not extract raw protobuf node bytes from input; cannot route to helper")
+                    }
+                    return .v2(nodeBytes: nodeBytes)
+                }
+                return .v1(nodeBytes: nodeBytes, fileData: fileData)
+            } catch let error as CLIError {
+                throw error
+            } catch {
+                throw CLIError("read attestation bundle: \(error)")
+            }
+        }
+
+        /// One-stop v2 invocation: spill the already-extracted node bytes to a
+        /// temp file, run the helper subcommand, decode the envelope, clean
+        /// up. Callers never see a temp path. The helper always receives
+        /// `--input-format binary` (we've already done AIR/base64 unwrapping)
+        /// so it doesn't re-read or re-parse the original file.
+        func runV2Helper(
+            nodeBytes: Data,
+            via resolver: PCCVREAttestationHelperResolver,
+            subcommand: [String]
+        ) async throws -> PCCVREAttestationHelper.Envelope {
+            let tmp = try FileManager.spillToTempFile(nodeBytes, prefix: "attestation-input")
+            defer { try? FileManager.default.removeItem(at: tmp) }
+            return try await resolver.runEnvelope(
+                arguments: subcommand + [tmp.path(percentEncoded: false), "--input-format", "binary", "-f", "json"]
+            )
+        }
+
+        /// Shared v1 decode used by all three AttestationCmd subcommands.
+        /// When `loadAndDispatch` already extracted the node's raw protobuf
+        /// (binary/AIR inputs), decode directly from it; for JSON-encoded
+        /// inputs (`nodeBytes == nil`) fall back to the format-aware path.
+        func decodeV1Bundle(nodeBytes: Data?, fileData: Data) throws -> AttestationBundle {
+            do {
+                if let nodeBytes {
+                    return try AttestationBundle(data: nodeBytes)
+                }
+                return try AttestationBundle(
+                    fileData: fileData,
+                    format: format,
+                    requestIndex: requestIndex,
+                    attestationIndex: attestationIndex
+                )
+            } catch {
+                throw CLIError("read attestation bundle: \(error)")
+            }
+        }
+
+        /// Extracts the selected node's raw protobuf bytes from an Apple
+        /// Intelligence Report. Returns nil if the node body isn't base64
+        /// (JSON-encoded bundles can't be sniffed at the byte level).
+        private static func airNodeBytes(
+            fileData: Data,
+            requestIndex: Int?,
+            attestationIndex: Int?
+        ) throws -> Data? {
+            guard let requestIndex, let attestationIndex else { return nil }
+            let report = try JSONDecoder().decode(AppleIntelligenceReport.self, from: fileData)
+            guard report.privateCloudComputeRequests.indices.contains(requestIndex) else {
+                throw AttestationBundle.Error.requestNotFound(index: requestIndex)
+            }
+            let nodes = report.privateCloudComputeRequests[requestIndex].nodes ?? []
+            guard nodes.indices.contains(attestationIndex) else {
+                throw AttestationBundle.Error.attestationNotFound(index: attestationIndex)
+            }
+            return Data(base64Encoded: nodes[attestationIndex].attestationBundle)
+        }
+
+        enum AttestationDispatch {
+            /// Route to pccvre-attestation-helper. Carries the already-extracted
+            /// raw protobuf node bytes; `runV2Helper` spills+cleans them up.
+            case v2(nodeBytes: Data)
+            /// Decode in-process via the legacy CloudAttestation framework.
+            /// `nodeBytes` is the extracted protobuf when available (binary/AIR
+            /// inputs); `fileData` is the original file for the JSON-encoded
+            /// fallback.
+            case v1(nodeBytes: Data?, fileData: Data)
         }
     }
 }
@@ -197,7 +361,9 @@ extension CLI {
 
             let relMD: SWReleaseMetadata
             do {
-                (_, relMD) = try assetHelper.loadRelease(
+                // Only metadata is needed here; loadReleaseRawData works for both v1 and v2
+                // releases (loadRelease would try to decode v1 tickets and may fail on v2 leaves).
+                (_, relMD) = try assetHelper.loadReleaseRawData(
                     index: relIndex,
                     logEnvironment: logEnvironment
                 )
@@ -261,8 +427,9 @@ extension CLI {
             }
         }
 
-        if let cryptexAssets = releaseMetadata.cryptexAssets() {
-            for asset in cryptexAssets.values {
+        let cryptexAssets = releaseMetadata.cryptexAssets()
+        if !cryptexAssets.isEmpty {
+            for asset in cryptexAssets {
                 do {
                     let assetPath = try CLI.expandAssetPath(asset,
                                                             altAssetSourceDir: altAssetSourceDir)
@@ -560,7 +727,7 @@ extension CLI {
         let vmLogsDir = FileManager.fileURL(vmBundleDir).appendingPathComponent("logs")
         let vmLogsSubs: [String]
         do {
-            vmLogsSubs = try FileManager.default.contentsOfDirectory(atPath: vmLogsDir.path)
+            vmLogsSubs = try Globals.computer.fileSystem.contentsOfDirectory(atPath: vmLogsDir.path)
         } catch {
             throw CLIError("\(vmLogsDir.path): not found")
         }
@@ -568,7 +735,7 @@ extension CLI {
         // setup destination folder (either provided or temp folder)
         var logDest: URL
         if let altDest {
-            try FileManager.default.createDirectory(atPath: altDest, withIntermediateDirectories: true)
+            try Globals.computer.fileSystem.createDirectory(at: URL(fileURLWithPath: altDest), withIntermediateDirectories: true)
             logDest = FileManager.fileURL(altDest)
         } else {
             // .../com.apple.security-research.pccvre/logs/<vre.name>/...
@@ -821,7 +988,8 @@ extension CLI {
 
     static func checkReleaseRequirements(metadata: SWReleaseMetadata) throws {
         let supportedFeatures: [String] = [
-            "tie_proxy"
+            "tie_proxy",
+            "cryptex_asset_variants"
         ]
 
         let missingFeatures = metadata.metadata.requirements.filter {
@@ -868,8 +1036,10 @@ extension CloudAttestation.AttestationBundle.AttestationFormat: ExpressibleByArg
 private let envPrefix = commandName.uppercased()
 
 enum CLIDefaults {
+    private static var env: [String: String] { Globals.computer.environment }
+
     static var debugEnable: Bool {
-        if let debugEnv = ProcessInfo().environment["\(envPrefix)_DEBUG"] {
+        if let debugEnv = env["\(envPrefix)_DEBUG"] {
             // false if starts with "n(o)", "f(alse)", "0", else true (if set)
             return !debugEnv.lowercased().starts(with: ["n", "f", "0"])
         }
@@ -879,7 +1049,7 @@ enum CLIDefaults {
 
     static var ktEnvironment: TransparencyLog.Environment {
         if CLI.internalBuild {
-            if let envEnv = ProcessInfo().environment["\(envPrefix)_ENV"] {
+            if let envEnv = env["\(envPrefix)_ENV"] {
                 if let env = TransparencyLog.Environment(rawValue: envEnv) {
                     return env
                 }
@@ -890,7 +1060,7 @@ enum CLIDefaults {
     }
 
     static var applicationDir: URL {
-        if let dir = ProcessInfo().environment["\(envPrefix)_APPLICATION_DIR"] {
+        if let dir = env["\(envPrefix)_APPLICATION_DIR"] {
             return FileManager.fileURL(dir)
         } else {
             return URL.applicationSupportDirectory.appendingPathComponent(applicationName)
@@ -899,7 +1069,7 @@ enum CLIDefaults {
 
     static var customAssetFolder: Bool = false // true if using "alternate" (user) ASSETS_DIR envvar
     static var assetsDirectory: URL {
-        if let assetsDirEnv = ProcessInfo().environment["\(envPrefix)_ASSETS_DIR"] {
+        if let assetsDirEnv = env["\(envPrefix)_ASSETS_DIR"] {
             customAssetFolder = true
             return FileManager.fileURL(assetsDirEnv)
         }
@@ -908,7 +1078,7 @@ enum CLIDefaults {
     }
 
     static var cdnHostnameOverride: String? {
-        guard let hostname = ProcessInfo().environment["\(envPrefix)_CDN_HOSTNAME_OVERRIDE"] else {
+        guard let hostname = env["\(envPrefix)_CDN_HOSTNAME_OVERRIDE"] else {
             return nil
         }
 
@@ -917,6 +1087,18 @@ enum CLIDefaults {
         }
 
         return hostname
+    }
+
+    // gcsAccessToken returns a Google Cloud Storage bearer token for authenticating
+    //  asset downloads from storage.googleapis.com. Uses CLOUDSDK_AUTH_ACCESS_TOKEN
+    //  (the standard gcloud env var, same one cloudattestationv2's `release image`
+    //  reads) so researchers set one variable for both tools.
+    static var gcsAccessToken: String? {
+        guard let token = env["CLOUDSDK_AUTH_ACCESS_TOKEN"], !token.isEmpty else {
+            return nil
+        }
+
+        return token
     }
 }
 

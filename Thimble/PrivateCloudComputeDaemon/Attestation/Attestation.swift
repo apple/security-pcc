@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -52,8 +52,8 @@ extension Attestation {
             // should match with `attestation.nodeIdentifier` that we get from the server
             nodeID: attestation.attestationBundle.base64EncodedSHA256,
             attestationBundle: attestation.attestationBundle,
-            cloudOSVersion: attestation.cloudosVersion,
-            cloudOSReleaseType: attestation.cloudosReleaseType,
+            cloudOSVersion: attestation.nodeBuildVersion,
+            cloudOSReleaseType: attestation.nodeReleaseType,
             unvalidatedCellID: attestation.cellID,
             ensembleID: attestation.ensembleID
         )

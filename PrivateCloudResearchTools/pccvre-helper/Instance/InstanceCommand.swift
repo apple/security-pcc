@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -27,6 +27,8 @@ struct InstanceCommand: ParsableCommand {
             TieVRECliCommand.self,
             CloudremotediagctlCommand.self,
             ControlPlaneCommand.self,
+            ServiceDiscoveryCommand.self,
+            ToolCommand.self,
             InstanceFeaturesCommand.self,
         ]
     )

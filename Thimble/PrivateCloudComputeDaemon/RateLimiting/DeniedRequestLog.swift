@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,7 +19,6 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
-internal import CollectionsInternal
 import Foundation
 import PrivateCloudCompute
 
@@ -62,6 +61,17 @@ extension DeniedRequestLog {
             // and update the entries depending on some ordering relationship of the configs
             // in question, but this works.
             log.removeValue(forKey: key)
+        }
+    }
+
+    mutating func updateWithNewConfigs(_ rateLimitConfigurations: [RateLimitConfiguration], replacing source: RateLimitSource) {
+        // Remove all existing for the same source.
+        log = log.filter { _, info in
+            info.rateLimitSource != source
+        }
+
+        for configuration in rateLimitConfigurations {
+            self.updateWithNewConfig(configuration)
         }
     }
 

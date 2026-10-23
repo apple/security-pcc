@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,11 +24,12 @@ import Foundation_Private.NSBackgroundActivityScheduler
 import OSLog
 import PrivateCloudCompute
 
+private let logger = Logger(for: .metricReporter)
+
 final class FeatureUsageAnalyzerScheduledActivity<
     SystemInfo: SystemInfoProtocol,
     FeatureFlagChecker: FeatureFlagCheckerProtocol,
 >: Sendable, ScheduledActivity {
-    private let logger = tc2Logger(forCategory: .metricReporter)
     private let eventStreamContinuation: AsyncStream<ThimbledEvent>.Continuation
     private let featureUsageAnalyzer: FeatureUsageAnalyzer<FeatureUsageAnalyzerStoreHelper, SystemInfo>
     private let featureFlagChecker: FeatureFlagChecker

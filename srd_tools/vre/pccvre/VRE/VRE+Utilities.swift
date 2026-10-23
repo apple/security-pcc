@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -35,14 +35,14 @@ extension VRE {
     static func ensembleDir(_ name: String) -> URL { VRE.ensemblesDir.appending(path: name) }
 
     init(vrevmPath: String? = nil) {
-        if let vrevmPath, FileManager.default.isExecutableFile(atPath: vrevmPath) {
+        if let vrevmPath, Globals.computer.fileSystem.isExecutableFile(atPath: vrevmPath) {
             VRE.VM.vrevmCmd = vrevmPath
         }
     }
 
     // instanceList returns a set of available VRE instances
     static func instanceList() -> [VRE.Instance]? {
-        guard let instanceNames = try? FileManager.default.contentsOfDirectory(
+        guard let instanceNames = try? Globals.computer.fileSystem.contentsOfDirectory(
             atPath: VRE.instancesDir.path)
             .filter({ FileManager.isDirectory(VRE.instanceDir($0)) })
         else {
@@ -66,7 +66,7 @@ extension VRE {
 
     // ensembleList returns a set of available VRE ensembles
     static func ensembleList() -> [VRE.Ensemble]? {
-        guard let ensembleNames = try? FileManager.default.contentsOfDirectory(
+        guard let ensembleNames = try? Globals.computer.fileSystem.contentsOfDirectory(
             atPath: VRE.ensemblesDir.path)
             .filter({ FileManager.isDirectory(VRE.ensembleDir($0)) })
         else {
@@ -130,7 +130,7 @@ extension VRE {
         // check if first DMG contains another DMG in root dir
         var innerDMGPath: String?
         do {
-            let dirls = try FileManager.default.contentsOfDirectory(atPath: toolsMountPoint.path)
+            let dirls = try Globals.computer.fileSystem.contentsOfDirectory(atPath: toolsMountPoint.path)
             innerDMGPath = dirls.filter { $0.hasSuffix(".dmg") }.first
         } catch {
             throw VREError("unable to get contents of \(dmgPath)")

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -46,7 +46,7 @@ final class InMemoryAttestationValidatorFactory: AttestationValidatorFactoryProt
     ///   - enableReleaseSetValidation: if true, the validator will enforce that the compute node attestation must run
     ///   a release that corresponds to the set of trusted releases associated with the provided proxyAttestationBundle
     func makeForProxyAttestation(
-        rawProxyAttestationBundle: Data,
+        rawProxyAttestationBundle: RawAttestationBundle,
         enableReleaseSetValidation: Bool
     ) async throws -> any AttestationValidatorProtocol {
         // our own should always parse fine, but just in case
@@ -60,9 +60,6 @@ final class InMemoryAttestationValidatorFactory: AttestationValidatorFactoryProt
             throw InMemoryAttestationValidatorError.unrecognisedAttestationFormat(error)
         }
         switch proxyAttestationBundle {
-        case .nameKeyConfigurationEncoding:
-            // There's no transitive trust possible with these, we just accept anything
-            return InMemoryAttestationValidator()
         case .version1(_, let info):
             if enableReleaseSetValidation {
                 let proxiedReleaseDigests = switch info.appData {
@@ -90,7 +87,7 @@ final class InMemoryAttestationValidator: AttestationValidatorProtocol, Sendable
     )
 
     /// may not be meaingful
-    let rawProxyAttestationBundle: Data
+    let rawProxyAttestationBundle: RawAttestationBundle
     let proxiedReleaseDigests: [String]
     let enableReleaseSetValidation: Bool
 
@@ -112,7 +109,7 @@ final class InMemoryAttestationValidator: AttestationValidatorProtocol, Sendable
 
     init(
         proxiedReleaseDigests: [String],
-        rawProxyAttestationBundle: Data,
+        rawProxyAttestationBundle: RawAttestationBundle,
         enableReleaseSetValidation: Bool = true
     ) {
         self.proxiedReleaseDigests = proxiedReleaseDigests
@@ -120,35 +117,24 @@ final class InMemoryAttestationValidator: AttestationValidatorProtocol, Sendable
         self.enableReleaseSetValidation = enableReleaseSetValidation
     }
 
-    func validate(rawAttestationBundle: Data) async throws -> ValidatedWorker {
-        let attestationBundle: TestOnlyAttestationBundle
-        do {
-            guard let bundle = try TestOnlyAttestationBundle(data: rawAttestationBundle) else {
-                throw InMemoryAttestationValidatorError.unrecognisedAttestationFormat(nil)
-            }
-            attestationBundle = bundle
-        } catch {
-            throw InMemoryAttestationValidatorError.unrecognisedAttestationFormat(error)
+    func validate(rawAttestationBundle: RawAttestationBundle) throws -> ValidatedWorker {
+        guard let bundle = try TestOnlyAttestationBundle(data: rawAttestationBundle) else {
+            throw InMemoryAttestationValidatorError.unrecognisedAttestationFormat(nil)
         }
-        let workerAttestation: ValidatedWorker =
+        return try self.validate(attestationBundle: bundle)
+    }
+
+    func validate(attestationBundle: TestOnlyAttestationBundle) throws -> ValidatedWorker {
+        let workerAttestation =
             switch attestationBundle {
-            case .nameKeyConfigurationEncoding(let publicKey):
-                .init(
-                    // We simply don't know the expiry, old code just ignored this.
-                    // this just makes it explicit
-                    expiration: Date.distantFuture,
-                    publicKey: publicKey,
-                    releaseDigest: CloudBoardAttestation.neverKnownReleaseDigest,
-                    appData: [:],
-                    udid: nil
-                )
             case .version1(let publicKey, let info):
-                .init(
+                ValidatedWorker(
                     expiration: info.expiration,
                     publicKey: publicKey,
                     releaseDigest: info.releaseDigest,
                     appData: info.computeNodeMetadata ?? [:],
-                    udid: info.udid
+                    hardwareID: info.explicitHardwareID,
+                    appIdentifiers: nil
                 )
             }
         // log in detail regardless since this is a test path
@@ -172,17 +158,32 @@ final class InMemoryAttestationValidator: AttestationValidatorProtocol, Sendable
     }
 
     func parseReleaseDigest(
-        rawAttestationBundle: Data
-    ) throws -> String {
+        rawAttestationBundle: RawAttestationBundle
+    ) async throws -> String {
         guard let bundle = try TestOnlyAttestationBundle(data: rawAttestationBundle) else {
             throw InMemoryAttestationValidatorError.unrecognisedAttestationFormat(nil)
         }
-        switch bundle {
-        case .nameKeyConfigurationEncoding:
-            return CloudBoardAttestation.neverKnownReleaseDigest
+        return try self.parseReleaseDigest(attestationBundle: bundle)
+    }
 
+    internal func parseReleaseDigest(
+        attestationBundle: TestOnlyAttestationBundle
+    ) throws -> String {
+        switch attestationBundle {
         case .version1(_, let info):
             return info.releaseDigest
+        }
+    }
+}
+
+extension TestOnlyAttestationInfo {
+    /// convert the optional string into a real ``HardwareID``
+    /// If none is present the sentinel ``HardwareID/unknown`` is provided
+    fileprivate var explicitHardwareID: HardwareID {
+        if let id = self.hardwareID {
+            .test(arbitraryId: id)
+        } else {
+            .unknown
         }
     }
 }

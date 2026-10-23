@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,21 +23,36 @@ import AppSupport
 import Darwin
 import Foundation
 import Foundation_Private.NSXPCConnection
+import Network
 import PrivateCloudCompute
 import Synchronization
 import os.lock
 
+private let logger = Logger(for: .daemon)
+
 protocol TC2DaemonHostDelegate: Sendable {
     func prefetchRequest(workloadType: String, workloadParameters: [String: String]) async -> Data?
-    func eventStreamPrewarmRequest(workloadType: String, workloadParameters: [String: String], bundleIdentifier: String, featureIdentifier: String)
-    func prewarmRequest(workloadType: String, workloadParameters: [String: String], bundleIdentifier: String, featureIdentifier: String) async -> Data?
-    func structuredRequestFactory(forSetup: TC2ResolvedSetup) -> ThimbledTrustedRequestFactory
+    func prewarmRequest(workloadType: String, workloadParameters: [String: String], bundleIdentifier: BundleIdentifier, featureIdentifier: String, serviceClass: NWParameters.ServiceClass?) async -> Data?
+    func warmAttestationStore() async
+    func structuredRequestFactory(
+        forSetup: TC2ResolvedSetup,
+        requestParameters: RequestParameters
+    ) -> ThimbledTrustedRequestFactory
     func prefetchCache() async -> [String]
     func prefetchParametersCache() -> [String]
     func prefetchParametersCacheSavedState() -> [String]
     func prefetchCacheReset() async -> Bool
-    func listRateLimits(bundleIdentifier: String?, featureIdentifier: String?, fetch: Bool) async -> Data?
-    func addRateLimit(bundleIdentifier: String?, featureIdentifier: String?, workloadType: String?, count: UInt, duration: Double, ttl: Double, jitter: Double) async
+    func listRateLimits(bundleIdentifier: BundleIdentifier?, featureIdentifier: String?, fetch: Bool) async -> Data?
+    func addRateLimit(
+        source: RateLimitSource,
+        bundleIdentifier: String?,
+        featureIdentifier: String?,
+        workloadType: String?,
+        count: UInt,
+        duration: Double,
+        ttl: Double,
+        jitter: Double
+    ) async
     func resetRateLimits() async
     func fetchServerDrivenConfiguration() async -> Data
     func listServerDrivenConfiguration() async -> Data
@@ -46,25 +61,33 @@ protocol TC2DaemonHostDelegate: Sendable {
 
 /// This object implements the protocol which we have defined. It provides the actual behavior for the service. It is 'exported' by the service to make it available to the process hosting the service over an NSXPCConnection.
 final class TC2DaemonHost<
-    SystemInfo: SystemInfoProtocol
+    SystemInfo: SystemInfoProtocol,
+    DeviceState: DeviceStateProtocol
 >: NSObject, TC2DaemonProtocol, @unchecked Sendable {
-    let logger = tc2Logger(forCategory: .daemon)
     let delegate: any TC2DaemonHostDelegate
     let connection: NSXPCConnection
     let config: any Configuration
     let systemInfo: SystemInfo
-    let rateLimitValve: OverflowValve<ContinuousClock>
+    let bundleIDProvider: any BundleIDProviderProtocol
+    let bundleIDResolver: BundleIDResolver
     let requestProxies: Mutex<[TrustedRequestXPCProxy]> = .init([])
+    let deviceState: DeviceState
 
-    init(config: any Configuration, systemInfo: SystemInfo, delegate: any TC2DaemonHostDelegate, connection: NSXPCConnection) {
+    init(
+        config: any Configuration,
+        systemInfo: SystemInfo,
+        bundleIDProvider: any BundleIDProviderProtocol,
+        delegate: any TC2DaemonHostDelegate,
+        connection: NSXPCConnection,
+        deviceState: DeviceState
+    ) {
         self.delegate = delegate
         self.connection = connection
         self.config = config
         self.systemInfo = systemInfo
-        self.rateLimitValve = OverflowValve(
-            frequency: Duration.seconds(config[.rateLimitRequestMinimumSpacing]),
-            clock: ContinuousClock()
-        )
+        self.bundleIDProvider = bundleIDProvider
+        self.bundleIDResolver = BundleIDResolver(provider: bundleIDProvider)
+        self.deviceState = deviceState
     }
 
     func invalidationHandler() {
@@ -95,76 +118,78 @@ final class TC2DaemonHost<
         completion(response)
     }
 
-    func trustedRequest(
-        withParameters parameters: Data,
-        requestID clientRequestID: UUID,
-        multiTurn: Bool,
-        bundleIdentifier: String?,
-        originatingBundleIdentifier: String?,
-        featureIdentifier: String?,
-        sessionIdentifier: UUID?,
-        completion: @escaping @Sendable ((any TC2XPCTrustedRequestProtocol)?, Data?) -> Void
+    func request(
+        parametersData: RequestParameters.Data,
+        completion: @escaping ((any TC2XPCTrustedRequestProtocol)?, Data?) -> Void
     ) {
         // The requestID that is passed in here is the clientRequestID, i.e., the ID
         // that the caller provides. We track it for logging but we do not pass it to the server.
         do {
-            let xpcRequest = try self._trustedRequest(
-                withParameters: parameters,
-                clientRequestID: clientRequestID,
-                multiTurn: multiTurn,
-                bundleIdentifier: bundleIdentifier,
-                originatingBundleIdentifier: originatingBundleIdentifier,
-                featureIdentifier: featureIdentifier,
-                sessionIdentifier: sessionIdentifier
-            )
+            let xpcRequest = try self._request(parametersData: parametersData)
             completion(xpcRequest, nil)
         } catch {
             completion(nil, error.json)
         }
     }
 
-    private func _trustedRequest(
-        withParameters parameters: Data,
-        clientRequestID: UUID,
-        multiTurn: Bool,
-        bundleIdentifier: String?,
-        originatingBundleIdentifier: String?,
-        featureIdentifier: String?,
-        sessionIdentifier: UUID?
+    private func _request(
+        parametersData: RequestParameters.Data
     ) throws(PrivateCloudComputeError) -> any TC2XPCTrustedRequestProtocol {
         guard hasEntitlement(.requests) else {
             throw PrivateCloudComputeError(message: "missing entitlements")
         }
 
-        let clientBundleIdentifier = bundleIdentifierForAuditToken(auditToken: connection.auditToken)
+        guard let clientBundleIdentifier = try? self.bundleIDProvider.bundleIdentifier(for: connection.auditToken) else {
+            throw PrivateCloudComputeError(message: "missing client bundle identifier")
+        }
         let allowBundleIdentifierOverride = hasEntitlement(.bundleIdentifierOverride)
         let effectiveUserIdentifier = effectiveUserIdentifier(auditToken: connection.auditToken)
 
-        guard let clientBundleIdentifier else {
-            throw PrivateCloudComputeError(message: "missing client bundle identifier")
-        }
-
-        let resolvedSetup = TC2ResolvedSetup(clientBundleIdentifier: clientBundleIdentifier, allowBundleIdentifierOverride: allowBundleIdentifierOverride)
-
-        let factory = delegate.structuredRequestFactory(forSetup: resolvedSetup)
-
-        guard let workload = Workload(json: parameters) else {
+        guard let parameters = RequestParameters(json: parametersData) else {
             throw PrivateCloudComputeError(message: "failure decoding request parameters")
         }
 
-        guard
-            let xpcRequest = factory.startTrustedRequest(
-                clientRequestID: clientRequestID,
-                parameters: workload,
-                multiTurn: multiTurn,
-                bundleID: bundleIdentifier,
+        let bundleIdentifier: BundleIdentifier
+        do {
+            bundleIdentifier = try bundleIDResolver.resolve(
+                forAuditToken: connection.auditToken,
+                stringOverride: parameters.bundleIdentifier,
+                pidOverride: parameters.onBehalfOfPID,
+                allowOverride: allowBundleIdentifierOverride
+            )
+        } catch {
+            throw PrivateCloudComputeError(message: "failed to resolve bundle identifier")
+        }
+
+        let originatingBundleIdentifier: BundleIdentifier?
+        do {
+            originatingBundleIdentifier = try bundleIDResolver.resolveOriginating(
+                stringOverride: parameters.originatingBundleIdentifier,
+                pidOverride: parameters.parentOfOnBehalfOfPID,
+                allowOverride: allowBundleIdentifierOverride
+            )
+        } catch {
+            throw PrivateCloudComputeError(message: "failed to resolve originating bundle identifier")
+        }
+
+        let factory = delegate.structuredRequestFactory(
+            forSetup: .init(
+                clientBundleIdentifier: clientBundleIdentifier.rawValue,
+                allowBundleIdentifierOverride: allowBundleIdentifierOverride
+            ),
+            requestParameters: parameters
+        )
+
+        let xpcRequest: TrustedRequestXPCProxy
+        do {
+            xpcRequest = try factory.startTrustedRequest(
+                requestParameters: parameters,
+                bundleIdentifier: bundleIdentifier,
                 originatingBundleIdentifier: originatingBundleIdentifier,
-                featureID: featureIdentifier,
-                sessionID: sessionIdentifier,
                 effectiveUserIdentifier: effectiveUserIdentifier
             )
-        else {
-            throw PrivateCloudComputeError(message: "failure retrieving request from factory")
+        } catch {
+            throw PrivateCloudComputeError.wrapAny(error: error)
         }
 
         self.requestProxies.withLock {
@@ -179,6 +204,11 @@ final class TC2DaemonHost<
             completion(nil)
             return
         }
+        guard deviceState.isUnlockedSinceBoot else {
+            logger.error("ignoring prefetch request: unavailable before first unlock")
+            completion(nil)
+            return
+        }
 
         Task {
             let data = await delegate.prefetchRequest(workloadType: workloadType, workloadParameters: workloadParameters)
@@ -187,50 +217,51 @@ final class TC2DaemonHost<
     }
 
     func prewarmRequest(
-        workloadType: String,
-        workloadParameters: [String: String],
-        bundleIdentifier: String?,
-        featureIdentifier: String,
-        runOnEventStream: Bool,
+        parametersData: PrewarmParameters.Data,
         completion: @escaping @Sendable () -> Void
     ) {
         // Entitlement is still the same, since the underlying call is going to be a prefetch
         guard hasEntitlement(.prefetchRequest) else {
             return completion()
         }
-
-        let clientBundleIdentifier = bundleIdentifierForAuditToken(auditToken: connection.auditToken)
-        let allowBundleIdentifierOverride = hasEntitlement(.bundleIdentifierOverride)
-
-        guard let clientBundleIdentifier else {
+        guard deviceState.isUnlockedSinceBoot else {
+            logger.error("ignoring prewarm request: unavailable before first unlock")
             return completion()
         }
 
-        let bundleIdentifierForPrewarm =
-            if allowBundleIdentifierOverride, let bundleIdentifier {
-                bundleIdentifier
-            } else {
-                clientBundleIdentifier
-            }
+        guard let parameters = PrewarmParameters(json: parametersData) else {
+            logger.log("failure decoding prewarm parameters")
+            return completion()
+        }
 
-        if runOnEventStream {
-            self.delegate.eventStreamPrewarmRequest(
-                workloadType: workloadType,
-                workloadParameters: workloadParameters,
+        let bundleIdentifierForPrewarm: BundleIdentifier
+        do {
+            bundleIdentifierForPrewarm = try bundleIDResolver.resolve(
+                forAuditToken: connection.auditToken,
+                stringOverride: parameters.bundleIdentifier,
+                pidOverride: parameters.onBehalfOfPID,
+                allowOverride: hasEntitlement(.bundleIdentifierOverride)
+            )
+        } catch {
+            logger.log("attempt to set bundleIdentifierOverride failed: \(error)")
+            return completion()
+        }
+
+        // Touch the attestation store at our current (pre-.medium) priority so its
+        // lazy init isn't left starting at .medium.
+        Task {
+            await self.delegate.warmAttestationStore()
+        }
+
+        Task(priority: .medium) {
+            _ = await self.delegate.prewarmRequest(
+                workloadType: parameters.workload.type,
+                workloadParameters: parameters.workload.parameters,
                 bundleIdentifier: bundleIdentifierForPrewarm,
-                featureIdentifier: featureIdentifier
+                featureIdentifier: parameters.featureIdentifier,
+                serviceClass: parameters.serviceClass?.unwrap()
             )
             completion()
-        } else {
-            Task(priority: .medium) {
-                _ = await self.delegate.prewarmRequest(
-                    workloadType: workloadType,
-                    workloadParameters: workloadParameters,
-                    bundleIdentifier: bundleIdentifierForPrewarm,
-                    featureIdentifier: featureIdentifier
-                )
-                completion()
-            }
         }
     }
 
@@ -273,46 +304,55 @@ final class TC2DaemonHost<
     }
 
     // The difference between knownRateLimits and listRateLimits is that knownRateLimits is ultimately
-    // exposed in API, and it (a) will make a determination for itself whether to issue a fetch to the
+    // exposed in API, and it (a) will not issue a fetch request to the
     // server, and (b) will default to the caller's bundleID but allow them to override with the
-    // correct entitlment, and therefore (c) uses its own entitlement separate from the admin one.
-    func knownRateLimits(bundleIdentifier: String?, featureIdentifier: String?, skipFetch: Bool, completion: @escaping @Sendable (Data?) -> Void) {
+    // correct entitlement, and therefore (c) uses its own entitlement separate from the admin one.
+    func knownRateLimits(bundleIdentifier: String?, featureIdentifier: String?, completion: @escaping @Sendable (Data?) -> Void) {
         guard hasEntitlement(.knownRateLimits) else {
             return completion(nil)
         }
-
-        guard hasEntitlement(.bundleIdentifierOverride) || bundleIdentifier == nil else {
-            logger.log("attempt to set bundleIdentifierOverride without entitlement rejected")
+        guard deviceState.isUnlockedSinceBoot else {
+            logger.error("ignoring knownRateLimits: unavailable before first unlock")
             return completion(nil)
         }
-        let bundleIdentifier = bundleIdentifier ?? bundleIdentifierForAuditToken(auditToken: connection.auditToken)
 
-        // Decide whether to fetch. If skipFetch is true, we never fetch. If it's false
-        // we make a decision based on the timeinterval since the last fetch.
-        Task {
-            let result =
-                if skipFetch {
-                    await delegate.listRateLimits(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier, fetch: false)
-                } else {
-                    await delegate.listRateLimits(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier, fetch: self.rateLimitValve.allow())
-                }
-            completion(result)
+        let resolvedBundleIdentifier: BundleIdentifier
+        do {
+            resolvedBundleIdentifier = try bundleIDResolver.resolve(
+                forAuditToken: connection.auditToken,
+                stringOverride: bundleIdentifier,
+                pidOverride: nil,
+                allowOverride: hasEntitlement(.bundleIdentifierOverride)
+            )
+        } catch {
+            logger.log("attempt to set bundleIdentifierOverride failed: \(error)")
+            return completion(nil)
         }
 
+        Task {
+            let result = await delegate.listRateLimits(bundleIdentifier: resolvedBundleIdentifier, featureIdentifier: featureIdentifier, fetch: false)
+            completion(result)
+        }
     }
 
     func listRateLimits(bundleIdentifier: String?, featureIdentifier: String?, fetch: Bool, completion: @escaping @Sendable (Data?) -> Void) {
         guard hasEntitlement(.admin) else {
             return completion(nil)
         }
+        guard deviceState.isUnlockedSinceBoot else {
+            logger.error("ignoring listRateLimits: unavailable before first unlock")
+            return completion(nil)
+        }
 
         Task {
-            let result = await delegate.listRateLimits(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier, fetch: fetch)
+            let bundleID = bundleIdentifier.map { BundleIdentifier(rawValue: $0, provenance: .unknown) }
+            let result = await delegate.listRateLimits(bundleIdentifier: bundleID, featureIdentifier: featureIdentifier, fetch: fetch)
             completion(result)
         }
     }
 
     func addRateLimit(
+        source: RateLimitSource.RawValue,
         bundleIdentifier: String?,
         featureIdentifier: String?,
         workloadType: String?,
@@ -325,21 +365,43 @@ final class TC2DaemonHost<
         guard hasEntitlement(.admin) else {
             return completion()
         }
-
-        Task {
-            await delegate.addRateLimit(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier, workloadType: workloadType, count: count, duration: duration, ttl: ttl, jitter: jitter)
-            completion()
+        guard deviceState.isUnlockedSinceBoot else {
+            logger.error("ignoring addRateLimit: unavailable before first unlock")
+            return completion()
         }
-    }
 
-    func resetRateLimits(completion: @escaping @Sendable () -> Void) {
-        guard hasEntitlement(.admin) else {
+        guard let source = RateLimitSource(rawValue: source) else {
+            logger.error("can not create RateLimitSource from rawValue, ignoring. source=\(source)")
             return completion()
         }
 
         Task {
-            await delegate.resetRateLimits()
+            await delegate.addRateLimit(
+                source: source,
+                bundleIdentifier: bundleIdentifier,
+                featureIdentifier: featureIdentifier,
+                workloadType: workloadType,
+                count: count,
+                duration: duration,
+                ttl: ttl,
+                jitter: jitter
+            )
             completion()
+        }
+    }
+
+    func resetRateLimits(completion: @escaping @Sendable (Data?) -> Void) {
+        guard hasEntitlement(.admin) else {
+            return completion(PrivateCloudComputeError(code: .unauthorizedError).json)
+        }
+        guard deviceState.isUnlockedSinceBoot else {
+            logger.error("ignoring resetRateLimits: unavailable before first unlock")
+            return completion(PrivateCloudComputeError(code: .unavailableBeforeFirstUnlock).json)
+        }
+
+        Task {
+            await delegate.resetRateLimits()
+            completion(nil)
         }
     }
 
@@ -389,20 +451,6 @@ final class TC2DaemonHost<
             logger.log("entitlement is wrong type: \(entitlement.rawValue) = \(type(of: x))")
             return false
         }
-    }
-
-    private func bundleIdentifierForAuditToken(auditToken: audit_token_t) -> String? {
-        var bundleID: Unmanaged<CFString>?
-        guard CPCopyBundleIdentifierAndTeamFromAuditToken(auditToken, &bundleID, nil) else {
-            logger.error("could not get client bundle identifier")
-            return nil
-        }
-
-        guard let bundleID = bundleID?.takeRetainedValue() else {
-            logger.error("could not retain client bundle identifier")
-            return nil
-        }
-        return bundleID as String
     }
 
     private func effectiveUserIdentifier(auditToken: audit_token_t) -> uid_t? {

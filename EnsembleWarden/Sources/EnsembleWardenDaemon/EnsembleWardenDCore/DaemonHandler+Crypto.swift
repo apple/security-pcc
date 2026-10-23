@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,7 +23,7 @@ private import CryptoKit
 internal import EnsemblePorter
 private import EnsembleWardenCommon
 internal import EnsembleWardenServer
-private import EnsembleWardenXPCAPI
+private import EnsembleWardenXPC
 internal import IOSurface
 private import os
 private import Synchronization
@@ -39,9 +39,11 @@ extension DaemonHandler {
     internal func encrypt(decryptedSurfaces: [IOSurface], purpose: KVCacheTransferPurpose) async throws -> [IOSurface] {
         // Tell the kernel that we're going to access all of the decrypted surfaces so we can start to page
         // them in.
-        _ = decryptedSurfaces.map {
+        for surface in decryptedSurfaces {
             do {
-                try $0.prefault()
+                try self.metrics.reportingPrefault(op: .encrypt) {
+                    try surface.prefault()
+                }
             } catch {
                 logger.warning("Failed to prefault IOSurface")
             }
@@ -55,6 +57,8 @@ extension DaemonHandler {
         switch purpose {
         case .ftET:
             keyType = .ftET
+        case .multiTurn:
+            keyType = .latestTurnKey
         }
         let (key, turnNumber) = try await self.getKey(keyType: keyType)
         var encryptedSurfaces: [IOSurface] = []
@@ -63,13 +67,22 @@ extension DaemonHandler {
             let turnID: UInt64
             switch purpose {
             case .ftET: turnID = UInt64.max
+            case .multiTurn:
+                // Use the turn number we already fetched
+                guard let turnNumber else {
+                    throw EnsembleWardenError.invalidTurnNumber
+                }
+                turnID = UInt64(turnNumber)
             }
             let timeBefore = Date()
-            let encryptedSurface = try IOSurfaceSealedBox.seal(surface, metadata: turnID, using: key)
+            let encryptedSurface = try self.metrics.reportingCryptoMetrics(op: .encrypt) {
+                try IOSurfaceSealedBox.seal(surface, metadata: turnID, using: key)
+            }
             let timeAfter = Date()
             let timeCompletedSurfaceIO = timeAfter.timeIntervalSince(timeBefore)
             let bandwidthBps = Double(encryptedSurface.bytesPerRow) / max(1, timeCompletedSurfaceIO) * 8.0
             let bandwidthGbps = bandwidthBps / (1024 * 1024 * 1024)
+            self.metrics.recordSurfaceBytes(op: .encrypt, bytes: encryptedSurface.bytesPerRow)
             logger.debug("""
                 Encrypted IOSurface. \
                 time_completed_s=\(timeCompletedSurfaceIO) \
@@ -87,9 +100,11 @@ extension DaemonHandler {
 
     func decrypt(encryptedSurfaces: [IOSurface]) async throws -> [IOSurface] {
         // Begin to fault in pages we'll access.
-        _ = encryptedSurfaces.map {
+        for surface in encryptedSurfaces {
             do {
-                try $0.prefault()
+                try self.metrics.reportingPrefault(op: .decrypt) {
+                    try surface.prefault()
+                }
             } catch {
                 logger.warning("Failed to prefault IOSurface")
             }
@@ -104,16 +119,22 @@ extension DaemonHandler {
             switch purpose {
             case .ftET:
                 keyType = .ftET
+            case .multiTurn:
+                // additionalData contains the turn number for multiTurn
+                keyType = .specificTurnKey(Int(additionalData))
             }
             let (key, _) = try await self.getKey(keyType: keyType)
 
             let timeBefore = Date()
-            let decryptedSurface = try IOSurfaceSealedBox.open(encryptedIOSurface, using: key)
+            let decryptedSurface = try self.metrics.reportingCryptoMetrics(op: .decrypt) {
+                try IOSurfaceSealedBox.open(encryptedIOSurface, using: key)
+            }
             let timeAfter = Date()
             let timeCompletedSurfaceIO = timeAfter.timeIntervalSince(timeBefore)
 
             let bandwidthBps = Double(decryptedSurface.bytesPerRow) / max(1, timeCompletedSurfaceIO) * 8.0
             let bandwidthGbps = bandwidthBps / (1024 * 1024 * 1024)
+            self.metrics.recordSurfaceBytes(op: .decrypt, bytes: decryptedSurface.bytesPerRow)
             logger.debug("""
                             Decrypted IOSurface. \
                             time_completed=\(timeCompletedSurfaceIO) \
@@ -134,6 +155,7 @@ extension KVCacheTransferPurpose {
         switch self {
             // Encode FT/ET as max value
         case .ftET: UInt64.max
+        case .multiTurn: 0
         }
     }
 
@@ -141,7 +163,7 @@ extension KVCacheTransferPurpose {
         if additionalData == UInt64.max {
             self = .ftET
         } else {
-            self = .ftET
+            self = .multiTurn
         }
     }
 }

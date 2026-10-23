@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,6 +21,7 @@
 #include "AppleCIOMeshSharedMemoryHelpers.h"
 #include "AppleCIOMeshThunderboltCommands.h"
 #include "AppleCIOMeshUserClient.h"
+#include "Kext/AppleCIOMeshUserClientInterface.h"
 
 #define LOG_PREFIX "AppleCIOMeshSharedMemory"
 #include "Common/Align.h"
@@ -442,6 +443,10 @@ bool
 AppleCIOMeshSharedMemory::createAssignment(int64_t offset, MUCI::MeshDirection direction, MCUCI::NodeId node, int64_t size)
 {
 	auto existingAssignment = _assignments->getObject((unsigned int)_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		ERROR("No assignment found for offset: %lld\n", offset);
+		return false;
+	}
 	if ((void *)existingAssignment != (void *)kOSBooleanFalse) {
 		AppleCIOMeshAssignment * checkAssignment = (AppleCIOMeshAssignment *)existingAssignment;
 
@@ -462,7 +467,8 @@ AppleCIOMeshSharedMemory::createAssignment(int64_t offset, MUCI::MeshDirection d
 	// the new object and replacing the old one
 	auto assignmentCount =
 	    direction == MUCI::MeshDirection::In ? _receiveAssignments.assignmentCount : _outputAssignments.assignmentCount;
-	if (assignmentCount >= kMaxAssignmentCount) {
+	auto requiredSlots = direction == MUCI::MeshDirection::In ? _service->getLinksPerChannel() : 1;
+	if (assignmentCount + requiredSlots > kMaxAssignmentCount) {
 		ERROR("Maximum number of %s assignments reached (%d)", direction == MUCI::MeshDirection::In ? "input" : "output",
 		      assignmentCount);
 		return false;
@@ -532,6 +538,9 @@ bool
 AppleCIOMeshSharedMemory::isAssignmentInput(int64_t offset)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+	}
 	if (UNLIKELY((void *)existingAssignment == (void *)kOSBooleanFalse)) {
 		panic("Assignment not created for offset: %lld\n", offset);
 	}
@@ -543,6 +552,10 @@ void
 AppleCIOMeshSharedMemory::addChunkOffsetToAssignment(int64_t assignmentOffset, int64_t chunkOffset)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(assignmentOffset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		ERROR("No assignment found for offset: %lld\n", assignmentOffset);
+		return;
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		ERROR("Assignment not created for offset: %lld\n", assignmentOffset);
 		return;
@@ -558,6 +571,10 @@ void
 AppleCIOMeshSharedMemory::setChannelLastOffsetForLink(int64_t assignmentOffset, int64_t chunkOffset, uint8_t linkIter)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(assignmentOffset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		ERROR("No assignment found for offset: %lld\n", assignmentOffset);
+		return;
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		ERROR("Assignment not created for offset: %lld\n", assignmentOffset);
 		return;
@@ -572,6 +589,10 @@ void
 AppleCIOMeshSharedMemory::setChannelFirstOffsetForLink(int64_t assignmentOffset, int64_t chunkOffset, uint8_t linkIter)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(assignmentOffset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		ERROR("No assignment found for offset: %lld\n", assignmentOffset);
+		return;
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		ERROR("Assignment not created for offset: %lld\n", assignmentOffset);
 		return;
@@ -585,6 +606,10 @@ void
 AppleCIOMeshSharedMemory::dispatch(int64_t offset, uint8_t linkIterMask, char * tag, size_t tagSz)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+		return;
+	}
 	if (UNLIKELY((void *)existingAssignment == (void *)kOSBooleanFalse)) {
 		panic("Assignment not created for offset: %lld\n", offset);
 		return;
@@ -600,6 +625,10 @@ bool
 AppleCIOMeshSharedMemory::assignmentDispatched(int64_t offset, uint8_t linkIterMask)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+		return false;
+	}
 	if (UNLIKELY((void *)existingAssignment == (void *)kOSBooleanFalse)) {
 		panic("Assignment not created for offset: %lld\n", offset);
 		return false;
@@ -623,6 +652,10 @@ void
 AppleCIOMeshSharedMemory::prepareCommand(int64_t offset)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+		return;
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		panic("Assignment not created for offset: %lld\n", offset);
 		return;
@@ -638,6 +671,10 @@ void
 AppleCIOMeshSharedMemory::markCommandForwardIncomplete(int64_t offset)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+		return;
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		panic("Assignment not created for offset: %lld\n", offset);
 		return;
@@ -655,6 +692,9 @@ AppleCIOMeshSharedMemory::dripPrepare(int64_t * assignmentIdx, int64_t * offsetI
 	auto outgoingNode = _service->getLocalNodeId();
 	auto existingAssignment =
 	    (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(_outputAssignments.assignmentOffset[*assignmentIdx]));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", _outputAssignments.assignmentOffset[*assignmentIdx]);
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		panic("Assignment not created for offset: %lld\n", _outputAssignments.assignmentOffset[*assignmentIdx]);
 	}
@@ -700,6 +740,10 @@ void
 AppleCIOMeshSharedMemory::holdCommand(int64_t offset)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+		return;
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		panic("Assignment not created for offset: %lld\n", offset);
 		return;
@@ -713,6 +757,10 @@ AppleCIOMeshSharedMemory::holdOutput()
 	for (int i = 0; i < _outputAssignments.assignmentCount; i++) {
 		auto existingAssignment =
 		    (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(_outputAssignments.assignmentOffset[i]));
+		if (UNLIKELY(existingAssignment == nullptr)) {
+			panic("No assignment found for offset: %lld\n", _outputAssignments.assignmentOffset[i]);
+			return;
+		}
 		if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 			panic("Assignment not created for offset: %lld\n", _outputAssignments.assignmentOffset[i]);
 			return;
@@ -741,6 +789,10 @@ AppleCIOMeshSharedMemory::checkAssignmentReady(int64_t offset, bool * interrupte
 	}
 
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+		return false;
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		panic("Assignment not created for offset: %lld\n", offset);
 		return false;
@@ -790,6 +842,10 @@ AppleCIOMeshSharedMemory::checkAssignmentForwardComplete(int64_t offset, bool * 
 	}
 
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+		return false;
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		panic("Assignment not created for offset: %lld\n", offset);
 		return false;
@@ -810,6 +866,10 @@ AppleCIOMeshSharedMemory::checkTXAssignmentReady(int64_t offset, uint8_t linkIte
 	}
 
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+		return false;
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		panic("Assignment not created for offset: %lld\n", offset);
 		return false;
@@ -821,6 +881,9 @@ bool
 AppleCIOMeshSharedMemory::checkAssignmentPrepared(int64_t offset)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		panic("Assignment not created for offset: %lld\n", offset);
 	}
@@ -831,6 +894,9 @@ bool
 AppleCIOMeshSharedMemory::readAssignmentTagForLink(int64_t offset, uint8_t linkIter, char * tag, size_t tagSz)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		panic("Assignment not created for offset: %lld\n", offset);
 	}
@@ -855,6 +921,10 @@ AppleCIOMeshSharedMemory::overrideOutputAssignmentForWholeBuffer()
 	for (int i = 0; i < _outputAssignments.assignmentCount; i++) {
 		auto existingAssignment =
 		    (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(_outputAssignments.assignmentOffset[i]));
+		if (UNLIKELY(existingAssignment == nullptr)) {
+			panic("No assignment found for offset: %lld\n", _outputAssignments.assignmentOffset[i]);
+			return;
+		}
 		if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 			panic("Assignment not created for offset: %lld\n", _outputAssignments.assignmentOffset[i]);
 			return;
@@ -867,6 +937,9 @@ AppleCIOMeshAssignment *
 AppleCIOMeshSharedMemory::getAssignment(int64_t offset)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		panic("Assignment not created for offset: %lld\n", offset);
 	}
@@ -877,6 +950,9 @@ AppleCIOMeshAssignment *
 AppleCIOMeshSharedMemory::getAssignmentIn(int64_t offset, int8_t linkIdx)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		return nullptr;
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		return nullptr;
 	}
@@ -887,6 +963,9 @@ AppleCIOMeshAssignment *
 AppleCIOMeshSharedMemory::getAssignmentOut(int64_t offset)
 {
 	auto existingAssignment = (AppleCIOMeshAssignment *)_assignments->getObject(_getOffsetIdx(offset));
+	if (UNLIKELY(existingAssignment == nullptr)) {
+		panic("No assignment found for offset: %lld\n", offset);
+	}
 	if ((void *)existingAssignment == (void *)kOSBooleanFalse) {
 		panic("OUT Assignment not created for offset: %lld\n", offset);
 	}

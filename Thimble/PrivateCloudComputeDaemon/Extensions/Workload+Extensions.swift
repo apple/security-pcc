@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,6 +25,7 @@ extension Workload {
     static var allowedParameters: Set<String> {
         [
             "inference-id",
+            "routing-key",  // Note: we set this to the value of `inference-id`. Value provided by adopter is ignored.
             "model",
             "adapter",
             "heuristic-input-token-count-interval-start-closed",
@@ -53,5 +54,19 @@ extension Workload {
             workloadType: self.type,
             inferenceId: self.parameters["inference-id"] ?? ""
         )
+    }
+}
+
+extension WorkloadParameters {
+    /// Applicable for invoke and prefetch requests.
+    func preparedToBeSentAsHeaders<FeatureFlagChecker: FeatureFlagCheckerProtocol>(
+        featureFlagChecker: FeatureFlagChecker
+    ) -> WorkloadParameters {
+        guard featureFlagChecker.isEnabled(.routingKey) else {
+            return self
+        }
+        var result = self
+        result["routing-key"] = result["inference-id"]
+        return result
     }
 }

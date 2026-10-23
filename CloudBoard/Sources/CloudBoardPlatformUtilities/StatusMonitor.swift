@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,7 +19,6 @@ public enum DaemonStatus: Equatable, Hashable, Sendable {
     case uninitialized
     case initializing
     case waitingForFirstAttestationFetch
-    case waitingForFirstKeyFetch
     case waitingForFirstHotPropertyUpdate
     case waitingForWorkloadRegistration
     case componentsFailedToRun(Components)
@@ -92,23 +91,14 @@ public final class StatusMonitor: Sendable {
     //                   ▼
     // ┌──────────────────────────────────┐
     // │                                  │
-    // │ .waitingForFirstAttestationFetch │
+    // │.waitingForFirstHotPropertyUpdate │
     // │                                  │
     // └──────────────────────────────────┘
     //                   │
-    //                   ├───────────────────┐
-    //                   ▼                   │
-    // ┌──────────────────────────────────┐  │
-    // │                                  │  │
-    // │     .waitingForFirstKeyFetch     │  │
-    // │                                  │  │
-    // └──────────────────────────────────┘  │
-    //                   │                   │
-    //                   ├───────────────────┘
     //                   ▼
     // ┌──────────────────────────────────┐
     // │                                  │
-    // │.waitingForFirstHotPropertyUpdate │
+    // │ .waitingForFirstAttestationFetch │
     // │                                  │
     // └──────────────────────────────────┘
     //                   │
@@ -175,8 +165,6 @@ public final class StatusMonitor: Sendable {
             self.metrics.emit(Metrics.StatusMonitor.LegacyStatusInitializing(value: 0))
         case .waitingForFirstAttestationFetch:
             self.metrics.emit(Metrics.StatusMonitor.LegacyStatusWaitingForFirstAttestationFetch(value: 0))
-        case .waitingForFirstKeyFetch:
-            self.metrics.emit(Metrics.StatusMonitor.LegacyStatusWaitingForFirstKeyFetch(value: 0))
         case .waitingForFirstHotPropertyUpdate:
             self.metrics.emit(Metrics.StatusMonitor.LegacyStatusWaitingForFirstHotPropertyUpdate(value: 0))
         case .waitingForWorkloadRegistration:
@@ -190,7 +178,7 @@ public final class StatusMonitor: Sendable {
                     failedComponents: failedComponents
                 ))
             case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
-                 .waitingForFirstKeyFetch, .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
+                 .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
                  .serviceDiscoveryUpdateSuccess, .serviceDiscoveryUpdateFailure, .serviceDiscoveryPublisherDraining,
                  .daemonDrained, .daemonExitingOnError:
                 self.metrics.emit(Metrics.StatusMonitor.LegacyStatusComponentsFailedToRun(
@@ -207,7 +195,7 @@ public final class StatusMonitor: Sendable {
                     knownServiceCount: knownServiceCount
                 ))
             case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
-                 .waitingForFirstKeyFetch, .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
+                 .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
                  .componentsFailedToRun, .serviceDiscoveryUpdateFailure, .serviceDiscoveryPublisherDraining,
                  .daemonDrained, .daemonExitingOnError:
                 self.metrics.emit(Metrics.StatusMonitor.LegacyStatusServiceDiscoveryUpdateSuccess(
@@ -224,7 +212,7 @@ public final class StatusMonitor: Sendable {
                     knownServiceCount: knownServiceCount
                 ))
             case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
-                 .waitingForFirstKeyFetch, .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
+                 .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
                  .componentsFailedToRun, .serviceDiscoveryUpdateSuccess, .serviceDiscoveryPublisherDraining,
                  .daemonDrained, .daemonExitingOnError:
                 self.metrics.emit(Metrics.StatusMonitor.LegacyStatusServiceDiscoveryUpdateFailure(
@@ -247,8 +235,6 @@ public final class StatusMonitor: Sendable {
             self.metrics.emit(Metrics.StatusMonitor.LegacyStatusInitializing(value: 1))
         case .waitingForFirstAttestationFetch:
             self.metrics.emit(Metrics.StatusMonitor.LegacyStatusWaitingForFirstAttestationFetch(value: 1))
-        case .waitingForFirstKeyFetch:
-            self.metrics.emit(Metrics.StatusMonitor.LegacyStatusWaitingForFirstKeyFetch(value: 1))
         case .waitingForFirstHotPropertyUpdate:
             self.metrics.emit(Metrics.StatusMonitor.LegacyStatusWaitingForFirstHotPropertyUpdate(value: 1))
         case .waitingForWorkloadRegistration:
@@ -304,30 +290,7 @@ public final class StatusMonitor: Sendable {
                 .unexpected
             case .waitingForFirstAttestationFetch, .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
                  .serviceDiscoveryUpdateSuccess, .serviceDiscoveryUpdateFailure, .componentsFailedToRun,
-                 .daemonDrained, .daemonExitingOnError, .serviceDiscoveryPublisherDraining,
-                 .waitingForFirstKeyFetch:
-                .blocked
-            }
-            state.conditionalUpdate(to: newStatus, category: transitionCategory)
-            return (oldStatus, transitionCategory)
-        }
-
-        self.emitTransitionTelemetry(from: oldStatus, to: newStatus, category: transitionCategory)
-    }
-
-    public func waitingForFirstKeyFetch() {
-        let newStatus = DaemonStatus.waitingForFirstKeyFetch
-
-        let (oldStatus, transitionCategory) = self.currentState.withLock { state in
-            let oldStatus = state.lastStatus
-            let transitionCategory: TransitionCategory = switch state.lastStatus {
-            case .initializing, .waitingForFirstAttestationFetch:
-                .expected
-            case .uninitialized, .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
-                 .serviceDiscoveryUpdateSuccess, .serviceDiscoveryUpdateFailure:
-                .unexpected
-            case .componentsFailedToRun, .daemonDrained, .daemonExitingOnError, .serviceDiscoveryPublisherDraining,
-                 .waitingForFirstKeyFetch:
+                 .daemonDrained, .daemonExitingOnError, .serviceDiscoveryPublisherDraining:
                 .blocked
             }
             state.conditionalUpdate(to: newStatus, category: transitionCategory)
@@ -343,11 +306,10 @@ public final class StatusMonitor: Sendable {
         let (oldStatus, transitionCategory) = self.currentState.withLock { state in
             let oldStatus = state.lastStatus
             let transitionCategory: TransitionCategory = switch state.lastStatus {
-            case .initializing:
+            case .initializing, .waitingForFirstHotPropertyUpdate:
                 .expected
-            case .uninitialized, .waitingForFirstAttestationFetch, .waitingForFirstKeyFetch,
-                 .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
-                 .serviceDiscoveryUpdateSuccess, .serviceDiscoveryUpdateFailure:
+            case .uninitialized, .waitingForFirstAttestationFetch,
+                 .waitingForWorkloadRegistration, .serviceDiscoveryUpdateSuccess, .serviceDiscoveryUpdateFailure:
                 .unexpected
             case .componentsFailedToRun, .daemonDrained, .daemonExitingOnError, .serviceDiscoveryPublisherDraining:
                 .blocked
@@ -365,7 +327,7 @@ public final class StatusMonitor: Sendable {
         let (oldStatus, transitionCategory) = self.currentState.withLock { state in
             let oldStatus = state.lastStatus
             let transitionCategory: TransitionCategory = switch state.lastStatus {
-            case .initializing, .waitingForFirstAttestationFetch, .waitingForFirstKeyFetch,
+            case .initializing, .waitingForFirstAttestationFetch,
                  .waitingForFirstHotPropertyUpdate:
                 .expected
             case .waitingForWorkloadRegistration, .uninitialized, .serviceDiscoveryUpdateSuccess,
@@ -387,7 +349,7 @@ public final class StatusMonitor: Sendable {
         let (oldStatus, transitionCategory) = self.currentState.withLock { state in
             let oldStatus = state.lastStatus
             let transitionCategory: TransitionCategory = switch state.lastStatus {
-            case .initializing, .waitingForFirstAttestationFetch, .waitingForFirstKeyFetch,
+            case .initializing, .waitingForFirstAttestationFetch,
                  .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration:
                 .expected
             case .uninitialized, .serviceDiscoveryUpdateSuccess, .serviceDiscoveryUpdateFailure:
@@ -433,7 +395,7 @@ public final class StatusMonitor: Sendable {
                     transitionCategory = .expected
                 }
                 newStatus = .componentsFailedToRun(failedComponents)
-            case .uninitialized, .initializing, .waitingForFirstAttestationFetch, .waitingForFirstKeyFetch,
+            case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
                  .serviceDiscoveryPublisherDraining:
                 newStatus = .componentsFailedToRun(component)
                 transitionCategory = .unexpected
@@ -456,7 +418,7 @@ public final class StatusMonitor: Sendable {
                 (.serviceDiscoveryUpdateSuccess(1), .expected)
             case .serviceDiscoveryUpdateSuccess(let knownServices), .serviceDiscoveryUpdateFailure(let knownServices):
                 (.serviceDiscoveryUpdateSuccess(knownServices + 1), .expected)
-            case .uninitialized, .initializing, .waitingForFirstAttestationFetch, .waitingForFirstKeyFetch,
+            case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
                  .waitingForFirstHotPropertyUpdate:
                 (.serviceDiscoveryUpdateSuccess(1), .unexpected)
             case .componentsFailedToRun, .serviceDiscoveryPublisherDraining, .daemonDrained, .daemonExitingOnError:
@@ -477,7 +439,7 @@ public final class StatusMonitor: Sendable {
                 (.serviceDiscoveryUpdateFailure(0), .expected)
             case .serviceDiscoveryUpdateSuccess(let knownServices), .serviceDiscoveryUpdateFailure(let knownServices):
                 (.serviceDiscoveryUpdateFailure(knownServices), .expected)
-            case .uninitialized, .initializing, .waitingForFirstAttestationFetch, .waitingForFirstKeyFetch,
+            case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
                  .waitingForFirstHotPropertyUpdate:
                 (.serviceDiscoveryUpdateFailure(0), .unexpected)
             case .componentsFailedToRun, .daemonDrained, .daemonExitingOnError, .serviceDiscoveryPublisherDraining:
@@ -502,7 +464,7 @@ public final class StatusMonitor: Sendable {
             let (newStatus, transitionCategory): (DaemonStatus, TransitionCategory) = switch state.lastStatus {
             case .serviceDiscoveryUpdateSuccess(let knownServices), .serviceDiscoveryUpdateFailure(let knownServices):
                 (.serviceDiscoveryUpdateSuccess(knownServices - 1), .expected)
-            case .uninitialized, .initializing, .waitingForFirstAttestationFetch, .waitingForFirstKeyFetch,
+            case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
                  .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration:
                 (.serviceDiscoveryUpdateSuccess(0), .unexpected)
             case .componentsFailedToRun, .daemonDrained, .daemonExitingOnError, .serviceDiscoveryPublisherDraining:
@@ -521,7 +483,7 @@ public final class StatusMonitor: Sendable {
             let (newStatus, transitionCategory): (DaemonStatus, TransitionCategory) = switch state.lastStatus {
             case .serviceDiscoveryUpdateSuccess(let knownServices), .serviceDiscoveryUpdateFailure(let knownServices):
                 (.serviceDiscoveryUpdateSuccess(knownServices - 1), .expected)
-            case .uninitialized, .initializing, .waitingForFirstAttestationFetch, .waitingForFirstKeyFetch,
+            case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
                  .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration:
                 (.serviceDiscoveryUpdateSuccess(0), .unexpected)
             case .componentsFailedToRun, .daemonDrained, .daemonExitingOnError, .serviceDiscoveryPublisherDraining:
@@ -542,7 +504,7 @@ public final class StatusMonitor: Sendable {
             let transitionCategory: TransitionCategory = switch state.lastStatus {
             case .serviceDiscoveryUpdateSuccess, .serviceDiscoveryUpdateFailure:
                 .expected
-            case .uninitialized, .initializing, .waitingForFirstAttestationFetch, .waitingForFirstKeyFetch,
+            case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
                  .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration, .componentsFailedToRun:
                 .unexpected
             case .daemonDrained, .daemonExitingOnError, .serviceDiscoveryPublisherDraining:
@@ -563,7 +525,7 @@ public final class StatusMonitor: Sendable {
             let transitionCategory: TransitionCategory = switch state.lastStatus {
             case .serviceDiscoveryPublisherDraining:
                 .expected
-            case .uninitialized, .initializing, .waitingForFirstAttestationFetch, .waitingForFirstKeyFetch,
+            case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
                  .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration, .componentsFailedToRun,
                  .serviceDiscoveryUpdateSuccess, .serviceDiscoveryUpdateFailure, .daemonDrained:
                 .unexpected
@@ -584,7 +546,7 @@ public final class StatusMonitor: Sendable {
             let oldStatus = state.lastStatus
             switch state.lastStatus {
             case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
-                 .waitingForFirstKeyFetch, .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
+                 .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
                  .componentsFailedToRun, .serviceDiscoveryUpdateSuccess, .serviceDiscoveryUpdateFailure,
                  .serviceDiscoveryPublisherDraining, .daemonDrained, .daemonExitingOnError:
                 state.updateStatus(newStatus)
@@ -697,8 +659,6 @@ extension DaemonStatus: CustomStringConvertible {
             return "initializing"
         case .waitingForFirstAttestationFetch:
             return "waitingForFirstAttestationFetch"
-        case .waitingForFirstKeyFetch:
-            return "waitingForFirstKeyFetch"
         case .waitingForFirstHotPropertyUpdate:
             return "waitingForFirstHotPropertyUpdate"
         case .waitingForWorkloadRegistration:
@@ -732,8 +692,6 @@ extension DaemonStatus {
             return "initializing"
         case .waitingForFirstAttestationFetch:
             return "waitingForFirstAttestationFetch"
-        case .waitingForFirstKeyFetch:
-            return "waitingForFirstKeyFetch"
         case .waitingForFirstHotPropertyUpdate:
             return "waitingForFirstHotPropertyUpdate"
         case .waitingForWorkloadRegistration:

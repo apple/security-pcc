@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,8 +20,27 @@ package protocol CloudBoardBridgeAPIClientToServerProtocol {
         _ encryptedRequest: PIREncryptedRequest,
         traceContext: PIREncryptedRequestTraceContext
     ) async throws -> PIREncryptedResponse
+
+    func makeToolInvocationRequest(
+        _ request: PCCToolInvocationRequest,
+    ) async throws -> PCCToolInvocationResponse
+
+    func makeAppleSigningServiceSignRequest(
+        _ request: AppleSigningServiceSignRequest,
+        traceContext: AppleSigningServiceTraceContext,
+    ) async throws -> InternalAppleSigningServiceSignResponse
+
+    func makeAppleSigningServiceGetKeyVersionsRequest(
+        traceContext: AppleSigningServiceTraceContext,
+    ) async throws -> InternalAppleSigningServiceGetKeyVersionsResponse
+
+    func makeCIPCompanionServiceVerifyImageRequest(
+        _ request: CIPCompanionServiceVerifyImageRequest,
+        traceContext: CIPCompanionServiceTraceContext,
+    ) async throws -> InternalCIPCompanionServiceImageVerificationResponse
 }
 
 package protocol CloudBoardBridgeAPIClientProtocol: CloudBoardBridgeAPIClientToServerProtocol, Sendable {
     func connect() async
+    func ping() async throws
 }

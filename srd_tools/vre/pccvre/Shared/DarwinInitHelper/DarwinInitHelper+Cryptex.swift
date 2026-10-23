@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -157,19 +157,21 @@ extension DarwinInitHelper {
     }
 
     func findAsset(label: String, assets: [CryptexSpec]) -> CryptexSpec? {
-        guard let _ = SWReleaseMetadata.AssetType(label: label) else {
-            return nil
-        }
-        let assetsOfType = assets.filter { $0.assetType == label }
-        guard assetsOfType.count == 1 else {
-            if assetsOfType.count == 0 {
-                AssetHelper.logger.error("'\(label, privacy: .public)' from darwin-init in release assets not found")
-            } else {
-                AssetHelper.logger.error("count of \(label, privacy: .public) in darwin-init != 1 (\(assetsOfType.count, privacy: .public))")
+        // If the label is a known AssetType, try matching by assetType first
+        if let _ = SWReleaseMetadata.AssetType(label: label) {
+            let assetsOfType = assets.filter { $0.assetType == label }
+            if assetsOfType.count == 1 {
+                return assetsOfType[0]
             }
-            return nil
         }
-        return assetsOfType[0]
+        // Fall back to matching by variant name (supports multiple same-type assets
+        // whose darwin-init entries use the actual variant as the placeholder)
+        let assetsByVariant = assets.filter { $0.variant == label }
+        if assetsByVariant.count == 1 {
+            return assetsByVariant[0]
+        }
+        AssetHelper.logger.error("'\(label, privacy: .public)' from darwin-init: no unique match in release assets")
+        return nil
     }
 }
 

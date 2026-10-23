@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -55,6 +55,7 @@ actor ManagedSupportApp: ManagedSupportAppProtocol, ManagedAppResponseHandlerPro
     private let jobUUID: UUID
     private var requestID: String?
     private var spanID: UInt64?
+    private let appName: String
     private let metrics: MetricsSystem
 
     /// Provides access to request secrets such as the DEK need to derive new secrets from client-provided key material
@@ -88,6 +89,7 @@ actor ManagedSupportApp: ManagedSupportAppProtocol, ManagedAppResponseHandlerPro
         enforceSupportAppEntitlements: Bool = true,
         metrics: any MetricsSystem,
         jobUUID: UUID,
+        appName: String,
         terminationHandler: @escaping (_ cleanTermination: Bool) async -> Void,
         spanID: UInt64?
     ) throws {
@@ -96,6 +98,7 @@ actor ManagedSupportApp: ManagedSupportAppProtocol, ManagedAppResponseHandlerPro
         self.enforceSupportAppEntitlements = enforceSupportAppEntitlements
         self.metrics = metrics
         self.spanID = spanID
+        self.appName = appName
         self.managedApp = ManagedApp(
             definition: definition,
             xpcClientFactory: xpcClientFactory,
@@ -123,6 +126,7 @@ actor ManagedSupportApp: ManagedSupportAppProtocol, ManagedAppResponseHandlerPro
                 requestID: self.requestID,
                 remotePID: self.managedApp.remotePID,
                 spanID: self.spanID,
+                appName: self.appName,
                 message: "Support app terminated with non-zero exit code",
             ).logAppTermination(statusCode: statusCode, to: Self.tracingLogger, level: .error)
             cleanTermination = false
@@ -132,6 +136,7 @@ actor ManagedSupportApp: ManagedSupportAppProtocol, ManagedAppResponseHandlerPro
                 requestID: self.requestID,
                 remotePID: self.managedApp.remotePID,
                 spanID: self.spanID,
+                appName: self.appName,
                 message: "Support app terminated",
             ).logAppTermination(statusCode: statusCode, to: Self.tracingLogger, level: .default)
             cleanTermination = true
@@ -145,6 +150,7 @@ actor ManagedSupportApp: ManagedSupportAppProtocol, ManagedAppResponseHandlerPro
             requestID: self.requestID,
             remotePID: self.managedApp.remotePID,
             spanID: self.spanID,
+            appName: self.appName,
             message: "Support app disconnected",
             error: error
         ).log(to: Self.tracingLogger, level: .default)
@@ -158,6 +164,7 @@ actor ManagedSupportApp: ManagedSupportAppProtocol, ManagedAppResponseHandlerPro
             requestID: self.requestID,
             remotePID: self.managedApp.remotePID,
             spanID: self.spanID,
+            appName: self.appName,
             message: "Support app experienced unexpected internal error",
         ).log(to: Self.tracingLogger, level: .error)
     }
@@ -258,7 +265,7 @@ actor ManagedSupportApp: ManagedSupportAppProtocol, ManagedAppResponseHandlerPro
             fatalError("XPC connection not available")
         }
         let hasEntitlement = await xpcConnection.hasEntitlement(entitlement)
-        if self.enforceSupportAppEntitlements, !hasEntitlement {
+        if !self.enforceSupportAppEntitlements, !hasEntitlement {
             Self.logger.error("Support app not entitled to access crypto material but this check is disabled")
         } else {
             guard hasEntitlement else {
@@ -312,12 +319,14 @@ struct ManagedSupportAppCheckpoint: RequestCheckpoint {
     var error: Error?
     var message: StaticString
     var spanID: UInt64?
+    var appName: String?
 
     public init(
         jobID: UUID,
         requestID: String?,
         remotePID: Int?,
         spanID: UInt64?,
+        appName: String? = nil,
         operationName: StaticString = #function,
         message: StaticString,
         error: Error? = nil
@@ -326,6 +335,7 @@ struct ManagedSupportAppCheckpoint: RequestCheckpoint {
         self.requestID = requestID
         self.remotePID = remotePID
         self.spanID = spanID
+        self.appName = appName
         self.operationName = operationName
         self.message = message
         if let error {
@@ -348,6 +358,7 @@ struct ManagedSupportAppCheckpoint: RequestCheckpoint {
         error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
         error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
         error.detailed=\(self.error.map { String(describing: $0) } ?? "", privacy: .private)
+        supportAppName=\(self.appName ?? "", privacy: .public)
         message=\(self.message, privacy: .public)
         """)
     }
@@ -365,6 +376,7 @@ struct ManagedSupportAppCheckpoint: RequestCheckpoint {
         service.namespace=\(self.namespace, privacy: .public)
         status=\(status?.rawValue ?? "", privacy: .public)
         application_exit_code=\(statusCode.map { "\($0)" } ?? "", privacy: .public)
+        supportAppName=\(self.appName ?? "", privacy: .public)
         message=\(self.message, privacy: .public)
         """)
     }

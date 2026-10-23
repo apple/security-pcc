@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -29,16 +29,20 @@ import PrivateCloudCompute
 import Synchronization
 import os.log
 
+private let logger = Logger(for: .daemon)
+
 @available(iOS 18.0, *)
 package final class TC2Daemon: NSObject, NSXPCListenerDelegate, TC2DaemonHostDelegate, Sendable {
-    let logger = tc2Logger(forCategory: .daemon)
     let systemInfo: SystemInfo
+    let osEligibility: OSEligibility
+    let deviceState = DeviceState()
     let serverDrivenConfig: ServerDrivenConfiguration
     let config = DefaultConfiguration()
     let prefetchActivity:
         PrefetchScheduledActivity<
-            RateLimiter,
-            AttestationStore,
+            DeferredRateLimiter,
+            LegacyAttestationStore,
+            DeferredAttestationStore,
             AttestationVerifier<FeatureFlagChecker, CloudAttestation.MuxValidator>,
             ServerDrivenConfiguration,
             DefaultConfiguration,
@@ -47,9 +51,13 @@ package final class TC2Daemon: NSObject, NSXPCListenerDelegate, TC2DaemonHostDel
             FeatureFlagChecker,
             PrefetchTracker
         >
+    let vaultConfigurationUpdater: VaultConfigurationUpdater<DeferredRateLimiter, DeviceQuotaConfigurationFetcherWrapper, DefaultConfiguration, FeatureFlagChecker, NotificationsProducer>
+    let notificationsMonitor: NotificationsMonitor<VaultConfigurationUpdater<DeferredRateLimiter, DeviceQuotaConfigurationFetcherWrapper, DefaultConfiguration, FeatureFlagChecker, NotificationsProducer>>
     let updateServerDrivenConfigurationActivity: UpdateServerDrivenConfigScheduledActivity<ServerDrivenConfiguration, SystemInfo>
-    let rateLimiter: RateLimiter
-    let attestationStore: AttestationStore?
+    let updateVaultConfigurationActivity: UpdateVaultConfigScheduledActivity<VaultConfigurationUpdater<DeferredRateLimiter, DeviceQuotaConfigurationFetcherWrapper, DefaultConfiguration, FeatureFlagChecker, NotificationsProducer>>
+    let rateLimiter: DeferredRateLimiter
+    let tokenProviderFactory: TokenProviderFactory<DefaultConfiguration, FeatureFlagChecker, ServerDrivenConfiguration, SystemInfo>
+    let attestationStoreOrLegacyStore: AttestationStoreOrLegacyStore<LegacyAttestationStore, DeferredAttestationStore>
     let attestationVerifier: AttestationVerifier<FeatureFlagChecker, CloudAttestation.MuxValidator>
     let dailyActiveUserReporter: DailyActiveUsersReporter<UserDefaultsStore, SystemInfo>
     let featureUsageAnalyzerScheduledActivity: FeatureUsageAnalyzerScheduledActivity<SystemInfo, FeatureFlagChecker>
@@ -68,56 +76,113 @@ package final class TC2Daemon: NSObject, NSXPCListenerDelegate, TC2DaemonHostDel
 
     let (thimbledEventStream, thimbledEventContinuation) = AsyncStream.makeStream(of: ThimbledEvent.self)
 
-    var scheduledPrefetchTask: ScheduledTask<PreferencesStore> {
-        return .init(preregisteredIdentifier: "com.apple.privatecloudcompute.prefetchAttestations", work: prefetchActivity, store: preferencesStore)
-    }
-
-    var scheduledFeatureUsageAnalyzerTask: ScheduledTask<PreferencesStore> {
-        return .init(
-            preregisteredIdentifier: "com.apple.privatecloudcompute.featureUsageAnalyzer",
-            work: featureUsageAnalyzerScheduledActivity,
+    var scheduledPrefetchTask: ScheduledTask<PreferencesStore, OSEligibility> {
+        .init(
+            preregisteredIdentifier: "com.apple.privatecloudcompute.prefetchAttestations",
+            work: prefetchActivity,
             store: preferencesStore,
+            osEligibility: osEligibility
         )
     }
 
-    var scheduledFetchConfigBagTask: ScheduledTask<PreferencesStore> {
-        return .init(preregisteredIdentifier: "com.apple.privatecloudcompute.fetchServerDrivenConfig", work: updateServerDrivenConfigurationActivity, store: preferencesStore)
+    var scheduledFeatureUsageAnalyzerTask: ScheduledTask<PreferencesStore, OSEligibility> {
+        .init(
+            preregisteredIdentifier: "com.apple.privatecloudcompute.featureUsageAnalyzer",
+            work: featureUsageAnalyzerScheduledActivity,
+            store: preferencesStore,
+            osEligibility: osEligibility
+        )
     }
 
-    var scheduledNodeDistributionReportTask: ScheduledTask<PreferencesStore> {
-        return .init(preregisteredIdentifier: "com.apple.privatecloudcompute.nodeDistributionReport", work: nodeDistributionReportActivity, store: preferencesStore)
+    var scheduledFetchConfigBagTask: ScheduledTask<PreferencesStore, OSEligibility> {
+        .init(
+            preregisteredIdentifier: "com.apple.privatecloudcompute.fetchServerDrivenConfig",
+            work: updateServerDrivenConfigurationActivity,
+            store: preferencesStore,
+            osEligibility: osEligibility
+        )
+    }
+
+    var scheduledFetchVaultConfigTask: ScheduledTask<PreferencesStore, OSEligibility> {
+        .init(
+            preregisteredIdentifier: "com.apple.privatecloudcompute.fetchVaultConfig",
+            work: updateVaultConfigurationActivity,
+            store: preferencesStore,
+            osEligibility: osEligibility
+        )
+    }
+
+    var scheduledNodeDistributionReportTask: ScheduledTask<PreferencesStore, OSEligibility> {
+        .init(
+            preregisteredIdentifier: "com.apple.privatecloudcompute.nodeDistributionReport",
+            work: nodeDistributionReportActivity,
+            store: preferencesStore,
+            osEligibility: osEligibility
+        )
+    }
+
+    var prefetchRequestHandler: PrefetchRequestHandler<PrefetchTracker, DeferredRateLimiter, LegacyAttestationStore, DeferredAttestationStore, DefaultConfiguration, ServerDrivenConfiguration, SystemInfo, FeatureFlagChecker> {
+        PrefetchRequestHandler(
+            prefetchTracker: self.prefetchTracker,
+            rateLimiter: self.rateLimiter,
+            attestationStoreOrLegacyStore: self.attestationStoreOrLegacyStore,
+            attestationVerifier: self.attestationVerifier,
+            config: self.config,
+            serverDrivenConfig: self.serverDrivenConfig,
+            systemInfo: self.systemInfo,
+            featureFlagChecker: self.featureFlagChecker,
+            eventStreamContinuation: self.thimbledEventContinuation
+        )
     }
 
     let structuredRequestFactoriesBySetup: Mutex<[TC2ResolvedSetup: ThimbledTrustedRequestFactory]> = Mutex([:])
 
     let prefetchTracker = PrefetchTracker()
 
-    package init(dataContainerUrl: URL? = nil) {
-        self.systemInfo = SystemInfo()
+    let bundleIDProvider: any BundleIDProviderProtocol
+
+    package init(dataContainerUrl: URL) {
+        self.systemInfo = SystemInfo(featureFlagChecker: self.featureFlagChecker)
+        self.osEligibility = OSEligibility()
         let environment = self.config.environment(systemInfo: self.systemInfo)
 
-        let (daemonDirectoryPath, migrateFromPath) = getDaemonDirectoryPath(
+        let daemonDirectoryPath = getDaemonDirectoryPath(
             dataContainerUrl: dataContainerUrl,
             environment: environment
         )
-        if let migrateFromPath {
-            migrateDaemon(from: migrateFromPath, to: daemonDirectoryPath)
-        }
 
         clearDefaultsIfBuildChanged(systemInfo: self.systemInfo, store: self.preferencesStore)
 
-        self.rateLimiter = RateLimiter(config: self.config, from: daemonDirectoryPath)
-        self.attestationStore = AttestationStore(environment: environment, dir: daemonDirectoryPath)
+        if self.featureFlagChecker.isEnabled(.secTaskBundleIDResolution) {
+            self.bundleIDProvider = SecTaskBundleIDProvider()
+        } else {
+            self.bundleIDProvider = LegacyBundleIDProvider()
+        }
+
+        self.rateLimiter = DeferredRateLimiter(config: self.config, from: daemonDirectoryPath)
+        if self.featureFlagChecker.isEnabled(.attestationStoreV3) {
+            let attestationStore = DeferredAttestationStore(dir: daemonDirectoryPath)
+            self.attestationStoreOrLegacyStore = .attestationStore(attestationStore)
+        } else {
+            let legacyAttestationStore = LegacyAttestationStore(dir: daemonDirectoryPath)
+            self.attestationStoreOrLegacyStore = .legacyStore(legacyAttestationStore)
+        }
         self.serverDrivenConfig = ServerDrivenConfiguration(from: daemonDirectoryPath)
         self.attestationVerifier = AttestationVerifier(
             environment: environment,
             featureFlagChecker: self.featureFlagChecker,
             validator: cloudAttestationValidator(for: environment)
         )
+        self.tokenProviderFactory = TokenProviderFactory(
+            configuration: self.config,
+            featureFlagChecker: self.featureFlagChecker,
+            serverDrivenConfig: self.serverDrivenConfig,
+            systemInfo: self.systemInfo
+        )
         self.dailyActiveUserReporter = DailyActiveUsersReporter<UserDefaultsStore, SystemInfo>(systemInfo: self.systemInfo)
         self.prefetchActivity = PrefetchScheduledActivity(
             rateLimiter: self.rateLimiter,
-            attestationStore: self.attestationStore,
+            attestationStoreOrLegacyStore: self.attestationStoreOrLegacyStore,
             attestationVerifier: self.attestationVerifier,
             config: self.config,
             daemonDirectoryPath: daemonDirectoryPath,
@@ -128,11 +193,24 @@ package final class TC2Daemon: NSObject, NSXPCListenerDelegate, TC2DaemonHostDel
             eventStreamContinuation: self.thimbledEventContinuation,
             prefetchTracker: self.prefetchTracker
         )
+        self.vaultConfigurationUpdater = VaultConfigurationUpdater(
+            rateLimiter: self.rateLimiter,
+            fetcher: DeviceQuotaConfigurationFetcherWrapper(),
+            configuration: self.config,
+            featureFlagChecker: self.featureFlagChecker,
+            notificationsProducer: NotificationsProducer()
+        )
+        self.notificationsMonitor = NotificationsMonitor(
+            vaultConfigurationUpdater: self.vaultConfigurationUpdater,
+            osEligibility: self.osEligibility
+        )
+
         self.updateServerDrivenConfigurationActivity = UpdateServerDrivenConfigScheduledActivity(
             serverDrivenConfig: self.serverDrivenConfig,
             systemInfo: systemInfo,
             config: self.config
         )
+        self.updateVaultConfigurationActivity = UpdateVaultConfigScheduledActivity(updater: self.vaultConfigurationUpdater)
         self.nodeDistributionAnalyzer = NodeDistributionAnalyzer(
             environment: environment.name,
             storeURL: daemonDirectoryPath,
@@ -170,7 +248,10 @@ package final class TC2Daemon: NSObject, NSXPCListenerDelegate, TC2DaemonHostDel
         logger.log("Starting daemon. tc2OSInfo: \(self.systemInfo.osInfo)")
     }
 
-    func structuredRequestFactory(forSetup setup: TC2ResolvedSetup) -> ThimbledTrustedRequestFactory {
+    func structuredRequestFactory(
+        forSetup setup: TC2ResolvedSetup,
+        requestParameters: RequestParameters
+    ) -> ThimbledTrustedRequestFactory {
         self.structuredRequestFactoriesBySetup.withLock { factories in
             if let factory = factories[setup] {
                 return factory
@@ -178,18 +259,19 @@ package final class TC2Daemon: NSObject, NSXPCListenerDelegate, TC2DaemonHostDel
                 let factory = ThimbledTrustedRequestFactory(
                     config: self.config,
                     serverDrivenConfig: self.serverDrivenConfig,
-                    systemInfo: systemInfo,
+                    systemInfo: self.systemInfo,
+                    osEligibility: self.osEligibility,
+                    deviceState: self.deviceState,
                     connectionFactory: NWAsyncConnection(),
-                    attestationStore: self.attestationStore,
+                    attestationStoreOrLegacyStore: self.attestationStoreOrLegacyStore,
                     attestationVerifier: self.attestationVerifier,
                     rateLimiter: self.rateLimiter,
-                    tokenProvider: NSPTokenProvider(fetcher: PrivateAccessTokenFetcher(config: self.config)),
+                    tokenProviderFactory: self.tokenProviderFactory,
                     clock: ContinuousClock(),
                     clientBundleIdentifier: setup.clientBundleIdentifier,
-                    allowBundleIdentifierOverride: setup.allowBundleIdentifierOverride,
                     parametersCache: self.prefetchActivity.parametersCache,
                     eventStreamContinuation: self.thimbledEventContinuation,
-                    featureFlagChecker: self.featureFlagChecker
+                    featureFlagChecker: self.featureFlagChecker,
                 )
                 factories[setup] = factory
                 return factory
@@ -197,176 +279,47 @@ package final class TC2Daemon: NSObject, NSXPCListenerDelegate, TC2DaemonHostDel
         }
     }
 
+    func warmAttestationStore() async {
+        if case .attestationStore(let attestationStore) = self.attestationStoreOrLegacyStore {
+            await attestationStore.warm()
+        }
+    }
+
     package func main() async {
         do {
-            self.logger.log("Setting up CloudTelemetry xpc service activities.")
+            logger.log("Setting up CloudTelemetry xpc service activities.")
             try await CloudTelemetry.setupXpcServiceActivities()
         } catch {
-            self.logger.log("Failed to setup CloudTelemetry")
+            logger.log("Failed to setup CloudTelemetry")
         }
 
         DispatchQueue.global().async {
             let listener = NSXPCListener(machServiceName: "com.apple.privatecloudcompute")
             listener.delegate = self
 
-            self.logger.log("Listener start")
+            logger.log("Listener start")
             listener.resume()
-            self.logger.log("Listener done")
+            logger.log("Listener done")
 
-            self.logger.log("Register prefetch task")
+            logger.log("Register prefetch task")
             self.scheduledPrefetchTask.register()
 
-            self.logger.log("Register feature usage analyzer task")
+            logger.log("Register feature usage analyzer task")
             self.scheduledFeatureUsageAnalyzerTask.register()
 
-            self.logger.log("Register fetch config bag task")
+            logger.log("Register fetch config bag task")
             self.scheduledFetchConfigBagTask.register()
 
-            self.logger.log("Register node distribution report task")
+            logger.log("Register update request tokens rate limits task")
+            self.scheduledFetchVaultConfigTask.register()
+
+            logger.log("Register node distribution report task")
             self.scheduledNodeDistributionReportTask.register()
         }
 
         logger.log("Starting daemon run loop...")
 
-        let metricExporter = MetricReporter()
-
-        // thimbled event stream should never be finished
-        await withDiscardingTaskGroup { taskGroup in
-            for await event in self.thimbledEventStream {
-                switch event {
-                case .expiredAttestationList(let expiredAttestationList, let parameters):
-                    taskGroup.addTask {
-                        await withOSTransaction(name: "com.apple.privatecloudcomputed.prefetch") {
-                            await self.prefetchAttestationsAsResponseToExpiredAttestationList(
-                                expiredAttestationList,
-                                parameters: parameters
-                            )
-                        }
-                    }
-
-                case .reportDailyActiveUserIfNecessary(let requestID, let environment):
-                    taskGroup.addTask {
-                        if let metric = await self.dailyActiveUserReporter.makeDailyInvokeRequestReportEvent(requestID: requestID, environment: environment) {
-                            await metricExporter.reportCloudTelemetryMetric(metric: metric)
-                        }
-                    }
-
-                case .reportDailyPrefetchMetricIfNecessary(let requestID, let environment):
-                    taskGroup.addTask {
-                        if let metric = await self.dailyActiveUserReporter.makeDailyPrefetchReportEvent(
-                            requestID: requestID,
-                            environment: environment,
-                            workloadsCache: self.prefetchActivity.parametersCache
-                        ) {
-                            await metricExporter.reportCloudTelemetryMetric(metric: metric)
-                        }
-                    }
-
-                case .exportMetric(let metric):
-                    taskGroup.addTask {
-                        await metricExporter.reportCloudTelemetryMetric(metric: metric)
-                    }
-
-                case .rateLimitConfigurations(let rateLimitConfigs):
-                    taskGroup.addTask {
-                        for rateLimitConfig in rateLimitConfigs {
-                            await self.rateLimiter.limitByConfiguration(rateLimitConfig)
-                        }
-                        await self.rateLimiter.trimExpiredData()
-                        await self.rateLimiter.save()
-                    }
-
-                case .attestationStoreCleanup:
-                    taskGroup.addTask {
-                        await self.attestationStore?.deleteEntriesWithExpiredAttestationBundles()
-                    }
-
-                case .prewarmAttestations(let workloadType, let workloadParameters, let bundleIdentifier, let featureIdentifier):
-                    // Use medium priority to avoid starving user request path
-                    taskGroup.addTask(priority: .medium) {
-                        self.logger.log("running prewarmAttestations: \(workloadType) \(workloadParameters)")
-                        await withOSTransaction(name: "com.apple.privatecloudcomputed.prewarm") {
-                            _ = await self.handlePrefetchRequest(
-                                workloadType: workloadType,
-                                workloadParameters: workloadParameters,
-                                prewarm: true,
-                                fetchType: .fetchAllBatches,
-                                bundleIdentifier: bundleIdentifier,
-                                featureIdentifier: featureIdentifier
-                            )
-                        }
-                    }
-
-                case .prefetchAttestationsForNewWorkload(let parameters):
-                    // Use medium priority to avoid starving user request path
-                    taskGroup.addTask(priority: .medium) {
-                        self.logger.log("running prefetchAttestationsForNewWorkload")
-                        await withOSTransaction(name: "com.apple.privatecloudcomputed.prefetch") {
-                            _ = await self.handlePrefetchRequest(
-                                workloadType: parameters.type,
-                                workloadParameters: parameters.parameters,
-                                prewarm: false,
-                                fetchType: .fetchAllBatches,
-                                bundleIdentifier: nil,
-                                featureIdentifier: nil
-                            )
-                        }
-                    }
-
-                case .discardUsedAttestationsAndPrefetchBatch(let serverRequestID, let parameters):
-                    // Use medium priority to avoid starving user request path
-                    taskGroup.addTask(priority: .medium) {
-                        self.logger.log("running discardUsedAttestationsAndPrefetchBatch")
-                        guard let attestationStore = self.attestationStore else {
-                            self.logger.error("failed to prefetch attestations as store is not initialized")
-                            return
-                        }
-
-                        await withOSTransaction(name: "com.apple.privatecloudcomputed.prefetch") {
-                            // 1. Issue a delete request to the store with trustedRequestID
-                            let batchID = await attestationStore.deleteAttestationsUsedByTrustedRequest(serverRequestID: serverRequestID)
-
-                            // 2. Prefetch a single batch to top up the store
-                            _ = await self.handlePrefetchRequest(
-                                workloadType: parameters.type,
-                                workloadParameters: parameters.parameters,
-                                prewarm: false,
-                                fetchType: .fetchSingleBatch(batchID: batchID),
-                                bundleIdentifier: nil,
-                                featureIdentifier: nil
-                            )
-                        }
-                    }
-
-                case .nodesReceived(let nodeIDs, let source):
-                    taskGroup.addTask {
-                        await self.nodeDistributionAnalyzer.receivedNodesWith(nodeIDs: nodeIDs, from: source)
-                    }
-                case .tapToRadarIndicationReceived(let context):
-                    taskGroup.addTask {
-                        _ = await self.tapToRadarController.ttrIndicationReceived(context)
-                    }
-                case .componentTimeMeasurementReceived(let clientRequestID, let source):
-                    taskGroup.addTask {
-                        self.componentTimeMeasurementReporter.process(clientRequestID: clientRequestID, source: source)
-                    }
-                case .fetchServerDrivenConfigurationIfAllowed:
-                    taskGroup.addTask {
-                        await self.fetchServerDrivenConfigurationIfAllowed()
-                    }
-                case .trustedRequestCompleted(let featureId, let error):
-                    taskGroup.addTask {
-                        if let error {
-                            if error.code == .invalidClientOverrideBuildVersion {
-                                await self.expiredBuildNotification.show()
-                            }
-                        } else {
-                            await self.featureUsageAnalyzer.requestSucceeded(featureId: featureId ?? "")
-                        }
-                    }
-                }
-            }
-        }
+        await self.runEventStreamLoop()
     }
 
     /// This method is where the NSXPCListener configures, accepts, and resumes a new incoming NSXPCConnection.
@@ -388,7 +341,7 @@ package final class TC2Daemon: NSObject, NSXPCListenerDelegate, TC2DaemonHostDel
         newConnection.exportedInterface = interfaceForTC2DaemonProtocol()
 
         // Next, set the object that the connection exports. All messages sent on the connection to this service will be sent to the exported object to handle. The connection retains the exported object.
-        let exportedObject = TC2DaemonHost(config: self.config, systemInfo: self.systemInfo, delegate: self, connection: newConnection)
+        let exportedObject = TC2DaemonHost(config: self.config, systemInfo: self.systemInfo, bundleIDProvider: self.bundleIDProvider, delegate: self, connection: newConnection, deviceState: self.deviceState)
         newConnection.exportedObject = exportedObject
 
         // Resuming the connection allows the system to deliver more incoming messages.
@@ -415,13 +368,16 @@ package final class TC2Daemon: NSObject, NSXPCListenerDelegate, TC2DaemonHostDel
     ) async {
         do {
             if expiredAttestationList.shouldClearCache {
-                if let attestationStore = self.attestationStore {
-                    // The prefetch request will take care of clearing out the store of older attestations for this workload
-                    self.logger.log("creating a prefetch request as response to expired attestations")
-                    try await self.prefetchTracker.ensuringOnlyASinglePrefetchIsRunningForParameters(parameters) {
-                        let prefetchRequest = BatchedPrefetch(
+                // The prefetch request will take care of clearing out the store of older attestations for this workload
+                logger.log("creating a prefetch request as response to expired attestations")
+
+                try await self.prefetchTracker.ensuringOnlyASinglePrefetchIsRunningForParameters(parameters) {
+                    let prefetchRequest: any PrefetchProtocol
+                    switch attestationStoreOrLegacyStore {
+                    case .legacyStore(let legacyAttestationStore):
+                        prefetchRequest = BatchedPrefetch(
                             connectionFactory: NWAsyncConnection(),
-                            attestationStore: attestationStore,
+                            attestationStore: legacyAttestationStore,
                             rateLimiter: self.rateLimiter,
                             attestationVerifier: self.attestationVerifier,
                             config: self.config,
@@ -433,19 +389,37 @@ package final class TC2Daemon: NSObject, NSXPCListenerDelegate, TC2DaemonHostDel
                             prewarm: false,
                             fetchType: .fetchAllBatches
                         )
-
-                        self.logger.log("firing prefetch request as response to expired attestations")
-                        _ = try await prefetchRequest.sendRequest()
-                        self.logger.log("succeeded prefetch request as response to expired attestations")
+                    case .attestationStore(let attestationStore):
+                        prefetchRequest = AttestationStorePrefetch(
+                            connectionFactory: NWAsyncConnection(),
+                            attestationStore: attestationStore,
+                            rateLimiter: self.rateLimiter,
+                            attestationVerifier: self.attestationVerifier,
+                            config: self.config,
+                            serverDrivenConfig: self.serverDrivenConfig,
+                            systemInfo: systemInfo,
+                            featureFlagChecker: self.featureFlagChecker,
+                            parameters: parameters,
+                            eventStreamContinuation: self.thimbledEventContinuation,
+                            prewarm: false
+                        )
                     }
+
+                    logger.log("firing prefetch request as response to expired attestations")
+                    _ = try await prefetchRequest.sendRequest()
                 }
             } else {
                 for nodeIdentifier in expiredAttestationList.nodeIdentifier {
-                    _ = await self.attestationStore?.deleteEntryForNode(nodeIdentifier: nodeIdentifier)
+                    switch attestationStoreOrLegacyStore {
+                    case .legacyStore(let legacyAttestationStore):
+                        _ = await legacyAttestationStore.deleteEntryForNode(nodeIdentifier: nodeIdentifier)
+                    case .attestationStore(let attestationStore):
+                        _ = await attestationStore.deleteEntryForNode(nodeID: nodeIdentifier)
+                    }
                 }
             }
         } catch {
-            self.logger.log("failed prefetch request as response to expired attestations. error: \(error)")
+            logger.log("failed prefetch request as response to expired attestations. error: \(error)")
         }
     }
 }

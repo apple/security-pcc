@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,6 +23,8 @@ import Foundation
 import PrivateCloudCompute
 
 protocol RateLimiterProtocol: Sendable {
+    /// Replaces all existing limits for the given `source` with new `configurations`.
+    func limitByConfigurations(_ configurations: [RateLimitConfiguration], replacing source: RateLimitSource) async
     func limitByConfiguration(_ config: RateLimitConfiguration) async
     func trimExpiredData(now: Date) async
     func save() async

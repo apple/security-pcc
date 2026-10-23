@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -30,16 +30,19 @@ package struct LaunchdWorkloadProvider: CloudBoardJobHelperWorkloadProvider {
     let metrics: any MetricsSystem
     let cloudAppClientFactory: any ManagedAppXPCClientFactoryProtocol
     let supportAppClientFactory: any ManagedAppXPCClientFactoryProtocol
+    let enforceAppEntitlements: Bool
 
     public init(
         launchdJobFinder: any LaunchdJobFinderProtocol,
-        metrics: any MetricsSystem
+        metrics: any MetricsSystem,
+        enforceAppEntitlements: Bool = true
     ) {
         self.init(
             launchdJobFinder: launchdJobFinder,
             cloudAppClientFactory: ManagedAppXPCClientFactory(),
             supportAppClientFactory: ManagedAppXPCClientFactory(),
-            metrics: metrics
+            metrics: metrics,
+            enforceAppEntitlements: enforceAppEntitlements
         )
     }
 
@@ -47,15 +50,16 @@ package struct LaunchdWorkloadProvider: CloudBoardJobHelperWorkloadProvider {
         launchdJobFinder: any LaunchdJobFinderProtocol,
         cloudAppClientFactory: any ManagedAppXPCClientFactoryProtocol,
         supportAppClientFactory: any ManagedAppXPCClientFactoryProtocol,
-        metrics: any MetricsSystem
+        metrics: any MetricsSystem,
+        enforceAppEntitlements: Bool = true
     ) {
         self.launchdJobFinder = launchdJobFinder
         self.metrics = metrics
         self.cloudAppClientFactory = cloudAppClientFactory
         self.supportAppClientFactory = supportAppClientFactory
+        self.enforceAppEntitlements = enforceAppEntitlements
     }
 
-    @available(*, deprecated, message: "use getCloudApp and provide requestSecrets and ensembleKeyDistributor")
     package func getCloudApp(
         cloudAppName: String,
         jobUUID: UUID,
@@ -64,8 +68,8 @@ package struct LaunchdWorkloadProvider: CloudBoardJobHelperWorkloadProvider {
         try self.getCloudApp(
             cloudAppName: cloudAppName,
             requestSecrets: RequestSecrets(),
-            ensembleKeyDistributor: EnsembleKeyDistributor(),
             pirHelper: NoOpPIRHelper(),
+            toolInvocationHelper: NoOpToolInvocationHelper(),
             jobUUID: jobUUID,
             cbJobHelperLogMetadata: cbJobHelperLogMetadata
         )
@@ -74,8 +78,8 @@ package struct LaunchdWorkloadProvider: CloudBoardJobHelperWorkloadProvider {
     package func getCloudApp(
         cloudAppName: String,
         requestSecrets: RequestSecrets,
-        ensembleKeyDistributor: EnsembleKeyDistributorProtocol,
         pirHelper: PIRHelperProtocol,
+        toolInvocationHelper: ToolInvocationHelperProtocol,
         jobUUID: UUID,
         cbJobHelperLogMetadata: CloudBoardJobHelperLogMetadata
     ) throws -> ManagedCloudAppProtocol {
@@ -90,8 +94,9 @@ package struct LaunchdWorkloadProvider: CloudBoardJobHelperWorkloadProvider {
                 definition: definition,
                 xpcClientFactory: self.cloudAppClientFactory,
                 requestSecrets: requestSecrets,
-                ensembleKeyDistributor: ensembleKeyDistributor,
                 pirHelper: pirHelper,
+                toolInvocationHelper: toolInvocationHelper,
+                enforceCloudAppEntitlements: self.enforceAppEntitlements,
                 metrics: self.metrics,
                 jobUUID: jobUUID,
                 spanID: cbJobHelperLogMetadata.spanID
@@ -137,8 +142,10 @@ package struct LaunchdWorkloadProvider: CloudBoardJobHelperWorkloadProvider {
                 definition: definition,
                 xpcClientFactory: self.supportAppClientFactory,
                 requestSecrets: requestSecrets,
+                enforceSupportAppEntitlements: self.enforceAppEntitlements,
                 metrics: self.metrics,
                 jobUUID: jobUUID,
+                appName: appName,
                 terminationHandler: terminationHandler,
                 spanID: cbJobHelperLogMetadata.spanID
             )

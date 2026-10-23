@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -59,9 +59,11 @@ package enum WorkloadControllerError: Error, Equatable, CustomStringConvertible 
 ///    error <------------------------error
 /// ```
 package actor WorkloadController {
-    /// Duration to wait before publishing status updates to prevent rapid-fire announcements.
+    /// Default duration to wait before publishing status updates to prevent rapid-fire announcements.
     /// Used when transitioning to states that benefit from debouncing (currently `.ready`).
-    internal static let debounceDuration: Duration = .seconds(5)
+    internal static let defaultDebounceDuration: Duration = .seconds(5)
+
+    private let debounceDuration: Duration
 
     private var isLeader: Bool = true
     /// The name of the cloud application this controller manages.
@@ -70,6 +72,14 @@ package actor WorkloadController {
     private let healthPublisher: ServiceHealthMonitor
     private var providerPause: (@Sendable (String?) async throws -> Void)?
     private var restartPrewarmedInstances: (@Sendable () async throws -> Void)?
+    /// When true, the capacity advertised to ROPES is capped by the configured prewarm pool size: the node can never
+    /// warm more instances than the pool holds, so `maxBatchSize` is clamped to it when reporting health (see
+    /// `sendHealthPublisherUpdate`).
+    private let maxBatchDependsOnPrewarmedSize: Bool
+    /// The statically-configured prewarm pool size for this cloud app, used to clamp the advertised `maxBatchSize`
+    /// while `maxBatchDependsOnPrewarmedSize` is enabled. `nil` when the pool size is not applicable (e.g. follower)
+    /// or not known to this controller.
+    private let configuredPrewarmedPoolSize: Int?
     private var restartingPrewarmedInstances: Bool = false
     private var concurrentRequestCount: Int
     private var announcedService: Bool = false
@@ -78,6 +88,7 @@ package actor WorkloadController {
 
     private var workloadProperties: WorkloadProperties?
     private var workloadConfig: InternalWorkloadConfig?
+    package nonisolated let inMemoryMode: Bool
 
     private var scheduledPublishing: Task<Void, Never>?
     private var lastDebouncedPublishingTime: ContinuousClock.Instant?
@@ -163,18 +174,27 @@ package actor WorkloadController {
         cloudAppName: String,
         healthPublisher: ServiceHealthMonitor,
         inMemoryControllerConfig: (WorkloadProperties, InternalWorkloadConfig)? = nil,
+        debounceDuration: Duration = WorkloadController.defaultDebounceDuration,
+        maxBatchDependsOnPrewarmedSize: Bool = false,
+        configuredPrewarmedPoolSize: Int? = nil,
         metrics: MetricsSystem
     ) {
         self.cloudAppName = cloudAppName
+        self.debounceDuration = debounceDuration
         self.metrics = metrics
         self.state = .initializing
         self.healthPublisher = healthPublisher
         self.concurrentRequestCount = 0
+        self.maxBatchDependsOnPrewarmedSize = maxBatchDependsOnPrewarmedSize
+        self.configuredPrewarmedPoolSize = configuredPrewarmedPoolSize
 
         if let (workloadProperties, workloadConfig) = inMemoryControllerConfig {
+            self.inMemoryMode = true
             self.workloadProperties = workloadProperties
             self.workloadConfig = workloadConfig
             self.state = .ready
+        } else {
+            self.inMemoryMode = false
         }
         self.metrics.emit(Metrics.WorkloadStatus.HealthStatus(value: 1, healthStatus: self.state))
     }
@@ -221,7 +241,7 @@ package actor WorkloadController {
 
         if case .ready = self.state,
            let properties = self.workloadProperties,
-           self.workloadConfig != nil {
+           let _ = self.workloadConfig {
             Self.log.info("""
             Announcing inMemoryController based service \(properties.workloadName, privacy: .public)
             """)
@@ -297,6 +317,34 @@ package actor WorkloadController {
             Self.log.warning(
                 "Optimal batch size is larger than max batch size"
             )
+        }
+
+        // When maxBatchDependsOnPrewarmedSize is enabled the node can never warm more instances than the configured
+        // prewarm pool holds, so cap the advertised batch sizes at the pool size: advertising more would promise
+        // capacity that can never become immediately servable. In-memory controllers are validated against the pool
+        // size at config-load time in SecureConfig, so this only ever triggers for externally-registered controllers.
+        var config = config
+        if self.maxBatchDependsOnPrewarmedSize,
+           let prewarmPoolSize = self.configuredPrewarmedPoolSize,
+           config.maxBatchSize > prewarmPoolSize {
+            Self.log.warning("""
+            cloudApp=\(self.cloudAppName, privacy: .public) registered maxBatchSize=\
+            \(config.maxBatchSize, privacy: .public) exceeds configured prewarmedPoolSize=\
+            \(prewarmPoolSize, privacy: .public) while maxBatchDependsOnPrewarmedSize is enabled; capping advertised \
+            capacity at the prewarm pool size. Raise the cloud app's prewarmedPoolSize to at least maxBatchSize.
+            """)
+            switch config {
+            case .compute(var computeConfig):
+                computeConfig.maxBatchSize = prewarmPoolSize
+                computeConfig.optimalBatchSize = min(computeConfig.optimalBatchSize, prewarmPoolSize)
+                config = .compute(computeConfig)
+            case .proxy(var proxyConfig):
+                proxyConfig.maxBatchSize = prewarmPoolSize
+                proxyConfig.optimalBatchSize = min(proxyConfig.optimalBatchSize, prewarmPoolSize)
+                config = .proxy(proxyConfig)
+            case .persistentService:
+                break
+            }
         }
 
         self.workloadConfig = config
@@ -571,15 +619,16 @@ package actor WorkloadController {
         let tags = switch config {
         case .compute(let config): config.workloadTags
         case .proxy(let config): config.workloadTags
+        case .persistentService(let config): config.workloadTags
         }
 
-        self.healthPublisher.updateStatus(.healthy(.init(
+        self.healthPublisher.updateStatus(.healthy(.leader(.init(
             workloadType: properties.workloadName,
             tags: tags,
             maxBatchSize: maxBatchSize,
             currentBatchSize: config.currentBatchSize,
             optimalBatchSize: optimalBatchSize
-        )))
+        ))))
     }
 
     /// Handles health publisher updates for follower instances with minimal status reporting.
@@ -588,7 +637,7 @@ package actor WorkloadController {
         case .initializing:
             return
         case .ready, .busy, .busyTransitioning:
-            self.healthPublisher.updateStatus(.healthy(nil))
+            self.healthPublisher.updateStatus(.healthy(.follower))
         case .error:
             self.healthPublisher.updateStatus(.unhealthy)
         }
@@ -624,7 +673,7 @@ package actor WorkloadController {
                 return
             }
             let delay = if let lastDebouncedPublishingTime = self.lastDebouncedPublishingTime {
-                Self.debounceDuration - lastDebouncedPublishingTime.duration(to: .now)
+                self.debounceDuration - lastDebouncedPublishingTime.duration(to: .now)
             } else {
                 Duration.zero
             }

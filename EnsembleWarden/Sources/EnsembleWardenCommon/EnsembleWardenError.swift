@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,7 +21,29 @@
 
 import Darwin
 
-public enum EnsembleWardenError: Codable, Equatable, Hashable, Error {
+/// Mirror of `EnsembleTransportError` from the `EnsembleTransport` framework.
+///
+/// We can't carry the framework's own type in ``EnsembleWardenError``: `EnsembleTransport` is
+/// weakly linked and only conditionally importable, whereas ``EnsembleWardenError`` crosses the
+/// XPC boundary and so must be `Codable` in every build configuration. Mirroring keeps the
+/// failure reason instead of flattening it to a type name, which is what
+/// `EnsembleWardenError.externalError(type:)` used to do.
+///
+/// `EnsembleTransportError` is a closed enum, so ``EnsembleTransportBackend`` converts it with
+/// an exhaustive switch — a new case upstream becomes a compile error here rather than silently
+/// folding into ``unknown``.
+package enum EnsembleTransportFailure: String, Codable, Equatable, Hashable, Sendable {
+    case disconnected
+    case publishFailed
+    case duplicateObject
+    case invalidSurface
+    case tooLarge
+    case deleteFailed
+    case unexpectedResponse
+    case unknown
+}
+
+package enum EnsembleWardenError: Codable, Equatable, Hashable, Error {
     // MARK: XPC
     case unexpectedXPCMessageType
     case invalidSyncRequest
@@ -40,13 +62,14 @@ public enum EnsembleWardenError: Codable, Equatable, Hashable, Error {
     case invalidFollowerToken
     case unexpectedError
     case externalError(type: String)
-    case kvCacheTransferFetchFailed
-    case kvCacheTransferPublishFailed
+    case ensemblePorterError(description: String)
+    case invalidTurnNumber
     case failedToGenerateRandomBytes
     case unimplemented
-    case emptyFetchResult
     case ioSurfaceDataMismatch
     case invalidStartMessage
+    case ensembleTransportUnavailable
+    case ensembleTransportError(EnsembleTransportFailure)
 
     // MARK: key errors
     case ensemblePorterHandleNotSupplied
@@ -61,16 +84,16 @@ public enum EnsembleWardenError: Codable, Equatable, Hashable, Error {
 }
 
 extension EnsembleWardenError: ReportableError {
-    public var publicDescription: String {
+    package var publicDescription: String {
         switch self {
         case .unexpectedError:
             "An unexpected error occurred"
         case .externalError(let type):
             "An external error occurred: \(type)"
-        case .kvCacheTransferFetchFailed:
-            "Failed to fetch from transfer daemon"
-        case .kvCacheTransferPublishFailed:
-            "Failed to publish to transfer daemon"
+        case .ensemblePorterError(let description):
+            "EnsemblePorter error: \(description)"
+        case .invalidTurnNumber:
+            "Invalid turn number"
         case .unimplemented:
             "Unimplemented"
         case .invalidStateTransition:
@@ -113,14 +136,16 @@ extension EnsembleWardenError: ReportableError {
             "Invalid IOSurface data range"
         case .keyAlreadyFetched:
             "Keys have already been fetched"
-        case .emptyFetchResult:
-            "Fetch operation returned no IOSurfaces"
         case .ioSurfaceDataMismatch:
             "Fetched IOSurface data does not match published data"
         case .clientNotYetConnected:
             "Client not yet connected"
         case .invalidStartMessage:
             "Invalid start message"
+        case .ensembleTransportUnavailable:
+            "EnsembleTransport unavailable"
+        case .ensembleTransportError(let failure):
+            "EnsembleTransport error: \(failure.rawValue)"
         }
     }
 

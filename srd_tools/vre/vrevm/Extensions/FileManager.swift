@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -38,7 +38,7 @@ extension FileManager {
                 pathURL = try _resolveSymlinks(pathURL)
             }
 
-            return FileManager.default.fileExists(atPath: pathURL.path)
+            return Globals.computer.fileSystem.fileExists(atPath: pathURL.path)
         } catch {
             return false
         }
@@ -52,7 +52,7 @@ extension FileManager {
             if resolve {
                 pathURL = try _resolveSymlinks(pathURL)
             }
-            return try pathURL.resourceValues(forKeys: [URLResourceKey.isRegularFileKey]).isRegularFile!
+            return Globals.computer.fileSystem.isRegularFile(at: pathURL)
         } catch {
             return false
         }
@@ -67,7 +67,7 @@ extension FileManager {
             if resolve {
                 pathURL = try _resolveSymlinks(pathURL)
             }
-            return try pathURL.resourceValues(forKeys: [URLResourceKey.isDirectoryKey]).isDirectory!
+            return Globals.computer.fileSystem.isDirectory(at: pathURL)
         } catch {
             return false
         }
@@ -77,7 +77,7 @@ extension FileManager {
     static func isWritableDirectory<T: Path>(_ path: T) -> Bool {
         let path = fileURL(path)
         if isDirectory(path.path) {
-            return FileManager.default.isWritableFile(atPath: path.path)
+            return Globals.computer.fileSystem.isWritableFile(atPath: path.path)
         }
 
         return false
@@ -86,11 +86,7 @@ extension FileManager {
     // isSymlink returns true/false whether path exists and as a symlink
     static func isSymlink<T: Path>(_ path: T) -> Bool {
         let pathURL = fileURL(path)
-        do {
-            return try pathURL.resourceValues(forKeys: [URLResourceKey.isSymbolicLinkKey]).isSymbolicLink!
-        } catch {
-            return false
-        }
+        return Globals.computer.fileSystem.isSymbolicLink(at: pathURL)
     }
 
     // copyFile copies src to dest
@@ -98,8 +94,8 @@ extension FileManager {
     @discardableResult
     static func copyFile<T: Path>(_ src: T, _ dest: T) throws -> URL {
         let dest = fileURL(_destPath(src, dest))
-        try? FileManager.default.removeItem(at: dest) // remove dest; ignore errors
-        try FileManager.default.copyItem(at: fileURL(src), to: dest)
+        try? Globals.computer.fileSystem.removeItem(at: dest) // remove dest; ignore errors
+        try Globals.computer.fileSystem.copyItem(at: fileURL(src), to: dest)
         return fileURL(dest)
     }
 
@@ -109,8 +105,8 @@ extension FileManager {
     @discardableResult
     static func moveFile<T: Path>(_ src: T, _ dest: T) throws -> URL {
         let dest = fileURL(_destPath(src, dest))
-        try? FileManager.default.removeItem(at: dest) // remove dest; ignore errors
-        try FileManager.default.moveItem(at: fileURL(src), to: dest)
+        try? Globals.computer.fileSystem.removeItem(at: dest) // remove dest; ignore errors
+        try Globals.computer.fileSystem.moveItem(at: fileURL(src), to: dest)
         return fileURL(dest)
     }
 

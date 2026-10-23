@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -26,6 +26,7 @@ private import CryptoKit
 private import Dispatch
 package import Foundation
 internal import OSLog
+@preconcurrency package import os
 @preconcurrency internal import os.activity
 private import Synchronization
 
@@ -114,7 +115,7 @@ package enum PrismTracing {
     // Logging constants
     package static let subsystem = "com.apple.cloudos.prism"
     package static let category = "PrismTracing"
-    
+
     fileprivate static func computeSpanID(from activityID: UInt64) -> UInt64 {
         var h = SHA256()
         var activityIDCopy = activityID
@@ -220,8 +221,14 @@ package enum PrismTracing {
         }
     }
 
-    package static func logCheckpoint(name: String) {
-        currentSpan.logCheckpoint(name: name)
+    /// Logs a checkpoint in the current span.
+    ///
+    /// `.default` is persisted by the logging system, so it reaches Splunk. `.debug` only lands in
+    /// the in-memory ring buffer, so it still shows up in a sysdiagnose or a live `log stream` but
+    /// costs nothing off-device. Use `.debug` for checkpoints that scale with the number of KV cache
+    /// operations or XPC round trips — those dominate our log volume.
+    package static func logCheckpoint(name: String, level: OSLogType = .default) {
+        currentSpan.logCheckpoint(name: name, level: level)
     }
 
     package static func logCheckpoint(name: String, error: any Error) {
@@ -399,10 +406,10 @@ internal struct Span: Sendable {
 
 
 extension Span {
-    fileprivate func logCheckpoint(name: String) {
+    fileprivate func logCheckpoint(name: String, level: OSLogType = .default) {
         // Log tracing.name first - this makes it easier to read log lines since the "useful"
         // bit is at the start of the log line.
-        logger.log("""
+        logger.log(level: level, """
             tracing.name=\(name, privacy: .public)
             request.duration_ms=\(duration * 1000)
             request.uuid=\(self.requestID, privacy: .public)

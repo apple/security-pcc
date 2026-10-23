@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -29,7 +29,7 @@ struct EnsembleConfigureCommand: ParsableCommand {
 
     @Option(name: .customLong("node"),
             help: "Node in JSON format; multiple options are joined into an array.")
-    var nodes: [DarwinInitConfig.EnsembleNode]
+    var nodes: [PCCDarwinInitConfig.EnsembleNode]
 
     @OptionGroup var options: DarwinInitCommand.Options
 
@@ -40,7 +40,7 @@ struct EnsembleConfigureCommand: ParsableCommand {
     }
 }
 
-extension DarwinInitConfig.EnsembleNode: ExpressibleByArgument {
+extension PCCDarwinInitConfig.EnsembleNode: ExpressibleByArgument {
     init?(argument: String) {
         guard let decoded = try? JSONDecoder().decode(Self.self, from: argument.data(using: .utf8)!) else {
             return nil

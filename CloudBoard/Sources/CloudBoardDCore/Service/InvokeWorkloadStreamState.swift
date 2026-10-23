@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -60,7 +60,9 @@ final class InvokeWorkloadStreamState: Sendable, CustomStringConvertible {
     }
 
     private func receiveParameters(requestBypass: Bool, nackRequest: Bool) throws {
-        try self.state.withLock { try $0.receiveParameters(requestBypass: requestBypass, nackRequest: nackRequest) }
+        try self.state.withLock {
+            try $0.receiveParameters(requestBypass: requestBypass, nackRequest: nackRequest, isProxy: self.isProxy)
+        }
     }
 
     private func receiveChunk(isFinal: Bool) throws {
@@ -89,6 +91,8 @@ extension InvokeWorkloadStreamState {
         case requestBypassAwaitingAuthToken
         /// Due to request bypass we aren't expecting anything else after receiving the auth token except termination
         case requestBypass
+        /// NACK request - no further chunks are expected. ROPES sends the NACK and finishes the request stream.
+        case nackRequest
 
         var description: String {
             switch self {
@@ -99,6 +103,7 @@ extension InvokeWorkloadStreamState {
             case .receivedTerminationNotification: "received termination notification"
             case .requestBypassAwaitingAuthToken: "request bypass awaiting auth token"
             case .requestBypass: "request bypass"
+            case .nackRequest: "nack request"
             }
         }
 
@@ -107,30 +112,30 @@ extension InvokeWorkloadStreamState {
             case .awaitingSetup:
                 self = .awaitingParameters
             case .awaitingParameters, .receivingChunks, .receivedFinalChunk, .requestBypassAwaitingAuthToken,
-                 .requestBypass:
+                 .requestBypass, .nackRequest:
                 throw Error.receivedDuplicateSetup
             case .receivedTerminationNotification:
                 throw Error.receivedSetupAfterTermination
             }
         }
 
-        mutating func receiveParameters(requestBypass: Bool, nackRequest: Bool) throws {
+        mutating func receiveParameters(requestBypass: Bool, nackRequest: Bool, isProxy: Bool) throws {
             switch self {
             case .awaitingParameters:
-                if requestBypass {
-                    if nackRequest {
-                        // If a NACK is requested, ROPES does not send an auth token and CloudBoard is expected to
-                        // directly send the NACK and complete the request
-                        self = .requestBypass
-                    } else {
-                        self = .requestBypassAwaitingAuthToken
+                if nackRequest {
+                    guard isProxy else {
+                        throw Error.receivedNackRequestOnNonProxy
                     }
+                    // If a NACK is requested, we do not expect any further messages from ROPES.
+                    self = .nackRequest
+                } else if requestBypass {
+                    self = .requestBypassAwaitingAuthToken
                 } else {
                     self = .receivingChunks
                 }
             case .awaitingSetup:
                 throw Error.receivedParametersBeforeSetup
-            case .receivingChunks, .receivedFinalChunk, .requestBypassAwaitingAuthToken, .requestBypass:
+            case .receivingChunks, .receivedFinalChunk, .requestBypassAwaitingAuthToken, .requestBypass, .nackRequest:
                 throw Error.receivedDuplicateParameters
             case .receivedTerminationNotification:
                 throw Error.receivedParametersAfterTermination
@@ -147,6 +152,8 @@ extension InvokeWorkloadStreamState {
                 self = .requestBypass
             case .requestBypass:
                 throw Error.receivedChunkUnderRequestBypass
+            case .nackRequest:
+                throw Error.receivedChunkForNackRequest
             case .receivedFinalChunk:
                 throw Error.receivedChunkAfterFinal
             case .receivingChunks:
@@ -165,6 +172,8 @@ extension InvokeWorkloadStreamState {
             case .requestBypassAwaitingAuthToken, .requestBypass:
                 // The auth token can never be the final chunk so this is always unexpected
                 throw Error.receivedChunkUnderRequestBypass
+            case .nackRequest:
+                throw Error.receivedChunkForNackRequest
             case .receivedFinalChunk:
                 throw Error.receivedDuplicateFinalChunk
             case .receivingChunks:
@@ -179,11 +188,12 @@ extension InvokeWorkloadStreamState {
             case .awaitingSetup:
                 throw Error.receivedTerminationBeforeSetup
             case .awaitingParameters, .receivingChunks, .receivedFinalChunk, .requestBypassAwaitingAuthToken,
-                 .requestBypass:
+                 .requestBypass, .nackRequest:
                 // Expected e.g. for candidate nodes that have not been chosen to handle the request and might be used
-                // to signal other reasons for termination in the future
-                // Note that currently ROPES does *not* send a terminate message for requestBypass, but
-                // there's nothing stopping ROPES sending it and it would be a reasonable state transition
+                // to signal other reasons for termination in the future.
+                // Note that currently ROPES does *not* send a terminate message for requestBypass or for NACK
+                // requests, but there's nothing stopping ROPES sending it and it would be a reasonable state
+                // transition.
                 self = .receivedTerminationNotification
             case .receivedTerminationNotification:
                 throw Error.receivedDuplicateTermination
@@ -198,6 +208,10 @@ extension InvokeWorkloadStreamState {
                 ()
             case .requestBypass:
                 InvokeWorkloadStreamState.logger.debug("EOF under requestBypass - clean termination")
+                // Expected
+                ()
+            case .nackRequest:
+                InvokeWorkloadStreamState.logger.debug("EOF under nackRequest - clean termination")
                 // Expected
                 ()
             case .receivedTerminationNotification:
@@ -233,6 +247,8 @@ extension InvokeWorkloadStreamState {
         case rpcAborted
         case unexpectedEndOfStream
         case receivedRequestBypassNotification
+        case receivedChunkForNackRequest
+        case receivedNackRequestOnNonProxy
     }
 }
 
@@ -273,6 +289,10 @@ extension InvokeWorkloadStreamState.Error: ReportableError {
             return "InvokeWorkloadStreamStateError.unexpectedEndOfStream"
         case .receivedRequestBypassNotification:
             return "InvokeWorkloadStreamStateError.receivedRequestBypassNotification"
+        case .receivedChunkForNackRequest:
+            return "InvokeWorkloadStreamStateError.receivedChunkForNackRequest"
+        case .receivedNackRequestOnNonProxy:
+            return "InvokeWorkloadStreamStateError.receivedNackRequestOnNonProxy"
         }
     }
 }

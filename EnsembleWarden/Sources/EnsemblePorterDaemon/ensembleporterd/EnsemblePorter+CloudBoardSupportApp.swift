@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -37,7 +37,21 @@ extension EnsemblePorter: CloudBoardSupportApp {
 
     convenience init() {
         do {
-            try self.init(clientType: .defaultClient)
+            let config = try EnsemblePorterSecureConfigLoader.real.load()
+            Self.logger.log("""
+                Loaded SecureConfig. \
+                security_policy=\(String(describing: config.securityPolicy), privacy: .public) \
+                heartbeat_send_interval=\(config.heartbeatSendInterval, privacy: .public) \
+                heartbeat_timeout_duration=\(config.heartbeatTimeoutDuration, privacy: .public) \
+                heartbeat_send_timeout=\(config.heartbeatSendTimeout, privacy: .public) \
+                max_consecutive_heartbeat_failures=\(config.maxConsecutiveHeartbeatFailures, privacy: .public)
+                """)
+            try self.init(
+                clientType: .defaultClient,
+                maxConsecutiveHeartbeatFailures: config.maxConsecutiveHeartbeatFailures,
+                heartbeatSendInterval: config.heartbeatSendInterval,
+                heartbeatSendTimeout: config.heartbeatSendTimeout
+            )
         } catch {
             Self.logger.error("Top-level error thrown. error=\(String(reportable: error), privacy: .public)")
             fatalError("Unexpected top level error: \(error)")

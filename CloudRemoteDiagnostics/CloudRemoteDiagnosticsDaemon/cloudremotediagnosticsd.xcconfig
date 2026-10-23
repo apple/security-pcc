@@ -15,7 +15,7 @@ INSTALL_PATH = /usr/libexec
 
 CODE_SIGN_ENTITLEMENTS = CloudRemoteDiagnosticsDaemon/cloudremotediagnostics.entitlements
 
-OTHER_LDFLAGS = -framework IOKit -lstdc++ -ltop -lpcap -lspindump -lCloudRemoteDiagnosticsCore
+OTHER_LDFLAGS = -framework IOKit -lstdc++ -ltop -lpcap -lspindump -lCloudRemoteDiagnosticsCore -weak_framework DenaliSEDiagnostics
 
 ADDITIONAL_SDKS[sdk=iphoneos*] = privatecloudsupport;
 ADDITIONAL_SDKS[sdk=macosx*] = acdcsupport;

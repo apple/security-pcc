@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,17 @@ extension CLI.ReleaseCmd {
     struct ReleaseDumpCmd: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "dump",
-            abstract: "Display information about a release in the Private Cloud Compute Transparency Log."
+            abstract: "Display information about a release in the Private Cloud Compute Transparency Log.",
+            discussion: """
+            Displays detailed information for a single release identified by its log \
+            index. Output includes the application name, build version, creation and \
+            expiry timestamps, and individual digests for the OS manifest ticket along \
+            with the associated cryptexes (such as Private Cloud extensions).
+
+            Software component digests are published while model/adapter image digests \
+            will not be. Use --detail to include raw metadata and parsed Image4 manifest \
+            properties.
+            """
         )
 
         @OptionGroup var globalOptions: CLI.globalOptions
@@ -54,12 +64,22 @@ extension CLI.ReleaseCmd {
             )
 
             try await swlog.fetchReleases(
+                helper: PCCVREAttestationHelperResolver(environment: logEnvironment),
                 reqCount: 1,
                 searchRangeStart: Int64(releaseIndex),
                 searchRangeEnd: releaseIndex + 1
             )
 
             guard swlog.count > 0 else {
+                if let skippedLeaf = swlog.skippedLeaves.first(where: { $0.index == releaseIndex }) {
+                    if jsonOutput {
+                        print(asJSONString(PartialReleaseInfo(leaf: skippedLeaf)))
+                    } else {
+                        printPartialRelease(leaf: skippedLeaf)
+                    }
+                    fputs("Warning: Some data from this release could not be parsed; consider updating macOS to a newer version to see more details.\n", stderr)
+                    return
+                }
                 throw CLIError("release index \(releaseIndex) wasn't found")
             }
             guard swlog.count == 1 else {
@@ -86,6 +106,112 @@ extension CLI.ReleaseCmd {
                         print()
                         print(parsedDescription)
                     }
+                }
+            }
+        }
+
+        private func printPartialRelease(leaf: TransparencyLog.ATLeaf) {
+            print(Self.formatPartialRelease(leaf: leaf))
+        }
+
+        static func formatPartialRelease(leaf: TransparencyLog.ATLeaf) -> String {
+            let nodeData = leaf.nodeData
+            var builder = ""
+
+            builder += "\(String(format: "%8d", leaf.index)):\n"
+            builder += "\t\(nodeData.dataHash.hexString)\n"
+
+            let insertTime: UInt64
+            if let insertion = nodeData.insertionTime {
+                insertTime = insertion / 1000
+            } else {
+                insertTime = nodeData.expiryMs / 1000 - 14 * 24 * 60 * 60
+            }
+            let expireTime = nodeData.expiryMs / 1000
+
+            if let metadata = try? SWReleaseMetadata(leaf: leaf) {
+                builder += "\n"
+                builder += "Application: \(metadata.application ?? "N/A")\n"
+
+                let buildVersion: String? = if !metadata.metadata.buildVersion.isEmpty {
+                    metadata.metadata.buildVersion
+                } else if let darwinInitString = metadata.darwinInitString,
+                          let darwinInit = try? DarwinInitConfigV1(jsonString: darwinInitString) {
+                    darwinInit.buildVersion
+                } else {
+                    nil
+                }
+                builder += "Build version: \(buildVersion ?? "N/A")\n"
+
+                builder += "Inserted: \(dateAsString(insertTime))\n"
+                builder += "Expires:  \(dateAsString(expireTime))\n"
+
+                if !metadata.assets.isEmpty {
+                    builder += "\n"
+                    builder += "Assets:\n"
+                    for asset in metadata.assets {
+                        builder += "  \(asset.type.label): \(asset.url)\n"
+                    }
+                }
+            } else {
+                builder += "\n"
+                builder += "Inserted: \(dateAsString(insertTime))\n"
+                builder += "Expires:  \(dateAsString(expireTime))\n"
+            }
+
+            return builder
+        }
+
+        struct PartialReleaseInfo: Encodable {
+            struct Asset: Encodable {
+                let type: String
+                let url: String
+            }
+
+            let index: UInt64
+            let dataHash: String
+            let releaseType: String
+            let insertTime: UInt64
+            let expireTime: UInt64
+            let applicationName: String?
+            let buildVersion: String?
+            let assets: [Asset]?
+
+            init(leaf: TransparencyLog.ATLeaf) {
+                let nodeData = leaf.nodeData
+
+                self.index = leaf.index
+                self.dataHash = nodeData.dataHash.hexString
+                self.releaseType = nodeData.releaseType.description
+
+                if let insertion = nodeData.insertionTime {
+                    self.insertTime = insertion / 1000
+                } else {
+                    self.insertTime = nodeData.expiryMs / 1000 - 14 * 24 * 60 * 60
+                }
+                self.expireTime = nodeData.expiryMs / 1000
+
+                if let metadata = try? SWReleaseMetadata(leaf: leaf) {
+                    self.applicationName = metadata.application
+
+                    if !metadata.metadata.buildVersion.isEmpty {
+                        self.buildVersion = metadata.metadata.buildVersion
+                    } else if let darwinInitString = metadata.darwinInitString,
+                              let darwinInit = try? DarwinInitConfigV1(jsonString: darwinInitString) {
+                        self.buildVersion = darwinInit.buildVersion
+                    } else {
+                        self.buildVersion = nil
+                    }
+
+                    if !metadata.assets.isEmpty {
+                        self.assets = metadata.assets.map { Asset(type: $0.type.label, url: $0.url) }
+                    } else {
+                        self.assets = nil
+                    }
+                } else {
+                    self.applicationName = nil
+                    self.buildVersion = nil
+                    self.assets = nil
                 }
             }
         }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -55,7 +55,6 @@ package actor CloudBoardAsyncXPCConnection: Identifiable {
             return
         }
 
-        self.logger.debug("Handle \(type, privacy: .public) message from \(self.name, privacy: .public) connection")
         let logger = self.logger
         if let handler = self.postedMessageHandlers[type] {
             // posted message handler should not be async as that can trivially lead to
@@ -230,6 +229,11 @@ package actor CloudBoardAsyncXPCConnection: Identifiable {
     // Checks if peer has the provided entitlement
     public func hasEntitlement(_ entitlement: String) -> Bool {
         return self.connection.hasEntitlement(entitlement)
+    }
+
+    // Get value for entitlement
+    public func getEntitlement(_ entitlement: String) -> [String] {
+        return self.connection.entitlementValue(for: entitlement)
     }
 
     /// Send a non-posted message with response data.

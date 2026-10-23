@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -14,5 +14,8 @@
 
 import CloudBoardAttestationDCore
 import CloudBoardCommon
+
+CloudAttestationV2Logging.bootstrap(subsystem: "com.apple.cloudos.cb_attestationd.cloudattestationv2")
+CloudAttestationV2Metrics.bootstrap(globalLabels: ["component": "cloudattestationv2"])
 
 try await CloudBoardAttestationDaemon().start(customSearchPath: .fromPreferences)

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,7 +20,7 @@ import Foundation
 @_spi(Private) import CloudAttestation
 
 extension CLI.AttestationCmd {
-    struct CanonicalizeCmd: ParsableCommand {
+    struct CanonicalizeCmd: AsyncParsableCommand {
         static var configuration = CommandConfiguration(
             commandName: "canonicalize",
             abstract: "Canonicalize an attestation bundle and create a release object."
@@ -38,28 +38,48 @@ extension CLI.AttestationCmd {
                   completion: .file())
         var file: String
 
-        func run() throws {
-            let attestationBundle: AttestationBundle
-            do {
-                attestationBundle = try .init(from: file, format: attestOptions.format, requestIndex: attestOptions.requestIndex, attestationIndex: attestOptions.attestationIndex)
-            } catch {
-                throw CLIError("read attestation bundle: \(error)")
-            }
-
-            let release: Release
-            do {
-                release = try Release(bundle: attestationBundle, evaluateTrust: false)
-            } catch {
-                throw CLIError("canonicalize attestation bundle: \(error)")
-            }
-
-            print(release.sha256)
-            print()
-            print(release.jsonString)
-
-            if showDetails {
+        func run() async throws {
+            switch try attestOptions.loadAndDispatch(file: file) {
+            case .v2(let nodeBytes):
+                // Route to pccvre-attestation-helper. `release attestation` is the
+                // helper's equivalent of canonicalize: bundle in → workload + firmware
+                // ReleaseV2 digests/contents out.
+                let resolver = PCCVREAttestationHelperResolver(environment: CLIDefaults.ktEnvironment)
+                let envelope = try await attestOptions.runV2Helper(
+                    nodeBytes: nodeBytes,
+                    via: resolver,
+                    subcommand: ["release", "attestation"]
+                )
+                // Match the v1 output shape: digest line, blank, JSON body.
+                print(envelope.digest ?? "")
                 print()
-                print(release.debugDescription)
+                print(envelope.detail)
+                if showDetails {
+                    print()
+                    print(envelope.summary)
+                }
+                if !envelope.ok {
+                    throw ExitCode(1)
+                }
+
+            case .v1(let nodeBytes, let fileData):
+                let attestationBundle = try attestOptions.decodeV1Bundle(nodeBytes: nodeBytes, fileData: fileData)
+
+                let release: Release
+                do {
+                    release = try Release(bundle: attestationBundle, evaluateTrust: false)
+                } catch {
+                    throw CLIError("canonicalize attestation bundle: \(error)")
+                }
+
+                print(release.sha256)
+                print()
+                print(release.jsonString)
+
+                if showDetails {
+                    print()
+                    print(release.debugDescription)
+                }
             }
         }
     }

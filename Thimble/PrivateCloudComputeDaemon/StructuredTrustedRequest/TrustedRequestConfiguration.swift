@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,6 +20,7 @@
 //
 
 import Foundation
+import Network
 import PrivateCloudCompute
 import Security
 
@@ -31,6 +32,7 @@ struct TrustedRequestConfiguration: CustomStringConvertible {
     var maxCachedAttestations: Int
     var maxTotalAttestations: Int
     var maxInlineAttestations: Int
+    var minExpectedInlineAttestations: Int
 
     var maxProtobufRandomizedPaddingSize: Int
 
@@ -41,7 +43,7 @@ struct TrustedRequestConfiguration: CustomStringConvertible {
     var rateLimiterDefaultJitterFactor: Double
 
     var ignoreCertificateErrors: Bool
-    var environment: String
+    var environment: TC2Environment
     var forceOHTTP: Bool
     var endpointURL: URL
     var trustedRequestHostname: String
@@ -60,32 +62,52 @@ struct TrustedRequestConfiguration: CustomStringConvertible {
     /// This is the bundle id we associate the request with.
     /// This would be either `clientBundleID` or `bundleIdentifierOverride` if adopter calling us has an entitlement allowing them to override
     /// bundle id associated with the request. This may also be referred to as `onBehalfOf`.
-    var bundleID: String
+    var bundleID: BundleIdentifier
     var featureID: String?
     var sessionID: UUID?
     /// Provided by the adopter. Typically when adopter has an entitlement to override `bundleID`, the `originatingBundleID` would be a parent of it.
     /// This may also be referred to as `parentOfOnBehalfOf`.
-    var originatingBundleID: String?
+    var originatingBundleID: BundleIdentifier?
     var userID: uid_t?
 
     var aeadKey: Data
     var serverQoS: ServerQoS
+    var serviceClass: NWParameters.ServiceClass?
 
     var isServerDrivenConfigurationOutdated: Bool
 
     var multiTurn: Bool
 
+    var applicationDataChunkingSize: Int
+
+    var networkConnectionReadSize: Int
+
+    /// With anti-targetability enabled, we are asking the server to provide n or zero inline attestations. We are
+    /// randomly picking some to use, but we only start to use them after we received all and have verified udid
+    /// uniqueness across them.
+    /// This variable contains randomly pre-selected indices of inline attestations, so as we receive them and extract
+    /// udids, we don't need to keep the non-selected attestations in-memory.
+    var preSelectedInlineAttestationIndices: Set<Int>
+
+    /// Means user has opted-in to share Diagnostics & Usage information with Apple.
+    var optedInToShareDiagnosticsAndUsageWithApple: Bool
+
+    /// If set, the request will be canceled if adopter doesn't provide user's data in the expected time. Counted
+    /// from the point when invoke was sent.
+    var inactivityTimeout: Duration?
+
     init(
         maxCachedAttestations: Int,
         maxTotalAttestations: Int,
         maxInlineAttestations: Int,
+        minExpectedInlineAttestations: Int,
         maxProtobufRandomizedPaddingSize: Int,
         overrideCellID: String?,
         rateLimiterMaximumRateLimitDuration: Double,
         rateLimiterMaximumRateLimitTTL: Double,
         rateLimiterDefaultJitterFactor: Double,
         ignoreCertificateErrors: Bool,
-        environment: String,
+        environment: TC2Environment,
         forceOHTTP: Bool,
         endpointURL: URL,
         trustedRequestHostname: String,
@@ -98,19 +120,26 @@ struct TrustedRequestConfiguration: CustomStringConvertible {
         trustedProxyResponseBypass: Bool,
         trustedProxyRoutingGroupAlias: String?,
         clientBundleID: String,
-        bundleID: String,
-        originatingBundleID: String?,
+        bundleID: BundleIdentifier,
+        originatingBundleID: BundleIdentifier?,
         featureID: String?,
         sessionID: UUID?,
         aeadKey: Data,
         serverQoS: ServerQoS,
+        serviceClass: NWParameters.ServiceClass?,
         userID: uid_t?,
         isServerDrivenConfigurationOutdated: Bool,
-        multiTurn: Bool
+        multiTurn: Bool,
+        applicationDataChunkingSize: Int,
+        networkConnectionReadSize: Int,
+        preSelectedInlineAttestationIndices: Set<Int>,
+        optedInToShareDiagnosticsAndUsageWithApple: Bool,
+        inactivityTimeout: Duration?
     ) {
         self.maxCachedAttestations = maxCachedAttestations
         self.maxTotalAttestations = maxTotalAttestations
         self.maxInlineAttestations = maxInlineAttestations
+        self.minExpectedInlineAttestations = minExpectedInlineAttestations
         self.maxProtobufRandomizedPaddingSize = maxProtobufRandomizedPaddingSize
         self.overrideCellID = overrideCellID
         self.rateLimiterMaximumRateLimitDuration = rateLimiterMaximumRateLimitDuration
@@ -136,27 +165,37 @@ struct TrustedRequestConfiguration: CustomStringConvertible {
         self.sessionID = sessionID
         self.aeadKey = aeadKey
         self.serverQoS = serverQoS
+        self.serviceClass = serviceClass
         self.userID = userID
         self.isServerDrivenConfigurationOutdated = isServerDrivenConfigurationOutdated
         self.multiTurn = multiTurn
+        self.applicationDataChunkingSize = applicationDataChunkingSize
+        self.networkConnectionReadSize = networkConnectionReadSize
+        self.preSelectedInlineAttestationIndices = preSelectedInlineAttestationIndices
+        self.optedInToShareDiagnosticsAndUsageWithApple = optedInToShareDiagnosticsAndUsageWithApple
+        self.inactivityTimeout = inactivityTimeout
     }
 
     init<
         ServerDrivenConfiguration: ServerDrivenConfigurationProtocol,
         SystemInfo: SystemInfoProtocol,
+        DeviceState: DeviceStateProtocol,
         FeatureFlagChecker: FeatureFlagCheckerProtocol
     >(
         clientBundleID: String,
-        bundleID: String,
-        originatingBundleID: String?,
+        bundleID: BundleIdentifier,
+        originatingBundleID: BundleIdentifier?,
         featureID: String?,
         sessionID: UUID?,
         configuration: any Configuration,
         parameters: Workload,
         multiTurn: Bool,
+        qos: QoS,
+        serviceClass: NWParameters.ServiceClass?,
         serverConfiguration: ServerDrivenConfiguration,
         userID: uid_t?,
         systemInfo: SystemInfo,
+        deviceState: DeviceState,
         featureFlagChecker: FeatureFlagChecker
     ) throws {
         let aeadKey = try {
@@ -186,8 +225,9 @@ struct TrustedRequestConfiguration: CustomStringConvertible {
         let environment = configuration.environment(systemInfo: systemInfo)
 
         let maxCachedAttestations: Int
-        let maxInlineAttestations: Int
+        var maxInlineAttestations: Int
         let maxTotalAttestations: Int
+        let minExpectedInlineAttestations: Int
         let trustedProxyRequestBypass: Bool?
         let trustedProxyResponseBypass: Bool
 
@@ -201,6 +241,16 @@ struct TrustedRequestConfiguration: CustomStringConvertible {
         let maxInlineAttestationsFromConfigOrCalculated = configuration[.trustedProxyMaxInlineAttestations] ?? maxTotalAttestations - maxCachedAttestations
         maxInlineAttestations = maxInlineAttestationsFromConfigOrCalculated.clamped(to: 0...4)
 
+        minExpectedInlineAttestations = max(serverConfiguration.antiTargetabilityExpectedInlineAttestations ?? 0, Self.minimumExpectedInlineAttestations(for: environment))
+
+        if featureFlagChecker.isEnforceAntiTargetabilityForInlineAttestationsEnabled(environment: environment) {
+            maxInlineAttestations = 1
+        }
+
+        let preSelectedInlineAttestationIndices = Set(
+            Array((0..<minExpectedInlineAttestations)).shuffled().prefix(maxInlineAttestations)
+        )
+
         if multiTurn || parameters.type == agentWorkloadType {
             trustedProxyRequestBypass = false
             trustedProxyResponseBypass = false
@@ -209,17 +259,28 @@ struct TrustedRequestConfiguration: CustomStringConvertible {
             trustedProxyResponseBypass = configuration[.trustedProxyResponseBypass]
         }
 
+        let applicationDataChunkingSize = configuration[.applicationDataChunkingSize]
+        let networkConnectionReadSize = featureFlagChecker.isEnabled(.boundedNetworkReads2) ? configuration[.networkConnectionReadSize] : .max
+
+        let inactivityTimeout: Duration?
+        if featureFlagChecker.isEnabled(.clientTimeout) {
+            inactivityTimeout = serverConfiguration.inactivityTimeout(workloadType: parameters.type)
+        } else {
+            inactivityTimeout = nil
+        }
+
         self.init(
             maxCachedAttestations: maxCachedAttestations,
             maxTotalAttestations: maxTotalAttestations,
             maxInlineAttestations: maxInlineAttestations,
+            minExpectedInlineAttestations: minExpectedInlineAttestations,
             maxProtobufRandomizedPaddingSize: configuration[.maxProtobufRandomizedPaddingSize],
             overrideCellID: configuration[.overrideCellID],
             rateLimiterMaximumRateLimitDuration: configuration[.rateLimiterMaximumRateLimitDuration],
             rateLimiterMaximumRateLimitTTL: configuration[.rateLimiterMaximumRateLimitTtl],
             rateLimiterDefaultJitterFactor: configuration[.rateLimiterDefaultJitterFactor],
             ignoreCertificateErrors: configuration[.ignoreCertificateErrors],
-            environment: environment.name,
+            environment: environment,
             forceOHTTP: environment.forceOHTTP,
             endpointURL: environment.ropesUrl,
             trustedRequestHostname: environment.ropesHostname,
@@ -237,10 +298,16 @@ struct TrustedRequestConfiguration: CustomStringConvertible {
             featureID: featureID,
             sessionID: sessionID,
             aeadKey: aeadKey,
-            serverQoS: ServerQoS(taskPriority: Task.currentPriority),
+            serverQoS: ServerQoS(qos),
+            serviceClass: serviceClass,
             userID: userID,
             isServerDrivenConfigurationOutdated: serverConfiguration.isOutdated,
-            multiTurn: multiTurn
+            multiTurn: multiTurn,
+            applicationDataChunkingSize: applicationDataChunkingSize,
+            networkConnectionReadSize: networkConnectionReadSize,
+            preSelectedInlineAttestationIndices: preSelectedInlineAttestationIndices,
+            optedInToShareDiagnosticsAndUsageWithApple: deviceState.optedInToShareDiagnosticsAndUsageWithApple,
+            inactivityTimeout: inactivityTimeout
         )
     }
 
@@ -250,6 +317,8 @@ struct TrustedRequestConfiguration: CustomStringConvertible {
                 maxCachedAttestations: \(maxCachedAttestations)
                 maxTotalAttestations: \(maxTotalAttestations)
                 maxInlineAttestations: \(maxInlineAttestations)
+                minExpectedInlineAttestations: \(minExpectedInlineAttestations)
+                preSelectedInlineAttestationIndices: \(preSelectedInlineAttestationIndices)
 
                 overrideCellID: \(String(describing: overrideCellID))
 
@@ -271,48 +340,36 @@ struct TrustedRequestConfiguration: CustomStringConvertible {
                 trustedRequestHostname: \(trustedRequestHostname)
                 trustedRequestPath: \(trustedRequestPath)
                 enforceWorkloadParametersFiltering: \(enforceWorkloadParametersFiltering)
+                inactivityTimeout: \(String(describing: inactivityTimeout))
 
                 testSignalHeader: \(String(describing: testSignalHeader))
                 testOptionsHeader: \(String(describing: testOptionsHeader))
                 routingGroupAlias: \(String(describing: routingGroupAlias))
 
-                bundleID: \(bundleID)
+                bundleID: \(bundleID.rawValue)
                 featureID: \(String(describing: featureID))
                 sessionID: \(String(describing: sessionID))
-                originatingBundleID: \(String(describing: self.originatingBundleID))
+                originatingBundleID: \(String(describing: self.originatingBundleID?.rawValue))
 
                 aeadKey: \(aeadKey)
                 serverQoS: \(serverQoS)
+                serviceClass: \(String(describing: serviceClass))
 
                 isServerDrivenConfigurationOutdated: \(isServerDrivenConfigurationOutdated)
             >
             """
 
     }
-}
 
-enum ServerQoS: String {
-    case high = "high"
-    case low = "low"
-    case background = "background"
-
-    init(taskPriority: TaskPriority) {
-        self =
-            switch taskPriority {
-            case .background:
-                .background
-            case .utility:
-                .low
-            case .low:
-                .low
-            case .medium:
-                .high
-            case .high:
-                .high
-            case .userInitiated:
-                .high
-            default:
-                .high
-            }
+    /// Returns the minimum expected inline attestations based on environment.
+    /// TODO: increase these values once nodes are available
+    /// rdar://177025810 ([PCC Antitargetability] Increase client-side expected inline attestation count)
+    static func minimumExpectedInlineAttestations(for environment: TC2Environment) -> Int {
+        switch environment {
+        case .production, .carry:
+            return 2
+        default:
+            return 1
+        }
     }
 }

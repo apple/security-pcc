@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -16,30 +16,88 @@ import Foundation
 import Synchronization
 
 final class ThreadSafeExpiringLookupMap<T: Sendable & Hashable, V: Sendable>: Sendable {
-    private let storage = Mutex<[T: V]>([:])
+    private struct Entry: Sendable {
+        let value: V
+        let expiresAt: ContinuousClock.Instant
+    }
+
+    private let storage = Mutex<[T: Entry]>([:])
     private let ttl: Duration
+    private let cleanupTask = Mutex<Task<Void, Never>?>(nil)
 
     init(_ ttl: Duration = .seconds(10)) {
         self.ttl = ttl
+    }
+
+    deinit {
+        cleanupTask.withLock { $0?.cancel() }
+    }
+
+    private func startCleanupTaskIfNeeded() {
+        cleanupTask.withLock { task in
+            guard task == nil else {
+                return
+            }
+            task = Task { [weak self] in
+                await self?.cleanupLoop()
+            }
+        }
+    }
+
+    private func cleanupLoop() async {
+        let cleanupInterval = Duration.nanoseconds(ttl.components.attoseconds / 2_000_000_000 +
+                                                   Int64(ttl.components.seconds) * 500_000_000)
+        while !Task.isCancelled {
+            try? await Task.sleep(for: cleanupInterval)
+
+            let now = ContinuousClock.now
+            let isEmpty = storage.withLock { store in
+                store = store.filter { $0.value.expiresAt > now }
+                return store.isEmpty
+            }
+
+            if isEmpty {
+                let shouldExit = cleanupTask.withLock { task in
+                    let stillEmpty = storage.withLock { $0.isEmpty }
+                    if stillEmpty {
+                        task = nil
+                        return true
+                    }
+                    return false
+                }
+                if shouldExit {
+                    return
+                }
+            }
+        }
     }
 }
 
 extension ThreadSafeExpiringLookupMap {
     subscript(index: T) -> V? {
         get {
-            self.storage.withLock {
-                $0[index]
+            let now = ContinuousClock.now
+            return self.storage.withLock { store in
+                guard let entry = store[index] else {
+                    return nil
+                }
+                guard entry.expiresAt > now else {
+                    store[index] = nil
+                    return nil
+                }
+                return entry.value
             }
         }
         set {
-            self.storage.withLock {
-                $0[index] = newValue
+            self.storage.withLock { store in
+                if let value = newValue {
+                    store[index] = Entry(value: value, expiresAt: .now + self.ttl)
+                } else {
+                    store[index] = nil
+                }
             }
             if newValue != nil {
-                Task {
-                    try await Task.sleep(for: self.ttl)
-                    self[index] = nil
-                }
+                startCleanupTaskIfNeeded()
             }
         }
     }
@@ -47,6 +105,11 @@ extension ThreadSafeExpiringLookupMap {
 
 extension ThreadSafeExpiringLookupMap: CustomStringConvertible {
     var description: String {
-        self.storage.withLock { $0.description }
+        let now = ContinuousClock.now
+        return self.storage.withLock { store in
+            let active = store.filter { $0.value.expiresAt > now }
+                .map { ($0.key, $0.value.value) }
+            return String(describing: Dictionary(uniqueKeysWithValues: active))
+        }
     }
 }

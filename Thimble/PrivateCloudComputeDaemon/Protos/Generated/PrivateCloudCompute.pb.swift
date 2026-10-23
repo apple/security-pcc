@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,11 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import InternalSwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -33,6 +37,48 @@ import InternalSwiftProtobuf
 fileprivate struct _GeneratedWithProtocGenSwiftVersion: InternalSwiftProtobuf.ProtobufAPIVersionCheck {
   struct _2: InternalSwiftProtobuf.ProtobufAPIVersion_2 {}
   typealias Version = _2
+}
+
+package enum Proto_PrivateCloudCompute_CompressionAlgorithm: InternalSwiftProtobuf.Enum, Swift.CaseIterable {
+  package typealias RawValue = Int
+  case unknown // = 0
+  case none // = 1
+  case zlib // = 2
+  case lzfse // = 3
+  case UNRECOGNIZED(Int)
+
+  package init() {
+    self = .unknown
+  }
+
+  package init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unknown
+    case 1: self = .none
+    case 2: self = .zlib
+    case 3: self = .lzfse
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  package var rawValue: Int {
+    switch self {
+    case .unknown: return 0
+    case .none: return 1
+    case .zlib: return 2
+    case .lzfse: return 3
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  package static let allCases: [Proto_PrivateCloudCompute_CompressionAlgorithm] = [
+    .unknown,
+    .none,
+    .zlib,
+    .lzfse,
+  ]
+
 }
 
 package enum Proto_PrivateCloudCompute_SubrequestExecutionPriority: InternalSwiftProtobuf.Enum, Swift.CaseIterable {
@@ -211,12 +257,29 @@ package struct Proto_PrivateCloudCompute_OpenRequestPayload: Sendable {
   /// Clears the value of `reputationTokenRequest`. Subsequent reads from it will return its default value.
   package mutating func clearReputationTokenRequest() {self._reputationTokenRequest = nil}
 
+  /// Means user has opted-in to share Diagnostics & Usage information with Apple.
+  package var optedInToShareDiagnosticsAndUsageWithApple: Bool = false
+
   package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
   package init() {}
 
   fileprivate var _capabilities: Proto_PrivateCloudCompute_Capabilities? = nil
   fileprivate var _reputationTokenRequest: Proto_PrivateCloudCompute_ReputationTokenRequest? = nil
+}
+
+package struct Proto_PrivateCloudCompute_CompressedPayload: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  package var compressionAlgorithm: Proto_PrivateCloudCompute_CompressionAlgorithm = .unknown
+
+  package var compressedData: Data = Data()
+
+  package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  package init() {}
 }
 
 package struct Proto_PrivateCloudCompute_Capabilities: Sendable {
@@ -234,6 +297,16 @@ package struct Proto_PrivateCloudCompute_Capabilities: Sendable {
   /// Clears the value of `applicationDataChunking`. Subsequent reads from it will return its default value.
   package mutating func clearApplicationDataChunking() {self._applicationDataChunking = nil}
 
+  /// Supports compression for REL entry
+  package var requestExecutionLogEntryCompression: Proto_PrivateCloudCompute_Capabilities.RequestExecutionLogCompression {
+    get {_requestExecutionLogEntryCompression ?? Proto_PrivateCloudCompute_Capabilities.RequestExecutionLogCompression()}
+    set {_requestExecutionLogEntryCompression = newValue}
+  }
+  /// Returns true if `requestExecutionLogEntryCompression` has been explicitly set.
+  package var hasRequestExecutionLogEntryCompression: Bool {self._requestExecutionLogEntryCompression != nil}
+  /// Clears the value of `requestExecutionLogEntryCompression`. Subsequent reads from it will return its default value.
+  package mutating func clearRequestExecutionLogEntryCompression() {self._requestExecutionLogEntryCompression = nil}
+
   package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
   package struct ApplicationDataChunking: Sendable {
@@ -248,9 +321,23 @@ package struct Proto_PrivateCloudCompute_Capabilities: Sendable {
     package init() {}
   }
 
+  package struct RequestExecutionLogCompression: Sendable {
+    // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    /// One or more algorithms supported by client application 
+    package var supportedAlgorithms: [Proto_PrivateCloudCompute_CompressionAlgorithm] = []
+
+    package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+    package init() {}
+  }
+
   package init() {}
 
   fileprivate var _applicationDataChunking: Proto_PrivateCloudCompute_Capabilities.ApplicationDataChunking? = nil
+  fileprivate var _requestExecutionLogEntryCompression: Proto_PrivateCloudCompute_Capabilities.RequestExecutionLogCompression? = nil
 }
 
 package struct Proto_PrivateCloudCompute_PayloadChunk: Sendable {
@@ -352,7 +439,6 @@ package struct Proto_PrivateCloudCompute_ReputationTokenRequest: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// ATHM token request
   package var tokenRequest: Data = Data()
 
   package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
@@ -502,14 +588,23 @@ package struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: Sendable {
     set {type = .costToken(newValue)}
   }
 
-  /// Reputation token response provided in response to client sending the reputation ATHM
-  /// token request in the `OpenRequestPayload`.
+  /// Reputation token response provided in response to client sending the reputation token
+  /// in the `OpenRequestPayload`.
   package var reputationToken: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ReputationTokenResponse {
     get {
       if case .reputationToken(let v)? = type {return v}
       return Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ReputationTokenResponse()
     }
     set {type = .reputationToken(newValue)}
+  }
+
+  /// Container for compressed RequestExecutionLogEntry.
+  package var compressedRequestExecutionLogEntry: Proto_PrivateCloudCompute_CompressedRequestExecutionLogEntry {
+    get {
+      if case .compressedRequestExecutionLogEntry(let v)? = type {return v}
+      return Proto_PrivateCloudCompute_CompressedRequestExecutionLogEntry()
+    }
+    set {type = .compressedRequestExecutionLogEntry(newValue)}
   }
 
   package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
@@ -538,9 +633,11 @@ package struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: Sendable {
     case componentTimeMeasurement(Proto_PrivateCloudCompute_ComponentTimeMeasurement)
     /// Cost token for this inference (contains signed JWT with bucketized cost)
     case costToken(Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CostToken)
-    /// Reputation token response provided in response to client sending the reputation ATHM
-    /// token request in the `OpenRequestPayload`.
+    /// Reputation token response provided in response to client sending the reputation token
+    /// in the `OpenRequestPayload`.
     case reputationToken(Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ReputationTokenResponse)
+    /// Container for compressed RequestExecutionLogEntry.
+    case compressedRequestExecutionLogEntry(Proto_PrivateCloudCompute_CompressedRequestExecutionLogEntry)
 
   }
 
@@ -614,7 +711,6 @@ package struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: Sendable {
     // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
     // methods supported on all messages.
 
-    /// ATHM token response
     package var tokenResponse: Data = Data()
 
     package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
@@ -640,11 +736,23 @@ package struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: Sendable {
 
     package var responseStatus: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ResponseStatus = .ok
 
+    /// Human-readable description of the error, intended for client-side logging.
+    /// Only populated when response_status indicates an error.
+    package var errorDescription: String {
+      get {_errorDescription ?? String()}
+      set {_errorDescription = newValue}
+    }
+    /// Returns true if `errorDescription` has been explicitly set.
+    package var hasErrorDescription: Bool {self._errorDescription != nil}
+    /// Clears the value of `errorDescription`. Subsequent reads from it will return its default value.
+    package mutating func clearErrorDescription() {self._errorDescription = nil}
+
     package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
     package init() {}
 
     fileprivate var _postResponseActions: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.PostResponseActions? = nil
+    fileprivate var _errorDescription: String? = nil
   }
 
   package struct PostResponseActions: Sendable {
@@ -682,6 +790,17 @@ package struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: Sendable {
     package var subrequestID: UInt64 = 0
 
     package var status: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload.SubresponseStatus = .ok
+
+    /// Human-readable description of the error, intended for client-side logging.
+    /// Only populated when status indicates an error.
+    package var errorDescription: String {
+      get {_errorDescription ?? String()}
+      set {_errorDescription = newValue}
+    }
+    /// Returns true if `errorDescription` has been explicitly set.
+    package var hasErrorDescription: Bool {self._errorDescription != nil}
+    /// Clears the value of `errorDescription`. Subsequent reads from it will return its default value.
+    package mutating func clearErrorDescription() {self._errorDescription = nil}
 
     package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
@@ -728,6 +847,8 @@ package struct Proto_PrivateCloudCompute_PrivateCloudComputeResponse: Sendable {
     }
 
     package init() {}
+
+    fileprivate var _errorDescription: String? = nil
   }
 
   package init() {}
@@ -803,6 +924,29 @@ package struct Proto_PrivateCloudCompute_RequestExecutionLogEntry: Sendable {
   fileprivate var _outboundCallContext: Proto_PrivateCloudCompute_OutboundCallContext? = nil
 }
 
+/// Container for compressed RequestExecutionLogEntry
+package struct Proto_PrivateCloudCompute_CompressedRequestExecutionLogEntry: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// decodes to RequestExecutionLogEntry
+  package var compressedRequestExecutionLogEntryData: Proto_PrivateCloudCompute_CompressedPayload {
+    get {_compressedRequestExecutionLogEntryData ?? Proto_PrivateCloudCompute_CompressedPayload()}
+    set {_compressedRequestExecutionLogEntryData = newValue}
+  }
+  /// Returns true if `compressedRequestExecutionLogEntryData` has been explicitly set.
+  package var hasCompressedRequestExecutionLogEntryData: Bool {self._compressedRequestExecutionLogEntryData != nil}
+  /// Clears the value of `compressedRequestExecutionLogEntryData`. Subsequent reads from it will return its default value.
+  package mutating func clearCompressedRequestExecutionLogEntryData() {self._compressedRequestExecutionLogEntryData = nil}
+
+  package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  package init() {}
+
+  fileprivate var _compressedRequestExecutionLogEntryData: Proto_PrivateCloudCompute_CompressedPayload? = nil
+}
+
 /// Metadata about an asset downloaded at runtime by cloudassetdownloader,
 /// and potentially used in the context of the request.
 package struct Proto_PrivateCloudCompute_AssetMetadata: Sendable {
@@ -866,6 +1010,10 @@ package struct Proto_PrivateCloudCompute_ResponseContext: Sendable {
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate let _protobuf_package = "com.apple.privatecloudcompute.api.v1"
+
+extension Proto_PrivateCloudCompute_CompressionAlgorithm: InternalSwiftProtobuf._ProtoNameProviding {
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0UNKNOWN\0\u{1}NONE\0\u{1}ZLIB\0\u{1}LZFSE\0")
+}
 
 extension Proto_PrivateCloudCompute_SubrequestExecutionPriority: InternalSwiftProtobuf._ProtoNameProviding {
   package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0REQUEST_EXECUTION_PRIORITY_UNSPECIFIED\0\u{1}REQUEST_EXECUTION_PRIORITY_DISCARDABLE\0")
@@ -1020,7 +1168,7 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeRequest: InternalSwiftPro
 
 extension Proto_PrivateCloudCompute_OpenRequestPayload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = _protobuf_package + ".OpenRequestPayload"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}token_granting_token\0\u{3}ott_salt\0\u{1}version\0\u{1}capabilities\0\u{3}workload_type\0\u{3}reputation_token_request\0")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}token_granting_token\0\u{3}ott_salt\0\u{1}version\0\u{1}capabilities\0\u{3}workload_type\0\u{3}reputation_token_request\0\u{3}opted_in_to_share_diagnostics_and_usage_with_apple\0")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1034,6 +1182,7 @@ extension Proto_PrivateCloudCompute_OpenRequestPayload: InternalSwiftProtobuf.Me
       case 4: try { try decoder.decodeSingularMessageField(value: &self._capabilities) }()
       case 5: try { try decoder.decodeSingularStringField(value: &self.workloadType) }()
       case 6: try { try decoder.decodeSingularMessageField(value: &self._reputationTokenRequest) }()
+      case 7: try { try decoder.decodeSingularBoolField(value: &self.optedInToShareDiagnosticsAndUsageWithApple) }()
       default: break
       }
     }
@@ -1062,6 +1211,9 @@ extension Proto_PrivateCloudCompute_OpenRequestPayload: InternalSwiftProtobuf.Me
     try { if let v = self._reputationTokenRequest {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
     } }()
+    if self.optedInToShareDiagnosticsAndUsageWithApple != false {
+      try visitor.visitSingularBoolField(value: self.optedInToShareDiagnosticsAndUsageWithApple, fieldNumber: 7)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1072,6 +1224,42 @@ extension Proto_PrivateCloudCompute_OpenRequestPayload: InternalSwiftProtobuf.Me
     if lhs._capabilities != rhs._capabilities {return false}
     if lhs.workloadType != rhs.workloadType {return false}
     if lhs._reputationTokenRequest != rhs._reputationTokenRequest {return false}
+    if lhs.optedInToShareDiagnosticsAndUsageWithApple != rhs.optedInToShareDiagnosticsAndUsageWithApple {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_CompressedPayload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  package static let protoMessageName: String = _protobuf_package + ".CompressedPayload"
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}compression_algorithm\0\u{3}compressed_data\0")
+
+  package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularEnumField(value: &self.compressionAlgorithm) }()
+      case 2: try { try decoder.decodeSingularBytesField(value: &self.compressedData) }()
+      default: break
+      }
+    }
+  }
+
+  package func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.compressionAlgorithm != .unknown {
+      try visitor.visitSingularEnumField(value: self.compressionAlgorithm, fieldNumber: 1)
+    }
+    if !self.compressedData.isEmpty {
+      try visitor.visitSingularBytesField(value: self.compressedData, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  package static func ==(lhs: Proto_PrivateCloudCompute_CompressedPayload, rhs: Proto_PrivateCloudCompute_CompressedPayload) -> Bool {
+    if lhs.compressionAlgorithm != rhs.compressionAlgorithm {return false}
+    if lhs.compressedData != rhs.compressedData {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1079,7 +1267,7 @@ extension Proto_PrivateCloudCompute_OpenRequestPayload: InternalSwiftProtobuf.Me
 
 extension Proto_PrivateCloudCompute_Capabilities: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = _protobuf_package + ".Capabilities"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}application_data_chunking\0")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}application_data_chunking\0\u{3}request_execution_log_entry_compression\0")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1088,6 +1276,7 @@ extension Proto_PrivateCloudCompute_Capabilities: InternalSwiftProtobuf.Message,
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularMessageField(value: &self._applicationDataChunking) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._requestExecutionLogEntryCompression) }()
       default: break
       }
     }
@@ -1101,11 +1290,15 @@ extension Proto_PrivateCloudCompute_Capabilities: InternalSwiftProtobuf.Message,
     try { if let v = self._applicationDataChunking {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
     } }()
+    try { if let v = self._requestExecutionLogEntryCompression {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   package static func ==(lhs: Proto_PrivateCloudCompute_Capabilities, rhs: Proto_PrivateCloudCompute_Capabilities) -> Bool {
     if lhs._applicationDataChunking != rhs._applicationDataChunking {return false}
+    if lhs._requestExecutionLogEntryCompression != rhs._requestExecutionLogEntryCompression {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1136,6 +1329,36 @@ extension Proto_PrivateCloudCompute_Capabilities.ApplicationDataChunking: Intern
 
   package static func ==(lhs: Proto_PrivateCloudCompute_Capabilities.ApplicationDataChunking, rhs: Proto_PrivateCloudCompute_Capabilities.ApplicationDataChunking) -> Bool {
     if lhs.size != rhs.size {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_Capabilities.RequestExecutionLogCompression: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  package static let protoMessageName: String = Proto_PrivateCloudCompute_Capabilities.protoMessageName + ".RequestExecutionLogCompression"
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}supported_algorithms\0")
+
+  package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedEnumField(value: &self.supportedAlgorithms) }()
+      default: break
+      }
+    }
+  }
+
+  package func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.supportedAlgorithms.isEmpty {
+      try visitor.visitPackedEnumField(value: self.supportedAlgorithms, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  package static func ==(lhs: Proto_PrivateCloudCompute_Capabilities.RequestExecutionLogCompression, rhs: Proto_PrivateCloudCompute_Capabilities.RequestExecutionLogCompression) -> Bool {
+    if lhs.supportedAlgorithms != rhs.supportedAlgorithms {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1426,7 +1649,7 @@ extension Proto_PrivateCloudCompute_ComponentTimeMeasurement: InternalSwiftProto
 
 extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = _protobuf_package + ".PrivateCloudComputeResponse"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}response_uuid\0\u{3}response_payload\0\u{3}response_summary\0\u{3}request_execution_log_entry\0\u{3}payload_chunk\0\u{3}sub_open\0\u{3}sub_close\0\u{3}component_time_measurement\0\u{3}cost_token\0\u{3}reputation_token\0")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}response_uuid\0\u{3}response_payload\0\u{3}response_summary\0\u{3}request_execution_log_entry\0\u{3}payload_chunk\0\u{3}sub_open\0\u{3}sub_close\0\u{3}component_time_measurement\0\u{3}cost_token\0\u{3}reputation_token\0\u{3}compressed_request_execution_log_entry\0")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1554,6 +1777,19 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse: InternalSwiftPr
           self.type = .reputationToken(v)
         }
       }()
+      case 11: try {
+        var v: Proto_PrivateCloudCompute_CompressedRequestExecutionLogEntry?
+        var hadOneofValue = false
+        if let current = self.type {
+          hadOneofValue = true
+          if case .compressedRequestExecutionLogEntry(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.type = .compressedRequestExecutionLogEntry(v)
+        }
+      }()
       default: break
       }
     }
@@ -1604,6 +1840,10 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse: InternalSwiftPr
     case .reputationToken?: try {
       guard case .reputationToken(let v)? = self.type else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 10)
+    }()
+    case .compressedRequestExecutionLogEntry?: try {
+      guard case .compressedRequestExecutionLogEntry(let v)? = self.type else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 11)
     }()
     case nil: break
     }
@@ -1683,7 +1923,7 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.ReputationTokenR
 
 extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePayload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = Proto_PrivateCloudCompute_PrivateCloudComputeResponse.protoMessageName + ".CloseResponsePayload"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{4}\u{2}post_response_actions\0\u{3}response_status\0\u{c}\u{1}\u{1}")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{4}\u{2}post_response_actions\0\u{3}response_status\0\u{3}error_description\0\u{c}\u{1}\u{1}")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1693,6 +1933,7 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePay
       switch fieldNumber {
       case 2: try { try decoder.decodeSingularMessageField(value: &self._postResponseActions) }()
       case 3: try { try decoder.decodeSingularEnumField(value: &self.responseStatus) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._errorDescription) }()
       default: break
       }
     }
@@ -1709,12 +1950,16 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePay
     if self.responseStatus != .ok {
       try visitor.visitSingularEnumField(value: self.responseStatus, fieldNumber: 3)
     }
+    try { if let v = self._errorDescription {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   package static func ==(lhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePayload, rhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseResponsePayload) -> Bool {
     if lhs._postResponseActions != rhs._postResponseActions {return false}
     if lhs.responseStatus != rhs.responseStatus {return false}
+    if lhs._errorDescription != rhs._errorDescription {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1782,7 +2027,7 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.OpenSubresponseP
 
 extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = Proto_PrivateCloudCompute_PrivateCloudComputeResponse.protoMessageName + ".CloseSubresponsePayload"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}subrequest_id\0\u{1}status\0")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}subrequest_id\0\u{1}status\0\u{3}error_description\0")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1792,24 +2037,33 @@ extension Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponse
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularUInt64Field(value: &self.subrequestID) }()
       case 2: try { try decoder.decodeSingularEnumField(value: &self.status) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._errorDescription) }()
       default: break
       }
     }
   }
 
   package func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if self.subrequestID != 0 {
       try visitor.visitSingularUInt64Field(value: self.subrequestID, fieldNumber: 1)
     }
     if self.status != .ok {
       try visitor.visitSingularEnumField(value: self.status, fieldNumber: 2)
     }
+    try { if let v = self._errorDescription {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   package static func ==(lhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload, rhs: Proto_PrivateCloudCompute_PrivateCloudComputeResponse.CloseSubresponsePayload) -> Bool {
     if lhs.subrequestID != rhs.subrequestID {return false}
     if lhs.status != rhs.status {return false}
+    if lhs._errorDescription != rhs._errorDescription {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1868,6 +2122,40 @@ extension Proto_PrivateCloudCompute_RequestExecutionLogEntry: InternalSwiftProto
     if lhs.final != rhs.final {return false}
     if lhs.assetMetadata != rhs.assetMetadata {return false}
     if lhs._outboundCallContext != rhs._outboundCallContext {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_PrivateCloudCompute_CompressedRequestExecutionLogEntry: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  package static let protoMessageName: String = _protobuf_package + ".CompressedRequestExecutionLogEntry"
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}compressed_request_execution_log_entry_data\0")
+
+  package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularMessageField(value: &self._compressedRequestExecutionLogEntryData) }()
+      default: break
+      }
+    }
+  }
+
+  package func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._compressedRequestExecutionLogEntryData {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  package static func ==(lhs: Proto_PrivateCloudCompute_CompressedRequestExecutionLogEntry, rhs: Proto_PrivateCloudCompute_CompressedRequestExecutionLogEntry) -> Bool {
+    if lhs._compressedRequestExecutionLogEntryData != rhs._compressedRequestExecutionLogEntryData {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

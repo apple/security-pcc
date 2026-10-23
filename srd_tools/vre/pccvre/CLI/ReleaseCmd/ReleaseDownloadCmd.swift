@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -68,6 +68,7 @@ extension CLI.ReleaseCmd {
                 )
 
                 try await swlog.fetchReleases(
+                    helper: PCCVREAttestationHelperResolver(environment: logEnvironment),
                     reqCount: 1,
                     includeAll: true,
                     searchRangeStart: Int64(releaseIndex),

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -125,7 +125,7 @@ public struct CryptexPolicy: AttestationPolicy {
 
         let sealedHashLocked = cryptexSealedHash.flags.contains(.ratchetLocked)
 
-        Self.logger.log("Observed Cryptex Lockdown State: \(sealedHashLocked)")
+        Self.logger.log("Observed Cryptex Lockdown State: \(sealedHashLocked, privacy: .public)")
 
         if self.requireLocked {
             // we should make sure the reported lock state from SecureConfigDB (malleable) matches the SEP SSR lock state (trusted)

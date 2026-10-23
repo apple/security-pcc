@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -26,20 +26,23 @@ import PrivateCloudCompute
 import Security
 import os.lock
 
+private let logger = Logger(for: .rateLimitRequest)
+
 final class TC2RateLimitRequest<
     ConnectionFactory: NWAsyncConnectionFactoryProtocol,
     RateLimiter: RateLimiterProtocol,
-    SystemInfo: SystemInfoProtocol
+    SystemInfo: SystemInfoProtocol,
+    FeatureFlagChecker: FeatureFlagCheckerProtocol
 >: Sendable {
-    private let logger = tc2Logger(forCategory: .rateLimitRequest)
     private let logPrefix: String
     private let connectionFactory: ConnectionFactory
     private let rateLimiter: RateLimiter
     private let requestID: UUID
     private let config: any Configuration
     private let systemInfo: SystemInfo
-    private let bundleIdentifier: String?
+    private let bundleIdentifier: BundleIdentifier?
     private let featureIdentifier: String?
+    private let featureFlagChecker: FeatureFlagChecker
 
     init(
         connectionFactory: ConnectionFactory,
@@ -47,8 +50,9 @@ final class TC2RateLimitRequest<
         requestID: UUID,
         config: any Configuration,
         systemInfo: SystemInfo,
-        bundleIdentifier: String?,
-        featureIdentifier: String?
+        bundleIdentifier: BundleIdentifier?,
+        featureIdentifier: String?,
+        featureFlagChecker: FeatureFlagChecker
     ) {
         self.logPrefix = "\(requestID):"
         self.connectionFactory = connectionFactory
@@ -58,12 +62,13 @@ final class TC2RateLimitRequest<
         self.systemInfo = systemInfo
         self.bundleIdentifier = bundleIdentifier
         self.featureIdentifier = featureIdentifier
+        self.featureFlagChecker = featureFlagChecker
     }
 
     func sendRequest() async throws {
-        self.logger.log("\(self.logPrefix) executing ratelimit request")
+        logger.log("\(self.logPrefix) executing ratelimit request")
         defer {
-            self.logger.log("\(self.logPrefix) finished ratelimit request")
+            logger.log("\(self.logPrefix) finished ratelimit request")
         }
         let environment = self.config.environment(systemInfo: self.systemInfo)
 
@@ -72,6 +77,7 @@ final class TC2RateLimitRequest<
                 ignoreCertificateErrors: self.config[.ignoreCertificateErrors],
                 forceOHTTP: environment.forceOHTTP,
                 useCompression: false,
+                featureFlagChecker: self.featureFlagChecker,
                 bundleIdentifier: self.bundleIdentifier
             ),
             endpoint: .url(environment.ropesUrl),
@@ -81,11 +87,15 @@ final class TC2RateLimitRequest<
             logComment: "rate_limit"
         ) { inbound, outbound, _, _ in
             let rateLimitRequest = Proto_Ropes_HttpService_ConfigRequest.with {
-                if let bundleIdentifier = self.bundleIdentifier {
-                    $0.rateLimitConfigRequest.bundleID = bundleIdentifier
-                }
-                if let featureIdentifier = self.featureIdentifier {
-                    $0.rateLimitConfigRequest.featureID = featureIdentifier
+                $0.rateLimitConfigRequest = .with {
+                    if let bundleIdentifier = self.bundleIdentifier {
+                        // Send the redacted value to the server: ROPES returns only global rate
+                        // limits and does not reference third-party bundle identifiers.
+                        $0.bundleID = bundleIdentifier.redactedValue
+                    }
+                    if let featureIdentifier = self.featureIdentifier {
+                        $0.featureID = featureIdentifier
+                    }
                 }
             }
             let rateLimitRequestData = try rateLimitRequest.serializedData()
@@ -109,28 +119,33 @@ final class TC2RateLimitRequest<
                 headerFields: headers
             )
 
-            self.logger.info("\(self.logPrefix) sending request \(String(reflecting: httpRequest))")
+            logger.info("\(self.logPrefix) sending request \(String(reflecting: httpRequest))")
             try await outbound.write(
                 content: rateLimitRequestData,
                 contentContext: .init(request: httpRequest),
                 isComplete: true
             )
 
-            self.logger.info("\(self.logPrefix) waiting for response")
+            logger.info("\(self.logPrefix) waiting for response")
             for try await response in inbound {
-                self.logger.info("\(self.logPrefix) received response \(response.data?.count ?? -1)")
+                logger.info("\(self.logPrefix) received response \(response.data?.count ?? -1)")
                 if let data = response.data {
                     let now = Date.now
                     let rateLimitResponse = try Proto_Ropes_HttpService_ConfigResponse(serializedBytes: data)
                     let rateLimitCount = rateLimitResponse.rateLimitConfigurationList.rateLimitConfiguration.count
-                    self.logger.info("\(self.logPrefix) decoded ratelimit response configuration count \(rateLimitCount)")
+                    logger.info("\(self.logPrefix) decoded ratelimit response configuration count \(rateLimitCount)")
 
                     if rateLimitCount > 0 {
                         for proto in rateLimitResponse.rateLimitConfigurationList.rateLimitConfiguration {
-                            if let rateLimitConfig = RateLimitConfiguration(now: now, proto: proto, config: self.config) {
+                            if let rateLimitConfig = RateLimitConfiguration(
+                                now: now,
+                                source: .ropes,
+                                proto: proto,
+                                config: self.config
+                            ) {
                                 await self.rateLimiter.limitByConfiguration(rateLimitConfig)
                             } else {
-                                self.logger.error("\(self.logPrefix) unable to process rate limit configuration \(String(describing: proto))")
+                                logger.error("\(self.logPrefix) unable to process rate limit configuration \(String(describing: proto))")
                             }
                         }
                         await self.rateLimiter.trimExpiredData(now: now)
@@ -138,7 +153,7 @@ final class TC2RateLimitRequest<
                     }
                 }
                 if response.isComplete {
-                    self.logger.info("\(self.logPrefix) response completed")
+                    logger.info("\(self.logPrefix) response completed")
                     break
                 }
             }

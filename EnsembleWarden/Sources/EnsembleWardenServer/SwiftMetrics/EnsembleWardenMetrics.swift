@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -29,22 +29,53 @@ package enum EnsembleWardenMetricLabels {
     package static let daemonLaunchTotal = "ensemblewarden_daemon_launch_total"
     package static let daemonUptime = "ensemblewarden_daemon_uptime"
     package static let launchdActiveManagedJobs = "ensemblewarden_launchd_active_managed_jobs"
-    package static let xpccallsTotal = "ensemblewarden_xpccalls_total"
     package static let xpccallsDuration = "ensemblewarden_xpccalls_duration_seconds"
-    package static let clientCallsTotal = "ensemblewarden_client_calls_total"
     package static let clientCallsDuration = "ensemblewarden_client_calls_duration_seconds"
+    package static let cryptoOperationsDuration = "ensemblewarden_crypto_operations_seconds"
+    package static let cryptoSurfaceBytes = "ensemblewarden_crypto_surface_bytes"
+    package static let iosurfacePrefaultDuration = "ensemblewarden_iosurface_prefault_seconds"
+}
+
+/// Stable identifiers for the `op` dimension on crypto metrics. Bound cardinality on purpose.
+package enum CryptoOperation: String, Sendable {
+    case encrypt
+    case decrypt
+}
+
+/// Stable identifiers for the `xpc_operation` dimension on EnsembleWarden XPC metrics.
+package enum EnsembleWardenXPCOperation: String, Sendable {
+    case start
+    case prefault
+    case finish
+    case publish2
+    case fetch2
+    case fetchMetadata
+    case delete
+    case dropAll
+}
+
+/// Stable identifiers for the `operation` dimension on EnsembleWarden client metrics.
+package enum EnsembleWardenClientOperation: String, Sendable {
+    case prewarm
+    case supply
+    case finish
+    case publish2
+    case fetch2
+    case fetchMetadata
+    case prefault
+    case delete
+    case dropAll
 }
 
 package enum EnsembleWardenMetricDimensions {
-    package static let bundleDimensions = ("bundle", Bundle.main.bundleIdentifier ?? "<unknown>")
-    package static let XPCPublishDimension = ("xpc_operation", "publish")
+    package static let XPCPublish2Dimension = ("xpc_operation", "publish2")
     package static let XPCStartDimension = ("xpc_operation", "start")
-    package static let XPCFetchDimension = ("xpc_operation", "fetch")
+    package static let XPCFetch2Dimension = ("xpc_operation", "fetch2")
     package static let XPCFinishDimension = ("xpc_operation", "finish")
     package static let successDimension = ("result", "success")
     package static let errorDimension = ("result", "error")
-    package static let publishDimension = ("operation", "publish")
-    package static let fetchDimension = ("operation", "fetch")
+    package static let publish2Dimension = ("operation", "publish2")
+    package static let fetch2Dimension = ("operation", "fetch2")
 }
 
 
@@ -55,7 +86,6 @@ package struct EnsembleWardenMetrics<Factory: MetricsFactory> {
     private let logger = Logger(subsystem: "com.apple.cloudos.ensemblewarden", category: "Metrics")
 
     private var metricsFactory: MetricsFactory
-    private var defaultDimensions: [(String,String)] = [("bundle", Bundle.main.bundleIdentifier ?? "<unknown>")]
 
     package var daemonLaunchTotalCount: CounterHandler
     package var launchdJobs: MeterHandler
@@ -63,25 +93,30 @@ package struct EnsembleWardenMetrics<Factory: MetricsFactory> {
 
     package init(metricsFactory: Factory) {
         self.metricsFactory = metricsFactory
-        self.daemonLaunchTotalCount = metricsFactory.makeCounter(label: EnsembleWardenMetricLabels.daemonLaunchTotal, dimensions: defaultDimensions)
-        self.launchdJobs = metricsFactory.makeMeter(label: EnsembleWardenMetricLabels.launchdActiveManagedJobs, dimensions: defaultDimensions)
-        self.daemonUptime = metricsFactory.makeRecorder(label: EnsembleWardenMetricLabels.daemonUptime, dimensions: defaultDimensions, aggregate: false)
+        self.daemonLaunchTotalCount = metricsFactory.makeCounter(label: EnsembleWardenMetricLabels.daemonLaunchTotal, dimensions: [])
+        self.launchdJobs = metricsFactory.makeMeter(label: EnsembleWardenMetricLabels.launchdActiveManagedJobs, dimensions: [])
+        self.daemonUptime = metricsFactory.makeRecorder(label: EnsembleWardenMetricLabels.daemonUptime, dimensions: [], aggregate: false)
     }
 
     /// Runs a closure, expected to handle an XPC message, and reports metrics on if that closure succeeded.
-    package func reportingXPCMetrics<T>(operationName: String, fn: () async throws -> T) async rethrows -> T {
-        let counterLabel = EnsembleWardenMetricLabels.xpccallsTotal
+    ///
+    /// - Parameters:
+    ///   - operationName: name of the XPC operation; emitted as the `xpc_operation` dimension.
+    ///   - purpose: optional `KVCacheTransferPurpose`. When supplied, emitted as the `purpose`
+    ///     dimension so we can split FT/ET vs multi-turn latency on the same metric.
+    package func reportingXPCMetrics<T>(operationName: EnsembleWardenXPCOperation, purpose: KVCacheTransferPurpose? = nil, fn: () async throws -> T) async rethrows -> T {
         let timerLabel = EnsembleWardenMetricLabels.xpccallsDuration
         let start = Date()
         var dimensions: [(String, String)] = [
-            ("bundle", Bundle.main.bundleIdentifier ?? "<unknown>"),
-            ("xpc_operation", operationName)
+            ("xpc_operation", operationName.rawValue)
         ]
+        if let purpose {
+            dimensions.append(("purpose", purpose.metricsLabel))
+        }
 
         defer {
             let processingTime = Date().timeIntervalSince(start)
-            self.metricsFactory.makeCounter(label: counterLabel, dimensions: dimensions).increment(by: 1)
-            self.metricsFactory.makeRecorder(label: timerLabel, dimensions: dimensions, aggregate: false).record(processingTime*1000)
+            self.metricsFactory.makeRecorder(label: timerLabel, dimensions: dimensions, aggregate: true).record(processingTime)
         }
 
         do {
@@ -91,29 +126,34 @@ package struct EnsembleWardenMetrics<Factory: MetricsFactory> {
         } catch {
             self.logger.error("""
                 Operation failed with error. \
-                operation_name=\(operationName, privacy: .public) \
+                operation_name=\(operationName.rawValue, privacy: .public) \
                 error=\(String(reportable: error), privacy: .public)
                 """)
             dimensions.append(("result", "error"))
+            dimensions.append(("error_category", Self.errorCategory(for: error)))
             throw error
         }
     }
 
     /// Runs a closure, expected to be a client operation, and reports metrics on if that closure succeeded.
-    package func reportingClientMetrics<T>(operationName: String, fn: () async throws -> T) async rethrows -> T {
-        let counterLabel = EnsembleWardenMetricLabels.clientCallsTotal
+    ///
+    /// - Parameters:
+    ///   - operationName: emitted as the `operation` dimension.
+    ///   - purpose: optional `KVCacheTransferPurpose`; emitted as `purpose` when present.
+    package func reportingClientMetrics<T>(operationName: EnsembleWardenClientOperation, purpose: KVCacheTransferPurpose? = nil, fn: () async throws -> T) async rethrows -> T {
         let timerLabel = EnsembleWardenMetricLabels.clientCallsDuration
         let start = Date()
 
         var dimensions: [(String, String)] = [
-            ("operation", operationName),
-            EnsembleWardenMetricDimensions.bundleDimensions
+            ("operation", operationName.rawValue),
         ]
+        if let purpose {
+            dimensions.append(("purpose", purpose.metricsLabel))
+        }
 
         defer {
             let processingTime = Date().timeIntervalSince(start)
-            self.metricsFactory.makeCounter(label: counterLabel, dimensions: dimensions).increment(by: 1)
-            self.metricsFactory.makeRecorder(label: timerLabel, dimensions: dimensions, aggregate: false).record(processingTime*1000)
+            self.metricsFactory.makeRecorder(label: timerLabel, dimensions: dimensions, aggregate: true).record(processingTime)
         }
 
         do {
@@ -122,7 +162,212 @@ package struct EnsembleWardenMetrics<Factory: MetricsFactory> {
             return result
         } catch {
             dimensions.append(EnsembleWardenMetricDimensions.errorDimension)
+            dimensions.append(("error_category", Self.errorCategory(for: error)))
             throw error
+        }
+    }
+
+    /// Synchronous XPC-metrics wrapper for non-async XPC handler paths (e.g. `cancellation`/`finish`).
+    package func reportingSyncXPCMetrics<T>(operationName: EnsembleWardenXPCOperation, fn: () throws -> T) rethrows -> T {
+        let timerLabel = EnsembleWardenMetricLabels.xpccallsDuration
+        let start = Date()
+        var dimensions: [(String, String)] = [
+            ("xpc_operation", operationName.rawValue),
+        ]
+
+        defer {
+            let processingTime = Date().timeIntervalSince(start)
+            self.metricsFactory.makeRecorder(label: timerLabel, dimensions: dimensions, aggregate: true).record(processingTime)
+        }
+
+        do {
+            let result = try fn()
+            dimensions.append(("result", "success"))
+            return result
+        } catch {
+            self.logger.error("""
+                Operation failed with error. \
+                operation_name=\(operationName.rawValue, privacy: .public) \
+                error=\(String(reportable: error), privacy: .public)
+                """)
+            dimensions.append(("result", "error"))
+            dimensions.append(("error_category", Self.errorCategory(for: error)))
+            throw error
+        }
+    }
+
+    /// Synchronous client-metrics wrapper for non-async client calls (e.g. `prewarm`).
+    package func reportingSyncClientMetrics<T>(operationName: EnsembleWardenClientOperation, fn: () throws -> T) rethrows -> T {
+        let timerLabel = EnsembleWardenMetricLabels.clientCallsDuration
+        let start = Date()
+
+        var dimensions: [(String, String)] = [
+            ("operation", operationName.rawValue),
+        ]
+
+        defer {
+            let processingTime = Date().timeIntervalSince(start)
+            self.metricsFactory.makeRecorder(label: timerLabel, dimensions: dimensions, aggregate: true).record(processingTime)
+        }
+
+        do {
+            let result = try fn()
+            dimensions.append(EnsembleWardenMetricDimensions.successDimension)
+            return result
+        } catch {
+            dimensions.append(EnsembleWardenMetricDimensions.errorDimension)
+            dimensions.append(("error_category", Self.errorCategory(for: error)))
+            throw error
+        }
+    }
+
+    /// Runs a per-IOSurface crypto operation and records its duration into a single dimensional
+    /// histogram (`ensemblewarden_crypto_operations_seconds`). The histogram's auto-emitted
+    /// `_count` series covers rate + error counts, so no separate counter is needed.
+    ///
+    /// - Parameters:
+    ///   - op: which crypto operation is being timed
+    ///   - fn: the operation; rethrown
+    package func reportingCryptoMetrics<T>(op: CryptoOperation, fn: () throws -> T) rethrows -> T {
+        let start = Date()
+        var dimensions: [(String, String)] = [
+            ("op", op.rawValue),
+        ]
+
+        defer {
+            let processingTime = Date().timeIntervalSince(start)
+            self.metricsFactory.makeRecorder(
+                label: EnsembleWardenMetricLabels.cryptoOperationsDuration,
+                dimensions: dimensions,
+                aggregate: true
+            ).record(processingTime)
+        }
+
+        do {
+            let result = try fn()
+            dimensions.append(EnsembleWardenMetricDimensions.successDimension)
+            return result
+        } catch {
+            dimensions.append(EnsembleWardenMetricDimensions.errorDimension)
+            dimensions.append(("error_category", Self.errorCategory(for: error)))
+            throw error
+        }
+    }
+
+    /// Records the size of an encrypted/decrypted IOSurface (bytes) into the per-op histogram.
+    /// Throughput is derived as `bytes / duration` server-side.
+    package func recordSurfaceBytes(op: CryptoOperation, bytes: Int) {
+        self.metricsFactory.makeRecorder(
+            label: EnsembleWardenMetricLabels.cryptoSurfaceBytes,
+            dimensions: [
+                ("op", op.rawValue),
+            ],
+            aggregate: true
+        ).record(Double(bytes))
+    }
+
+    /// Increments the IOSurface prefault failure counter. Prefault failures are non-fatal; this
+    /// counter exists so we can alert on rising rates without grepping logs.
+    package func reportingPrefault<T>(op: CryptoOperation, fn: () throws -> T) rethrows -> T {
+        let start = Date()
+        var dimensions: [(String, String)] = [
+            ("op", op.rawValue),
+        ]
+
+        defer {
+            let processingTime = Date().timeIntervalSince(start)
+            self.metricsFactory.makeRecorder(
+                label: EnsembleWardenMetricLabels.iosurfacePrefaultDuration,
+                dimensions: dimensions,
+                aggregate: true
+            ).record(processingTime)
+        }
+
+        do {
+            let result = try fn()
+            dimensions.append(EnsembleWardenMetricDimensions.successDimension)
+            return result
+        } catch {
+            dimensions.append(EnsembleWardenMetricDimensions.errorDimension)
+            throw error
+        }
+    }
+
+    /// Maps an error to a stable, low-cardinality category string. Never use raw error
+    /// descriptions here — that would make `error_category` unbounded.
+    ///
+    /// The `EnsembleWardenError` switch is exhaustive on purpose so adding a new case there
+    /// becomes a compile error here, forcing the author to pick a bucket rather than silently
+    /// folding into `ensemblewarden_other`.
+    private static func errorCategory(for error: any Error) -> String {
+        if let ewError = error as? EnsembleWardenError {
+            switch ewError {
+            // XPC
+            case .unexpectedXPCMessageType: return "unexpected_xpc_message_type"
+            case .invalidSyncRequest: return "invalid_sync_request"
+            case .clientNoLongerActive: return "client_not_connected"
+            case .unsupportedXPCRequestType: return "unsupported_xpc_request_type"
+            case .invalidXPCResponse: return "invalid_xpc_response"
+
+            // Internal
+            case .failedToCreateIOSurface: return "failed_to_create_iosurface"
+            case .failedToAccessDataPointer: return "failed_to_access_data_pointer"
+            case .failedToTakeOwnership: return "failed_to_take_ownership"
+            case .failedToPrefaultIOSurface: return "failed_to_prefault_iosurface"
+            case .launchdMisconfiguration: return "launchd_misconfiguration"
+            case .invalidStateTransition: return "invalid_state_transition"
+            case .clientNotYetConnected: return "client_not_connected"
+            case .invalidFollowerToken: return "invalid_follower_token"
+            case .unexpectedError: return "unexpected_error"
+            case .externalError: return "external_error"
+            case .ensemblePorterError: return "ensembleporter_error"
+            case .invalidTurnNumber: return "invalid_turn_number"
+            case .failedToGenerateRandomBytes: return "failed_to_generate_random_bytes"
+            case .unimplemented: return "unimplemented"
+            case .ioSurfaceDataMismatch: return "iosurface_data_mismatch"
+            case .invalidStartMessage: return "invalid_start_message"
+            case .ensembleTransportUnavailable: return "ensemble_transport_unavailable"
+            case .ensembleTransportError(let failure):
+                return "ensemblewarden_ensembletransport_\(failure.metricsLabel)"
+
+            // Keys
+            case .ensemblePorterHandleNotSupplied: return "key_not_supplied"
+            case .keyIDNotSupplied: return "key_not_supplied"
+            case .keyIDSuppliedTwice: return "key_supplied_twice"
+            case .keyAlreadyFetched: return "key_already_fetched"
+
+            // Crypto
+            case .invalidSealedBox: return "invalid_sealed_box"
+            case .failedToGenerateIOSurface: return "failed_to_generate_iosurface"
+            case .invalidIOSurfaceRange: return "invalid_iosurface_range"
+            }
+        }
+        return "other"
+    }
+}
+
+fileprivate extension EnsembleTransportFailure {
+    /// Snake-case suffix for the `error_category` dimension, appended to
+    /// `ensemblewarden_ensembletransport_`. Spelled out rather than derived from `rawValue` so
+    /// the wire name and the metric name can change independently.
+    ///
+    /// Every value here must also be listed under the `error_category` dimension of
+    /// `ensemblewarden_xpccalls_duration_seconds` and `ensemblewarden_crypto_operations_seconds`
+    /// in `logauditlists/metrics/ensemblewardend.json`. `CloudMetrics.MetricsFilter` drops the
+    /// *whole sample* on an unaudited dimension value, not just the dimension, so a missing entry
+    /// would silently erase these errors from the success-rate metric. The client-side lists in
+    /// `logauditlists/metrics/tie-*.json` leave `error_category` empty, which that filter treats
+    /// as unrestricted, so they need no change.
+    var metricsLabel: String {
+        switch self {
+        case .disconnected: "disconnected"
+        case .publishFailed: "publish_failed"
+        case .duplicateObject: "duplicate_object"
+        case .invalidSurface: "invalid_surface"
+        case .tooLarge: "too_large"
+        case .deleteFailed: "delete_failed"
+        case .unexpectedResponse: "unexpected_response"
+        case .unknown: "unknown"
         }
     }
 }

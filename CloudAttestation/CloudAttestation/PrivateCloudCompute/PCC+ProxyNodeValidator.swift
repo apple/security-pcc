@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -51,6 +51,13 @@ extension PCC {
 
         var _validateProxiedReleaseProofs: Bool?
 
+        @_spi(Private)
+        public var fullReleaseSetVerification: Bool
+
+        var enforceEnvironment: Bool
+
+        let environment: Environment
+
         /// Constructs a ``ProxyNodeValidator`` with a default validity duration of 1 day.
         public init() {
             self = .init(validity: .days(1))
@@ -75,14 +82,27 @@ extension PCC {
         ///   - validity: The ``Swift/Duration`` object indicating a lower bound on how long a validated AttestationBundle should last.
         ///   - environment: The environment to validate the AttestationBundle in.
         public init(validity: Duration, environment: Environment) {
+            self.environment = environment
             self.inner = NodeValidator(validity: validity, environment: environment)
+            self.inner.certificateTransparency = false
             self.inner.customerSecurityPolicy = .customerProxy
+
+            let configuration = Configuration(for: environment)
+            self.fullReleaseSetVerification = configuration.fullReleaseSetVerification
+            self.enforceEnvironment = configuration.enforceEnvironment
         }
 
         /// The policy to use for validation.
         @PolicyBuilder
         public var policy: some AttestationPolicy {
-            ProxiedReleaseTransparencyPolicy(verifier: self.transparencyVerifier, validateProofs: validateProxiedReleaseProofs)
+            ProxiedReleaseTransparencyPolicy(
+                verifier: self.transparencyVerifier,
+                validateProofs: validateProxiedReleaseProofs,
+                fullReleaseSetVerification: fullReleaseSetVerification
+            )
+            if enforceEnvironment {
+                EnvironmentPolicy(expected: self.environment)
+            }
         }
 
         /// Returns the key used to sign the attestation.
@@ -96,8 +116,12 @@ extension PCC {
         ) async throws -> (key: PublicKeyData, expiration: Date, attestation: Validated.AttestationBundle) {
             let nonce = Data(bundle.proto.appData.digest())
             let result = try await inner.validate(bundle: bundle, nonce: nonce)
-            try await policy.evaluate(bundle: bundle)
-            return result
+
+            var context = result.attestation.context ?? AttestationPolicyContext()
+            try await policy.evaluate(bundle: bundle, context: &context)
+            let expiration = [result.expiration, context.proofExpiration].compactMap { $0 }.min() ?? result.expiration
+
+            return (key: result.key, expiration: expiration, attestation: result.attestation)
         }
     }
 }

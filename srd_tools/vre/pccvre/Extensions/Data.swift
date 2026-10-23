@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,5 +22,28 @@ import Foundation
 extension Data {
     var hexString: String {
         self.compactMap { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Decode a lowercase/uppercase hex string. Returns nil on odd length or
+    /// any non-hex character.
+    init?(hexString: String) {
+        let chars = Array(hexString.utf8)
+        guard chars.count % 2 == 0 else { return nil }
+        var out = Data(capacity: chars.count / 2)
+        func nibble(_ c: UInt8) -> UInt8? {
+            switch c {
+            case 0x30...0x39: return c - 0x30
+            case 0x61...0x66: return c - 0x61 + 10
+            case 0x41...0x46: return c - 0x41 + 10
+            default: return nil
+            }
+        }
+        var i = chars.startIndex
+        while i < chars.endIndex {
+            guard let hi = nibble(chars[i]), let lo = nibble(chars[i + 1]) else { return nil }
+            out.append(hi << 4 | lo)
+            i += 2
+        }
+        self = out
     }
 }

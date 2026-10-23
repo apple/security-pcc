@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -87,6 +87,31 @@ internal enum CloudBoardAttestationAPIXPCClientToServerMessages {
         @inlinable
         public init(from buffer: inout ByteBuffer) throws {
             self.proxyAttestationKeyID = try .init(from: &buffer)
+            self.rawWorkerAttestationBundle = try .init(from: &buffer)
+        }
+    }
+
+    /// Request to pre-warm the validation cache for a worker against the proxy's most recent active keys.
+    /// The proxy keys are chosen daemon-side; the caller supplies only the worker bundle.
+    internal struct RequestWarmWorkerValidation: CloudBoardAsyncXPCByteBufferMessage {
+        internal typealias Success = WarmWorkerValidationSummary
+        internal typealias Failure = CloudBoardAttestationAPIError
+
+        package var rawWorkerAttestationBundle: Data
+
+        internal init(
+            rawWorkerAttestationBundle: Data
+        ) {
+            self.rawWorkerAttestationBundle = rawWorkerAttestationBundle
+        }
+
+        @inlinable
+        public func encode(to buffer: inout ByteBuffer) throws {
+            try self.rawWorkerAttestationBundle.encode(to: &buffer)
+        }
+
+        @inlinable
+        public init(from buffer: inout ByteBuffer) throws {
             self.rawWorkerAttestationBundle = try .init(from: &buffer)
         }
     }

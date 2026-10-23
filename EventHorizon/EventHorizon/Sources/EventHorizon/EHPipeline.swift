@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -16,9 +16,16 @@
 #if canImport(os)
 import os
 #endif
+import AST
 import Dispatch
 import Foundation
 import Synchronization
+
+extension Duration {
+    var asSeconds: Double {
+        Double(self.components.seconds) + Double(self.components.attoseconds) / 1e18
+    }
+}
 
 public protocol EHGenerator {
     func configure(_ pipeline: EHPipeline) throws
@@ -35,7 +42,10 @@ public enum EHTransformResult: String, CaseIterable {
     case error
 }
 
-public typealias EHTransformReturn = (EHTransformResult, [any EHUEFEvent]?, [(any EHMetrics.EHMetricDefinitionProtocol, UInt64, [(String, String)]?)]?, [(any EHMetrics.EHMetricDefinitionProtocol, Double, [(String, String)]?)]?)
+public typealias EHTransformCounterMetrics = [(any EHMetrics.EHMetricDefinitionCounterProtocol, UInt64, [(String, String)]?)]
+public typealias EHTransformGaugeMetrics = [(any EHMetrics.EHMetricDefinitionGaugeProtocol, Double, [(String, String)]?)]
+
+public typealias EHTransformReturn = (EHTransformResult, [any EHUEFEvent]?, EHTransformCounterMetrics?, EHTransformGaugeMetrics?)
 
 public enum EHUEFCategory: String, CaseIterable, Codable, Sendable {
     case process
@@ -47,7 +57,7 @@ public enum EHUEFCategory: String, CaseIterable, Codable, Sendable {
     case informational
 }
 
-public enum EHValueType: Sendable, Codable {
+public enum EHValueType: Sendable, Codable, Equatable, Hashable {
     case int(Int), string(String), boolean(Bool), double(Double)
 
     public init(from decoder: any Decoder) throws {
@@ -115,12 +125,162 @@ public enum EHValueType: Sendable, Codable {
     }
 }
 
+
+public struct EHEventMetadata: Sendable, Codable, Hashable {
+    private final class Storage: @unchecked Sendable {
+        var fields: [String: EHValueType]
+        var tags: Set<String>
+
+        init(fields: [String: EHValueType] = [:], tags: Set<String> = []) {
+            self.fields = fields
+            self.tags = tags
+        }
+
+        func copy() -> Storage {
+            Storage(fields: fields, tags: tags)
+        }
+    }
+
+    private var storage: Storage
+
+    private mutating func ensureUnique() {
+        if !isKnownUniquelyReferenced(&storage) {
+            storage = storage.copy()
+        }
+    }
+
+    public var fields: [String: EHValueType] {
+        get { storage.fields }
+        set { ensureUnique(); storage.fields = newValue }
+    }
+
+    public var tags: Set<String> {
+        get { storage.tags }
+        set { ensureUnique(); storage.tags = newValue }
+    }
+
+    public mutating func mutateFields(_ body: (inout [String: EHValueType]) -> Void) {
+        ensureUnique()
+        body(&storage.fields)
+    }
+
+    public mutating func mutateTags(_ body: (inout Set<String>) -> Void) {
+        ensureUnique()
+        body(&storage.tags)
+    }
+
+    public init(fields: [String: EHValueType] = [:], tags: Set<String> = []) {
+        self.storage = Storage(fields: fields, tags: tags)
+    }
+
+    public init(tags: Set<String>) {
+        self.storage = Storage(fields: [:], tags: tags)
+    }
+
+
+    private enum CodingKeys: String, CodingKey {
+        case fields, tags
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let fields = try container.decodeIfPresent([String: EHValueType].self, forKey: .fields) ?? [:]
+        let tags = try container.decodeIfPresent(Set<String>.self, forKey: .tags) ?? []
+        self.storage = Storage(fields: fields, tags: tags)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(storage.fields, forKey: .fields)
+        try container.encode(storage.tags, forKey: .tags)
+    }
+
+
+    public static func == (lhs: EHEventMetadata, rhs: EHEventMetadata) -> Bool {
+        lhs.storage.fields == rhs.storage.fields && lhs.storage.tags == rhs.storage.tags
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(storage.fields)
+        hasher.combine(storage.tags)
+    }
+}
+
 public protocol EHUEFEvent: Sendable, Codable, CustomDebugStringConvertible {
-    var fields: [String: EHValueType] {get set}
-    var tags: Set<String> {get set}
+    var metadata: EHEventMetadata {get set}
     var event_category: EHUEFCategory {get}
     var event_type: String {get}
     init()
+}
+
+extension EHUEFEvent {
+    public var fields: [String: EHValueType] {
+        get { metadata.fields }
+        set { metadata.fields = newValue }
+    }
+
+    public var tags: Set<String> {
+        get { metadata.tags }
+        set { metadata.tags = newValue }
+    }
+}
+
+public protocol EHFieldExtractable {
+    func fieldValue(for fieldName: String) -> Any?
+}
+
+public protocol EHRegoConvertible {
+    func toRegoValue() -> AST.RegoValue
+}
+
+
+extension EHValueType {
+    public var regoValue: AST.RegoValue {
+        switch self {
+        case .string(let s):
+            return .string(s)
+        case .int(let i):
+            return .number(RegoNumber(int: Int64(i)))
+        case .double(let d):
+            return .number(RegoNumber(decimal: Decimal(d)))
+        case .boolean(let b):
+            return .boolean(b)
+        }
+    }
+}
+
+extension Set<String> {
+    public func toRegoValue() -> AST.RegoValue {
+        var regoSet = Set<AST.RegoValue>()
+        for s in self {
+            regoSet.insert(.string(s))
+        }
+        return .set(regoSet)
+    }
+}
+
+extension Dictionary where Key == String, Value == EHValueType {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj = [AST.RegoValue: AST.RegoValue](minimumCapacity: self.count)
+        for (key, value) in self {
+            obj[.string(key)] = value.regoValue
+        }
+        return .object(obj)
+    }
+}
+
+enum EHJSONEncoding {
+    static let sharedEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        return encoder
+    }()
+
+    static let sharedEncoderUnsorted: JSONEncoder = {
+        let e = JSONEncoder()
+        e.outputFormatting = [.withoutEscapingSlashes]
+        return e
+    }()
 }
 
 extension EHUEFEvent {
@@ -129,9 +289,7 @@ extension EHUEFEvent {
         return String(data: self.jsonData ?? Data(), encoding: .utf8) ?? errStr
     }
     public var jsonData: Data? {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        guard let encoded = try? encoder.encode(self) else {
+        guard let encoded = try? EHJSONEncoding.sharedEncoderUnsorted.encode(self) else {
             return nil
         }
         return encoded
@@ -144,7 +302,7 @@ extension EHUEFEvent {
 }
 public protocol EHTransform: Sendable {
     func process(_ event: any EHUEFEvent) async -> EHTransformReturn
-    func configure() throws
+    func configure() async throws
     var name: String { get }
 }
 public protocol EHFileSubscriber {
@@ -153,8 +311,15 @@ public protocol EHFileSubscriber {
 
 public protocol EHFrontend {
     func getConfig() -> EHDaemonConfig
+    func getPipeline() -> EHPipeline
     var name: String { get }
     init()
+}
+
+extension EHFrontend {
+    public func getPipeline() -> EHPipeline {
+        getConfig().Pipeline
+    }
 }
 
 public struct EHDaemonConfig {
@@ -173,7 +338,10 @@ public final class EHDaemon {
     private let log = EHLog.withCategory(EHDaemon.self)
     private let frontend: EHFrontend?
 
-    public let allEventsIterable: [any AllEventsIterable.Type] = [
+    public let allEventsIterable: [any AllEventsIterable.Type]
+    public let eventMapping: EHEventMapping
+
+    public nonisolated(unsafe) static let defaultAllEventsIterable: [any AllEventsIterable.Type] = [
         ESClient.self,
         NStatClient.self,
         OSLogStreamer.self,
@@ -183,18 +351,23 @@ public final class EHDaemon {
         EventNormalizer.self,
         MDNSResponderQueries.self,
         RestrictedExecutionModeViolation.self,
-        SandboxViolation.self
+        SandboxViolation.self,
+        AuditLogGenerator.self,
+        PCCFrontend.PrivacyApprovedEvents.self,
+        RegoEngine.self,
+        EhprobeGenerator.self
     ]
-    public let eventMapping: EHEventMapping
 
-    public init(_ frontend: EHFrontend) {
+    public init(_ frontend: EHFrontend, allEventsIterable: [any AllEventsIterable.Type] = EHDaemon.defaultAllEventsIterable) {
         self.config = frontend.getConfig()
         self.frontend = frontend
+        self.allEventsIterable = allEventsIterable
         self.eventMapping = Self.getEventMapping(allEventsIterable: allEventsIterable)
     }
-    public init(_ config: EHDaemonConfig) {
+    public init(_ config: EHDaemonConfig, allEventsIterable: [any AllEventsIterable.Type] = EHDaemon.defaultAllEventsIterable) {
         self.config = config
         self.frontend = nil
+        self.allEventsIterable = allEventsIterable
         self.eventMapping = Self.getEventMapping(allEventsIterable: allEventsIterable)
     }
 
@@ -215,11 +388,45 @@ public final class EHDaemon {
         }
         os_log(.info, log: log, "Initializing")
 
-        try config.Pipeline.configure()
-        for generator in config.Generators {
-            try generator.configure(config.Pipeline)
-            try generator.start(config.Pipeline)
+        Task {
+            await EHMetrics.shared.preRegisterMetrics(
+                counters: EHMetrics.Labels.Counters.self,
+                gauges: EHMetrics.Labels.Gauges.self
+            )
         }
+
+        nonisolated(unsafe) var configureError: Error?
+        let pipeline = config.Pipeline
+        let semaphore = DispatchSemaphore(value: 0)
+        Task { @Sendable in
+            do {
+                try await pipeline.configure()
+            } catch {
+                configureError = error
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        if let configureError {
+            throw configureError
+        }
+
+        var activeGenerators: [EHGenerator] = []
+        for generator in config.Generators {
+            do {
+                try generator.configure(config.Pipeline)
+                try generator.start(config.Pipeline)
+                activeGenerators.append(generator)
+            } catch {
+                os_log(
+                    .error, log: log,
+                    "Generator %{public}@ failed to initialize: %{public}@, skipping",
+                    String(describing: type(of: generator)), "\(error)"
+                )
+                try? generator.stop()
+            }
+        }
+        config.Generators = activeGenerators
         os_log(.info, log: log, "Daemon initialized and is listening for events")
     }
 
@@ -256,90 +463,103 @@ public final class EHPipeline: Sendable {
 
     let depth = Atomic<Int>(0)
 
-    func configure() throws {
+    func configure() async throws {
         if let configOnlyTransforms = self.configOnlyTransforms {
-            try configOnlyTransforms.forEach { try $0.configure() }
+            for transform in configOnlyTransforms {
+                try await transform.configure()
+            }
         }
-        try self.transforms.forEach { try $0.configure() }
+        for transform in self.transforms {
+            try await transform.configure()
+        }
     }
 
     public func process(_ event: any EHUEFEvent, skipToTranformIndex: Int = 0) async {
-        await withDiscardingTaskGroup { metrics in
-            var curEvent: (any EHUEFEvent)? = event
-            let dET = [(EHMetrics.Labels.Dimensions.event_type.rawValue, event.event_type)]
-            let startTime = Date()
-            var counterMetrics: [(any EHMetrics.EHMetricDefinitionProtocol, UInt64, [(String, String)]?)] = []
-            var gaugeMetrics: [(any EHMetrics.EHMetricDefinitionProtocol, Double, [(String, String)]?)] = []
+        let metricsCache = PipelineMetricsCache.shared
+        var curEvent: (any EHUEFEvent)? = event
+        let dET: [(String, String)] = [(EHMetrics.Labels.Dimensions.event_type.rawValue, event.event_type)]
+        let clock = ContinuousClock()
+        let startTime = clock.now
 
-            counterMetrics.append((EHMetrics.Labels.Counters.pipeline_event_ingest_count, 1, dET))
+        metricsCache.increment(EHMetrics.Labels.Counters.pipeline_event_ingest_count, dimensions: dET)
 
-            let depth = self.depth.add(1, ordering: .sequentiallyConsistent)
-            gaugeMetrics.append((EHMetrics.Labels.Gauges.pipeline_queue_depth, Double(depth.newValue), nil))
-            defer { self.depth.subtract(1, ordering: .sequentiallyConsistent) }
-            if depth.newValue > maxDepth {
-                counterMetrics.append((EHMetrics.Labels.Counters.pipeline_event_ingest_drop_count, 1, dET))
-                gaugeMetrics.append((EHMetrics.Labels.Gauges.pipeline_event_latency, Date().timeIntervalSince(startTime), dET))
-                metrics.addTask {
-                    await EHMetrics.shared.bulkReport(counters: counterMetrics, gauges: gaugeMetrics)
+        let depth = self.depth.add(1, ordering: .acquiringAndReleasing)
+        metricsCache.set(EHMetrics.Labels.Gauges.pipeline_queue_depth, value: Double(depth.newValue), dimensions: nil)
+        defer { self.depth.subtract(1, ordering: .releasing) }
+
+        if depth.newValue > maxDepth {
+            metricsCache.increment(EHMetrics.Labels.Counters.pipeline_event_ingest_drop_count, dimensions: dET)
+            metricsCache.set(EHMetrics.Labels.Gauges.pipeline_event_latency, value: (clock.now - startTime).asSeconds, dimensions: dET)
+            return
+        }
+
+        for (transform_idx, transform) in self.transforms.enumerated() {
+            if skipToTranformIndex > 0 && transform_idx < skipToTranformIndex {
+                continue
+            }
+            let tStart = clock.now
+            let (result, newEvents, transformMetricsCounters, transformMetricsGauges) = await transform.process(curEvent!)
+
+            if let transformMetricsCounters {
+                for (metric, value, dims) in transformMetricsCounters {
+                    metricsCache.increment(metric, by: value, dimensions: dims)
                 }
-                return
+            }
+            if let transformMetricsGauges {
+                for (metric, value, dims) in transformMetricsGauges {
+                    metricsCache.set(metric, value: value, dimensions: dims)
+                }
             }
 
-            for (transform_idx, transform) in self.transforms.enumerated() {
-                if skipToTranformIndex > 0 && transform_idx < skipToTranformIndex {
-                    continue
+            let mDim: [(String, String)] = [
+                (EHMetrics.Labels.Dimensions.event_type.rawValue, event.event_type),
+                (EHMetrics.Labels.Dimensions.transform_id.rawValue, transform.name),
+                (EHMetrics.Labels.Dimensions.transform_result.rawValue, result.rawValue)
+            ]
+            let tDuration = clock.now - tStart
+            metricsCache.set(EHMetrics.Labels.Gauges.pipeline_transform_latency, value: tDuration.asSeconds, dimensions: mDim)
+            metricsCache.increment(EHMetrics.Labels.Counters.pipeline_transform_count, dimensions: mDim)
+
+            if let newEvents = newEvents {
+                guard let firstEvent = newEvents.first else {
+                    break
                 }
-                let tDate = Date()
-                let (result, newEvents, transformMetricsCounters, transformMetricsGauges) = await transform.process(curEvent!)
-                if let transformMetricsCounters {
-                    counterMetrics.append(contentsOf: transformMetricsCounters)
-                }
-                if let transformMetricsGauges {
-                    gaugeMetrics.append(contentsOf: transformMetricsGauges)
-                }
-                let mDim = dET + [
-                    (EHMetrics.Labels.Dimensions.transform_id.rawValue, transform.name),
-                    (EHMetrics.Labels.Dimensions.transform_result.rawValue, result.rawValue)
-                ]
-                gaugeMetrics.append((EHMetrics.Labels.Gauges.pipeline_transform_latency, Date().timeIntervalSince(tDate), mDim))
-                counterMetrics.append((EHMetrics.Labels.Counters.pipeline_transform_count, 1, mDim))
-                if let newEvents = newEvents {
-                    curEvent = newEvents.first
-                    if newEvents.count > 1 {
-                        counterMetrics.append((EHMetrics.Labels.Counters.pipeline_transform_created_event_count, UInt64(newEvents.count), mDim))
-                        if transform_idx < self.transforms.count - 1 {
-                            Task {
-                                let new_events = newEvents.dropFirst()
-                                for ne in new_events {
-                                    await process(ne, skipToTranformIndex: skipToTranformIndex + 1)
-                                }
+                curEvent = firstEvent
+                if newEvents.count > 1 {
+                    metricsCache.increment(
+                        EHMetrics.Labels.Counters.pipeline_transform_created_event_count,
+                        by: UInt64(newEvents.count),
+                        dimensions: mDim
+                    )
+                    if transform_idx < self.transforms.count - 1 {
+                        Task {
+                            let new_events = newEvents.dropFirst()
+                            for ne in new_events {
+                                await process(ne, skipToTranformIndex: transform_idx + 1)
                             }
                         }
                     }
                 }
-
-                var outerBreak = false
-                switch result {
-                case .proceed, .proceed_mutated, .error:
-                    break
-                case .halt:
-                    os_log(.error, log: log, "Pipeline halted due to transform \(String(describing: transform), privacy: .public)")
-                    exit(ExitCodes.halt.rawValue)
-                case .halt_ok:
-                    os_log(.error, log: log, "Pipeline halted ok due to transform \(String(describing: transform), privacy: .public)")
-                    exit(ExitCodes.success.rawValue)
-                case .drop:
-                    outerBreak = true
-                }
-                if outerBreak {
-                    break
-                }
             }
-            gaugeMetrics.append((EHMetrics.Labels.Gauges.pipeline_event_latency, Date().timeIntervalSince(startTime), dET))
-            metrics.addTask {
-                await EHMetrics.shared.bulkReport(counters: counterMetrics, gauges: gaugeMetrics)
+
+            var outerBreak = false
+            switch result {
+            case .proceed, .proceed_mutated, .error:
+                break
+            case .halt:
+                os_log(.error, log: log, "Pipeline halted due to transform \(String(describing: transform), privacy: .public)")
+                exit(ExitCodes.halt.rawValue)
+            case .halt_ok:
+                os_log(.error, log: log, "Pipeline halted ok due to transform \(String(describing: transform), privacy: .public)")
+                exit(ExitCodes.success.rawValue)
+            case .drop:
+                outerBreak = true
+            }
+            if outerBreak {
+                break
             }
         }
+        metricsCache.set(EHMetrics.Labels.Gauges.pipeline_event_latency, value: (clock.now - startTime).asSeconds, dimensions: dET)
     }
 }
 

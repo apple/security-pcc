@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -30,12 +30,7 @@ protocol TC2ClientProtocol: Sendable {
 
     var xpc: XPCWrapper { get }
 
-    func prewarm(
-        request: Prefetch,
-        bundleIdentifier: String?,
-        featureIdentifier: String,
-        runOnEventStream: Bool
-    ) async
+    func prewarm(parameters: PrewarmParameters) async
     func prefetch(request: Prefetch) async throws -> [Prefetch.Response]
     func prefetchParametersCache() async -> [String]
     func prefetchParametersCacheSavedState() async -> [String]
@@ -43,8 +38,7 @@ protocol TC2ClientProtocol: Sendable {
     func prefetchCache() async -> [String]
     func knownRateLimits(
         bundleIdentifier: String?,
-        featureIdentifier: String?,
-        skipFetch: Bool
+        featureIdentifier: String?
     ) async -> [TrustedCloudComputeRateLimit]
 }
 
@@ -69,14 +63,8 @@ package final class TC2Client<
         try await xpc.prefetchRequest(request)
     }
 
-    package func prewarm(request: Prefetch, bundleIdentifier: String?, featureIdentifier: String, runOnEventStream: Bool) async {
-        try? await xpc.prewarmRequest(
-            workloadType: request.workloadType,
-            workloadParameters: request.workloadParameters ?? [:],
-            bundleIdentifier: bundleIdentifier,
-            featureIdentifier: featureIdentifier,
-            runOnEventStream: runOnEventStream
-        )
+    package func prewarm(parameters: PrewarmParameters) async {
+        try? await xpc.prewarmRequest(parametersData: parameters.json)
     }
 
     package func prefetchParametersCache() async -> [String] {
@@ -99,8 +87,8 @@ package final class TC2Client<
         return ret ?? []
     }
 
-    package func knownRateLimits(bundleIdentifier: String?, featureIdentifier: String?, skipFetch: Bool) async -> [TrustedCloudComputeRateLimit] {
-        guard let json = try? await xpc.knownRateLimits(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier, skipFetch: skipFetch) else {
+    package func knownRateLimits(bundleIdentifier: String?, featureIdentifier: String?) async -> [TrustedCloudComputeRateLimit] {
+        guard let json = try? await xpc.knownRateLimits(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier) else {
             return []
         }
 
@@ -117,13 +105,31 @@ package final class TC2Client<
     }
 
     // Internal for thtool
-    package func addRateLimit(bundleIdentifier: String?, featureIdentifier: String?, workloadType: String?, count: UInt, duration: Double, ttl: Double, jitter: Double) async {
-        try? await xpc.addRateLimit(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier, workloadType: workloadType, count: count, duration: duration, ttl: ttl, jitter: jitter)
+    package func addRateLimit(
+        source: RateLimitSource,
+        bundleIdentifier: String?,
+        featureIdentifier: String?,
+        workloadType: String?,
+        count: UInt,
+        duration: Double,
+        ttl: Double,
+        jitter: Double
+    ) async {
+        try? await xpc.addRateLimit(
+            source: source.rawValue,
+            bundleIdentifier: bundleIdentifier,
+            featureIdentifier: featureIdentifier,
+            workloadType: workloadType,
+            count: count,
+            duration: duration,
+            ttl: ttl,
+            jitter: jitter
+        )
     }
 
     // Internal for thtool
-    package func resetRateLimits() async {
-        try? await xpc.resetRateLimits()
+    package func resetRateLimits() async throws {
+        try await xpc.resetRateLimits()
     }
 
     // Internal for thtool

@@ -1,0 +1,849 @@
+Copyright © 2026 Apple Inc. All Rights Reserved.
+
+APPLE INC.
+PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
+PLEASE READ THE FOLLOWING PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT (“AGREEMENT”) CAREFULLY BEFORE DOWNLOADING OR USING THE APPLE SOFTWARE ACCOMPANYING THIS AGREEMENT(AS DEFINED BELOW). BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT, DO NOT DOWNLOAD OR USE THE APPLE SOFTWARE. THESE TERMS AND CONDITIONS CONSTITUTE A LEGAL AGREEMENT BETWEEN YOU AND APPLE.
+IMPORTANT NOTE: BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING ON YOUR OWN BEHALF AND/OR ON BEHALF OF YOUR COMPANY OR ORGANIZATION TO THE TERMS OF THIS AGREEMENT.
+1. As used in this Agreement, the term “Apple Software” collectively means and includes all of the Apple Private Cloud Compute materials provided by Apple here, including but not limited to the Apple Private Cloud Compute software, tools, data, files, frameworks, libraries, documentation, logs and other Apple-created materials. In consideration for your agreement to abide by the following terms, conditioned upon your compliance with these terms and subject to these terms, Apple grants you, for a period of ninety (90) days from the date you download the Apple Software, a limited, non-exclusive, non-sublicensable license under Apple’s copyrights in the Apple Software to download, install, compile and run the Apple Software internally within your organization only on a single Apple-branded computer you own or control, for the sole purpose of verifying the security and privacy characteristics of Apple Private Cloud Compute. This Agreement does not allow the Apple Software to exist on more than one Apple-branded computer at a time, and you may not distribute or make the Apple Software available over a network where it could be used by multiple devices at the same time. You may not, directly or indirectly, redistribute the Apple Software or any portions thereof. The Apple Software is only licensed and intended for use as expressly stated above and may not be used for other purposes or in other contexts without Apple's prior written permission. Except as expressly stated in this notice, no other rights or licenses, express or implied, are granted by Apple herein.
+2. The Apple Software is provided by Apple on an "AS IS" basis. APPLE MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS, SYSTEMS, OR SERVICES. APPLE DOES NOT WARRANT THAT THE APPLE SOFTWARE WILL MEET YOUR REQUIREMENTS, THAT THE OPERATION OF THE APPLE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, THAT DEFECTS IN THE APPLE SOFTWARE WILL BE CORRECTED, OR THAT THE APPLE SOFTWARE WILL BE COMPATIBLE WITH FUTURE APPLE PRODUCTS, SOFTWARE OR SERVICES. NO ORAL OR WRITTEN INFORMATION OR ADVICE GIVEN BY APPLE OR AN APPLE AUTHORIZED REPRESENTATIVE WILL CREATE A WARRANTY.
+3. IN NO EVENT SHALL APPLE BE LIABLE FOR ANY DIRECT, SPECIAL, INDIRECT, INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE, REPRODUCTION, COMPILATION OR OPERATION OF THE APPLE SOFTWARE, HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+4. This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from Apple if you fail to comply with any term(s) of this Agreement. Upon termination, you agree to cease all use of the Apple Software and destroy all copies, full or partial, of the Apple Software. This Agreement constitutes the entire understanding of the parties with respect to the subject matter contained herein, and supersedes all prior negotiations, representations, or understandings, written or oral. This Agreement will be governed and construed in accordance with the laws of the State of California, without regard to its choice of law rules.
+You may report security issues about Apple products to product-security@apple.com, as described here: https://www.apple.com/support/security/. Non-security bugs and enhancement requests can be made via https://bugreport.apple.com as described here: https://developer.apple.com/bug-reporting/
+EA1937
+10/02/2024
+
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "darwin-init JSON Schema (version 2)",
+    "description": "Schema describing darwin-init JSON configuration structure (version 2)",
+    "$defs": {
+        "uint8": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+        },
+        "uint64": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 18446744073709551615
+        }
+    },
+    "type": "object",
+    "properties": {
+
+        "authentication": {
+            "type": "object",
+            "description": "Authentication information.",
+            "properties": {
+                "apple_connect": {
+                    "type": "boolean",
+                    "description": "Use AppleConnect(SSO) for personalization.",
+                    "default": false
+                },
+                "daw_token": {
+                    "description": "Daw token for authenticating with Knox when downloading and fetching decryption key for a Knox cryptex. Note: DAW token support was deprecated on 9/30/2025. If you use this key to download from Knox, your download will fail.",
+                    "type": "string",
+                    "$comment": "existing: CredentialString"
+                },
+                "westgate": {
+                    "type": "object",
+                    "description": "Credentials for authenticating via Westgate.",
+                    "required": ["username", "token"],
+                    "properties": {
+                        "token": {
+                            "type": "string",
+                            "description": "Westgate token for authenticating when accessing protected resources.",
+                            "$comment": "existing: CredentialString"
+                        },
+                        "username": {
+                            "type": "string",
+                            "description": "Westgate username for authenticating. If testing at desk, you should use your AppleConnect username."
+                        }
+                    }
+                },
+                "oidc_token": {
+                    "description": "OIDC token for authenticating with Knox when downloading and fetching decryption key for a Knox cryptex.",
+                    "type": "string",
+                    "$comment": "existing: CredentialString"
+                }
+            }
+        },
+
+        "ca_roots": {
+            "description": "Certificate Authority root trust.",
+            "type": "object",
+            "properties": {
+                "apple_corporate_root": {
+                    "type": "boolean",
+                    "description": "Install the Apple corporate root certificate."
+                },
+                "custom_roots": {
+                    "type": "array",
+                    "description": "Custom CA root certificates to install and trust.",
+                    "items": {
+                        "type": "object",
+                        "required": ["certificate"],
+                        "properties": {
+                            "certificate": {
+                                "type": "string",
+                                "description": "Certificate as PEM text (with headers) or base64-encoded DER."
+                            }
+                        }
+                    }
+                }
+            }
+        },
+
+        "config_security_policy": {
+			"$comment": "name: SecurityPolicy",
+			"type": "object",
+            "description": "Policy for security and privacy validation of the darwin-init config. If not set, no security/privacy validation is performed. Included in the attestation bundle.",
+            "properties": {
+                "policy": {
+                    "description": "The policy to use.",
+                    "type": "string",
+                    "examples": ["carry", "customer", "customerProxy"]
+                },
+                "version": {
+                    "description": "Version number to use when validating darwin-init config against the config-security-policy. Each time new policy enforcement logic is deployed for a darwin-init key, we will increment the version number. Clients may override this and use an older version so that they only receive a warning but can still apply their config.",
+                    "type": "integer",
+                    "minimum": 0
+                }
+            }
+        },
+
+        "cryptex": {
+            "type": "object",
+            "description": "Configuration related to Cryptexes.",
+            "properties": {
+                "network": {
+                    "type": "object",
+                    "description": "Network settings for retrieving cryptexes.",
+                    "properties": {
+                        "alternate_cdn_host": {
+                            "type": "string",
+                            "description": "Alternate CDN host address to use when downloading cryptexes from Knox, i.e. the domain in the asset uri."
+                        },
+                        "network_service_type": {
+                            "type": "string",
+                            "description": "Set the network service type for Knox cryptex downloads.",
+                            "enum": ["default", "background"],
+                            "default": "default"
+                        },
+                        "bandwidth_limit": {
+                            "description": "Configure the input bandwidth limit on the Mellanox interface in bits per second. The limit will be set immediately before cryptexes are downloaded and unset immediately after. Intended only for J236.",
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "retry_count": {
+                            "type": "integer",
+                            "description": "Configure the number of retries with exponential backoff for network failures such as HTTP 429 when downloading and decrypting a cryptex from Knox. The max number of retries is 15. This does not apply to authorization failures.",
+                            "minimum": 0
+                        },
+                        "download_tasks": {
+                            "description": "Maximum active tasks for performing parallel range request downloads from the CDN. Intended for debugging.",
+                            "default": 4,
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "chunk_size": {
+                            "description": "Chunk size (in bytes) to use when performing parallel range request downloads. If set, darwin-init will assume range requests are supported without verifying via a HEAD request. Note: If unspecified, but darwin-init detects range requests are supported a default of 16 MiB is used.",
+                            "type": "integer",
+                            "minimum": 0
+                        }
+                    }
+                },
+                "cache": {
+                    "type": "object",
+                    "description": "Control caching parameters.",
+                    "properties": {
+                        "cache_max_size": {
+                            "type": "integer",
+                            "description": "Sets the maximum storage space that the cryptex cache should occupy (in bytes).",
+                            "minimum": 0
+                        },
+                        "retain_previously_cached_cryptexes_unsafely": {
+                            "description": "On internal builds, retains cryptexes not specified in the darwin-init rather than removing them after initialization.",
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "retained_cryptexes": {
+                            "type": "object",
+                            "description": "Cryptexes to retain after update install.",
+                            "additionalProperties": {
+                                "type": "object",
+                                "description": "Bundle identifier of the Cryptex.",
+                                "$comment": "existing: Cryptex"
+                            }
+						},
+                        "invalidation_id": {
+                            "description": "Sets the identifier for the current workload used to guard access to cryptex cache contents. If the specified value does not match the identifier on disk, the cryptex cache is purged before the config is applied.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "cryptexes": {
+                    "type": "object",
+                    "description": "Cryptexes to install.",
+                    "additionalProperties": {
+                        "type": "object",
+                        "description": "Bundle identifier of the Cryptex.",
+                        "required": ["url"],
+                        "properties": {
+                            "aea_decryption_params": {
+                                "description": "Parameters for decrypting AEA cryptexes directly from the CDN.",
+                                "type": "object",
+                                "required": ["archive_id", "decryption_key"],
+                                "properties": {
+                                    "archive_id": {
+                                        "description": "The expected AEA archive ID for an AEA cryptex.",
+                                        "type": "string",
+                                        "$comment": "existing: CredentialString"
+                                    },
+                                    "decryption_key": {
+                                        "description": "Pre-determined decryption key for an AEA cryptex.",
+                                        "type": "string",
+                                        "$comment": "existing: CredentialString"
+                                    }
+                                }
+                            },
+                            "cacheable": {
+                                "description": "Enable or disable caching of this cryptex into the preboot volume. If enabled, the downloaded cryptex will persist across reboots in the cache. If unset, the downloaded cryptex will be cached by default if a valid \"sha256\" is provided, if the cryptex comes from a knox:// url, or if a valid \"aea_archive_id\" is provided.",
+                                "type": "boolean"
+                            },
+                            "dependencies": {
+                                "type": "array",
+                                "description": "Identifiers of other cryptexes that need to  be installed before this one.",
+                                "items": { "type": "string" }
+                            },
+                            "signing_environment": {
+                                "description": "Authorization services used to verify cryptex validities.",
+                                "type": "string",
+                                "default": "tatsu",
+                                "enum": ["tatsu", "diavlo", "factory", "none"]
+                            },
+                            "signing_environment_url": {
+                                "description": "Signing environment URL for this cryptex (overwrites any global diavlo URL).",
+                                "type": "string",
+                                "default": "",
+                                "format": "uri-template"
+                            },
+                            "sha256": {
+                                "description": "Hexadecimal sha256 digests of the compressed cryptexes.",
+                                "type": "string",
+                                "$comment": "existing: Sha256"
+                            },
+                            "size": {
+                                "description": "Sizes of the compressed cryptexes. If set will be used to validate the download.",
+                                "type": "integer",
+                                "minimum": 0
+                            },
+                            "url": {
+                                "description": "URL of the cryptexes to install.",
+                                "type": "string",
+                                "format": "uri-template"
+                            },
+                            "variant": {
+                                "description": "Variant names for the cryptexes.",
+                                "type": "string"
+                            },
+                            "jetsam_properties_variant": {
+                                "description": "Jetsam properties variant name for the cryptex.",
+                                "type": "string"
+                            },
+                            "original_knox_url": {
+                                "description": "Stashes the equivalent knox:// url for non-production use cases (e.g. VRE). This key is ignored by darwin-init and not actually used to download the cryptex.",
+                                "type": "string",
+                                "format": "uri-template"
+                            },
+                            "readwrite": {
+                                "description": "Installs the cryptex into ReadWrite mode, allowing the cryptex contents to be changed. This feature is limited to internal security policy devices.",
+                                "type": "boolean",
+                                "default": "false"
+                            }
+                        }
+                    }
+                },
+                "lock": {
+                    "type": "boolean",
+                    "description": "Lock cryptex sealed software hash registers after installing cryptexes, preventing further loading of cryptexes. This behavior is implied when \"userspace-reboot\" is set to \"rem\"."
+                }
+            }
+        },
+
+        "roots": {
+            "type": "array",
+            "description": "Install roots via darwinup",
+            "items": {
+                "type": "object",
+                "description": "Individual root to install.",
+                "required": ["root"],
+                "properties": {
+                    "preflight": {
+                        "type": "string",
+                        "description": "Command to execute before executing `darwinup`.",
+                        "examples": ["/usr/bin/touch /tmp/test_file.txt"]
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "A root that will be passed to the `darwinup` command. This can be a URL. If it is a URL, it causes darwin-init to wait until the destination is reachable."
+                    },
+                    "postflight": {
+                        "description": "Command to execute after executing `darwinup`.",
+                        "examples": ["/usr/bin/touch /tmp/test_file.txt"],
+                        "type": "string"
+                    },
+                    "wait_for_volume": {
+                        "description": "Causes darwin-init to delay before executing any install steps until the specified mount point has become available.",
+                        "type": "string"
+                    }
+                }
+            }
+        },
+
+        "diavlo": {
+            "type": "object",
+            "description": "Diavlo server configuration",
+            "properties": {
+                "url": {
+                    "description": "URL to the diavlo authorization server, e.g. https://diavlo.apple.com.",
+                    "examples": ["https://diavlo.apple.com."],
+                    "type": "string",
+                    "format": "uri-template"
+                },
+                "root_certificate": {
+                    "description": "PEM encoded root certificate of the the diavlo authorization serve.r",
+                    "type": "string",
+                    "contentEncoding": "base64"
+
+                }
+            }
+        },
+
+        "feature_flags": {
+            "description": "Configuration for feature flags updates. Definitions must be provided via OS or cryptex. Note that `config_security_policy` imposes requirements on feature flag attributes.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "oneOf": [
+                    {
+                        "description": "Specific enabling or disabling of a feature.",
+                        "required": ["domain", "enable", "feature"],
+                        "properties": {
+                            "domain": {
+                                "description": "The domain the feature is present within.",
+                                "type": "string"
+                            },
+                            "feature": {
+                                "description": "The name of the feature.",
+                                "type": "string"
+                            },
+                            "enable": {
+                                "description": "The feature matching the domain and feature_name will be enabled or disabled based on the feature phase.",
+                                "type": "boolean"
+                            }
+                        }
+                    },
+                    {
+                        "required": ["attribute_name", "attribute_value"],
+                        "properties": {
+                            "attribute_name": {
+                                "description": "Name of attribute to be searched for.",
+                                "type": "string"
+                            },
+                            "attribute_value": {
+                                "description": "Value of attribute to be matched against.",
+                                "type": "string"
+                            },
+                            "enable": {
+                                "description": "Any features matching the attribute name and value will be enabled or disabled based on the value of this key.",
+                                "type": "boolean"
+                            },
+                            "feature_phase": {
+                                "description": "Any features matching the attribute name and value will be compared to the phase & enabled based on the feature phase.",
+                                "type": "string",
+                                "enum": ["UnderDevelopment", "CodeComplete", "PreviewReady", "FeatureComplete"]
+                            }
+
+                        }
+                    }
+                ]
+            }
+        },
+
+        "finish": {
+            "type": "object",
+            "description": "Actions to be taken at the end of setup.",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "A message to be placed in the log"
+                },
+                "on_failure": {
+                    "$comment": "name: FailureAction",
+                    "type": "string",
+                    "enum": ["reboot", "shutdown", "exit"]
+                },
+                "reboot": {
+                    "description": "Reboot the machine after the preflight, root install, and postflight",
+                    "type": "boolean"
+                },
+                "scripts": {
+                    "type": "array",
+                    "description": "Specify one or more scripts to execute at the end.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "userspace_reboot": {
+                    "description": "Reboot userspace after preflight, root install, and postflight. Use \"rem\" for Restricted Execution Mode. Use \"rem-dev\" for Restricted Execution Mode without blowing the fuse that enforces trust cache REM policy. This fuse state is attested to, so \"rem-dev\" is not useful in production deployments. Use \"default\" to trigger a userspace reboot back into the default boot mode. Use an empty string \"none\" to disable userspace reboots on systems where it is the default.",
+                    "type": "string",
+                    "enum": [
+                        "none",
+                        "rem",
+                        "rem-dev",
+                        {"value": "default", "name": "userReboot"},
+                        {"value": "", "name": "empty"}
+                    ],
+                    "$comment": "name: UserspaceReboot"
+                }
+            }
+        },
+
+        "identification": {
+            "type": "object",
+            "description": "Naming and identifying the device.",
+            "properties": {
+                "computer_name": {
+                    "description": "Custom device computer name used in user displays and used by bonjour.",
+                    "type": "string"
+                },
+                "hostname": {
+                    "description": "Custom device hostname.",
+                    "type": "string"
+                },
+                "local_hostname": {
+                    "description": "Custom device local hostname used by bonjour.",
+                    "type": "string"
+                },
+                "usage_label": {
+                    "description": "Usage label for tagging log messages forwarded by splunkloggingd and emitted by OSAnalytics.",
+                    "type": "string"
+                }
+
+            }
+        },
+
+        "log": {
+            "description": "Custom logging preferences.",
+            "type": "object",
+            "properties": {
+                "privacy_level": {
+                    "description": "Set the system log privacy level to one of 'Public', 'Private', or 'Sensitive'. Note: this will persist across reboots.",
+                    "type": "string",
+                    "enum": ["Public", "Private", "Sensitive"]
+                },
+                "persist": {
+                    "description": "Enable or disable system logging to disk.",
+                    "type": "boolean"
+                }
+            }
+        },
+
+        "meta": {
+            "type": "object",
+            "description": "Information about the configuration itself.",
+            "properties": {
+
+                "apply_timeout": {
+                    "description": "Set the timeout to enforce when applying this config.",
+                    "type": "string",
+                    "default": "30m",
+                    "examples": ["10m", "60s"]
+                },
+                "name": {
+                    "type": "string",
+                    "description": "identifier for the darwin-init configuration.",
+                    "examples": ["system", "platform|CEC", "darwin-init.default"]
+                }
+            }
+
+        },
+
+        "narrative": {
+            "type": "object",
+            "description": "Narrative Identity of format <domain>-<identitytype> to configure. Supported Identities include adb-platform, adb-host, acdc-actor, example-platform, example-host, example-actor.",
+            "examples": ["adb-platform", "adb-host", "acdc-actor", "example-platform", "example-host", "example-actor"],
+            "additionalProperties": true
+        },
+
+        "network": {
+            "description": "Configure network parameters.",
+            "type": "object",
+            "properties": {
+                "firewall": {
+                    "description": "Firewall configuration.",
+                    "type": "object",
+                    "required" : ["rules"],
+                    "properties": {
+                        "rules": {
+                            "description": "Firewall rules.",
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "description": "Individual firewall rule."
+                            }
+                        }
+                    }
+                },
+                "interfaces": {
+                    "type": "object",
+                    "description": "Network interfaces to configure. Keys are the interface name, e.g. 'tap0'; values are configuration for it.",
+                    "examples": ["{\"tap0\": {  } }"],
+                    "additionalProperties": true
+                },
+                "uplink_mtu": {
+                    "description": "Set the Maxmimum Transmission Unit (MTU) of the uplink.",
+                    "type": "integer",
+                    "minimum": 1280,
+                    "maximum": 16384
+                }
+            }
+        },
+
+        "analytics": {
+            "type": "object",
+            "description": "Diagnostics related properties.",
+            "properties": {
+                "submit": {
+                    "type": "boolean",
+                    "description": "Enables diagnostics submission.",
+                    "default": true
+                },
+                "coredumps": {
+                    "description": "If set to `True`, enables user core dump generation. If set to an array, the `True` action is taken, and the process identifier listed in the array will have their core dumps be automatically collected by ReportCrash.",
+                    "oneOf": [{ "type": "boolean" }, {"type": "array", "items": { "type": "string"}}]
+                }
+            }
+        },
+
+        "packages": {
+            "description": "Package installation.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["url"],
+                "properties": {
+                    "url": {
+                        "description": "URL of the packages to install.",
+                        "type": "string",
+                        "format": "uri-template"
+                    }
+                }
+            }
+        },
+
+        "preferences": {
+            "type": "object",
+            "description": "Set preferences. Keys are the users to apply the preference for. Use 'AnyUser' to indicate it applies to any user",
+            "additionalProperties": {
+                "type": "object",
+                "description": "Restrict preference domain by applicationId or 'AnyApplication' if it applies to any application.",
+                "additionalProperties": {
+                    "type": "object",
+                    "description": "Preference key-value pairs where value is any valid json; use \"null\" to delete a preference.",
+                    "additionalProperties": true
+                }
+            }
+        },
+
+        "secure_config": {
+            "type": "object",
+            "description": "SecureConfigParameters registered with secureconfigd. Applied only during the boot invocation of darwin-init.",
+            "additionalProperties": true
+        },
+
+        "ssh": {
+            "type": "object",
+            "description": "Secure Shell configuration.",
+            "properties": {
+                "enabled": {
+                    "description": "Enable SSH daemon.",
+                    "type": "boolean"
+                },
+                "pwauth": {
+                    "description": "Enable SSH password authentication",
+                    "type": "boolean"
+                },
+				"ca": {
+					"description": "SSH CA Public Key",
+					"type": "string"
+				}
+            }
+        },
+
+        "start": {
+            "description": "Configuration performed at startup.",
+            "type": "object",
+            "properties": {
+                "issue_dcrt": {
+                    "description": "Issue DCRT hardware attestation certificate at boot.",
+                    "type": "boolean"
+                },
+                "perfdata": {
+                    "description": "Collect performance data at boot.",
+                    "type": "boolean"
+                },
+                "scripts": {
+                    "type": "array",
+                    "description": "Specify one or more scripts to execute early during apply (before root installation).",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+
+        "tailspin": {
+            "description": "Configuration for tailspin. Tailspin is disabled by default on all darwinOS platforms.",
+            "oneOf": [{ "type": "boolean" }, {
+                "type": "object",
+                "description": "Custom configuration options for tailspin",
+                "properties": {
+                    "full_sampling_period_set": {
+                        "description": "The full-system sampling period in nanoseconds.  To disable full-system sampling, specify zero. Sets the full-system sampling period attribute on a tailspin config object. The minimum sampling frequency for full sampling is 10ms on x86_64, 50ms on arm64 and 100ms on arm. It is an error to specify a full-system sampling period less than the minimum, unless you specify zero.",
+                        "$ref": "#/$defs/uint64"
+                    },
+                    "oncore_sampling_period_set": {
+                        "description": "The on-core sampling period in nanoseconds.  To disable on-core sampling, specify zero. Sets the on-core sampling period attribute on a tailspin config object. The minimum sampling frequency for oncore sampling is 10ms on x86_64, and 20ms on arm64 and 50ms on arm. It is an error to specify an oncore sampling frequency lower than the minimum, unless you specify zero.",
+                        "$ref": "#/$defs/uint64"
+                    },
+                    "buffer_size_set": {
+                        "description": "The buffer size in megabytes.  Must be greater than zero. Sets the buffer size attribute on a tailspin config object.",
+                        "$ref": "#/$defs/uint64"
+                    },
+                    "class_configs": {
+                        "description": "Each class should be specified in a separate array entry.",
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["class_number", "class_enabled"],
+                            "properties": {
+                                "class_number": {
+                                    "description": "The class number to enable or disable.",
+                                    "$ref": "#/$defs/uint8"
+                                },
+                                "class_enabled": {
+                                    "description": "A boolean value specifying whether to enable or disable the specified class. Specify true to enable the class or false to disable the class.",
+                                    "type": "boolean"
+                                },
+                                "subclass_configs": {
+                                    "description": "Each subclass should be specified in a separate array entry.",
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "required": ["subclass_number", "subclass_enabled"],
+                                        "properties": {
+                                            "subclass_number": {
+                                                "description": "The subclass number to enable or disable.",
+                                                "$ref": "#/$defs/uint8"
+                                            },
+                                            "subclass_enabled": {
+                                                "description": "A boolean value specifying whether to enable or disable the  specified subclass. Specify true to enable the subclass or false to disable the subclass.",
+                                                "type": "boolean"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }]
+        },
+
+        "users": {
+            "description": "Configure users.",
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "required": ["uid", "gid"],
+                "properties": {
+                    "authentication": {
+                        "type": "object",
+                        "properties": {
+                            "ca": {
+                                "description": "SSH Certificate Authority configuration",
+                                "type": "object",
+                                "properties": {
+                                    "principals": {
+                                        "description": "Authorized certificate principals that can be used to log in via SSH.",
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            },
+                            "esc": {
+                                "description": "AppleConnect credentials that can be used to log into the account using SSH.",
+                                "type": "object",
+                                "properties": {
+                                    "principals": {
+                                        "description": "AppleConnect principals that can be used to log in via SSH.",
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "groups": {
+                                        "description": "AppleConnect groups whose member can be used to log in via SSH.",
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            },
+                            "memento": {
+                                "description": "Memento SSH configuration",
+                                "type": "object",
+                                "properties": {
+                                    "users": {
+                                        "description": "UserID to fetch memento key for.",
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "groups": {
+                                        "description": "GroupID whose members to fetch memento key for.",
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "ldap_server": {
+                                        "description": "LDAP server to fetch memento key from.",
+                                        "type": "string",
+                                        "default": "nod.apple.com"
+                                    }
+                                }
+                            },
+                            "plaintext_password": {
+                                "description": "Specifies the password of the user.",
+                                "type": "string"
+                            },
+                            "ssh_authorized_key": {
+                                "description": "An authorized_keys file containing at least one public key.",
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "admin": {
+                        "description": "Specifies that the user should have admin privileges.",
+                        "type": "boolean"
+                    },
+                    "uid": {
+                        "description": "Specifies the uid of a user.",
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "gid": {
+                        "description": "Specifies the gid of a user.",
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "groups": {
+                        "type": "array",
+                        "description": "Additional groups the user should belong to.",
+                        "items": {
+                            "oneOf": [
+                                {"type": "string"},
+                                {"type": "integer", "minimum": 0}
+                            ]
+                        }
+                    },
+                    "passwordless_sudo": {
+                        "description": "Enable users of the admin group to be perform sudo operations without prompting for a password.",
+                        "type": "boolean"
+                    }
+                }
+            }
+        },
+
+        "volumes": {
+            "type": "object",
+            "description": "Volumes to mount. The key is the name of the volume to mount; typically rDNS. The value is a URL to the secret that protects the volume.",
+            "additionalProperties": {
+                "type": "string",
+                "format": "uri-template"
+            }
+        },
+
+        "sysctl": {
+            "type": "object",
+            "description": "Sysctl configurations to set on early boot.",
+            "additionalProperties": {
+                "type": "object",
+                "description": "Individual sysctl value.",
+                "required": ["value", "kind"],
+                "properties": {
+                    "value": {
+                        "type": "string",
+                        "description": "Sysctl value to set."
+                    },
+                    "kind": {
+                        "type": "string",
+                        "description": "Kind of sysctl value.",
+                        "enum": ["uint32", "uint64", "string"]
+                    }
+                }
+            }
+        },
+
+        "origin": {
+            "type": "object",
+            "description": "Information of where the config was loaded from. Added by the loader, internal only!",
+            "$comment": "existing: ConfigOrigin, wrapped: LoaderInjected"
+        },
+
+        "apply-timeout": false,
+        "ca-roots": false,
+        "compname": false,
+        "computer-name": false,
+        "config-security-policy": false,
+        "config-security-policy-version": false,
+        "cryptex-cache-max-total-size": false,
+        "cryptex-retain": false,
+        "cryptex-download-bandwidth-limit": false,
+        "diagnostics-submission-enabled": false,
+        "firewall": false,
+        "fqdn": false,
+        "host-name": false,
+        "hostname": false,
+        "install": false,
+        "issue-dcrt": false,
+        "local-host-name": false,
+        "lock-cryptexes": false,
+        "logtext": false,
+        "narrative-identities": false,
+        "network-uplink-mtu": false,
+        "package": false,
+        "perfdata": false,
+        "pre-init-cmds": false,
+        "pre-init-critical": false,
+        "reboot": false,
+        "result": false,
+        "retain-previously-cached-cryptexes-unsafely": false,
+        "secure-config": false,
+        "ssh_pwauth": false,
+        "usage-label": false,
+        "user": false,
+        "userspace-reboot": false
+    },
+    "not": {
+        "required": ["origin"],
+        "$comment": "# origin is used internally and must not appear in the input."
+    }
+}

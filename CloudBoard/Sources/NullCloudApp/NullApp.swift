@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -16,6 +16,7 @@ import CloudBoardCommon
 import CloudBoardJob
 import CloudBoardLogging
 import CloudBoardMetrics
+import Foundation
 import os
 
 // Warning: If someone is looking to implement a CloudApp and using this as a template *don't*
@@ -36,12 +37,16 @@ enum NullAppServiceName: String {
 
     case testApp = "TestApp"
     case echoApp = "EchoApp"
+    case appleSigningServiceApp = "AppleSigningServiceApp"
+    case cipCompanionServiceApp = "CIPCompanionServiceApp"
 
     // MARK: Proxy Roles
 
     case proxyApp = "ProxyApp"
     case proxyScriptApp = "ProxyScriptApp"
     case multiNodeProxyApp = "MultiNodeProxyApp"
+    case toolInvocationApp = "ToolInvocationApp"
+    case privateFilterTestApp = "PrivateFilterTestApp"
 }
 
 /// The NullCloudApp serves as the 'host' for a single ``NullAppRole`` which may not be known till the
@@ -58,6 +63,10 @@ actor NullCloudApp: CloudBoardApp {
     /// Allows request specific control of the mode for the proxy node,
     /// Only legal on the initial request to the proxy nodes
     static let workloadProxyModeKey: StaticString = "nullapp-proxy-mode"
+    /// Allows request specific control of response bypass for proxy requests.
+    /// Overrides the ProxyConfiguration.responseBypass preference when set.
+    /// Legal values: "true", "false"
+    static let workloadResponseBypassKey: StaticString = "nullapp-response-bypass"
 
     /// This is passed to the NullAppRoles where required so that the logging in the null
     /// app is from a consistent source. this makes it easier to diagnose issues for users
@@ -178,19 +187,30 @@ actor NullCloudApp: CloudBoardApp {
             roleType = EchoApp.self
         case "test":
             roleType = TestApp.self
+        case "apple-signing-service":
+            roleType = AppleSigningServiceApp.self
+        case "cip-companion-service":
+            roleType = CIPCompanionServiceApp.self
         case "proxy":
             roleType = ProxyApp.self
         case "proxy-script":
             roleType = ScriptedProxy.self
         case "proxy-multi-node":
             roleType = MultiNodeProxyApp.self
+        case "tool-invocation":
+            roleType = ToolInvocationApp.self
+        case "private-filter-test":
+            roleType = PrivateFilterTestApp.self
         default:
             roleType = InvalidRole.self
-            Self.log
-                .error(
-                    "Unknown role \(roleName, privacy: .public) - mapping to \(roleType.serviceName.rawValue, privacy: .public) for metrics"
-                )
         }
+
+        if roleType == InvalidRole.self {
+            Self.log.error(
+                "Unknown role \(roleName, privacy: .public) - mapping to \(roleType.serviceName.rawValue, privacy: .public) for metrics"
+            )
+        }
+
         let serviceName = roleType.serviceName
         self.metrics.emit(Metrics.LaunchCounter(action: .increment, serviceName: serviceName))
         func mustBeProxy() throws -> PCCRequestSemantics {
@@ -222,6 +242,12 @@ actor NullCloudApp: CloudBoardApp {
             case "test":
                 try mustBeCompute()
                 role = TestApp(log: Self.log)
+            case "apple-signing-service":
+                try mustBeCompute()
+                role = AppleSigningServiceApp(log: Self.log)
+            case "cip-companion-service":
+                try mustBeCompute()
+                role = CIPCompanionServiceApp(log: Self.log)
 
             // MARK: proxy specific
             case "proxy":
@@ -233,6 +259,18 @@ actor NullCloudApp: CloudBoardApp {
             case "proxy-multi-node":
                 let semantics = try mustBeProxy()
                 role = MultiNodeProxyApp(log: Self.log, semantics: semantics)
+            case "tool-invocation":
+                let semantics = try mustBeProxy()
+                role = ToolInvocationApp(log: Self.log, semantics: semantics)
+            case "private-filter-test":
+                // Only needs the proxy gate — does not make PCC requests to compute nodes,
+                // so PCCRequestSemantics is not required. Uses persistentServiceClient directly.
+                _ = try mustBeProxy()
+                role = PrivateFilterTestApp(
+                    log: Self.log,
+                    metrics: self.metrics,
+                    persistentServiceClient: environment.persistentServiceClient
+                )
             default:
                 // role came form config, workload parameter or a static string it's fine to pass back
                 throw NullCloudAppRoleError.unknownRole(role: roleName)

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,7 +20,7 @@ import Foundation
 @_spi(Private) import CloudAttestation
 
 extension CLI.AttestationCmd {
-    struct ParseCmd: ParsableCommand {
+    struct ParseCmd: AsyncParsableCommand {
         static var configuration = CommandConfiguration(
             commandName: "parse",
             abstract: "Parse and convert a PCC Attestation Bundle."
@@ -43,22 +43,55 @@ extension CLI.AttestationCmd {
                   completion: .file())
         var file: String
 
-        func run() throws {
-            let attestationBundle: AttestationBundle
-            do {
-                attestationBundle = try .init(from: file, format: attestOptions.format, requestIndex: attestOptions.requestIndex, attestationIndex: attestOptions.attestationIndex)
-            } catch {
-                throw CLIError("read attestation bundle: \(error)")
-            }
+        func run() async throws {
+            switch try attestOptions.loadAndDispatch(file: file) {
+            case .v2(let nodeBytes):
+                // Route to pccvre-attestation-helper for the JSON form. We
+                // already hold the raw protobuf node bytes, so -O protobuf is
+                // served locally without a helper round-trip.
+                if outputFormat == .protobuf {
+                    try writeOutput(nodeBytes)
+                    return
+                }
+                let resolver = PCCVREAttestationHelperResolver(environment: CLIDefaults.ktEnvironment)
+                let envelope = try await attestOptions.runV2Helper(
+                    nodeBytes: nodeBytes,
+                    via: resolver,
+                    subcommand: ["attestation", "parse"]
+                )
+                if outputFile == "-" {
+                    print(envelope.summary)
+                    print()
+                    print(envelope.detail)
+                } else {
+                    // envelope.detail is the helper's protobuf-JSON of the
+                    // AttestationBundle — write that, matching -O json on v1.
+                    try writeOutput(Data((envelope.detail + "\n").utf8))
+                }
+                if !envelope.ok {
+                    throw ExitCode(1)
+                }
 
+            case .v1(let nodeBytes, let fileData):
+                let bundle = try attestOptions.decodeV1Bundle(nodeBytes: nodeBytes, fileData: fileData)
+                try writeV1(bundle: bundle)
+            }
+        }
+
+        /// Writes raw bytes to `outputFile` (or stdout for `-`, refusing
+        /// protobuf-to-TTY). Shared by the v1 path's serialized output and the
+        /// v2 path's already-extracted node bytes / envelope detail.
+        private func writeOutput(_ data: Data) throws {
             let output: FileHandle
             if outputFile == "-" {
                 output = FileHandle.standardOutput
+                if outputFormat == .protobuf, output.isTTY {
+                    throw CLIError("refusing to write binary protobuf to terminal")
+                }
             } else {
                 if !FileManager.isRegularFile(outputFile) {
-                    FileManager.default.createFile(atPath: outputFile, contents: nil)
+                    Globals.computer.fileSystem.createFile(atPath: outputFile, contents: nil)
                 }
-
                 do {
                     output = try FileHandle(forWritingTo: FileManager.fileURL(outputFile))
                     try output.truncate(atOffset: 0)
@@ -66,14 +99,17 @@ extension CLI.AttestationCmd {
                     throw CLIError("failed to create file handle")
                 }
             }
+            do {
+                try output.write(contentsOf: data)
+            } catch {
+                throw CLIError("write to \(outputFile): \(error)")
+            }
+        }
 
+        private func writeV1(bundle attestationBundle: AttestationBundle) throws {
             let parsedBundle: Data
             switch outputFormat {
                 case .protobuf:
-                    guard !output.isTTY else {
-                        throw CLIError("refusing to write binary protobuf to terminal")
-                    }
-
                     do {
                         parsedBundle = try attestationBundle.serializedData()
                     } catch {
@@ -93,11 +129,7 @@ extension CLI.AttestationCmd {
                     }
             }
 
-            do {
-                try output.write(contentsOf: parsedBundle)
-            } catch {
-                throw CLIError("write to \(outputFile): \(error)")
-            }
+            try writeOutput(parsedBundle)
         }
     }
 

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -15,6 +15,7 @@
 #ifndef vrevm_Bridging_Header_h
 #define vrevm_Bridging_Header_h
 
+#define AMRESTORE_SWIFT_READY 1
 #import <MobileDevice/MobileDevice.h>
 #import <AMRestore.h>
 #import <bootpolicy/bootpolicy.h>

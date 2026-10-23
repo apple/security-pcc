@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,6 +12,7 @@
 // EA1937
 // 10/02/2024
 
+import DarwinInitConfig
 import Foundation
 
 internal protocol Convertable {
@@ -128,6 +129,10 @@ struct KeyedConverter<Key: CodingKey> {
 
     func codingPath(forKey key: Key) -> [CodingKey] {
         self.codingPath + [key]
+    }
+
+    func has(key: Key) -> Bool {
+        return dict[key.stringValue] != nil
     }
 
     /// Lookup key and return its value or `nil` if the key is not present.
@@ -374,8 +379,7 @@ extension KeyedConverter {
 extension PathCoded: Convertable where Value: Convertable {
     init?(from conv: any Converter) throws {
         guard let res = try Value.init(from: conv) else { return nil }
-        self.wrappedValue = res
-        self.codingPath = conv.codingPath
+        self.init(wrappedValue: res, at: conv.codingPath)
     }
 }
 

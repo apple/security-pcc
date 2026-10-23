@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,49 +18,40 @@ import CloudBoardLogging
 import Foundation
 import os
 
-/// Serves requests from cb_jobhelper instances to obtain TGT signing keys and for abuse reporting
-actor CloudBoardJobAuthServer: CloudBoardJobAuthAPIServerDelegateProtocol, AuthTokenSigningKeyUpdateWatcher {
+/// Serves requests from cb_jobhelper instances to obtain cost token signing keys
+actor CloudBoardJobAuthServer: CloudBoardJobAuthAPIServerDelegateProtocol, CostTokenSigningKeyUpdateWatcher {
     public static let logger: Logger = .init(
         subsystem: "com.apple.cloudos.cb_jobauthd",
         category: "CloudBoardJobAuthServer"
     )
 
     private let apiServer: CloudBoardJobAuthAPIServerProtocol
-    private let authTokenSigningKeyProvider: AuthTokenSigningKeyProvider
+    private let signingKeyProvider: SigningKeyProvider
 
-    init(apiServer: CloudBoardJobAuthAPIServerProtocol, authTokenSigningKeyProvider: AuthTokenSigningKeyProvider) {
+    init(apiServer: CloudBoardJobAuthAPIServerProtocol, signingKeyProvider: SigningKeyProvider) {
         self.apiServer = apiServer
-        self.authTokenSigningKeyProvider = authTokenSigningKeyProvider
+        self.signingKeyProvider = signingKeyProvider
     }
 
-    func requestTGTSigningKeys() async throws -> [SigningKey] {
-        Self.logger.info("Received request for TGT signing key")
+    func requestCostTokenSigningKey() async throws -> CostTokenSigningKeyPair {
+        Self.logger.info("Received request for cost token signing key")
         do {
-            return try await self.authTokenSigningKeyProvider.requestTGTSigningKeys()
+            return try await self.signingKeyProvider.requestCostTokenSigningKey()
         } catch {
-            Self.logger.error(
-                "Failed to serve request for TGT signing key: \(String(reportable: error), privacy: .public) (\(error))"
-            )
+            Self.logger
+                .error(
+                    "Failed to serve request for cost token signing key: \(String(reportable: error), privacy: .public) (\(error))"
+                )
             throw error
         }
     }
 
-    func requestOTTSigningKeys() async throws -> [SigningKey] {
-        Self.logger.info("Received request for OTT signing key")
-        do {
-            return try await self.authTokenSigningKeyProvider.requestOTTSigningKeys()
-        } catch {
-            Self.logger.error("Failed to server request for OTT signing key: \(error)")
-            throw error
-        }
-    }
-
-    func authTokenKeysUpdated(newKeySet: AuthTokenKeySet) async throws {
-        try await self.apiServer.authKeysUpdated(newKeySet: newKeySet)
+    func costTokenKeyUpdated(newKey: CostTokenSigningKeyPair) async throws {
+        try await self.apiServer.costTokenKeyUpdated(newKey: newKey)
     }
 
     func run() async throws {
-        self.authTokenSigningKeyProvider.registerForUpdates(watcher: self)
+        self.signingKeyProvider.registerForCostTokenKeyUpdates(watcher: self)
         await self.apiServer.set(delegate: self)
         await self.apiServer.connect()
         Self.logger.notice("Ready to receive job auth requests")

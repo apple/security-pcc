@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,7 +23,7 @@ private import DarwinPrivate.os.variant
 import PrivateCloudCompute
 import os.log
 
-private let logger = tc2Logger(forCategory: .daemon)
+private let logger = Logger(for: .daemon)
 
 protocol LastBuildStore: AnyObject, Sendable {
     var lastBuildVersion: String? { get set }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -86,9 +86,7 @@ extension Cloudboard_Status_V1_StatusRequest: InternalSwiftProtobuf.Message, Int
 
 extension Cloudboard_Status_V1_StatusResponse: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".StatusResponse"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "cloudboardStatusJson"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}cloudboardStatusJson\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {

@@ -1,0 +1,37 @@
+ARG swiftVersion=6.3
+
+# ================================
+# Build image
+# ================================
+FROM docker.apple.com/coreosvn/apple-archive-ubi9mw:1 as aea
+FROM docker.apple.com/base-images/ubi9/swift$swiftVersion-builder as base
+
+RUN yum install -y libacl-devel bzip2-devel openssl-devel
+
+ARG WHISPERCTL_VERSION=1.9.0
+RUN curl -fsSL "https://artifacts.apple.com/crypto-services-binaries-local/whisperctl/prod/${WHISPERCTL_VERSION}/whisperctl_${WHISPERCTL_VERSION}_linux_amd64.tar.gz" -o /tmp/whisperctl.tar.gz \
+    && tar -xf /tmp/whisperctl.tar.gz -C /usr/local/bin/ whisperctl \
+    && chmod +x /usr/local/bin/whisperctl \
+    && rm /tmp/whisperctl.tar.gz
+
+# Set up a build area
+WORKDIR /build
+
+# Only copy static archives (.a) so the linker is forced to link
+# AppleArchive statically into the final binary. The archives ship
+# with a `_static` suffix, but `link "AppleArchive"`/`link "compression"`
+# in the modulemap looks for libAppleArchive.a / libcompression.a, so
+# rename them.
+COPY --from=aea /AppleArchiveRoots/usr/lib/*.a /usr/lib64/
+COPY --from=aea /AppleArchiveRoots/usr/lib/*.a /usr/lib/
+COPY --from=aea /AppleArchiveRoots/usr/include/ /usr/include/
+
+# Also expose the static archives under their non-suffixed names so
+# downstream link steps can resolve `-lAppleArchive` / `-lcompression`
+# against the `.a` directly. The dynamic `libAppleArchive.so` is left
+# in place, so existing dynamic-link consumers continue to resolve
+# against it (the linker prefers `.so` over `.a` when both are present).
+RUN mv /usr/lib64/libAppleArchive_static.a /usr/lib64/libAppleArchive.a \
+    && mv /usr/lib64/libcompression_static.a /usr/lib64/libcompression.a \
+    && mv /usr/lib/libAppleArchive_static.a /usr/lib/libAppleArchive.a \
+    && mv /usr/lib/libcompression_static.a /usr/lib/libcompression.a

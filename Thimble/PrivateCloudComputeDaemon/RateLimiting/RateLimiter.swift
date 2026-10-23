@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,10 +19,11 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
-internal import CollectionsInternal
 import Foundation
 import PrivateCloudCompute
 import os.log
+
+private let logger = Logger(for: .rateLimiter)
 
 // MARK: - RateLimiter
 
@@ -59,10 +60,9 @@ final actor RateLimiter: RateLimiterProtocol {
         }
     }
 
-    static let filename = "ratelimitmodel_v3.plist"
+    static let filename = "ratelimitmodel_v4.plist"
     private let encoder = PropertyListEncoder()
     private let decoder = PropertyListDecoder()
-    private let logger = tc2Logger(forCategory: .rateLimiter)
     private let file: URL
     private var model: RateLimitModel
     private let config: any Configuration
@@ -91,12 +91,6 @@ final actor RateLimiter: RateLimiterProtocol {
         }
 
         logger.debug("initialized ratelimiter, file=\(file)")
-    }
-
-    static func migrate(from source: URL, to destination: URL) {
-        let sourceFile = source.appending(path: Self.filename)
-        let destinationFile = destination.appending(path: Self.filename)
-        moveDaemonStateFile(from: sourceFile, to: destinationFile)
     }
 
     // The amount of data we have to save here is bounded by the various ttl and
@@ -141,11 +135,11 @@ extension RateLimiter {
         let matchingConfigurations = self.model.rateLimitConfigurations.matching(now: now, requestMetadata)
         for config in matchingConfigurations {
 
-            if config.timing.count == 0 {
+            if config.deniesAllRequests {
                 // This is a matching config that does not allow any requests. No
                 // need to consult anything, it's a definite denial.
                 logger.error("rate limit applied for rate with count=0")
-                let retryAfterDate = now + config.timing.duration + config.timing.jitter * Double.random(in: 0.0..<1.0)
+                let retryAfterDate = self.retryAfterDate(now: now, config: config)
                 let newRateLimit = RateLimitInfo(rateLimitConfig: config, retryAfterDate: retryAfterDate)
                 self.model.deniedLog.append(requestMetadata: requestMetadata, rateLimitInfo: newRateLimit)
                 return newRateLimit
@@ -191,11 +185,7 @@ extension RateLimiter {
 
             if shouldDeny {
                 // uh oh!
-                let firstRequest = self.model.requestLog.first(now: now, newerThan: config.timing.duration, filteredBy: config.filter)
-                // Our retry-after is going to be the timestamp of this first request, plus the duration in the rate.
-                // Because at that point in time, this request will fall off the log and the request will succeed (or
-                // at least not fail due to this config).
-                let retryAfterDate = firstRequest!.timestamp + config.timing.duration + config.timing.jitter * Double.random(in: 0.0..<1.0)
+                let retryAfterDate = self.retryAfterDate(now: now, config: config)
                 let newRateLimit = RateLimitInfo(rateLimitConfig: config, retryAfterDate: retryAfterDate)
                 self.model.deniedLog.append(requestMetadata: requestMetadata, rateLimitInfo: newRateLimit)
                 return newRateLimit
@@ -212,6 +202,10 @@ extension RateLimiter {
         return configs.map { config in
             let workloadParameters = config.filter.workloadTags.map { tag in TrustedCloudComputeRateLimit.WorkloadParameter(key: tag.key, value: tag.value) }
             let loggedCountSoFar = self.model.requestLog.count(now: now, newerThan: config.timing.duration, filteredBy: config.filter)
+            var loggedCountRollDate: Date?
+            if loggedCountSoFar >= config.timing.count {
+                loggedCountRollDate = self.retryAfterDate(now: now, config: config)
+            }
             return TrustedCloudComputeRateLimit(
                 bundleIdentifier: config.filter.bundleID,
                 featureIdentifier: config.filter.featureID,
@@ -221,7 +215,8 @@ extension RateLimiter {
                 duration: config.timing.duration,
                 jitter: config.timing.jitter,
                 ttlExpiration: config.timing.ttlExpiration,
-                loggedCountSoFar: loggedCountSoFar)
+                loggedCountSoFar: loggedCountSoFar,
+                loggedCountRollDate: loggedCountRollDate)
         }
     }
 
@@ -235,9 +230,16 @@ extension RateLimiter {
     }
 
     func limitByConfiguration(_ config: RateLimitConfiguration) {
-        logger.info("rate limit discovered for rate with count=\(config.timing.count), duration=\(config.timing.duration)")
+        logger.info("rate limit discovered for rate with count=\(config.timing.count), duration=\(config.timing.duration), source=\(config.source, privacy: .public)")
         self.model.rateLimitConfigurations.add(config)
         self.model.deniedLog.updateWithNewConfig(config)
+    }
+
+    /// Replaces all existing limits for the given `source` with new `configurations`.
+    func limitByConfigurations(_ configurations: [RateLimitConfiguration], replacing source: RateLimitSource) async {
+        logger.info("rate limits discovered, source=\(source, privacy: .public), count=\(configurations.count)")
+        self.model.rateLimitConfigurations.add(configurations, replacing: source)
+        self.model.deniedLog.updateWithNewConfigs(configurations, replacing: source)
     }
 
     func sessionProgress(now: Date = Date.now, for session: UUID) -> UInt {
@@ -258,17 +260,50 @@ extension RateLimiter {
         self.model.reset()
         await self.save()
     }
+
+    // The retry-after is the timestamp of the first request within the rate limit window, plus the duration of the rate.
+    // Because at that point in time, this request will fall off the log and the request will succeed
+    // (or at least not fail due to this config).
+    private func retryAfterDate(now: Date, config: RateLimitConfiguration) -> Date {
+        let jitter = config.timing.jitter * Double.random(in: 0.0..<1.0)
+        if config.deniesAllRequests {
+            return now + config.timing.duration + jitter
+        }
+        guard let firstRequest = self.model.requestLog.first(now: now, newerThan: config.timing.duration, filteredBy: config.filter) else {
+            return .now
+        }
+        return firstRequest.timestamp + config.timing.duration + jitter
+    }
 }
 
 extension RateLimitInfo {
     init(rateLimitConfig: RateLimitConfiguration, retryAfterDate: Date) {
         self.init(
+            rateLimitSource: rateLimitConfig.source,
             bundleID: rateLimitConfig.filter.bundleID,
             featureID: rateLimitConfig.filter.featureID,
+            qos: .init(rateLimitConfig.filter.qos),
             workloadType: rateLimitConfig.filter.workloadType,
             workloadTags: rateLimitConfig.filter.workloadTags.map { RateLimitInfo.WorkloadTag(key: $0.key, value: $0.value) },
             count: rateLimitConfig.timing.count,
             duration: rateLimitConfig.timing.duration,
             retryAfterDate: retryAfterDate)
+    }
+}
+
+extension QoS {
+    init?(_ serverQoS: ServerQoS?) {
+        switch serverQoS {
+        case .high:
+            self = .high
+        case .medium:
+            self = .medium
+        case .low:
+            self = .low
+        case .background:
+            self = .background
+        case .none:
+            return nil
+        }
     }
 }

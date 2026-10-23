@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,6 +23,8 @@ import Foundation
 import PrivateCloudCompute
 import os.log
 
+private let logger = Logger(for: .metricReporter)
+
 final actor FeatureUsageAnalyzer<
     FeatureUsageAnalyzerStoreHelper: FeatureUsageAnalyzerStoreHelperProtocol,
     SystemInfo: SystemInfoProtocol
@@ -38,8 +40,6 @@ final actor FeatureUsageAnalyzer<
         return calendar
     }()
 
-    let logger = tc2Logger(forCategory: .metricReporter)
-
     init(storeHelper: FeatureUsageAnalyzerStoreHelper, environment: String, systemInfo: SystemInfo) {
         self.storeHelper = storeHelper
         self.environment = environment
@@ -47,7 +47,7 @@ final actor FeatureUsageAnalyzer<
     }
 
     func requestSucceeded(featureId: String, now: Date = Date()) async {
-        self.logger.debug("Request succeeded featureId=\(featureId)")
+        logger.debug("Request succeeded featureId=\(featureId)")
 
         let line = fileFormat.encode(
             date: utcCalendar.startOfDay(for: now),
@@ -57,17 +57,17 @@ final actor FeatureUsageAnalyzer<
         do {
             try await self.storeHelper.writeToFile(lines: [line])
         } catch {
-            self.logger.error("Failed to write to file: \(error)")
+            logger.error("Failed to write to file: \(error)")
         }
     }
 
-    func generateMetrics(now: Date = Date(), locale: Locale = .current) async -> [FeatureUsageSummaryMetric] {
+    func generateMetrics(now: Date = Date()) async -> [FeatureUsageSummaryMetric] {
         // Data associated with this should be written back
         let startOfTodayInUTC = utcCalendar.startOfDay(for: now)
 
         // Data associated with this should be reported to telemetry
         guard let startOfYesterdayInUTC = utcCalendar.date(byAdding: .day, value: -1, to: startOfTodayInUTC) else {
-            self.logger.error("Failed to calculate start of yesterday startOfTodayInUTC=\(startOfTodayInUTC)")
+            logger.error("Failed to calculate start of yesterday startOfTodayInUTC=\(startOfTodayInUTC)")
             return []
         }
 
@@ -75,7 +75,7 @@ final actor FeatureUsageAnalyzer<
         do {
             data = try await self.storeHelper.readFromFile()
         } catch {
-            self.logger.error("Failed to read from temp file: \(error)")
+            logger.error("Failed to read from temp file: \(error)")
             return []
         }
 
@@ -90,7 +90,7 @@ final actor FeatureUsageAnalyzer<
             let string = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
             guard let (date, featureId) = fileFormat.decode(string) else {
-                self.logger.error("Failed to parse line: \(line)")
+                logger.error("Failed to parse line: \(line)")
                 continue
             }
             switch date {
@@ -108,7 +108,7 @@ final actor FeatureUsageAnalyzer<
             // Write back today's data to be reported tomorrow
             try await self.storeHelper.writeToFile(lines: linesForCurrentDayInUTC)
         } catch {
-            self.logger.error("Failed to write back: \(error)")
+            logger.error("Failed to write back: \(error)")
         }
 
         let samplingUUID = UUID()
@@ -118,7 +118,6 @@ final actor FeatureUsageAnalyzer<
                 periodStart: startOfYesterdayInUTC,
                 environment: self.environment,
                 systemInfo: self.systemInfo,
-                locale: locale,
                 samplingUUID: samplingUUID,
                 trustedRequestSuccessCount: Int64(count.round(significantFigures: 2))
             )

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -14,7 +14,99 @@
 
 import CloudBoardController
 import os
+import Synchronization
 
+/// Tracks the health status of a cloud app workload and broadcasts changes to watchers.
+///
+/// ## State Diagram
+///
+/// The monitor has two orthogonal state dimensions: the **reported status** (`lastUpdate`)
+/// and the **maintenance condition set**. Together they determine what watchers observe.
+///
+/// ```
+///                         ┌─────────────────────────────────────────────────────────────┐
+///                         │              Reported Status (lastUpdate)                    │
+///                         │                                                             │
+///                         │   .initializing ──updateStatus──▶ .healthy / .unhealthy     │
+///                         │         ▲                               │                    │
+///                         │         │                          updateStatus              │
+///                         │       (init)                           │                     │
+///                         │                                        ▼                    │
+///                         │                              .healthy ◀──▶ .unhealthy       │
+///                         │                                                             │
+///                         │   updateStatus() ALWAYS writes lastUpdate, regardless of    │
+///                         │   maintenance. Watchers are only notified when NOT under     │
+///                         │   maintenance.                                               │
+///                         └─────────────────────────────────────────────────────────────┘
+///
+///                         ┌─────────────────────────────────────────────────────────────┐
+///                         │            Maintenance Conditions (Set<Maintenance>)         │
+///                         │                                                             │
+///                         │   Conditions: .waitingForInitialAssets                       │
+///                         │               .attestationInvalid                            │
+///                         │               .restartingJobHelpers                          │
+///                         │               .prewarmingFailed                               │
+///                         │               .draining                                      │
+///                         │                                                             │
+///                         │   Multiple conditions can be active simultaneously.          │
+///                         │   The set is empty (not under maintenance) or non-empty      │
+///                         │   (under maintenance).                                       │
+///                         └─────────────────────────────────────────────────────────────┘
+///
+/// ## Watcher Notification Rules
+///
+/// ```
+///   ┌──────────────────┐    enterMaintenance(X)     ┌──────────────────┐
+///   │  NOT under        │──────────────────────────▶│  Under            │
+///   │  maintenance      │   conditions: {} → {X}    │  maintenance      │
+///   │                   │   watchers get .unhealthy  │                   │
+///   │  watch() primes   │                            │  watch() primes   │
+///   │  with lastUpdate  │                            │  with .unhealthy  │
+///   │                   │                            │                   │
+///   │  updateStatus()   │    exitMaintenance(X)      │  updateStatus()   │
+///   │  notifies watchers│◀──────────────────────────│  suppressed, but  │
+///   │                   │   conditions: {X} → {}     │  lastUpdate still │
+///   │                   │   watchers get lastUpdate   │  updated          │
+///   └──────────────────┘                             └──────────────────┘
+///                                                      │            ▲
+///                                                      │            │
+///                                          enterMaintenance(Y)  exitMaintenance(Y)
+///                                          conditions: {X}→{X,Y}  {X,Y}→{X}
+///                                          no notification       no notification
+///                                          (already under        (still under
+///                                           maintenance)          maintenance)
+/// ```
+///
+/// ## Lifecycle (typical startup sequence)
+///
+/// ```
+///   1. init()
+///      └─ lastUpdate = .initializing, maintenanceConditions = {}
+///
+///   2. enterMaintenance(.waitingForInitialAssets)         [WorkloadManager.run()]
+///      └─ watchers notified with .unhealthy (if any exist)
+///      └─ new watchers primed with .unhealthy
+///
+///   3. WorkloadController sends updateStatus(.healthy)    [gRPC from cloud app controller]
+///      └─ lastUpdate = .healthy(...), but watchers NOT notified (under maintenance)
+///
+///   4. Initial assets received
+///      └─ exitMaintenance(.waitingForInitialAssets)        [AssetsMetadataManager]
+///      └─ watchers notified with lastUpdate (.healthy)
+///
+///   5. Normal operation
+///      └─ updateStatus() notifies watchers normally
+///
+///   6. Newer assets arrive
+///      └─ enterMaintenance(.restartingJobHelpers)          [AssetsMetadataManager]
+///      └─ restart prewarmed instances
+///      └─ exitMaintenance(.restartingJobHelpers)
+///      └─ watchers notified with lastUpdate
+///
+///   7. Shutdown
+///      └─ drain() → enterMaintenance(.draining)            [never exits]
+///      └─ terminate() → finishes all watcher streams
+/// ```
 public final class ServiceHealthMonitor: Sendable {
     private static let logger: os.Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
@@ -22,15 +114,21 @@ public final class ServiceHealthMonitor: Sendable {
     )
 
     package let cloudApp: String
-    private let currentState: OSAllocatedUnfairLock<State>
+    /// When true, the reported `maxBatchSize`/`optimalBatchSize` account for the number of available prewarmed
+    /// instances (see `applyPrewarm`). Changes to that count are re-broadcast to watchers.
+    private let maxBatchDependsOnPrewarmedSize: Bool
+    private let currentState: Mutex<State>
 
-    public init(cloudApp: String) {
+    public init(cloudApp: String, maxBatchDependsOnPrewarmedSize: Bool = false) {
         self.cloudApp = cloudApp
-        self.currentState = OSAllocatedUnfairLock(initialState: State(
+        self.maxBatchDependsOnPrewarmedSize = maxBatchDependsOnPrewarmedSize
+        self.currentState = Mutex(State(
             nextID: 0,
             watchers: [],
             lastUpdate: .initializing,
+            configuredMaxBatchSize: 0,
             currentBatchSizeOverride: nil,
+            availablePrewarmedInstances: 0,
             maintenanceConditions: []
         ))
     }
@@ -43,16 +141,105 @@ public final class ServiceHealthMonitor: Sendable {
         }
     }
 
+    /// The number of prewarmed instances currently ready to serve a request immediately.
+    public var availablePrewarmedInstances: Int {
+        self.currentState.withLock { $0.availablePrewarmedInstances }
+    }
+
+    /// The controller-configured leader `maxBatchSize` — the concurrency ceiling the node could serve if every
+    /// instance were warm. This reflects what the controller configured and does not change with transient health
+    /// state (e.g. busy / transitioning). Zero until a leader has reported a configuration.
+    public var configuredMaxBatchSize: Int {
+        self.currentState.withLock { $0.configuredMaxBatchSize }
+    }
+
+    /// Updates the number of prewarmed instances ready to serve a request immediately. When
+    /// `maxBatchDependsOnPrewarmedSize` is enabled this re-broadcasts the recomputed load level to all watchers so
+    /// ROPES sees the change (the value feeds `maxBatchSize = min(configuredMax, currentBatchSize + available)`).
+    public func updateAvailablePrewarmedInstances(count: Int) {
+        let toNotify: ([Watcher], Status)? = self.currentState.withLock { state in
+            state.availablePrewarmedInstances = count
+            // Only the prewarm-aware path cares about this value, and only watchers not under maintenance
+            // should be notified.
+            guard self.maxBatchDependsOnPrewarmedSize, !state.isUnderMaintenance else {
+                return nil
+            }
+            return (state.watchers, self.effectiveStatus(state))
+        }
+
+        guard let (watchers, status) = toNotify else {
+            return
+        }
+        for watcher in watchers {
+            watcher.continuation.yield(status)
+        }
+    }
+
+    /// Applies the configured current-batch override and the prewarm-aware capacity reduction to produce the
+    /// status that should be reported to watchers. The prewarm reduction is deliberately *not* baked into
+    /// `lastUpdate` so it can be recomputed when the available prewarmed count changes.
+    private func effectiveStatus(_ state: State) -> Status {
+        let withOverride = state.lastUpdate.withCurrentBatchCountOverride(state.currentBatchSizeOverride)
+        return self.applyPrewarm(withOverride, availablePrewarmed: state.availablePrewarmedInstances)
+    }
+
+    /// Reduces the reported capacity to what is immediately servable given the number of available prewarmed
+    /// instances. No-op unless `maxBatchDependsOnPrewarmedSize` is enabled and the status is healthy.
+    private func applyPrewarm(_ status: Status, availablePrewarmed: Int) -> Status {
+        guard self.maxBatchDependsOnPrewarmedSize else {
+            return status
+        }
+        switch status {
+        case .healthy(.leader(let loadLevel)):
+            let effectiveMax = min(loadLevel.maxBatchSize, loadLevel.currentBatchSize + availablePrewarmed)
+            let effectiveOptimal = min(loadLevel.optimalBatchSize, effectiveMax)
+            return .healthy(.leader(.init(
+                workloadType: loadLevel.workloadType,
+                tags: loadLevel.tags,
+                maxBatchSize: effectiveMax,
+                currentBatchSize: loadLevel.currentBatchSize,
+                optimalBatchSize: effectiveOptimal
+            )))
+        case .healthy(.follower), .healthy(.persistentService), .initializing, .unhealthy, .terminal:
+            return status
+        }
+    }
+
+    /// The status to surface to watchers while under maintenance. Maintenance normally reports `.unhealthy`, but a
+    /// `.terminal` last update is preserved: terminal is an unrecoverable override that maintenance must not mask
+    /// (masking it would drop the terminal aggregation override in `HealthServer`).
+    private func maintenanceStatus(_ state: State) -> Status {
+        state.lastUpdate == .terminal ? .terminal : .unhealthy
+    }
+
+    /// Snapshot of effective health status, accounting for maintenance state, batch-size override and prewarmed
+    /// availability.
+    public var currentStatus: Status {
+        self.currentState.withLock { state in
+            if state.isUnderMaintenance {
+                return self.maintenanceStatus(state)
+            }
+            return self.effectiveStatus(state)
+        }
+    }
+
     public func updateStatus(_ status: Status) {
         let (watchers, statusWithOverride): ([Watcher], Status) = self.currentState.withLock { state in
-            let status = status.withCurrentBatchCountOverride(state.currentBatchSizeOverride)
-            state.lastUpdate = status
+            // Persist only the current-batch override; the prewarm reduction is applied at emission time.
+            state.lastUpdate = status.withCurrentBatchCountOverride(state.currentBatchSizeOverride)
+
+            // Remember the configured concurrency ceiling. A leader reports maxBatchSize == 0 while busy /
+            // transitioning, which is a transient advertised value, not a reconfiguration — so only update on a
+            // non-zero report to keep configuredMaxBatchSize stable across busy periods.
+            if case .healthy(.leader(let loadLevel)) = status, loadLevel.maxBatchSize > 0 {
+                state.configuredMaxBatchSize = loadLevel.maxBatchSize
+            }
 
             // do not notify watchers when under maintenance
             if state.isUnderMaintenance {
-                return ([], status)
+                return ([], state.lastUpdate)
             }
-            return (state.watchers, status)
+            return (state.watchers, self.effectiveStatus(state))
         }
 
         for watcher in watchers {
@@ -105,8 +292,13 @@ public final class ServiceHealthMonitor: Sendable {
             }
 
             // Prime the pump with the last value to ensure that order of operations
-            // isn't an issue.
-            continuation.yield(state.lastUpdate)
+            // isn't an issue. If under maintenance, prime with the maintenance status (unhealthy, or terminal if
+            // the last update was terminal) so new watchers see the correct suppressed state.
+            if state.isUnderMaintenance {
+                continuation.yield(self.maintenanceStatus(state))
+            } else {
+                continuation.yield(self.effectiveStatus(state))
+            }
         }
 
         return stream
@@ -120,8 +312,11 @@ public final class ServiceHealthMonitor: Sendable {
             }
             state.maintenanceConditions.insert(maintenance)
 
-            // already unhealthy due to last update or OTHER maintenance conditions
-            if state.lastUpdate == .unhealthy || state.maintenanceConditions.count > 1 {
+            // Already reporting a non-serving state to watchers (via last update or OTHER maintenance conditions), so
+            // there is nothing new to notify. `.terminal` is included so entering maintenance does not downgrade a
+            // terminal service to a plain `.unhealthy` (which would drop the terminal aggregation override).
+            let alreadyNotServing = state.lastUpdate == .unhealthy || state.lastUpdate == .terminal
+            if alreadyNotServing || state.maintenanceConditions.count > 1 {
                 return []
             }
             return state.watchers
@@ -146,8 +341,11 @@ public final class ServiceHealthMonitor: Sendable {
                 return ([], state.lastUpdate)
             }
 
-            // not under any maintenance - notify watchers about last update
-            return (state.watchers, state.lastUpdate)
+            // not under any maintenance - notify watchers about the last update. Emit the *effective* status (not
+            // the raw lastUpdate) so the prewarm reduction is reapplied: e.g. after restartPrewarmedInstances the
+            // ready queue was cleared and availablePrewarmedInstances dropped to 0 while suppressed under
+            // maintenance, so the capacity advertised on exit must reflect that, not the pre-restart maxBatchSize.
+            return (state.watchers, self.effectiveStatus(state))
         }
 
         for watcher in watchers {
@@ -170,6 +368,8 @@ extension ServiceHealthMonitor {
         case draining
         case attestationInvalid
         case restartingJobHelpers
+        case prewarmingFailed
+        case waitingForInitialAssets
     }
 
     private struct State {
@@ -179,7 +379,15 @@ extension ServiceHealthMonitor {
 
         var lastUpdate: Status
 
+        /// The controller-configured leader `maxBatchSize` — the concurrency ceiling the node could serve if every
+        /// instance were warm. Captured from `updateStatus` whenever a leader reports a non-zero `maxBatchSize`, and
+        /// deliberately *not* cleared when the leader transiently reports zero (e.g. while busy / transitioning), so
+        /// it always reflects what the controller configured rather than the momentary advertised capacity.
+        var configuredMaxBatchSize: Int
+
         var currentBatchSizeOverride: Int?
+
+        var availablePrewarmedInstances: Int
 
         var maintenanceConditions: Set<Maintenance>
 
@@ -200,8 +408,14 @@ extension ServiceHealthMonitor {
 
     public enum Status: Sendable, Hashable, CustomStringConvertible {
         case initializing
-        case healthy(Healthy?)
+        case healthy(Healthy)
         case unhealthy
+        /// Terminally unhealthy: the service has failed in a way it cannot recover from on its own (e.g. a persistent
+        /// service that exhausted its asset download retries during initialization). Unlike `.unhealthy` — which a
+        /// service may report transiently while still converging — `.terminal` is a signal that the node should be
+        /// re-converged externally. `HealthServer` treats a single `.terminal` publisher as making the whole node
+        /// unhealthy, even while other publishers are still `.initializing`.
+        case terminal
 
         public var description: String {
             switch self {
@@ -209,40 +423,66 @@ extension ServiceHealthMonitor {
                 return "initializing"
             case .unhealthy:
                 return "unhealthy"
+            case .terminal:
+                return "terminal"
             case .healthy(let healthy):
-                return "healthy\(healthy.map { " (\($0))" } ?? "")"
+                return "healthy (\(healthy))"
             }
         }
 
         public func withCurrentBatchCountOverride(_ count: Int?) -> Status {
-            if let count {
-                switch self {
-                case .initializing:
-                    return .initializing
-                case .healthy(let healthyState):
-                    var newHealthyState: ServiceHealthMonitor.Status.Healthy?
-                    if let healthyState {
-                        newHealthyState = .init(
-                            workloadType: healthyState.workloadType,
-                            tags: healthyState.tags,
-                            maxBatchSize: healthyState.maxBatchSize,
-                            currentBatchSize: count,
-                            optimalBatchSize: healthyState.optimalBatchSize
-                        )
-                    }
-                    return .healthy(newHealthyState)
-                case .unhealthy:
-                    return .unhealthy
-                }
-            } else {
+            guard let count else {
                 return self
+            }
+            switch self {
+            case .initializing:
+                return .initializing
+            case .unhealthy:
+                return .unhealthy
+            case .terminal:
+                return .terminal
+            case .healthy(.follower):
+                // A follower reports no load level, so there is nothing to override.
+                return .healthy(.follower)
+            case .healthy(.persistentService):
+                // A persistent service reports no load level, so there is nothing to override.
+                return .healthy(.persistentService)
+            case .healthy(.leader(let loadLevel)):
+                return .healthy(.leader(.init(
+                    workloadType: loadLevel.workloadType,
+                    tags: loadLevel.tags,
+                    maxBatchSize: loadLevel.maxBatchSize,
+                    currentBatchSize: count,
+                    optimalBatchSize: loadLevel.optimalBatchSize
+                )))
             }
         }
     }
 }
 
 extension ServiceHealthMonitor.Status {
-    public struct Healthy: Sendable, Hashable {
+    /// A healthy node's reporting mode. A leader serves requests and advertises a concrete load level; a follower
+    /// is healthy and reachable but does not serve requests; a persistent service is healthy and registered but
+    /// reports no load level. Neither follower nor persistent service has a load level to advertise.
+    public enum Healthy: Sendable, Hashable, CustomStringConvertible {
+        case leader(LoadLevel)
+        case follower
+        case persistentService
+
+        public var description: String {
+            switch self {
+            case .leader(let loadLevel):
+                return "leader (\(loadLevel))"
+            case .follower:
+                return "follower"
+            case .persistentService:
+                return "persistentService"
+            }
+        }
+    }
+
+    /// The capacity a leader node advertises to ROPES.
+    public struct LoadLevel: Sendable, Hashable, CustomStringConvertible {
         public var workloadType: String
 
         public var tags: [String: RoutingTagValue]
@@ -265,6 +505,13 @@ extension ServiceHealthMonitor.Status {
             self.maxBatchSize = maxBatchSize
             self.currentBatchSize = currentBatchSize
             self.optimalBatchSize = optimalBatchSize
+        }
+
+        public var description: String {
+            """
+            workloadType: \(self.workloadType), maxBatchSize: \(self.maxBatchSize), \
+            currentBatchSize: \(self.currentBatchSize), optimalBatchSize: \(self.optimalBatchSize)
+            """
         }
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -186,8 +186,8 @@ extension ASN1OctetString {
 // MARK: - DER Encoding
 extension Release: DERImplicitlyTaggable {
     @inlinable
-    public func serialize(into coder: inout DER.Serializer, withIdentifier identifier: ASN1Identifier) throws {
-        try coder.appendConstructedNode(identifier: identifier) { coder in
+    public func serialize(into coder: inout DER.Serializer, withIdentifier identifier: ASN1Identifier) throws(ThrownASN1Error) {
+        try coder.appendConstructedNode(identifier: identifier) { coder throws(ThrownASN1Error) in
             try coder.serialize(self.version)
             try coder.serialize(self.apTicket)
             try coder.serializeSetOf(self.cryptexTickets, identifier: .set)
@@ -201,8 +201,8 @@ extension Release: DERImplicitlyTaggable {
         .sequence
     }
 
-    public init(derEncoded: ASN1Node, withIdentifier identifier: ASN1Identifier) throws {
-        self = try DER.sequence(derEncoded, identifier: identifier) { nodes in
+    public init(derEncoded: ASN1Node, withIdentifier identifier: ASN1Identifier) throws(ThrownASN1Error) {
+        self = try DER.sequence(derEncoded, identifier: identifier) { nodes throws(ThrownASN1Error) in
             let version = try Int(derEncoded: &nodes)
 
             guard version == 1 else {
@@ -225,7 +225,7 @@ extension Release: DERImplicitlyTaggable {
 }
 
 extension Release {
-    public static func local(assetProvider: some AttestationAssetProvider) throws -> Release {
+    public static func local(assetProvider: any AttestationAssetProvider) throws -> Release {
         return try Self.local(assetProvider: assetProvider, requireCryptex1: false)
     }
 

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -35,7 +35,12 @@ struct DarwinInitHelper {
     }
 
     init(configFile: String, pccvreHelper: PCCVREHelper) throws {
-        self.configJSON = try String(contentsOfFile: configFile, encoding: .utf8)
+        let url = URL(fileURLWithPath: configFile)
+        let data = try Globals.computer.fileSystem.contentsOfFile(at: url)
+        guard let str = String(data: data, encoding: .utf8) else {
+            throw DarwinInitHelperError("darwin-init: invalid UTF-8 in \(configFile)")
+        }
+        self.configJSON = str
         self.sourcePath = configFile
         self.pccvreHelper = pccvreHelper
     }

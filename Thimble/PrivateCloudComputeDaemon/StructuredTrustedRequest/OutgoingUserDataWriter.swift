@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,24 +23,23 @@ internal import CollectionsInternal
 import Foundation
 import PrivateCloudCompute
 import Synchronization
+import os.log
+
+private let logger = Logger(for: .trustedRequest)
 
 /// Corresponds to `XPCRequestMessage`. See `XPCRequestMessage`'s documentation.
 enum OutgoingUserData: Equatable {
-    /// Used for non multi-turn request. Bool value indicates whether it `isComplete`.
-    case data(Data, Bool)
+    /// Used for non multi-turn request.
+    case data(XPCRequestMessage.DataPayload)
 
-    /// Used in multi-turn requests to mark the beginning of a new subrequest. UInt64 is subrequest's id.
-    case openSubrequest(
-        UInt64,  // subrequest id
-        PrivateCloudComputeConnection.Request.Priority,
-        [PrivateCloudComputeConnection.Request.OpaqueCryptoMaterial]
-    )
-    /// Used in multi-turn requests for the actual subrequest's data. UInt64 is subrequest's id.
-    case subrequestData(UInt64, Data)
-    /// Used in multi-turn requests to mark the end of a new subrequest. UInt64 is subrequest's id.
-    case closeSubrequest(UInt64)
+    /// Used in multi-turn requests to mark the beginning of a new subrequest.
+    case openSubrequest(XPCRequestMessage.OpenSubrequestPayload)
+    /// Used in multi-turn requests for the actual subrequest's data.
+    case subrequestData(XPCRequestMessage.SubrequestDataPayload)
+    /// Used in multi-turn requests to mark the end of a new subrequest.
+    case closeSubrequest(XPCRequestMessage.CloseSubrequestPayload)
     /// Used in multi-turn requests to signal a cancellation of subrequest to the server.
-    case cancelSubrequest(UInt64)
+    case cancelSubrequest(XPCRequestMessage.CancelSubrequestPayload)
 
     /// Used in multi-turn requests to indicate completion of the outer request. Means there will
     /// be no new subrequests after this point.
@@ -50,8 +49,8 @@ enum OutgoingUserData: Equatable {
 
     var isComplete: Bool {
         switch self {
-        case .data(_, let isComplete):
-            return isComplete
+        case .data(let payload):
+            return payload.isComplete
         case .final:
             return true
         default:
@@ -173,6 +172,8 @@ final class OutgoingUserDataWriter {
 
     private let stateLock: Mutex<StateMachine> = Mutex(StateMachine())
     private let waiterIDGenerator = IdentifierSequence()
+    /// Closure to be called on `cancelAllWrites`.
+    private let onCancelAllWrites: Mutex<(@Sendable (any Error) -> Void)?> = Mutex(nil)
 }
 
 extension OutgoingUserDataWriter: OutgoingUserDataWriterProtocol {
@@ -217,11 +218,17 @@ extension OutgoingUserDataWriter: OutgoingUserDataWriterProtocol {
             case .none:
                 break
             }
+
+            self.onCancelAllWrites.withLock {
+                $0 = nil
+            }
         }
     }
 
     func cancelAllWrites(error: any Error) {
         let action = self.stateLock.withLock { $0.cancelAllWrites(error: error) }
+        logger.log("OutgoingUserDataWriter.cancelAllWrites, error=\(error), action=\(String(describing: action))")
+
         switch action {
         case .cancelOutgoingContinuation(let continuation):
             continuation.resume(throwing: error)
@@ -231,6 +238,11 @@ extension OutgoingUserDataWriter: OutgoingUserDataWriterProtocol {
             }
         case .none:
             break
+        }
+
+        onCancelAllWrites.withLock {
+            $0?(error)
+            $0 = nil
         }
     }
 
@@ -248,6 +260,12 @@ extension OutgoingUserDataWriter: OutgoingUserDataWriterProtocol {
             case .none:
                 break
             }
+        }
+    }
+
+    func registerCancelAllWritesClosure(_ closure: @escaping @Sendable (any Error) -> Void) {
+        self.onCancelAllWrites.withLock {
+            $0 = closure
         }
     }
 }

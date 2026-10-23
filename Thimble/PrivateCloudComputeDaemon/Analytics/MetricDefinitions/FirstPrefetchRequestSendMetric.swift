@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -32,7 +32,6 @@ struct FirstPrefetchRequestSendMetric: CloudTelemetryReportable {
         case environment = "env"
         case clientRequestId = "clientRequestId"
         case clientInfo = "appleClientInfo"
-        case locale = "appleLocale"
         case numberOfCachedWorkloads = "numberOfCachedWorkloads"
         case ageOfOldestCachedWorkloadInDays = "ageOfOldestCachedWorkloadInDays"
     }
@@ -42,7 +41,6 @@ struct FirstPrefetchRequestSendMetric: CloudTelemetryReportable {
         environment: String,
         clientRequestId: UUID,
         clientInfo: String,
-        locale: Locale,
         numberOfCachedWorkloads: Int,
         ageOfOldestCachedWorkloadInDays: Int
     ) {
@@ -51,7 +49,6 @@ struct FirstPrefetchRequestSendMetric: CloudTelemetryReportable {
             .environment: .string(environment),
             .clientRequestId: .string(clientRequestId.uuidString),
             .clientInfo: .string(clientInfo),
-            .locale: .string(locale.identifier),
             .numberOfCachedWorkloads: .int(Int64(numberOfCachedWorkloads)),
             .ageOfOldestCachedWorkloadInDays: .int(Int64(ageOfOldestCachedWorkloadInDays)),
         ]

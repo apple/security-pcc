@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,6 +21,8 @@ protocol CloudBoardJobHelperInstanceProtocol: Actor {
     func waitForWarmupComplete() async throws
     func waitForExit(returnIfNotUsed: Bool) async throws
     func laContextUsed() async throws
+    func triggerTeardown(error: Error?) async
+    func queryProxyRequestStatus() async throws -> ProxyRequestStatus
 }
 
 protocol CloudBoardJobHelperClientProvider: Sendable {

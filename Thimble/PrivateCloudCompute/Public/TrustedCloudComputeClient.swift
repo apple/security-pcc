@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,10 +19,9 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
-import AppleIntelligenceReporting
 import OSLog
 
-private let logger = tc2Logger(forCategory: .client)
+private let logger = Logger(for: .client)
 
 /// A client for executing trusted cloud compute requests.
 public final class TrustedCloudComputeClient: Sendable {
@@ -31,7 +30,6 @@ public final class TrustedCloudComputeClient: Sendable {
     private let client: any TC2ClientProtocol
     /// The configuration.
     private let configuration: Configuration
-    /// Feature flag checker to use
     private let featureFlagChecker: any FeatureFlagCheckerProtocol
     /// Request ID generator for subrequests
     private let subrequestIdGenerator: @Sendable () -> UInt64
@@ -60,58 +58,45 @@ public final class TrustedCloudComputeClient: Sendable {
         self.subrequestIdGenerator = subrequestIdGenerator
     }
 
-    /// Executes a trusted request.
-    ///
-    /// This method opens a trusted connection to the cloud compute environment and provides access to writing the request and consuming
-    /// the response data in the `body` closure. Once the `body` closure returns the connection will be torn down and all resources
-    /// associated with it will be freed.
-    ///
-    /// - Parameters:
-    ///   - request: The request to execute.
-    ///   - body: A closure during which request data can be written and the response data can be consumed.
-    /// - Returns: The type that the body closure produced.
-    @concurrent public func withTrustedRequest<Return>(
-        _ request: TrustedRequest,
+    nonisolated(nonsending) public func withRequest<Return>(
+        configuration: RequestConfiguration,
         _ body: @concurrent (_ writer: TrustedRequest.Writer, _ response: TrustedRequest.Response) async throws -> Return
     ) async throws -> Return {
-        return try await withTaskCancellationHandler {
-            var telemetryEventID: EventIdentifier?
-            do {
-                telemetryEventID = try EventReporter().emitAppleIntelligenceStartEvent(
-                    eventInfo: trustedRequestEventInfo(with: request.id, step: .privateCloudComputeRequestInProcess)
-                )
-            } catch {
-                logger.error("Failed to emit start reporting event; id=\(request.id), error=\(error)")
-            }
-
-            logger.log("\(request.id) withTrustedRequest started")
+        let logPrefix = "\(configuration.id):"
+        return try await logger.logLifetime("withRequest", logPrefix: logPrefix) {
+            let requestParameters = RequestParameters(configuration)
+            let stepReporter = AppleIntelligenceStepReporter(forWorkload: requestParameters.workload)
+            let step = stepReporter.beginStep(.privateCloudComputeRequestInProcess, requestID: configuration.id)
+            let xpcRequestProxy = try await self.client.xpc.request(parametersData: requestParameters.json)
             defer {
-                logger.log("\(request.id) withTrustedRequest finished")
-            }
-
-            let xpcRequestProxy = try await self.client.xpc.trustedRequest(
-                withParameters: Workload(
-                    type: request.workloadType,
-                    parameters: request.workloadParameters ?? [:]
-                ).json,
-                requestID: request.id,
-                multiTurn: false,
-                bundleIdentifier: request.bundleIdentifier,
-                originatingBundleIdentifier: request.originatingBundleIdentifier,
-                featureIdentifier: request.featureIdentifier,
-                sessionIdentifier: request.sessionIdentifier
-            )
-            defer {
-                logger.log("\(request.id) withTrustedRequest xpc proxy closing")
+                logger.log("\(logPrefix) withRequest xpc proxy closing")
                 xpcRequestProxy.close()
             }
 
-            let isChunkingEnabled = self.featureFlagChecker.isEnabled(.applicationDataChunking)
-            let writer = TrustedRequest.Writer(id: request.id, xpcRequestProxy: xpcRequestProxy, telemetryEventID: telemetryEventID, isChunkingEnabled: isChunkingEnabled)
-            let response = TrustedRequest.Response(id: request.id, xpcRequestProxy: xpcRequestProxy, telemetryEventID: telemetryEventID, isChunkingEnabled: isChunkingEnabled)
-            return try await body(writer, response)
-        } onCancel: {
-            logger.error("\(request.id) withTrustedRequest cancelled")
+            let setup = try await xpcRequestProxy.prepare()
+            let chunkSize = setup.chunkSize
+            let writer = TrustedRequest.Writer(id: configuration.id, xpcRequestProxy: xpcRequestProxy, step: step, chunkSize: chunkSize)
+            let response = TrustedRequest.Response(id: configuration.id, xpcRequestProxy: xpcRequestProxy, step: step, chunkSize: chunkSize)
+
+            if self.featureFlagChecker.isEnabled(.requestCancellationV2) {
+                // Before we return control to the adopter, we need to wrap up things, such as receive cost tokens
+                // and final REL. And only then we can close XPC (defer defined earlier) and return to the adopter.
+                defer {
+                    try? await logger.logLifetime("withRequest waitForRequestCompletion", logPrefix: logPrefix) {
+                        try await xpcRequestProxy.waitForRequestCompletion()
+                    }
+                }
+
+                return try await withTaskCancellationHandler {
+                    try await logger.logLifetime("withRequest body", logPrefix: logPrefix) {
+                        try await body(writer, response)
+                    }
+                } onCancel: {
+                    xpcRequestProxy.cancel()
+                }
+            } else {
+                return try await body(writer, response)
+            }
         }
     }
 
@@ -132,29 +117,33 @@ public final class TrustedCloudComputeClient: Sendable {
     ) async throws {
         let logPrefix = "\(configuration.id):"
         try await logger.logLifetime("withConnection", logPrefix: logPrefix) {
-            let xpcProxy = try await self.client.xpc.connection(
-                withParameters: Workload(
-                    type: configuration.workloadType,
-                    parameters: configuration.workloadParameters ?? [:]
-                ).json,
-                connectionIdentifier: configuration.id,
-                bundleIdentifier: configuration.bundleIdentifier,
-                originatingBundleIdentifier: configuration.originatingBundleIdentifier,
-                featureIdentifier: configuration.featureIdentifier,
-                sessionIdentifier: configuration.sessionIdentifier
-            )
+            let requestParameters = RequestParameters(configuration)
+            let xpcProxy = try await self.client.xpc.request(parametersData: requestParameters.json)
 
             defer {
                 logger.log("\(logPrefix) withConnection xpc proxy closing")
                 xpcProxy.close()
             }
 
+            let setup = try await xpcProxy.prepare()
+
+            // Before we return control to the adopter, we need to wrap up things, such as receive cost tokens
+            // and final REL. And only then we can close XPC (defer defined earlier) and return to the adopter.
+            defer {
+                if self.featureFlagChecker.isEnabled(.requestCancellationV2) {
+                    try? await logger.logLifetime(level: .info, "withConnection waitForRequestCompletion", logPrefix: logPrefix) {
+                        try await xpcProxy.waitForRequestCompletion()
+                    }
+                }
+            }
+
             try await withTaskCancellationHandler {
                 try await PrivateCloudComputeConnection.run(
                     configuration: configuration,
                     xpcProxy: xpcProxy,
-                    logPrefix: logPrefix,
                     featureFlagChecker: self.featureFlagChecker,
+                    logPrefix: logPrefix,
+                    chunkSize: setup.chunkSize,
                     subrequestIdGenerator: self.subrequestIdGenerator,
                     closure: body
                 )
@@ -165,67 +154,14 @@ public final class TrustedCloudComputeClient: Sendable {
         }
     }
 
-    /// Runs a prefetch for attestations from the server, for the given workload specification.
-    ///
-    /// - Parameters:
-    ///   - workloadType: The workloadType associated with requests to prefetch attestations for
-    ///   - workloadParameters: The workloadParameters associated with requests to prefetch attestations for
-    /// - Returns: Returns `true` when a successful prefetch occurs, or `false` otherwise.
-    @available(*, deprecated, message: "Use `completePrewarm(workloadType:workloadParameters:bundleIdentifierOverride:featureIdentifier)` instead.")
-    @concurrent public func prefetchRequest(workloadType: String, workloadParameters: [String: String]) async throws -> Bool {
-        await client.prewarm(
-            request: .init(
-                workloadType: workloadType,
-                workloadParameters: workloadParameters
-            ),
-            bundleIdentifier: nil,
-            // This is temporary till the caller switches over to the new API
-            featureIdentifier: "prewarm.prefetchRequest",
-            runOnEventStream: true
-        )
-        return true
-    }
-
-    /// Kicks off a prefetch for attestations from the server, for the given workload specification.
-    ///
-    /// - Parameters:
-    ///   - workloadType: The workloadType associated with requests to prefetch attestations for
-    ///   - workloadParameters: The workloadParameters associated with requests to prefetch attestations for
-    ///   - bundleIdentifierOverride: Optional bundle identifier to override the one automatically determined
-    ///   - featureIdentifier: Non optional feature identifier used for rate limiting and analytics
-    @available(*, deprecated, message: "Use `completePrewarm(workloadType:workloadParameters:bundleIdentifierOverride:featureIdentifier)` instead.")
-    @concurrent public func prewarm(workloadType: String, workloadParameters: [String: String], bundleIdentifierOverride: String?, featureIdentifier: String) async {
-        return await client.prewarm(
-            request: .init(
-                workloadType: workloadType,
-                workloadParameters: workloadParameters
-            ),
-            bundleIdentifier: bundleIdentifierOverride,
-            featureIdentifier: featureIdentifier,
-            runOnEventStream: true
-        )
-    }
-
     /// Runs a prefetch for attestations from the server, for the given workload specification, as well
-    /// as any other work that might be required to speed up request that is likely to occur. This method,
-    /// `completePrewarm`, differs from `prewarm` in that it runs its work to completion before
-    /// it asynchronously returns. This is in contrast to `prewarm`'s behavior being fire-and-forget.
-    ///
-    /// - Parameters:
-    ///   - workloadType: The workloadType associated with requests to prefetch attestations for
-    ///   - workloadParameters: The workloadParameters associated with requests to prefetch attestations for
-    ///   - bundleIdentifierOverride: Optional bundle identifier to override the one automatically determined
-    ///   - featureIdentifier: Non optional feature identifier used for rate limiting and analytics
-    @concurrent public func completePrewarm(workloadType: String, workloadParameters: [String: String], bundleIdentifierOverride: String?, featureIdentifier: String) async {
-        return await client.prewarm(
-            request: .init(
-                workloadType: workloadType,
-                workloadParameters: workloadParameters
-            ),
-            bundleIdentifier: bundleIdentifierOverride,
-            featureIdentifier: featureIdentifier,
-            runOnEventStream: false
-        )
+    /// as any other work that might be required to speed up request that is likely to occur.
+    nonisolated(nonsending) public func prewarm(configuration: PrewarmConfiguration) async throws {
+        let logPrefix = "\(UUID().uuidString):"
+        logger.log("\(logPrefix) prewarm, configuration=\(String(describing: configuration))")
+        await logger.logLifetime("prewarm", logPrefix: logPrefix) {
+            await client.prewarm(parameters: PrewarmParameters(configuration))
+        }
     }
 
     package func prefetch(request: Prefetch) async throws -> [Prefetch.Response] {
@@ -250,8 +186,7 @@ public final class TrustedCloudComputeClient: Sendable {
     }
 
     /// Discovers the rate limiting configurations for requests associated with the given bundleIdentifier and
-    /// featureIdentifier. This is determined by consulting the server, which means that the data should be
-    /// relatively fresh, and may reflect information like ongoing incidents or outages.
+    /// featureIdentifier.
     ///
     /// Note that there is no guarantee that a new limitation doesn't arise after this method succeeds. Therefore
     /// the requests issued still need to handle rate limiting errors.
@@ -260,11 +195,30 @@ public final class TrustedCloudComputeClient: Sendable {
     ///   - bundleIdentifier: Optional bundle identifier to override the one automatically determined. Can only be passed if you have an entitlement.
     ///   - featureIdentifier: Optional feature identifier. If `nil`, then return all configurations applicable to the bundleID regardless of what feature identifier they are scoped to.
     /// - Returns: Every rate limit known to the system that may apply to the bundle/feature in question.
-    @concurrent public func knownRateLimits(bundleIdentifier: String? = nil, featureIdentifier: String? = nil) async -> [TrustedCloudComputeRateLimit] {
-        return await self.client.knownRateLimits(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier, skipFetch: false)
+    @concurrent public func knownRateLimits(
+        bundleIdentifier: String? = nil,
+        featureIdentifier: String? = nil
+    ) async -> [TrustedCloudComputeRateLimit] {
+        await self.knownRateLimits(
+            bundleIdentifier: bundleIdentifier,
+            featureIdentifier: featureIdentifier,
+            skipFetch: false
+        )
     }
 
-    @concurrent public func knownRateLimits(bundleIdentifier: String? = nil, featureIdentifier: String? = nil, skipFetch: Bool = false) async -> [TrustedCloudComputeRateLimit] {
-        return await self.client.knownRateLimits(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier, skipFetch: skipFetch)
+    /// NOTE: the `skipFetch` flag is ignored and will not trigger fetching of the limits.
+    @concurrent public func knownRateLimits(
+        bundleIdentifier: String? = nil,
+        featureIdentifier: String? = nil,
+        skipFetch: Bool = false  // Unused. Will be deprecated and removed in future.
+    ) async -> [TrustedCloudComputeRateLimit] {
+        let logPrefix = "\(UUID().uuidString):"
+        logger.log("\(logPrefix) knownRateLimits, bundleIdentifier=\(bundleIdentifier ?? "nil"), featureIdentifier=\(featureIdentifier ?? "nil")")
+        return await logger.logLifetime("knownRateLimits", logPrefix: logPrefix) {
+            await self.client.knownRateLimits(
+                bundleIdentifier: bundleIdentifier,
+                featureIdentifier: featureIdentifier,
+            )
+        }
     }
 }

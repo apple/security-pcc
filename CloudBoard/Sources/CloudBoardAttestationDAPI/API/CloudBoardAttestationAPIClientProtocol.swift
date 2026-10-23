@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -89,13 +89,20 @@ public struct AttestationSet: Codable, Sendable, Equatable {
 
         public var appData: [String: Data]
 
+        /// Transparency log tree ID from the attestation bundle's transparency proofs
+        public var transparencyTreeID: UInt64?
+        /// Transparency log revision number from the attestation bundle's transparency proofs
+        public var transparencyRevision: UInt64?
+
         public init(
             attestationBundle: Data,
             expiry: Date,
             releaseDigest: String,
             availableOnNodeOnly: Bool,
             proxiedReleaseDigests: [String] = [],
-            appData: [String: Data] = [:]
+            appData: [String: Data] = [:],
+            transparencyTreeID: UInt64? = nil,
+            transparencyRevision: UInt64? = nil
         ) {
             self.attestationBundle = attestationBundle
             self.expiry = expiry
@@ -103,6 +110,8 @@ public struct AttestationSet: Codable, Sendable, Equatable {
             self.availableOnNodeOnly = availableOnNodeOnly
             self.proxiedReleaseDigests = proxiedReleaseDigests
             self.appData = appData
+            self.transparencyTreeID = transparencyTreeID
+            self.transparencyRevision = transparencyRevision
         }
     }
 
@@ -116,176 +125,6 @@ public struct AttestationSet: Codable, Sendable, Equatable {
         self.currentAttestation = currentAttestation
         self.unpublishedAttestations = unpublishedAttestations
     }
-}
-
-/// Represents the results of validating an attestation for a worker successfully
-/// Many useful pieces of information are available at this point and exposed here
-///
-/// This hides _almost_ all the actual ``CloudAttestation`` API so that test use cases
-/// (using InMemoryKeys) can function correctly without most code needing to know
-/// about them.
-package struct ValidatedWorker: ByteBufferCodable, Sendable {
-    /// The key should not be used after this date
-    public var expiration: Date
-
-    /// The public key which can be used to establish a secure communication channel with
-    public var publicKey: Curve25519.KeyAgreement.PublicKey
-
-    /// The SHA256 digest of the release this attestation is for
-    public var releaseDigest: String
-
-    /// The application-specific data included in the attestation.
-    public var appData: [String: Data]
-
-    /// The UDID of the worker node
-    public var udid: String?
-
-    public init(
-        expiration: Date,
-        publicKey: Curve25519.KeyAgreement.PublicKey,
-        releaseDigest: String,
-        appData: [String: Data],
-        udid: String?
-    ) {
-        self.expiration = expiration
-        self.publicKey = publicKey
-        self.releaseDigest = releaseDigest
-        self.appData = appData
-        self.udid = udid
-    }
-
-    func encode(to buffer: inout ByteBuffer) throws {
-        try self.expiration.encode(to: &buffer)
-        try PublicKeyEnvelope(self.publicKey).encode(to: &buffer)
-        try self.releaseDigest.encode(to: &buffer)
-        try self.appData.encode(to: &buffer)
-        try self.udid.encode(to: &buffer)
-    }
-
-    init(from buffer: inout ByteBuffer) throws {
-        self.expiration = try .init(from: &buffer)
-        self.publicKey = try PublicKeyEnvelope(from: &buffer).key
-        self.releaseDigest = try .init(from: &buffer)
-        self.appData = try .init(from: &buffer)
-        self.udid = try .init(from: &buffer)
-    }
-}
-
-/// Represents the result of rack validation
-package enum RackValidationResult: Sendable, Equatable {
-    case allowed
-    case blocked(rackValidationError: WorkerRackValidationError)
-}
-
-extension RackValidationResult: ByteBufferCodable {
-    func encode(to buffer: inout ByteBuffer) throws {
-        switch self {
-        case .allowed:
-            buffer.writeInteger(0)
-        case .blocked(let rackValidationError):
-            buffer.writeInteger(1)
-            try rackValidationError.encode(to: &buffer)
-        }
-    }
-
-    init(from buffer: inout ByteBuffer) throws {
-        guard let enumCase: Int = buffer.readInteger() else {
-            throw DecodingError.valueNotFound(
-                Self.self,
-                .init(codingPath: [], debugDescription: "no expected enum case")
-            )
-        }
-        switch enumCase {
-        case 0:
-            self = .allowed
-        case 1:
-            self = try .blocked(rackValidationError: .init(from: &buffer))
-        case let value:
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: [ByteBufferCodingKey(Self.self)],
-                debugDescription: "bad result enum case \(value)"
-            ))
-        }
-    }
-}
-
-package enum WorkerRackValidationError: Error, Codable, ByteBufferCodable, Equatable {
-    case rackIdChanged(reason: String, originalRackId: String, blockedUntil: Date, udid: String)
-
-    package var publicDescription: String {
-        switch self {
-        case .rackIdChanged(let reason, let originalRackId, let blockedUntil, let udid):
-            return "Worker with udid: \(udid) blocked due to rack change: \(reason), original rack: \(originalRackId), blocked until: \(blockedUntil)"
-        }
-    }
-
-    func encode(to buffer: inout ByteBuffer) throws {
-        switch self {
-        case .rackIdChanged(let reason, let originalRackId, let blockedUntil, let udid):
-            buffer.writeInteger(0)
-            try reason.encode(to: &buffer)
-            try originalRackId.encode(to: &buffer)
-            try blockedUntil.encode(to: &buffer)
-            try udid.encode(to: &buffer)
-        }
-    }
-
-    init(from buffer: inout ByteBuffer) throws {
-        guard let enumCase: Int = buffer.readInteger() else {
-            throw DecodingError.valueNotFound(
-                Self.self,
-                .init(codingPath: [], debugDescription: "no expected enum case")
-            )
-        }
-        switch enumCase {
-        case 0:
-            self = try .rackIdChanged(
-                reason: .init(from: &buffer),
-                originalRackId: .init(from: &buffer),
-                blockedUntil: .init(from: &buffer),
-                udid: .init(from: &buffer)
-            )
-        case let value:
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: [ByteBufferCodingKey(Self.self)],
-                debugDescription: "bad result enum case \(value)"
-            ))
-        }
-    }
-}
-
-/// Combined result of worker attestation validation and rack validation
-package struct WorkerValidationResult: ByteBufferCodable, Sendable {
-    public var validatedWorker: ValidatedWorker
-    public var rackValidation: RackValidationResult
-
-    public init(validatedWorker: ValidatedWorker, rackValidation: RackValidationResult) {
-        self.validatedWorker = validatedWorker
-        self.rackValidation = rackValidation
-    }
-
-    func encode(to buffer: inout ByteBuffer) throws {
-        try self.validatedWorker.encode(to: &buffer)
-        try self.rackValidation.encode(to: &buffer)
-    }
-
-    init(from buffer: inout ByteBuffer) throws {
-        self.validatedWorker = try .init(from: &buffer)
-        self.rackValidation = try .init(from: &buffer)
-    }
-}
-
-/// API used by a job helper to validate a worker's attestation
-/// Done as a separate protocol to simplify mocking
-package protocol CloudBoardAttestationWorkerValidationProtocol: Sendable {
-    func validateWorkerAttestation(
-        // The id of the relevant key the parent request is operating under
-        // This defines which releases are valid implicitly
-        proxyAttestationKeyID: Data,
-        // The raw attestation bundle to validate and parse
-        // The udid and rackID will be extracted from the validated attestation for rack validation
-        rawWorkerAttestationBundle: Data
-    ) async throws -> WorkerValidationResult
 }
 
 package protocol CloudBoardAttestationAttestationLookupProtocol: Actor {

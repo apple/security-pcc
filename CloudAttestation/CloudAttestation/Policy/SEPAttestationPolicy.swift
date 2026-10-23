@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -112,7 +112,7 @@ public struct SEPAttestationPolicy: AttestationPolicy {
             // check that the deviceIdentity in the cert (if present) matches the attestation's deviceIdentity
             if let certDeviceIdentity = context.validatedCert?.deviceIdentity {
                 guard certDeviceIdentity.identity == attestation.identity?.string else {
-                    Self.logger.error("Certificate DeviceIdentity \(certDeviceIdentity.identity) != \(attestation.identity?.string ?? "<nil>")")
+                    Self.logger.error("Certificate DeviceIdentity \(certDeviceIdentity.identity, privacy: .public) != \(attestation.identity?.string ?? "<nil>", privacy: .public)")
                     throw Error.invalidIdentity
                 }
             }

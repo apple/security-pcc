@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,6 +17,7 @@ import CloudBoardDomain
 import CloudBoardJobHelperAPI
 import CloudBoardLogging
 import CloudBoardMetrics
+import CloudBoardPlatformUtilities
 import DequeModule
 import os
 import Synchronization
@@ -60,10 +61,22 @@ actor JobHelperInstanceQueue {
     private var terminated: Bool = false
     private var cloudAppName: String
     private let metrics: MetricsSystem
+    /// When non-nil, the current queued instance count is yielded here whenever it changes. Only wired for the
+    /// ready queue; the other queues pass `nil` and incur no notification cost.
+    private let instanceCountChangedContinuation: AsyncStream<Int>.Continuation?
 
-    init(cloudAppName: String, metrics: MetricsSystem) {
+    init(
+        cloudAppName: String,
+        metrics: MetricsSystem,
+        instanceCountChangedContinuation: AsyncStream<Int>.Continuation? = nil
+    ) {
         self.cloudAppName = cloudAppName
         self.metrics = metrics
+        self.instanceCountChangedContinuation = instanceCountChangedContinuation
+    }
+
+    private func notifyCountChanged() {
+        self.instanceCountChangedContinuation?.yield(self.readyJobHelperInstances.count)
     }
 
     private func enqueue(_ instance: JobHelperInstance, _ operation: (JobHelperInstance) -> Void) throws {
@@ -79,6 +92,7 @@ actor JobHelperInstanceQueue {
             waiter.succeed(with: instance)
         } else {
             operation(instance)
+            self.notifyCountChanged()
         }
     }
 
@@ -96,6 +110,7 @@ actor JobHelperInstanceQueue {
         }
 
         if let readyInstance = self.readyJobHelperInstances.popFirst() {
+            self.notifyCountChanged()
             return readyInstance
         }
 
@@ -120,6 +135,7 @@ actor JobHelperInstanceQueue {
         }
 
         self.readyJobHelperInstances.remove(at: index)
+        self.notifyCountChanged()
         return true
     }
 
@@ -135,6 +151,9 @@ actor JobHelperInstanceQueue {
         }
 
         defer { self.readyJobHelperInstances = [] }
+        // Shutdown: finish the stream so the count consumer exits. No need to yield a final 0 — nothing reads the
+        // ready count once we are terminating.
+        self.instanceCountChangedContinuation?.finish()
         return self.readyJobHelperInstances
     }
 
@@ -149,6 +168,8 @@ actor JobHelperInstanceQueue {
         }
 
         defer { self.readyJobHelperInstances = [] }
+        // Restart, not terminal: yield the reset-to-zero but keep the stream open for the refilled instances.
+        self.instanceCountChangedContinuation?.yield(0)
         return self.readyJobHelperInstances
     }
 }
@@ -158,6 +179,7 @@ enum JobHelperInstanceProviderError: Error {
     case invalidPrewarmedPoolSizeSpecified
     case invalidMaxInstanceCountSpecified
     case failedToAllocateJobHelperInstance
+    case warmupTimedOut
 }
 
 // JobHelperInstanceProvider is left as a class so that we don't serialize all
@@ -165,6 +187,7 @@ enum JobHelperInstanceProviderError: Error {
 final class JobHelperInstanceProvider: Sendable {
     private let cloudAppName: String
     private let supportAppNames: [String]
+    private let isTrampolineProxy: Bool
     private let metrics: MetricsSystem
     private let tracer: any Tracer
     private let launchdJobFinder: any LaunchdJobFinderProtocol
@@ -175,6 +198,19 @@ final class JobHelperInstanceProvider: Sendable {
     private let maxInstanceCount: Int
     private let maxLAContextCount: Int
     private let maxApplicationLayerMessageSize: Int
+    private let maxToolInvocationsPerRequest: Int
+    private let teardownTimeout: Duration
+    private let warmupTimeout: Duration?
+    private let consecutiveWarmupFailuresThreshold: Int
+    private let healthMonitor: ServiceHealthMonitor?
+    /// When true, the prewarm pool ready count is reported to the health monitor for load-level calculation. The
+    /// configured prewarm pool is expected to be sized to at least the controller's max concurrency (validated and
+    /// warned about by `WorkloadController`); this provider does not resize the pool dynamically.
+    private let maxBatchDependsOnPrewarmedSize: Bool
+    /// Cadence at which the pool-size gauges are sampled and emitted. Gauges are point-in-time samples, so they are
+    /// published periodically rather than on every queue edge — edge-triggered emission would hammer the metrics
+    /// backend during pool fill/drain without adding meaningful resolution.
+    private let gaugeEmitInterval: Duration
 
     private var prewarmingDisabled: Bool {
         return self.prewarmedPoolSize == 0
@@ -182,6 +218,10 @@ final class JobHelperInstanceProvider: Sendable {
 
     /// Queue with instances which are ready to serve requests
     private let readyPrewarmedQueue: JobHelperInstanceQueue
+
+    /// Stream of the ready-queue count, driven by `readyPrewarmedQueue` and consumed in `run()` to emit metrics and
+    /// (when enabled) the load level reported to ROPES. Decouples the fan-out from the queue actor's isolation.
+    private let readyCountStream: AsyncStream<Int>
 
     /// Queue with instances which have prewarmed the job helper instance
     /// but cannot serve requests, for example because it doesn't have a LAContext yet
@@ -201,39 +241,114 @@ final class JobHelperInstanceProvider: Sendable {
 
     /// This is internal for Testing purposes
     internal struct State {
-        var prewarmedCount: Int = 0
+        var managedInstanceCount: Int = 0
+        /// Number of instances in the ready queue (fully warmed + LAContext assigned) able to serve immediately.
+        var availablePrewarmedCount: Int = 0
         var awaitingLAContext: Int = 0
+        var consecutiveWarmupFailures: Int = 0
         var laContextResourcePool: ResourcePool
         var instanceResourcePool: ResourcePool
     }
 
     internal let state: Mutex<State>
 
-    private func incrementPrewarmedPoolCount() {
+    private func incrementManagedInstanceCount() {
         self.state.withLock { state in
-            state.prewarmedCount += 1
-            self.metrics.emit(Metrics.JobHelperInstanceProvider.PrewarmedPoolSizeGauge(
-                value: state.prewarmedCount, cloudApp: self.cloudAppName, configuredPoolSize: self.prewarmedPoolSize
-            ))
+            state.managedInstanceCount += 1
         }
     }
 
-    private func decrementPrewarmedPoolCount() {
+    private func decrementManagedInstanceCount() {
         self.state.withLock { state in
-            state.prewarmedCount -= 1
-            self.metrics.emit(Metrics.JobHelperInstanceProvider.PrewarmedPoolSizeGauge(
-                value: state.prewarmedCount, cloudApp: self.cloudAppName, configuredPoolSize: self.prewarmedPoolSize
-            ))
+            state.managedInstanceCount -= 1
+        }
+    }
+
+    /// Periodically samples and emits the pool-size gauges (`PrewarmedPoolSizeGauge` ready count, and the derived
+    /// `PrewarmingPoolSizeGauge` in-progress count). Gauges are inherently point-in-time samples, so they are
+    /// published on a fixed cadence rather than on every queue edge: edge-triggered emission would hammer the
+    /// metrics backend while the pool fills/drains without adding resolution the gauge semantics need. Runs until
+    /// the enclosing task group is cancelled.
+    private func processPoolSizeGaugeSampling() async {
+        while true {
+            self.emitPoolSizeGauges()
+            do {
+                try await Task.sleep(for: self.gaugeEmitInterval)
+            } catch {
+                return
+            }
+        }
+    }
+
+    /// Emits both pool-size gauges from a single consistent snapshot of the counts. The ready count mirrors the
+    /// value last published to ROPES via `updateAvailablePrewarmedInstances`; the prewarming count is derived as
+    /// `managedInstanceCount - availablePrewarmedCount`.
+    private func emitPoolSizeGauges() {
+        let (ready, prewarming) = self.state.withLock { state in
+            (state.availablePrewarmedCount, max(0, state.managedInstanceCount - state.availablePrewarmedCount))
+        }
+        self.metrics.emit(Metrics.JobHelperInstanceProvider.PrewarmedPoolSizeGauge(
+            value: ready, cloudApp: self.cloudAppName, configuredPoolSize: self.prewarmedPoolSize
+        ))
+        self.metrics.emit(Metrics.JobHelperInstanceProvider.PrewarmingPoolSizeGauge(
+            value: prewarming, cloudApp: self.cloudAppName, configuredPoolSize: self.prewarmedPoolSize
+        ))
+    }
+
+    /// Invoked by `readyPrewarmedQueue` whenever the number of immediately-servable instances changes. Updates the
+    /// stored ready count and, when `maxBatchDependsOnPrewarmedSize` is enabled, drives the load level reported to
+    /// ROPES. This stays edge-triggered (unlike the gauges) because ROPES must see availability changes promptly —
+    /// it is a real-time signal, not a sampled metric.
+    private func onReadyPrewarmedCountChanged(_ readyCount: Int) {
+        self.state.withLock { state in
+            state.availablePrewarmedCount = readyCount
+        }
+        self.healthMonitor?.updateAvailablePrewarmedInstances(count: readyCount)
+    }
+
+    private func recordWarmupFailure() {
+        guard self.consecutiveWarmupFailuresThreshold > 0 else { return }
+        let shouldEnterMaintenance = self.state.withLock { state in
+            state.consecutiveWarmupFailures += 1
+            return state.consecutiveWarmupFailures >= self.consecutiveWarmupFailuresThreshold
+        }
+        if shouldEnterMaintenance {
+            log.error(
+                "JobHelperInstanceProvider::\(self.cloudAppName, privacy: .public) consecutive warmup failures reached threshold (\(self.consecutiveWarmupFailuresThreshold, privacy: .public)), entering maintenance"
+            )
+            self.healthMonitor?.enterMaintenance(.prewarmingFailed)
+        }
+    }
+
+    private func recordWarmupSuccess() {
+        let shouldExitMaintenance = self.state.withLock { state in
+            let wasInFailureState = state.consecutiveWarmupFailures >= self.consecutiveWarmupFailuresThreshold
+            state.consecutiveWarmupFailures = 0
+            return wasInFailureState
+        }
+        if shouldExitMaintenance {
+            log.info(
+                "JobHelperInstanceProvider::\(self.cloudAppName, privacy: .public) warmup succeeded after failures, exiting maintenance"
+            )
+            self.healthMonitor?.exitMaintenance(.prewarmingFailed)
         }
     }
 
     init(
         cloudAppName: String,
         supportAppNames: [String],
+        isTrampolineProxy: Bool,
         prewarmedPoolSize: Int,
         maxInstanceCount: Int,
         maxLAContextCount: Int = 1,
         maxApplicationLayerMessageSize: Int,
+        maxToolInvocationsPerRequest: Int,
+        teardownTimeout: Duration,
+        warmupTimeout: Duration? = nil,
+        consecutiveWarmupFailuresThreshold: Int,
+        healthMonitor: ServiceHealthMonitor? = nil,
+        maxBatchDependsOnPrewarmedSize: Bool = false,
+        gaugeEmitInterval: Duration = gaugeMetricPublishInterval,
         metrics: MetricsSystem,
         tracer: any Tracer,
         launchdJobFinder: any LaunchdJobFinderProtocol,
@@ -242,6 +357,7 @@ final class JobHelperInstanceProvider: Sendable {
     ) throws {
         self.cloudAppName = cloudAppName
         self.supportAppNames = supportAppNames
+        self.isTrampolineProxy = isTrampolineProxy
         log.log(
             "Initializing JobHelperInstanceProvider::\(self.cloudAppName, privacy: .public) with prewarmedPoolSize: \(prewarmedPoolSize, privacy: .public), maxInstanceCount: \(maxInstanceCount, privacy: .public)"
         )
@@ -266,10 +382,19 @@ final class JobHelperInstanceProvider: Sendable {
         }
         self.maxInstanceCount = maxInstanceCount
         self.maxLAContextCount = maxLAContextCount
+        self.teardownTimeout = teardownTimeout
+        self.warmupTimeout = warmupTimeout
+        self.consecutiveWarmupFailuresThreshold = consecutiveWarmupFailuresThreshold
+        self.healthMonitor = healthMonitor
+        self.maxBatchDependsOnPrewarmedSize = maxBatchDependsOnPrewarmedSize
+        self.gaugeEmitInterval = gaugeEmitInterval
 
+        let (readyCountStream, readyCountContinuation) = AsyncStream<Int>.makeStream()
+        self.readyCountStream = readyCountStream
         self.readyPrewarmedQueue = JobHelperInstanceQueue(
             cloudAppName: self.cloudAppName,
-            metrics: metrics
+            metrics: metrics,
+            instanceCountChangedContinuation: readyCountContinuation
         )
         self.notReadyPrewarmedQueue = JobHelperInstanceQueue(
             cloudAppName: self.cloudAppName,
@@ -297,6 +422,7 @@ final class JobHelperInstanceProvider: Sendable {
             nil
         }
         self.maxApplicationLayerMessageSize = maxApplicationLayerMessageSize
+        self.maxToolInvocationsPerRequest = maxToolInvocationsPerRequest
     }
 
     /// Run  the provided `JobHelperInstance` until it terminates and handler teardown triggers.
@@ -326,7 +452,7 @@ final class JobHelperInstanceProvider: Sendable {
             instanceTaskGroup.addTask {
                 // this expects the trigger for teardown to be invoked elsewhere - if it isn't,
                 // promise gets leaked and cloudboardd will crash.
-                await jobHelperInstance.teardownOnTrigger()
+                await jobHelperInstance.awaitTeardownTriggerAndComplete()
                 if await jobHelperInstance.laContextAssigned {
                     await self.laContextUsedByClient()
                 }
@@ -348,9 +474,21 @@ final class JobHelperInstanceProvider: Sendable {
                 action: .increment,
                 cloudApp: self.cloudAppName
             ))
-            self.decrementPrewarmedPoolCount()
+            self.decrementManagedInstanceCount()
         }
         return removed
+    }
+
+    /// Awaits the point at which every asset consumer has its initial assets. Returns immediately when gating is
+    /// disabled (no initial-assets promise). The promise is fulfilled via `updateAssetsMetadata(isInitial: true)`.
+    ///
+    /// Cancellation-aware: throws `CancellationError` if the awaiting task is cancelled, so callers unwind
+    /// instead of blocking teardown.
+    func waitForInitialAssets() async throws {
+        guard let initialAssetsReadyPromise = self.initialAssetsReadyPromise else {
+            return
+        }
+        try await Future(initialAssetsReadyPromise).valueWithCancellation
     }
 
     func run() async throws {
@@ -386,8 +524,23 @@ final class JobHelperInstanceProvider: Sendable {
             group.addTask {
                 await self.processLAContextAvailableStream()
             }
+            group.addTask {
+                await self.processReadyCountStream()
+            }
+            group.addTask {
+                await self.processPoolSizeGaugeSampling()
+            }
             await group.next()
             group.cancelAll()
+        }
+    }
+
+    /// Consumes the ready-queue count stream, driving metrics and (when enabled) the load level reported to ROPES.
+    /// Running on the provider's task — rather than synchronously inside the queue actor — keeps the metric emission
+    /// and health-monitor fan-out off the queue's isolation.
+    private func processReadyCountStream() async {
+        for await count in self.readyCountStream {
+            self.onReadyPrewarmedCountChanged(count)
         }
     }
 
@@ -410,13 +563,16 @@ final class JobHelperInstanceProvider: Sendable {
                     definition,
                     cloudAppName: self.cloudAppName,
                     supportAppNames: self.supportAppNames,
+                    isTrampolineProxy: self.isTrampolineProxy,
                     withLAContext: withLAContext,
                     assetsMetadata: self.assetsMetadata.withLock { $0 },
                     maxApplicationLayerMessageSize: self.maxApplicationLayerMessageSize,
+                    maxToolInvocationsPerRequest: self.maxToolInvocationsPerRequest,
                     jobHelperXPCClientFactory: self.jobHelperXPCClientFactory,
                     delegate: PrewarmedJobHelperResponseDelegate(metrics: self.metrics),
                     metrics: self.metrics,
-                    tracer: self.tracer
+                    tracer: self.tracer,
+                    teardownTimeout: self.teardownTimeout
                 )
 
                 log.info("\(jobHelperInstance.logMetadata(), privacy: .public) created JobHelperInstance")
@@ -444,13 +600,27 @@ final class JobHelperInstanceProvider: Sendable {
                     // prewarm the jobhelper instance - races with `runJobHelperInstance`, but that is handled by the
                     // jobhelper instance's state machine
                     do {
-                        self.incrementPrewarmedPoolCount()
+                        self.incrementManagedInstanceCount()
 
                         /// We keep track of the instances which are still being warmed up
                         /// So that if we get a request to restart all instances
                         /// we also abandon the instances which are being warmed up.
                         try await self.prewarmingQueue.push(jobHelperInstance)
-                        try await jobHelperInstance.waitForWarmupComplete()
+                        if let warmupTimeout = self.warmupTimeout {
+                            try await withThrowingTaskGroup(of: Void.self) { timeoutGroup in
+                                timeoutGroup.addTask {
+                                    try await jobHelperInstance.waitForWarmupComplete()
+                                }
+                                timeoutGroup.addTask {
+                                    try await Task.sleep(for: warmupTimeout)
+                                    throw JobHelperInstanceProviderError.warmupTimedOut
+                                }
+                                try await timeoutGroup.next()
+                                timeoutGroup.cancelAll()
+                            }
+                        } else {
+                            try await jobHelperInstance.waitForWarmupComplete()
+                        }
                         let notRestarted = await self.prewarmingQueue.remove(jobHelperInstance)
                         if !notRestarted {
                             log.log("""
@@ -482,6 +652,7 @@ final class JobHelperInstanceProvider: Sendable {
                                 prewarmedPoolSize: self.prewarmedPoolSize
                             )
                         )
+                        self.recordWarmupSuccess()
                     } catch {
                         // Dont rethrow this error because we want to let run complete so the JobHelperInstance
                         // can be torn down and removed from the prewarmed queue.
@@ -495,12 +666,13 @@ final class JobHelperInstanceProvider: Sendable {
                             action: .increment,
                             cloudApp: self.cloudAppName
                         ))
+                        self.recordWarmupFailure()
                         let removed = await self.removeFromPrewarmedQueues(jobHelperInstance)
 
                         /// If we throw even before adding to any of the queues, we are respoinsible
                         /// for decrementing the prewarm counts
                         if !removed {
-                            self.decrementPrewarmedPoolCount()
+                            self.decrementManagedInstanceCount()
                         }
                         await jobHelperInstance.triggerTeardown(error: error)
                     }
@@ -514,15 +686,15 @@ final class JobHelperInstanceProvider: Sendable {
                 let error = JobHelperInstanceProviderError.teardownInitiatedBecauseRefillStreamFinished
                 for jobHelperInstance in try await self.prewarmingQueue.terminate(error: error) {
                     await jobHelperInstance.triggerTeardown(error: error)
-                    self.decrementPrewarmedPoolCount()
+                    self.decrementManagedInstanceCount()
                 }
                 for jobHelperInstance in try await self.readyPrewarmedQueue.terminate(error: error) {
                     await jobHelperInstance.triggerTeardown(error: error)
-                    self.decrementPrewarmedPoolCount()
+                    self.decrementManagedInstanceCount()
                 }
                 for jobHelperInstance in try await self.notReadyPrewarmedQueue.terminate(error: error) {
                     await jobHelperInstance.triggerTeardown(error: error)
-                    self.decrementPrewarmedPoolCount()
+                    self.decrementManagedInstanceCount()
                 }
             } catch {
                 log.error("""
@@ -578,7 +750,7 @@ final class JobHelperInstanceProvider: Sendable {
                         "JobHelperInstanceProvider::\(self.cloudAppName, privacy: .public): Error assigning LAContext: \(String(unredacted: error), privacy: .public)"
                     )
                     await instance?.triggerTeardown(error: error)
-                    self.decrementPrewarmedPoolCount()
+                    self.decrementManagedInstanceCount()
                     // Re-signal to try next waiting instance
                     self.laContextAvailableContinutation.yield(.start())
                 }
@@ -599,7 +771,7 @@ final class JobHelperInstanceProvider: Sendable {
         // submit new creation requests.
         self.state.withLock { state in
             var pendingPlusPrewarmedCount: Int {
-                state.prewarmedCount + state.instanceResourcePool.acquiring
+                state.managedInstanceCount + state.instanceResourcePool.acquiring
             }
 
             while pendingPlusPrewarmedCount < self.prewarmedPoolSize,
@@ -635,7 +807,7 @@ final class JobHelperInstanceProvider: Sendable {
                 """)
                 throw error
             }
-            self.decrementPrewarmedPoolCount()
+            self.decrementManagedInstanceCount()
             self.jobHelperInstanceConsumed()
 
             do {
@@ -728,7 +900,7 @@ final class JobHelperInstanceProvider: Sendable {
             await jobHelperInstance.triggerTeardown(error: error)
             return
         }
-        self.incrementPrewarmedPoolCount()
+        self.incrementManagedInstanceCount()
         self.metrics.emit(Metrics.JobHelperInstanceProvider.ReclaimedPrewarmedTotal(
             action: .increment,
             cloudApp: self.cloudAppName
@@ -825,7 +997,7 @@ final class JobHelperInstanceProvider: Sendable {
                             \(String(reportable: error), privacy: .public)
                             """)
                         }
-                        self.decrementPrewarmedPoolCount()
+                        self.decrementManagedInstanceCount()
                         self.jobHelperInstanceConsumed()
                     }
                 }
@@ -842,7 +1014,7 @@ final class JobHelperInstanceProvider: Sendable {
 
 /// This is not thread safe and should be used from inside a Lock
 struct ResourcePool {
-    private let poolSize: Int
+    let poolSize: Int
     private var noLimit: Bool {
         self.poolSize == 0
     }

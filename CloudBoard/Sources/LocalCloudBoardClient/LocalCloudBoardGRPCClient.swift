@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,6 +21,7 @@ import Foundation
 internal import HTTPClientStateMachine
 internal import InternalGRPC
 internal import InternalSwiftProtobuf
+internal import LengthPrefixChunking
 internal import NIOCore
 internal import Synchronization
 import os
@@ -88,9 +89,12 @@ public enum PrivateCloudComputeResponseMessage {
     case summary(String)
     case requestExecutionLogEntry(RequestExecutionLogEntry)
     case attestationBundle(LocalCloudBoardAttestationBundle)
+    case componentTimeMeasurement(ComponentTimeMeasurementEntry)
+    case costToken
     case unknown
 }
 
+/// An enum that represents a response from CloudBoard.
 public enum PrivateCloudComputeResponse: Sendable {
     /// Response ID generated and returned by CloudBoard for every request
     case responseID(UUID)
@@ -108,6 +112,10 @@ public enum PrivateCloudComputeResponse: Sendable {
     /// Attestation bundle wrapper exposing both the raw attestation bundle and associated metadata such as the release
     /// digest
     case attestationBundle(LocalCloudBoardAttestationBundle)
+    /// Time measurement for an operation from a component
+    case componentTimeMeasurement(ComponentTimeMeasurementEntry)
+    /// Cost token containing signed JWT with bucketized cost
+    case costToken(Data)
     case unknown
 }
 
@@ -118,6 +126,7 @@ public struct RequestExecutionLogEntry: Sendable {
     public var trustedProxyAttestationBundle: LocalCloudBoardAttestationBundle
     public var computeNodeAttestationBundle: LocalCloudBoardAttestationBundle?
     public var assetsMetata: [LocalCloudBoardAssetMetadata]
+    public var outboundCallContext: OutboundCallContext?
 }
 
 public struct LocalCloudBoardAssetMetadata: Sendable {
@@ -125,6 +134,34 @@ public struct LocalCloudBoardAssetMetadata: Sendable {
     public var applicationID: String
     public var assetIdentityHash: String
     public var version: String
+}
+
+public struct ComponentTimeMeasurementEntry: Sendable, CustomStringConvertible {
+    public var description: String {
+        return """
+        component: \(self.component),
+        operation: \(self.operation),
+        identifier: \(self.identifier ?? ""),
+        subIdentifier: \(self.subIdentifier ?? ""),
+        startTime: \(self.startTime),
+        endTime: \(self.endTime)
+        """
+    }
+
+    public var component: String
+    public var operation: String
+    public var identifier: String?
+    public var subIdentifier: String?
+    internal var _startTimeMs: Int64
+    internal var _endTimeMs: Int64
+
+    public var startTime: Date {
+        Date(timeIntervalSince1970: Double(self._startTimeMs) / 1000.0)
+    }
+
+    public var endTime: Date {
+        Date(timeIntervalSince1970: Double(self._endTimeMs) / 1000.0)
+    }
 }
 
 // namespace for translated forms of the real protobuf types to avoid confusion
@@ -211,6 +248,9 @@ public class LocalCloudBoardGRPCClient {
                         outputStreamContinuation.yield(.summary(summary.protobufTextEncodedForm))
                     case .attestationBundle(let attestationBundle): outputStreamContinuation
                         .yield(.attestationBundle(attestationBundle))
+                    case .componentTimeMeasurement(let measurement): outputStreamContinuation
+                        .yield(.componentTimeMeasurement(measurement))
+                    case .costToken: outputStreamContinuation.yield(.costToken)
                     case .unknown: outputStreamContinuation.yield(.unknown)
                     }
                 }
@@ -1026,6 +1066,7 @@ public class LocalCloudBoardGRPCAsyncClient {
             $0.requestID = requestID
             $0.requestBypassed = useRequestBypass
             $0.workload = .init(type: metaData.workloadType, parameters: metaData.workloadParameters)
+            $0.patIssuer = metaData.patIssuer
         }
         let session = try await self.streamPrivateRequestInternal(
             requestSender: .plainPayloadSender(parameters: parameters),
@@ -1064,6 +1105,7 @@ public class LocalCloudBoardGRPCAsyncClient {
             $0.requestID = requestID
             $0.requestBypassed = useRequestBypass
             $0.workload = .init(type: metaData.workloadType, parameters: metaData.workloadParameters)
+            $0.patIssuer = metaData.patIssuer
         }
         let session = try await self.streamPrivateRequestInternal(
             requestSender: .plainPayloadSender(parameters: parameters),
@@ -1124,6 +1166,7 @@ public class LocalCloudBoardGRPCAsyncClient {
             $0.requestID = requestID
             $0.requestBypassed = false
             $0.workload = .init(type: metaData.workloadType, parameters: metaData.workloadParameters)
+            $0.patIssuer = metaData.patIssuer
         }
         let session = try await self.streamPrivateRequestInternal(
             requestSender: .plainPayloadSender(parameters: parameters),
@@ -1286,6 +1329,7 @@ public class LocalCloudBoardGRPCAsyncClient {
                         }
                     }
                 }
+                proxyInvokeOpen.workloadType = metaData.workloadType
                 let pccProxyInvokeOpen = try ProtoPrivateCloudComputeRequest.serialized(
                     with: .proxyInvokeOpen(proxyInvokeOpen)
                 )
@@ -1295,11 +1339,6 @@ public class LocalCloudBoardGRPCAsyncClient {
                 authTokenGRPCMessage = asyncWorkloadClient.makeAuthToken(encapsulatedProxyInvokeOpen)
             } else {
                 var authToken = Proto_PrivateCloudCompute_OpenRequestPayload()
-                // We generate random tokens here which will fail validation but allow us to track token propagation
-                // across
-                // PCC nodes in testing when enforcement is disabled
-                authToken.tokenGrantingToken = Data(randomByteCount: 16)
-                authToken.ottSalt = Data(randomByteCount: 16)
                 if case .enabled(let chunkSize) = applicationDataChunkingConfiguration {
                     authToken.capabilities = .with {
                         $0.applicationDataChunking = .with {
@@ -1307,11 +1346,12 @@ public class LocalCloudBoardGRPCAsyncClient {
                         }
                     }
                 }
+                authToken.workloadType = metaData.workloadType
                 let pccAuthRequest = try ProtoPrivateCloudComputeRequest.serialized(with: .open(authToken))
-                let encapsulatedTGT = try oHTTPClientStateMachine.encapsulateMessage(
+                let encapsulatedOpen = try oHTTPClientStateMachine.encapsulateMessage(
                     message: pccAuthRequest, isFinal: false
                 )
-                authTokenGRPCMessage = asyncWorkloadClient.makeAuthToken(encapsulatedTGT)
+                authTokenGRPCMessage = asyncWorkloadClient.makeAuthToken(encapsulatedOpen)
             }
         case .invokeWorkloadRequest(let stream, _):
             var streamIterator = stream.makeAsyncIterator()
@@ -1343,21 +1383,31 @@ public class LocalCloudBoardGRPCAsyncClient {
             switch requestStreamContext {
             case .plainPayload(let stream, _, _):
                 for try await chunk in stream {
-                    let pccPayloadChunk = try ProtoPrivateCloudComputeRequest
-                        .serialized(with: .applicationPayload(chunk))
-                    let encapsulatedPayload = try oHTTPClientStateMachine.encapsulateMessage(
-                        message: pccPayloadChunk, isFinal: false
-                    )
-                    let payloadChunkGRPCMessage = InvokeWorkloadRequest.with {
-                        $0.requestChunk = Proto_Ropes_Common_Chunk.with {
-                            $0.encryptedPayload = encapsulatedPayload
-                            $0.isFinal = false
+                    let dataChunks: [Data]
+                    switch applicationDataChunkingConfiguration {
+                    case .disabled:
+                        dataChunks = [chunk]
+                    case .enabled(let chunkSize):
+                        let chunker = try LengthPrefixChunker(chunkSize: chunkSize, mode: .dataOnly)
+                        dataChunks = try chunker.chunkData(data: chunk)
+                    }
+                    for dataChunk in dataChunks {
+                        let pccPayloadChunk = try ProtoPrivateCloudComputeRequest
+                            .serialized(with: .applicationPayload(dataChunk))
+                        let encapsulatedPayload = try oHTTPClientStateMachine.encapsulateMessage(
+                            message: pccPayloadChunk, isFinal: false
+                        )
+                        let payloadChunkGRPCMessage = InvokeWorkloadRequest.with {
+                            $0.requestChunk = Proto_Ropes_Common_Chunk.with {
+                                $0.encryptedPayload = encapsulatedPayload
+                                $0.isFinal = false
+                            }
                         }
+                        if let requestDumpFileHandle {
+                            try requestDumpFileHandle.write(payloadChunkGRPCMessage.serialized())
+                        }
+                        authenticatedRequestContinuation.yield(payloadChunkGRPCMessage)
                     }
-                    if let requestDumpFileHandle {
-                        try requestDumpFileHandle.write(payloadChunkGRPCMessage.serialized())
-                    }
-                    authenticatedRequestContinuation.yield(payloadChunkGRPCMessage)
                 }
 
                 let pccFinalMessage = try ProtoPrivateCloudComputeRequest.serialized(with: .finalMessage(.init()))
@@ -1420,11 +1470,16 @@ public class LocalCloudBoardGRPCAsyncClient {
                         authenticatedRequestContinuation: authenticatedRequestContinuation,
                         requestParameters: requestParameters
                     )
+                    bypassResponseContinuation.finish()
                 }
 
                 // decapsulate response payload from the original PCC node
                 group.addTask {
                     var receivedFinalRequestExecutionLogEntry = false
+                    var responseAssembler: LengthPrefixAssembler?
+                    if case .enabled = applicationDataChunkingConfiguration {
+                        responseAssembler = LengthPrefixAssembler()
+                    }
                     do {
                         for try await chunk in originalResponseStream {
                             let pccResponseContinuation: AsyncThrowingStream<PrivateCloudComputeResponse, Error>
@@ -1475,16 +1530,28 @@ public class LocalCloudBoardGRPCAsyncClient {
                                             .log("Received final request execution log entry")
                                     }
                                 } else {
-                                    try pccResponseContinuation.yield(self.convertToClientResponse(
+                                    let clientResponse = try self.convertToClientResponse(
                                         pccResponse,
                                         attestationEnvironment: self.attestationEnvironment
-                                    ))
+                                    )
+                                    if responseAssembler != nil,
+                                       case .payload(let payloadData) = clientResponse, !payloadData.isEmpty {
+                                        let reassembledMessages = try responseAssembler!.append(payloadData)
+                                        for message in reassembledMessages {
+                                            pccResponseContinuation
+                                                .yield(PrivateCloudComputeResponse.payload(message))
+                                        }
+                                    } else {
+                                        pccResponseContinuation.yield(clientResponse)
+                                    }
                                 }
                             } else {
                                 pccResponseContinuation.yield(PrivateCloudComputeResponse.payload(.init()))
                             }
                         }
-                        responseStreamContext.finishStream()
+                        if let responseAssembler {
+                            try responseAssembler.finish()
+                        }
                         if !receivedFinalRequestExecutionLogEntry {
                             LocalCloudBoardGRPCAsyncClient.logger
                                 .error("Final request execution log entry not received for the request")
@@ -1496,7 +1563,15 @@ public class LocalCloudBoardGRPCAsyncClient {
 
                 // optionally decapsulate response payload from the worker node
                 group.addTask {
+                    guard initialClient.isProxy else {
+                        bypassResponseContinuation.finish()
+                        return
+                    }
                     var bypassDecapsulator: StreamingResponseBypassDecapsulator?
+                    var bypassResponseAssembler: LengthPrefixAssembler?
+                    if case .enabled = applicationDataChunkingConfiguration {
+                        bypassResponseAssembler = LengthPrefixAssembler()
+                    }
                     for try await chunk in bypassResponseStream {
                         let pccResponseContinuation: AsyncThrowingStream<PrivateCloudComputeResponse, Error>
                             .Continuation
@@ -1545,18 +1620,32 @@ public class LocalCloudBoardGRPCAsyncClient {
                         if let chunkData = data.readLengthPrefixedChunk() {
                             let pccResponse = try LocalCloudBoardGRPCAsyncClient
                                 .ProtoPrivateCloudComputeResponse(serializedBytes: chunkData)
-                            try pccResponseContinuation.yield(self.convertToClientResponse(
+                            let clientResponse = try self.convertToClientResponse(
                                 pccResponse,
                                 attestationEnvironment: self.attestationEnvironment
-                            ))
+                            )
+                            if bypassResponseAssembler != nil,
+                               case .payload(let payloadData) = clientResponse, !payloadData.isEmpty {
+                                let reassembledMessages = try bypassResponseAssembler!.append(payloadData)
+                                for message in reassembledMessages {
+                                    pccResponseContinuation
+                                        .yield(PrivateCloudComputeResponse.payload(message))
+                                }
+                            } else {
+                                pccResponseContinuation.yield(clientResponse)
+                            }
                         } else {
                             pccResponseContinuation.yield(PrivateCloudComputeResponse.payload(.init()))
                         }
                         LocalCloudBoardGRPCAsyncClient.logger
                             .log("Sent (bypassed) response chunk from compute to client")
                     }
+                    if let bypassResponseAssembler {
+                        try bypassResponseAssembler.finish()
+                    }
                 }
             }
+            responseStreamContext.finishStream()
         }
 
         return .init(
@@ -1787,7 +1876,6 @@ public class LocalCloudBoardGRPCAsyncClient {
             decryptionKey: .helper(keyID: cloudOSNodePublicKeyID, key: encapsulatedKey),
             requestID: requestID,
             metaData: metaData,
-            // not clear if ROPES will set this on NACKS or not
             requestBypassed: true,
             responseBypass: Com_Apple_Cloudboard_Api_V1_ResponseBypassMode.none,
             requestNack: true
@@ -1899,7 +1987,8 @@ public class LocalCloudBoardGRPCAsyncClient {
                             "Received empty request execution log entry NACK from \(client.endPoint, privacy: .public)"
                         )
                         state = state.moveToNext()
-                    case .payloadChunk, .subClose, .subOpen:
+                    case .payloadChunk, .subClose, .subOpen, .componentTimeMeasurement, .costToken, .reputationToken,
+                         .compressedExecutionLogEntry:
                         // Unsupported in V1 of LocalCloudBoardClient
                         ()
                     }
@@ -2151,9 +2240,8 @@ public class LocalCloudBoardGRPCAsyncClient {
         // - warmup
         // - parameters (DEK)
         // sent to it
-        // If there is a pending request bypass hook it up, this should send the TGT
-        // (assuming the original had one) otherwise the proxy needs to deal with forwarding it (or making a
-        // new one if that is the agreed semantics)
+        // If there is a pending request bypass hook it up; otherwise the proxy needs to deal with
+        // forwarding the open message (or making a new one if that is the agreed semantics)
         let allowPayloadMessagesFromProxy: Bool
         if potentialRequestByPass.hasPendingBypass {
             allowPayloadMessagesFromProxy = false
@@ -2349,6 +2437,13 @@ public class LocalCloudBoardGRPCAsyncClient {
                     )
                 }
             }
+            var outboundCallContext: OutboundCallContext?
+            if requestExecutionLogEntry.hasOutboundCallContext {
+                outboundCallContext = .init(
+                    serviceName: requestExecutionLogEntry.outboundCallContext.serviceName,
+                    metadata: requestExecutionLogEntry.outboundCallContext.metadata
+                )
+            }
             if let trustedProxyAttestationBundle, let endpoint {
                 let requestExecutionLogEntryData = RequestExecutionLogEntry(
                     isNack: isNack,
@@ -2363,12 +2458,24 @@ public class LocalCloudBoardGRPCAsyncClient {
                             assetIdentityHash: $0.hash,
                             version: $0.version
                         )
-                    }
+                    },
+                    outboundCallContext: outboundCallContext
                 )
                 message = PrivateCloudComputeResponse.requestExecutionLogEntry(requestExecutionLogEntryData)
             } else {
                 throw LocalCloudBoardGRPCClientError.incompleteInfoForCreatingRequestExecutionLogEntry
             }
+        case .componentTimeMeasurement(let measurement):
+            message = PrivateCloudComputeResponse.componentTimeMeasurement(.init(
+                component: measurement.componentName,
+                operation: measurement.operation,
+                identifier: measurement.hasIdentifier ? measurement.identifier : nil,
+                subIdentifier: measurement.hasSubIdentifier ? measurement.subIdentifier : nil,
+                _startTimeMs: measurement.startTime,
+                _endTimeMs: measurement.endTime
+            ))
+        case .costToken(let costToken):
+            message = PrivateCloudComputeResponse.costToken(costToken.jwt)
         default:
             message = PrivateCloudComputeResponse.unknown
         }
@@ -2601,7 +2708,8 @@ extension InvokeWorkloadRequest.Parameters {
     var invokeWorkloadRequestMetaData: InvokeWorkloadRequestMetaData {
         .init(
             workloadType: self.workload.type,
-            workloadParameters: self.workload.param.asMap()
+            workloadParameters: self.workload.param.asMap(),
+            patIssuer: self.patIssuer
         )
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,7 +19,7 @@
 //  Created by Marc Orr on 5/2/24.
 //
 
-import DarwinInitClient
+@_weakLinked import DarwinInitClient
 import Foundation
 import os
 

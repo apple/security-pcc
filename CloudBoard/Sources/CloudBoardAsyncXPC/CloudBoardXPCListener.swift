@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -33,6 +33,10 @@ package actor CloudBoardAsyncXPCListener {
     private var nonPostedMessageHandlers: [String: CloudBoardAsyncXPCConnection.XPCNonPostedMessageHandler]
     private weak var delegate: CloudBoardAsyncXPCListenerDelegate?
     private let onListening: ((CloudBoardAsyncXPCEndpoint) -> Void)?
+    /// Exposed for factory wiring tests in `SingleClientListenerWiringTests`.
+    /// `nonisolated` is safe because this is an immutable `let` set during init.
+    package nonisolated let singleClient: Bool
+    private var hasEverAcceptedConnection: Bool = false
 
     public var endpoint: CloudBoardAsyncXPCEndpoint? {
         self.listener.endpoint
@@ -44,26 +48,39 @@ package actor CloudBoardAsyncXPCListener {
 
     /// Initialize an anonymous local listener
     /// - Parameters:
-    /// - onListening: A callback for testing use cases where access to the underlying endpoint is required
+    ///   - singleClient: See ``init(localService:entitlement:singleClient:onListening:)`` for the full
+    ///     semantics; this convenience initializer always creates an anonymous listener.
+    ///   - onListening: A callback for testing use cases where access to the underlying endpoint is required
     public init(
+        singleClient: Bool,
         onListening: ((CloudBoardAsyncXPCEndpoint) -> Void)? = nil
     ) {
-        self.init(localService: nil, entitlement: nil, onListening: onListening)
+        self.init(localService: nil, entitlement: nil, singleClient: singleClient, onListening: onListening)
     }
 
     /// Initialize xpc listener with an optional mach service name and an
     /// entitlement to check.
     ///
     /// - Parameters:
-    /// - localService: mach xpc service name, when nil, an anonymous listener is created.
-    /// Anonymous listener can be created within a regular process (does not require launchd), thus is suitable for
-    /// unit-testing.
-    /// CloudBoardAsyncXPCEndpoint can be used to establish a connection to an anonymous listener.
-    /// - entitlement: entitlement to check an incoming connection for, when nil, all connections are allowed.
-    /// - onListening: A callback for testing use cases where access to the underlying endpoint is required
+    ///   - localService: mach xpc service name, when nil, an anonymous listener is created.
+    ///     Anonymous listener can be created within a regular process (does not require launchd), thus is suitable for
+    ///     unit-testing.
+    ///     CloudBoardAsyncXPCEndpoint can be used to establish a connection to an anonymous listener.
+    ///   - entitlement: entitlement to check an incoming connection for, when nil, all connections are allowed.
+    ///   - singleClient: When `true`, the listener accepts at most one client *for its entire lifetime*: a
+    ///     second concurrent connection is rejected, and a reconnection after the first disconnects is also
+    ///     rejected. Use this for per-instance launchd `MultipleInstances` services where the only legitimate
+    ///     client is the process that spawned the instance via `xpc_connection_set_oneshot_instance(uuid)` —
+    ///     for example `CloudBoardJobAPIXPCServer`, `CloudBoardSupportAppAPIXPCServer`,
+    ///     `PersistentHelperXPCServer` (cb_pserverhelper / cb_pclienthelper),
+    ///     `PersistentClientHelperRouterXPCServer`. Use `false` for shared-daemon listeners that legitimately
+    ///     serve concurrent peers (e.g. cb_jobauthd, cb_attestationd, cb_bridged, CloudBoardController,
+    ///     CloudBoardHealth, CloudBoardJobHelperAPI). There is no safe default — author must choose.
+    ///   - onListening: A callback for testing use cases where access to the underlying endpoint is required
     public init(
         localService name: String?,
         entitlement: String?,
+        singleClient: Bool,
         onListening: ((CloudBoardAsyncXPCEndpoint) -> Void)? = nil
     ) {
         let connection: XPCConnection = if let name {
@@ -80,7 +97,12 @@ package actor CloudBoardAsyncXPCListener {
             XPCLocalConnection(xpc_connection_create(nil, nil))
         }
 
-        self.init(connection: connection, entitlement: entitlement, onListening: onListening)
+        self.init(
+            connection: connection,
+            entitlement: entitlement,
+            singleClient: singleClient,
+            onListening: onListening
+        )
     }
 
     public func set(delegate: CloudBoardAsyncXPCListenerDelegate?) async {
@@ -90,6 +112,7 @@ package actor CloudBoardAsyncXPCListener {
     internal init(
         connection: XPCConnection,
         entitlement: String?,
+        singleClient: Bool,
         onListening: ((CloudBoardAsyncXPCEndpoint) -> Void)? = nil
     ) {
         self.logger = Logger(subsystem: "com.apple.CloudBoardAsyncXPC", category: "CloudBoardXPCListener")
@@ -101,6 +124,7 @@ package actor CloudBoardAsyncXPCListener {
         self.listenerQueue = DispatchQueue(label: "com.apple.CloudBoardAsyncXPC.CloudBoardXPCListener.queue")
         self.listener.setTargetQueue(self.listenerQueue)
         self.onListening = onListening
+        self.singleClient = singleClient
 
         if let entitlement {
             self.auth = XPCConnectionEntitlementAuthorization(
@@ -118,6 +142,18 @@ package actor CloudBoardAsyncXPCListener {
 
     private func handleNewConnection(connection: XPCLocalConnection) async {
         guard self.auth.isAuthorized(connection: connection) else {
+            connection.cancel()
+            return
+        }
+
+        if self.singleClient, self.hasEverAcceptedConnection {
+            // The fault-level log line is part of the security signal contract: SIEM rules
+            // and oncall dashboards key on this category + message text to flag rejected
+            // single-client reconnect attempts. Don't downgrade the level or rephrase the
+            // message without coordinating with the security team.
+            self.logger.fault(
+                "\(self.name, privacy: .public) refusing additional connection on single-client listener (already had a connection)"
+            )
             connection.cancel()
             return
         }
@@ -140,6 +176,7 @@ package actor CloudBoardAsyncXPCListener {
         }
 
         self.connections[authorizedConnection.id] = authorizedConnection
+        self.hasEverAcceptedConnection = true
         await authorizedConnection.activate(
             postedMessageHandlers: self.postedMessageHandlers,
             messageHandlers: self.nonPostedMessageHandlers
@@ -226,7 +263,11 @@ package actor CloudBoardAsyncXPCListener {
         return self
     }
 
-    /// Stop listening for xpc events and close all open connections
+    /// Stop listening for xpc events and close all open connections.
+    ///
+    /// The listener is terminal after `cancel()`: re-invoking `listen(...)` is unsupported. In particular,
+    /// the `hasEverAcceptedConnection` sticky flag used by single-client listeners is intentionally not
+    /// reset, so a re-listen would silently inherit the prior reject-everything state.
     public func cancel() async {
         self.listener.cancel()
         for (_, connection) in self.connections {
@@ -272,18 +313,30 @@ package actor CloudBoardAsyncXPCListener {
         }
     }
 
-    /// This sends the message to the first connection. This is primarily intended to be used in a client-server setting
-    /// where it is known to be a 1:1 relationship.
-    public func sendToAny<Message: CloudBoardAsyncXPCCodableMessage>(
-        _ message: Message,
-        requiringEntitlement: String? = nil
-    ) async throws -> Message.Success {
+    /// Selects the first open connection, enforcing the caller's entitlement
+    /// requirement. Throws ``CloudBoardAsyncXPCError/noConnection`` if no peers
+    /// are connected, or ``CloudBoardAsyncXPCError/missingEntitlement`` if the
+    /// selected peer lacks the requested entitlement. Centralising this logic
+    /// keeps the four `sendToAny` overloads below consistent.
+    private func firstAuthorizedConnection(
+        requiringEntitlement: String?
+    ) async throws -> CloudBoardAsyncXPCConnection {
         guard let connection = self.connections.values.first else {
             throw CloudBoardAsyncXPCError.noConnection
         }
         if let requiringEntitlement, await !connection.hasEntitlement(requiringEntitlement) {
             throw CloudBoardAsyncXPCError.missingEntitlement
         }
+        return connection
+    }
+
+    /// This sends the message to the first connection. This is primarily intended to be used in a client-server setting
+    /// where it is known to be a 1:1 relationship.
+    public func sendToAny<Message: CloudBoardAsyncXPCCodableMessage>(
+        _ message: Message,
+        requiringEntitlement: String? = nil
+    ) async throws -> Message.Success {
+        let connection = try await self.firstAuthorizedConnection(requiringEntitlement: requiringEntitlement)
         return try await connection.send(message)
     }
 
@@ -293,13 +346,35 @@ package actor CloudBoardAsyncXPCListener {
         _ message: Message,
         requiringEntitlement: String? = nil
     ) async throws -> Message.Success {
-        guard let connection = self.connections.values.first else {
-            throw CloudBoardAsyncXPCError.noConnection
-        }
-        if let requiringEntitlement, await !connection.hasEntitlement(requiringEntitlement) {
-            throw CloudBoardAsyncXPCError.missingEntitlement
-        }
+        let connection = try await self.firstAuthorizedConnection(requiringEntitlement: requiringEntitlement)
         return try await connection.send(message)
+    }
+
+    /// Fire-and-forget post to the first connection. 1:1 relationship assumed.
+    ///
+    /// Exists so that callers with a `Never`-reply message can get a throwing,
+    /// single-peer alternative to `broadcast` (which silently swallows send
+    /// errors). `sendToAny` with a non-Never
+    /// `Message.Success` uses `connection.send` which waits for a reply; for
+    /// Never-reply messages that hangs.
+    public func sendToAny<Message: CloudBoardAsyncXPCByteBufferMessage>(
+        _ message: Message,
+        requiringEntitlement: String? = nil
+    ) async throws
+    where Message.Success == Never, Message.Failure == Never {
+        let connection = try await self.firstAuthorizedConnection(requiringEntitlement: requiringEntitlement)
+        try await connection.post(message)
+    }
+
+    /// Fire-and-forget post to the first connection for codable messages with
+    /// Never reply. Same rationale as the byte-buffer overload above.
+    public func sendToAny<Message: CloudBoardAsyncXPCCodableMessage>(
+        _ message: Message,
+        requiringEntitlement: String? = nil
+    ) async throws
+    where Message.Success == Never, Message.Failure == Never {
+        let connection = try await self.firstAuthorizedConnection(requiringEntitlement: requiringEntitlement)
+        try await connection.post(message)
     }
 
     /// Send a message with no reply to all open connections

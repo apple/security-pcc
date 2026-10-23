@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -74,6 +74,16 @@ struct ProxyApp: NullAppRole {
                 responseBypass: self.semantics.responseBypass ?? true,
                 spanID: spanID
             ) { requestSession in
+                self.log.log("""
+                request.uuid=\(requestID, privacy: .public)
+                workerSession.uuid=\(requestSession.sessionID, privacy: .public)
+                worker.buildVersion=\(requestSession.workerInfo.buildVersion, privacy: .public)
+                worker.releaseType=\(requestSession.workerInfo.releaseType, privacy: .public)
+                worker.releaseDigest=\(requestSession.workerInfo.releaseDigest, privacy: .public)
+                worker.ensemble=\(requestSession.workerInfo.ensemble, privacy: .public)
+                worker.rack=\(requestSession.workerInfo.rack, privacy: .public)
+                message=Established worker session
+                """)
                 try await withThrowingTaskGroup(of: Void.self) { group in
                     // Forward requests
                     group.addTask { @Sendable in

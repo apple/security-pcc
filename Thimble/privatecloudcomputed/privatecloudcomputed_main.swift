@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,20 +19,20 @@
 //  Copyright © 2025 Apple Inc. All rights reserved.
 //
 
+import Foundation_Private.NSError
 import PrivateCloudComputeDaemon
 
 @main
 struct Main: TC2Sandbox {
     static func main() async {
+        // Disable filename localization in errors to avoid a deadlock with LaunchServices when logging
+        // file-related errors before first unlock. rdar://179951585
+        NSError._setFileNameLocalizationEnabled(false)
+
         enterSandbox(identifier: "com.apple.privatecloudcomputed", macOSProfile: "com.apple.privatecloudcomputed")
-        #if os(macOS)
         await withSandboxDataContainer { url in
             let instance = TC2Daemon(dataContainerUrl: url)
             await instance.main()
         }
-        #else
-        let instance = TC2Daemon()
-        await instance.main()
-        #endif
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -46,7 +46,7 @@ protocol RouterDelegate {
 /// Router initialization configuration.
 struct RouterConfiguration {
 	/// The backend to use when communicating with the mesh.
-	let backend: Backend
+	let backend: any CIOBackendProtocol
 
 	/// Current node configuration
 	let node: NodeConfiguration
@@ -58,7 +58,7 @@ struct RouterConfiguration {
 	let delegate: RouterDelegate
 
 	init(
-		backend: Backend,
+		backend: any CIOBackendProtocol,
 		node: NodeConfiguration,
 		ensemble: EnsembleConfiguration,
 		delegate: RouterDelegate

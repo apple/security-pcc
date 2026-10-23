@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,6 +25,8 @@ import XPC
 import XPCPrivate
 import os
 
+private let logger = Logger(for: .xpcWrapper)
+
 package struct XPCSubrequest: Sendable, Equatable, Codable, TC2JSON {
     /// Represents encoded `XPCSubrequest`.  Use `XPCSubrequest(json:)` to convert.
     package typealias Data = Foundation.Data
@@ -50,11 +52,14 @@ package struct XPCSubrequest: Sendable, Equatable, Codable, TC2JSON {
 package protocol XPCWrapperProtocol: Sendable {
     associatedtype RequestProxy: TC2XPCTrustedRequestProtocol
 
+    func prepare(proxy: RequestProxy, connectionID: Int) async throws -> RequestSetupConfiguration
     func cancel(connectionID: Int, proxy: RequestProxy) async
     func close(connectionID: Int, proxy: RequestProxy) async
     func send(connectionID: Int, proxy: RequestProxy, message: XPCRequestMessage) async throws
     func next(connectionID: Int, proxy: RequestProxy) async throws -> XPCResponseMessage?
     func nextProgress(connectionID: Int, proxy: RequestProxy) async throws -> PrivateCloudComputeConnection.Progress?
+
+    func waitForRequestCompletion(connectionID: Int, proxy: RequestProxy) async throws
 
     func createSubrequest(
         connectionID: Int,
@@ -62,45 +67,21 @@ package protocol XPCWrapperProtocol: Sendable {
         subrequest: XPCSubrequest
     ) async throws
 
-    func trustedRequest(
-        withParameters parameters: Data,
-        requestID: UUID,
-        multiTurn: Bool,
-        bundleIdentifier: String?,
-        originatingBundleIdentifier: String?,
-        featureIdentifier: String?,
-        sessionIdentifier: UUID?
-    ) async throws -> any XPCRequestProxyProtocol
-
-    func connection(
-        withParameters parameters: Data,
-        connectionIdentifier: UUID,
-        bundleIdentifier: String?,
-        originatingBundleIdentifier: String?,
-        featureIdentifier: String?,
-        sessionIdentifier: UUID?
-    ) async throws -> any XPCRequestProxyProtocol
+    func request(parametersData: RequestParameters.Data) async throws -> any XPCRequestProxyProtocol
 
     func close()
     func currentEnvironment() async throws -> String
     func prefetchRequest(
         _ request: Prefetch
     ) async throws -> [Prefetch.Response]
-    func prewarmRequest(
-        workloadType: String,
-        workloadParameters: [String: String],
-        bundleIdentifier: String?,
-        featureIdentifier: String,
-        runOnEventStream: Bool
-    ) async throws
+    func prewarmRequest(parametersData: PrewarmParameters.Data) async throws
     func prefetchParametersCache() async throws -> [String]
     func prefetchParametersCacheSavedState() async throws -> [String]
     func prefetchCacheReset() async throws -> Bool
     func prefetchCache() async throws -> [String]
     func knownRateLimits(
         bundleIdentifier: String?,
-        featureIdentifier: String?,
-        skipFetch: Bool
+        featureIdentifier: String?
     ) async throws -> Data?
     func listRateLimits(
         bundleIdentifier: String?,
@@ -108,6 +89,7 @@ package protocol XPCWrapperProtocol: Sendable {
         fetch: Bool
     ) async throws -> Data?
     func addRateLimit(
+        source: RateLimitSource.RawValue,
         bundleIdentifier: String?,
         featureIdentifier: String?,
         workloadType: String?,
@@ -208,37 +190,42 @@ package final actor XPCWrapper: XPCWrapperProtocol {
     nonisolated package func close() {
         self.queue.async {
             self.assumeIsolated { wrapper in
-                precondition(wrapper.runningRequests.isEmpty)
+                wrapper.finishProgressReading()
+                wrapper.failRunningRequests(error: PrivateCloudComputeError(message: "XPCWrapper closing"))
                 wrapper.connection.invalidate()
                 wrapper.connection.interruptionHandler = nil
             }
         }
     }
 
+    private func finishProgressReading() {
+        for (xpcRequestID, continuation) in self.runningRequests {
+            switch continuation {
+            case .optionalProgress(let progressContinuation):
+                logger.debug("finishing progress continuation, xpcRequestID=\(xpcRequestID)")
+                self.runningRequests[xpcRequestID] = nil
+                progressContinuation.resume(returning: nil)
+            default:
+                break
+            }
+        }
+    }
+
+    private func failRunningRequests(error: PrivateCloudComputeError) {
+        for (xpcRequestID, continuation) in self.runningRequests {
+            logger.debug("will fail running continuation, error=\(error), xpcRequestID=\(xpcRequestID), continuation=\(String(describing: continuation))")
+            continuation.resume(throwing: error)
+        }
+        self.runningRequests.removeAll()
+    }
+
     // MARK: - XPC Methods
 
-    package func trustedRequest(
-        withParameters parameters: Data,
-        requestID: UUID,
-        multiTurn: Bool,
-        bundleIdentifier: String?,
-        originatingBundleIdentifier: String?,
-        featureIdentifier: String?,
-        sessionIdentifier: UUID?
-    ) async throws -> any XPCRequestProxyProtocol {
+    package func request(parametersData: RequestParameters.Data) async throws -> any XPCRequestProxyProtocol {
         let xpcRequestID = self.nextRequestID()
         let (proxy, connectionID) = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(any TC2XPCTrustedRequestProtocol, Int), any Error>) in
             self.storeContinuation(continuation, id: xpcRequestID)
-
-            self.xpc.trustedRequest(
-                withParameters: parameters,
-                requestID: requestID,
-                multiTurn: multiTurn,
-                bundleIdentifier: bundleIdentifier,
-                originatingBundleIdentifier: originatingBundleIdentifier,
-                featureIdentifier: featureIdentifier,
-                sessionIdentifier: sessionIdentifier
-            ) { proxy, errorData in
+            self.xpc.request(parametersData: parametersData) { proxy, errorData in
                 self.assumeIsolated { wrapper in
                     if let errorData {
                         if let error = PrivateCloudComputeError(json: errorData) {
@@ -259,26 +246,6 @@ package final actor XPCWrapper: XPCWrapperProtocol {
             }
         }
         return XPCRequestProxy(connectionID: connectionID, proxy: proxy, wrapper: self)
-    }
-
-    /// Uses `connectionIdentifier` as client's `requestID` when creating `XPCRequestProxy`.
-    package func connection(
-        withParameters parameters: Data,
-        connectionIdentifier: UUID,
-        bundleIdentifier: String?,
-        originatingBundleIdentifier: String?,
-        featureIdentifier: String?,
-        sessionIdentifier: UUID?
-    ) async throws -> any XPCRequestProxyProtocol {
-        try await trustedRequest(
-            withParameters: parameters,
-            requestID: connectionIdentifier,
-            multiTurn: true,
-            bundleIdentifier: bundleIdentifier,
-            originatingBundleIdentifier: originatingBundleIdentifier,
-            featureIdentifier: featureIdentifier,
-            sessionIdentifier: sessionIdentifier
-        )
     }
 
     package func currentEnvironment() async throws -> String {
@@ -327,24 +294,12 @@ package final actor XPCWrapper: XPCWrapperProtocol {
         return try self.jsonDecoder.decode([Prefetch.Response].self, from: data)
     }
 
-    package func prewarmRequest(
-        workloadType: String,
-        workloadParameters: [String: String],
-        bundleIdentifier: String?,
-        featureIdentifier: String,
-        runOnEventStream: Bool
-    ) async throws {
+    package func prewarmRequest(parametersData: PrewarmParameters.Data) async throws {
         let requestID = self.nextRequestID()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             self.storeContinuation(continuation, id: requestID)
 
-            self.xpc.prewarmRequest(
-                workloadType: workloadType,
-                workloadParameters: workloadParameters,
-                bundleIdentifier: bundleIdentifier,
-                featureIdentifier: featureIdentifier,
-                runOnEventStream: runOnEventStream
-            ) {
+            self.xpc.prewarmRequest(parametersData: parametersData) {
                 self.assumeIsolated { wrapper in
                     wrapper.finishContinuation(id: requestID)
                 }
@@ -406,8 +361,7 @@ package final actor XPCWrapper: XPCWrapperProtocol {
 
     package func knownRateLimits(
         bundleIdentifier: String?,
-        featureIdentifier: String?,
-        skipFetch: Bool
+        featureIdentifier: String?
     ) async throws -> Data? {
         let requestID = self.nextRequestID()
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data?, any Error>) in
@@ -415,8 +369,7 @@ package final actor XPCWrapper: XPCWrapperProtocol {
 
             self.xpc.knownRateLimits(
                 bundleIdentifier: bundleIdentifier,
-                featureIdentifier: featureIdentifier,
-                skipFetch: skipFetch
+                featureIdentifier: featureIdentifier
             ) { data in
                 self.assumeIsolated { wrapper in
                     wrapper.finishContinuation(id: requestID, with: data)
@@ -447,6 +400,7 @@ package final actor XPCWrapper: XPCWrapperProtocol {
     }
 
     package func addRateLimit(
+        source: RateLimitSource.RawValue,
         bundleIdentifier: String?,
         featureIdentifier: String?,
         workloadType: String?,
@@ -460,6 +414,7 @@ package final actor XPCWrapper: XPCWrapperProtocol {
             self.storeContinuation(continuation, id: requestID)
 
             self.xpc.addRateLimit(
+                source: source,
                 bundleIdentifier: bundleIdentifier,
                 featureIdentifier: featureIdentifier,
                 workloadType: workloadType,
@@ -480,9 +435,14 @@ package final actor XPCWrapper: XPCWrapperProtocol {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             self.storeContinuation(continuation, id: requestID)
 
-            self.xpc.resetRateLimits {
+            self.xpc.resetRateLimits { errorData in
                 self.assumeIsolated { wrapper in
-                    wrapper.finishContinuation(id: requestID)
+                    if let errorData {
+                        let error = PrivateCloudComputeError(json: errorData) ?? PrivateCloudComputeError(message: "failed to decode resetRateLimits error")
+                        wrapper.failContinuation(id: requestID, error: error)
+                    } else {
+                        wrapper.finishContinuation(id: requestID)
+                    }
                 }
             }
         }
@@ -529,6 +489,30 @@ package final actor XPCWrapper: XPCWrapperProtocol {
 
     // MARK: Trusted request proxy methods
 
+    package func prepare(proxy: any TC2XPCTrustedRequestProtocol, connectionID: Int) async throws -> RequestSetupConfiguration {
+        guard self.connectionID == connectionID else {
+            throw PrivateCloudComputeError(code: .xpcConnectionInterrupted)
+        }
+        let xpcRequestID = self.nextRequestID()
+        let data = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data?, any Error>) in
+            self.storeContinuation(continuation, id: xpcRequestID)
+
+            proxy.prepare { (responseData) in
+                self.assumeIsolated { wrapper in
+                    wrapper.finishContinuation(id: xpcRequestID, with: responseData)
+                }
+            }
+        }
+
+        guard let data else {
+            throw PrivateCloudComputeError(message: "prepare returned no data")
+        }
+        guard let config = RequestSetupConfiguration(json: data) else {
+            throw PrivateCloudComputeError(message: "failed to decode RequestSetupConfiguration from prepare response")
+        }
+        return config
+    }
+
     package func cancel(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol) async {
         guard self.connectionID == connectionID else { return }
         proxy.cancel {}
@@ -537,6 +521,24 @@ package final actor XPCWrapper: XPCWrapperProtocol {
     package func close(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol) async {
         guard self.connectionID == connectionID else { return }
         proxy.close {}
+    }
+
+    package func waitForRequestCompletion(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol) async throws {
+        guard self.connectionID == connectionID else {
+            // check that the xpc connection for which we received the proxy object is still alive
+            throw PrivateCloudComputeError(code: .xpcConnectionInterrupted)
+        }
+
+        let xpcRequestID = self.nextRequestID()
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            self.storeContinuation(continuation, id: xpcRequestID)
+
+            proxy.waitForRequestCompletion {
+                self.assumeIsolated { wrapper in
+                    wrapper.finishContinuation(id: xpcRequestID)
+                }
+            }
+        }
     }
 
     package func send(connectionID: Int, proxy: any TC2XPCTrustedRequestProtocol, message: XPCRequestMessage) async throws {
@@ -653,7 +655,7 @@ package final actor XPCWrapper: XPCWrapperProtocol {
                         }
                     } else {
                         // receiving completed
-                        wrapper.finishContinuation(id: xpcRequestID, with: nil as XPCResponseMessage?)
+                        wrapper.finishContinuation(id: xpcRequestID, with: nil as PrivateCloudComputeConnection.Progress?)
                     }
                 }
             }
@@ -674,6 +676,7 @@ package final actor XPCWrapper: XPCWrapperProtocol {
     }
 
     private func failAllRunningRequestsAndRestartConnection() {
+        logger.debug("failAllRunningRequestsAndRestartConnection")
 
         // fail all running requests
         for (_, continuation) in self.runningRequests {

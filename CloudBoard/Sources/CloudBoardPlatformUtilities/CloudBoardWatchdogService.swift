@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -15,8 +15,12 @@
 import CloudBoardLogging
 import os
 
-#if canImport(cloudOSWatchdogClient)
+#if RC_IS_CLOUDOS_ENABLED && os(iOS)
+import cloudOSWatchdogClient
+#elseif canImport(cloudOSWatchdogClient)
 @_weakLinked import cloudOSWatchdogClient
+#else
+#warning("cloudOSWatchdogClient not available at compile time")
 #endif
 
 public actor CloudBoardWatchdogService {
@@ -32,6 +36,7 @@ public actor CloudBoardWatchdogService {
         #if canImport(cloudOSWatchdogClient)
         if #_hasSymbol(WatchdogService.self) {
             let endpoint = "com.apple.cloudos.\(self.processName).watchdog"
+            self.logger.log("Activating watchdog service endpoint \(endpoint, privacy: .public)")
             do {
                 try await WatchdogService.shared.activate(machServiceName: endpoint)
             } catch {

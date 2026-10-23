@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -40,6 +40,7 @@ extension TransparencyLog {
         func fetch<NodeType>(
             startIndex: UInt64,
             endIndex: UInt64,
+            dataType: TxPB_ATLogDataType? = nil,
             requestUUID: UUID = UUID(),
             nodeDecoder: (TxPB_LogLeavesResponse.Leaf) -> NodeType?
         ) async throws -> [NodeType] {
@@ -52,6 +53,9 @@ extension TransparencyLog {
                 builder.startIndex = startIndex
                 builder.endIndex = endIndex // note: this is an open index (endIndex is not included)
                 builder.requestUuid = requestUUID.uuidString
+                if let dataType {
+                    builder.dataType = dataType
+                }
             }
 
             if TransparencyLog.traceLog {

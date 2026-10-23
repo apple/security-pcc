@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -50,6 +50,8 @@ extension VRE {
             var ncpu: UInt?
             /// Designate memory (GiB) for guest
             var nramGB: UInt?
+            /// Primary VM disk size in GiB; nil uses the vrevm default (64).
+            var diskSizeGB: UInt?
             var bootArgs: VRE.NVRAMArgs?
             var nvramArgs: VRE.NVRAMArgs?
             var romImagePath: String?
@@ -57,6 +59,7 @@ extension VRE {
             var kernelCachePath: String?
             var sptmPath: String?
             var txmPath: String?
+            var prkitPath: String?
         }
 
         struct Status: Codable {
@@ -94,7 +97,7 @@ extension VRE {
             vrevmPath: String? = nil
         ) {
             self.name = name
-            if let vrevmPath, FileManager.default.isExecutableFile(atPath: vrevmPath) {
+            if let vrevmPath, Globals.computer.fileSystem.isExecutableFile(atPath: vrevmPath) {
                 VRE.VM.vrevmCmd = vrevmPath
             }
         }
@@ -252,10 +255,6 @@ extension VRE {
                 cmdline.append("--network=\(netargs.joined(separator: ","))")
             }
 
-            if let ncpu = config.ncpu {
-                cmdline.append("--ncpu=\(ncpu)")
-            }
-
             if let nramGB = config.nramGB {
                 cmdline.append("--nram=\(nramGB)")
             }
@@ -286,6 +285,14 @@ extension VRE {
 
             if let txmPath = config.txmPath {
                 cmdline.append("--txm=\(txmPath)")
+            }
+
+            if let prkitPath = config.prkitPath {
+                cmdline.append("--prkit=\(prkitPath)")
+            }
+
+            if let diskSizeGB = config.diskSizeGB {
+                cmdline.append("--storage=\(diskSizeGB)")
             }
 
             return cmdline
@@ -323,7 +330,9 @@ extension VRE {
             let execQueue = DispatchQueue(label: applicationName + ".exec", qos: .userInitiated)
             // let vrevm know it was launched by us for monitoring in case we exit abnormally (and exit itself)
             let envvars = [envExitOnPID: String(getpid())]
-            let (exitCode, stdOutput, stdError) = try ExecCommand(commandLine, envvars: envvars).run(
+            let (exitCode, stdOutput, stdError) = try Globals.computer.processRunner.run(
+                command: commandLine,
+                environment: envvars,
                 outputMode: outMode,
                 queue: execQueue
             )

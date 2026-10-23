@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,6 +25,10 @@ import MobileGestaltPrivate
 import OSAnalytics
 import PrivateCloudCompute
 
+/// The device's identity and other characteristics that are immutable for a
+/// given boot, such as its model and OS version.
+///
+/// See also `DeviceState` for live state that changes while the device runs.
 package protocol SystemInfoProtocol: Sendable {
     var bundleName: String? { get }
     var bundleVersion: String? { get }
@@ -79,7 +83,11 @@ package struct SystemInfo: SystemInfoProtocol {
     /// include hwModel here for Metrics reporting
     package let osInfoWithDeviceModel: String
 
-    init(bundle: Bundle = .main, mobileGestalt: MobileGestalt = .current) {
+    init<FeatureFlagChecker: FeatureFlagCheckerProtocol>(
+        featureFlagChecker: FeatureFlagChecker,
+        bundle: Bundle = .main,
+        mobileGestalt: MobileGestalt = .current
+    ) {
         self.bundleName = bundle.bundleIdentifier
         self.bundleVersion = bundle.infoDictionary?["CFBundleVersion"] as? String
 
@@ -104,11 +112,50 @@ package struct SystemInfo: SystemInfoProtocol {
         let bundleName = self.bundleName ?? "unknown"
         let bundleVersion = self.bundleVersion ?? "unknown"
 
+        #if RC_SEED_BUILD
+        let identifyAsSeedBuild = featureFlagChecker.isEnabled(.identifySeedBuildsInClientInfo)
+        #else
+        let identifyAsSeedBuild = false
+        #endif
+
         // Only include device family name (e.g. iPad), not the whole productType (e.g. MacBookPro18,2)
-        osInfo = "<\(self.marketingDeviceFamilyName)> <\(self.productName);\(self.productVersion);\(self.buildVersion)> <\(bundleName)/\(bundleVersion)>"
+        osInfo = Self.makeOSInfo(
+            hardwareIdentifier: self.marketingDeviceFamilyName,
+            productName: self.productName,
+            productVersion: self.productVersion,
+            buildVersion: self.buildVersion,
+            isSeed: identifyAsSeedBuild,
+            bundleName: bundleName,
+            bundleVersion: bundleVersion
+        )
 
         // Include the whole productType (e.g. MacBookPro18,2)
-        osInfoWithDeviceModel = "<\(self.productType)> <\(self.productName);\(self.productVersion);\(self.buildVersion)> <\(bundleName)/\(bundleVersion)>"
+        osInfoWithDeviceModel = Self.makeOSInfo(
+            hardwareIdentifier: self.productType,
+            productName: self.productName,
+            productVersion: self.productVersion,
+            buildVersion: self.buildVersion,
+            isSeed: identifyAsSeedBuild,
+            bundleName: bundleName,
+            bundleVersion: bundleVersion
+        )
+    }
+
+    /// Builds the `osInfo` string, e.g. `<iPad> <iPhone OS;18.0;22A282> <com.apple.foo/1.2.3>`.
+    static func makeOSInfo(
+        hardwareIdentifier: String,
+        productName: String,
+        productVersion: String,
+        buildVersion: String,
+        isSeed: Bool,
+        bundleName: String,
+        bundleVersion: String
+    ) -> String {
+        if isSeed {
+            "<\(hardwareIdentifier)> <\(productName);\(productVersion);\(buildVersion);seed> <\(bundleName)/\(bundleVersion)>"
+        } else {
+            "<\(hardwareIdentifier)> <\(productName);\(productVersion);\(buildVersion)> <\(bundleName)/\(bundleVersion)>"
+        }
     }
 
     // MARK: - System Calls

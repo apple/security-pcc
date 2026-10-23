@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,11 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import InternalSwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -35,7 +39,7 @@ fileprivate struct _GeneratedWithProtocGenSwiftVersion: InternalSwiftProtobuf.Pr
   typealias Version = _2
 }
 
-struct AttestationAppData: @unchecked Sendable {
+struct AttestationAppData: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -55,11 +59,7 @@ struct AttestationAppData: @unchecked Sendable {
 
 extension AttestationAppData: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = "AttestationAppData"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "rackId"),
-    2: .same(proto: "ensembleId"),
-    3: .same(proto: "bootId"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}rackId\0\u{1}ensembleId\0\u{1}bootId\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {

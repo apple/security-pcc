@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -14,35 +14,40 @@
 
 
 import Foundation
-import Synchronization
 
 public final class SandboxViolation: OSLogStreamer.PredicatePlugin {
     public static let allEvents: [any EHUEFEvent.Type] = [ Event.self ]
-    static let predicate = "((processID == 0) AND (subsystem == \"com.apple.sandbox.reporting\" AND category==\"violation\"))"
+    static let predicate = """
+        process == "sandboxd" AND subsystem == "com.apple.sandbox.reporting" AND category == "violation"
+        """
     public func getPredicate() -> String {
         return Self.predicate
     }
 
-    let parser = Mutex<Parser>(Parser())
+    let parser = Parser()
     public func parse(_ fromOSLogEvent: OSLogStreamer.OSLogEvent) -> (any EHUEFEvent)? {
-        parser.withLock {
-            $0.parse(fromOSLogEvent)
-        }
+        parser.parse(fromOSLogEvent)
     }
 
     public func logMessageMatch(_ event: OSLogStreamer.OSLogEvent) -> Bool {
-        return (event.processID == 0) && (event.subsystem == "com.apple.sandbox.reporting" && event.category == "violation")
+        event.process == "sandboxd"
+            && event.subsystem == "com.apple.sandbox.reporting"
+            && event.category == "violation"
     }
     public init() {}
-    struct Parser: OSLogStreamer.EventParser {
-        let rrule = /((?<duplicates>\d+) duplicate report(s)? for )?(System Policy|Sandbox): (?<process>.+?)\((?<processID>\d+)\)\s+(?<action>.+?)\s+(?<rule>.+?)(\s+(?<path>.+?))?$/
+    struct Parser: OSLogStreamer.EventParser, @unchecked Sendable {
+        let rrule = /((?<duplicates>\d+) duplicate report(s)? for )?(System Policy|Sandbox): (?<process>.+?)\((?<processID>\d+)\)\s+(?<action>.+?)\s+(?<rule>.+?)(\s+(?<path>.+?))?(?:\n|$)/
         func parse(_ fromOSLogEvent: OSLogStreamer.OSLogEvent) -> (any EHUEFEvent)? {
-            var e = Event()
-            if let result = try? rrule.wholeMatch(in: fromOSLogEvent.composedMessage) {
+            if let result = try? rrule.firstMatch(in: fromOSLogEvent.composedMessage) {
+                let action = String(result.action)
+                if !action.hasPrefix("deny") {
+                    return nil
+                }
+                var e = Event()
                 e.timestamp = fromOSLogEvent.timestamp.timeIntervalSince1970
                 e.process = String(result.process)
                 e.processID = pid_t(Int(String(result.processID)) ?? 0)
-                e.action = String(result.action)
+                e.action = action
                 e.rule = String(result.rule)
                 e.path = String(result.path ?? "none")
                 e.duplicates = Int(String(result.duplicates ?? "0")) ?? 0
@@ -54,8 +59,7 @@ public final class SandboxViolation: OSLogStreamer.PredicatePlugin {
 
     public struct Event: EHUEFEvent {
         internal init(fields: [String: EHValueType] = [:], tags: Set<String> = Set<String>(), event_category: EHUEFCategory = .system, event_type: String = "SandboxViolation", process: String = "", processID: pid_t = 0, action: String = "", rule: String = "", path: String = "", timestamp: TimeInterval = 0, duplicates: Int = 0) {
-            self.fields = fields
-            self.tags = tags
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
             self.event_category = event_category
             self.event_type = event_type
             self.process = process
@@ -67,8 +71,7 @@ public final class SandboxViolation: OSLogStreamer.PredicatePlugin {
             self.duplicates = duplicates
         }
 
-        public var fields: [String: EHValueType] = [:]
-        public var tags = Set<String>()
+        public var metadata = EHEventMetadata()
 
         public var event_category: EHUEFCategory = .system
         public var event_type: String = "SandboxViolation"
@@ -82,5 +85,72 @@ public final class SandboxViolation: OSLogStreamer.PredicatePlugin {
         public var duplicates = 0
         public init() {}
 
+    }
+}
+
+
+extension SandboxViolation.Event: EHEventSimilarityValue {
+    public var similarityHash: Int {
+        var hasher = Hasher()
+        hasher.combine(process)
+        hasher.combine(action)
+        hasher.combine(rule)
+        hasher.combine(path)
+        return hasher.finalize()
+    }
+}
+
+
+extension SandboxViolation.Event: EHFieldExtractable {
+    public func fieldValue(for field: String) -> Any? {
+        switch field {
+        case "tags": return tags
+        case "fields": return fields
+        case "event_category": return event_category
+        case "event_type": return event_type
+        case "process": return process
+        case "processID": return processID
+        case "action": return action
+        case "rule": return rule
+        case "path": return path
+        case "timestamp": return timestamp
+        case "duplicates": return duplicates
+        default: return nil
+        }
+    }
+}
+
+
+import AST
+
+private enum RK {
+    static let event_type: AST.RegoValue = .string("event_type")
+    static let event_category: AST.RegoValue = .string("event_category")
+    static let tags: AST.RegoValue = .string("tags")
+    static let fields: AST.RegoValue = .string("fields")
+    static let process: AST.RegoValue = .string("process")
+    static let processID: AST.RegoValue = .string("processID")
+    static let action: AST.RegoValue = .string("action")
+    static let rule: AST.RegoValue = .string("rule")
+    static let path: AST.RegoValue = .string("path")
+    static let timestamp: AST.RegoValue = .string("timestamp")
+    static let duplicates: AST.RegoValue = .string("duplicates")
+}
+
+extension SandboxViolation.Event: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = [:]
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.process] = .string(process)
+        obj[RK.processID] = .number(RegoNumber(int: Int64(processID)))
+        obj[RK.action] = .string(action)
+        obj[RK.rule] = .string(rule)
+        obj[RK.path] = .string(path)
+        obj[RK.timestamp] = .number(RegoNumber(decimal: Decimal(timestamp)))
+        obj[RK.duplicates] = .number(RegoNumber(int: Int64(duplicates)))
+        return .object(obj)
     }
 }

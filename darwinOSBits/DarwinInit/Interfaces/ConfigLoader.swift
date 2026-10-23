@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,62 +18,15 @@
 //
 //
 
+import DarwinInitConfig
 import Foundation
 import System
-import RemoteServiceDiscovery
-
-internal import DarwinInitBridging
-
-/// Information about the origin of a configuration
-struct ConfigOrigin: Equatable, Hashable, Codable {
-    var loadingPath: [ConfigLoader.LoadingKey]
-    var source: JSON
-}
-
-extension ConfigOrigin {
-    /// Original source was a version 1 config
-    var isV1: Bool {
-        return loadingPath.version != .v2
-    }
-
-    /// Was not loaded from an array
-    var isSimple: Bool {
-        return loadingPath.first { $0.isIndex } == nil
-    }
-}
-
-/// Marks a property as injected by the loader
-///
-/// Inject properties are excluded from comparisons, i.e.
-/// they are always equal, indepedent of their values.
-@propertyWrapper
-struct LoaderInjected<Value: Hashable & Equatable & Codable>: Equatable, Hashable {
-    var wrappedValue: Value?
-
-    static func == (lhs: LoaderInjected<Value>, rhs: LoaderInjected<Value>) -> Bool {
-        return true
-    }
-}
 
 // MARK: - Config Loader
 struct ConfigLoader {
 
-    enum LoadingKey: Equatable, Hashable, Codable {
-        case nvram(DInitNVRAMConfigSource)
-        case source(DInitConfigSource)
-        case index(Int)
-        case version(VersionInfo)
-
-        var isIndex: Bool {
-            switch self {
-            case .index(_): true
-            default: false
-            }
-        }
-    }
-
     enum DecodedData {
-        case source(DInitConfigSource, [LoadingKey])
+        case source(DInitConfigSource, [ConfigLoadingKey])
         case config(Config)
     }
 
@@ -99,6 +52,8 @@ struct ConfigLoader {
 
     /// Loads a config from the provided source, if provided, or the system.
     func load(from source: DInitConfigSource?) async throws -> [Config] {
+
+
         do {
             if let source {
                 return try await load(from: source)
@@ -113,7 +68,7 @@ struct ConfigLoader {
 
     /// Recursively load configurations from `source`.
     private func load(from source: DInitConfigSource,
-                      at loadingPath: [LoadingKey] = []) async throws -> [Config] {
+                      at loadingPath: [ConfigLoadingKey] = []) async throws -> [Config] {
         logger.debug("Loading configuration from \(source)")
 
         let data = switch source {
@@ -227,61 +182,34 @@ struct ConfigLoader {
 
         return configs
     }
-    
-    // MARK: Remote Service Discovery
-    /// Load configuration data from a remote service.
-    private func loadRemoteService(from deviceTypeDesc: String, serviceName: String) throws -> Data {
-        let queue = DispatchQueue(label: "remote_device_browse")
-        let semaphore = DispatchSemaphore(value: 0)
-        var configData: Data = Data()
-        var _device: remote_device_t? = nil
 
-        let deviceType = remote_device_type_parse(deviceTypeDesc)
-        guard deviceType != REMOTE_DEVICE_TYPE_INVALID_OR_UNKNOWN else {
-            throw RemoteDeviceTypeError.invalidDeviceTypeDesc(deviceTypeDesc)
-        }
-
-        var flag = atomic_flag()
-
-        let browser = remote_device_start_browsing(deviceType, queue) { device, canceling in
-            if canceling {
-                return
+    private func testBootstrapServer() -> URL {
+        do {
+            let nvram = try computer.nvram
+            let data = try nvram.getData(forKey: NVRAMVariable(stringLiteral: kDInitTestBootstrapServerNVRAMKey))
+            guard let string = String(data: data, encoding: String.Encoding.utf8) else {
+                throw NVRAMError.unableToGetDataForKey(kDInitTestBootstrapServerNVRAMKey)
             }
-
-            remote_device_set_connected_callback(device!, queue) { device in
-                if atomic_flag_test_and_set_explicit(&flag, memory_order_relaxed) {
-                    // timed out, bail
-                    return
-                }
-                _device = device
-                semaphore.signal()
+            guard let url = URL(string: string) else {
+                throw EncodingError.invalidValue(string, EncodingError.Context(codingPath: [], debugDescription: "Invalid URL: \(string)"))
             }
+            return url
+        } catch {
+            logger.log("Unable to load DCBSS URL from NVRAM, falling back to \(kDInitTestBootstrapServerFallback)")
+            return kDInitTestBootstrapServerFallback
         }
-        defer {
-            remote_device_browser_cancel(browser)
-        }
-
-        switch semaphore.wait(timeout: DispatchTime.now() + .seconds(120)) {
-        case .success:
-            let deviceName = String(cString: remote_device_get_name(_device!))
-            logger.info("remote device found: \(deviceName)")
-        case .timedOut:
-            if atomic_flag_test_and_set_explicit(&flag, memory_order_relaxed) {
-                // the callback has been fired but not signaled yet.
-                // it's safe to wait for that forever here
-                semaphore.wait()
-            } else {
-                logger.error("timeout waiting for remote device to show up")
-                throw Error.loadTimeout(.remoteService(device: deviceTypeDesc, service: serviceName))
-            }
-        }
-
-        configData = try DInitRemoteService.fetchConfig(from: _device!, service: serviceName)
-        logger.debug("Raw data got from remote service: \(configData)")
-        return configData
     }
 
     // MARK: Network
+    private func selectBootstrapServer() -> URL {
+        // Decide the BSS server
+        let bss = switch computer.dataCenterRegionCode {
+        case .internalTest: self.testBootstrapServer()
+        default: kDInitDataCenterBootstrapServer
+        }
+        return bss
+    }
+
     /// Load the configuration data from an HTTP server.
     private func loadNetwork(from url: URL) async throws -> Data {
         let identity = DInitDeviceIdentity.shared
@@ -290,15 +218,6 @@ struct ConfigLoader {
                                       to: url,
                                       attempts: self.networkConfig.retries,
                                       backoff: self.networkConfig.backoff)
-    }
-    
-    // MARK: Factory
-    /// Load configuration data from a factory remote service.
-    private func loadFactoryConfig() async throws -> Data {
-        logger.log("Loading configuration from factory remote service")
-        
-        let deviceTypeDesc = String(cString: remote_device_type_get_description(computer.isComputeNode ? REMOTE_DEVICE_TYPE_COMPUTE_CONTROLLER : REMOTE_DEVICE_TYPE_NCM_HOST))
-        return try loadRemoteService(from: deviceTypeDesc, serviceName: kDInitFactoryRemoteServiceName)
     }
 
     // MARK: NVRAM
@@ -327,7 +246,7 @@ struct ConfigLoader {
             do {
                 let nvram = try computer.nvram
                 data = try nvram.getData(forKey: source.variable)
-            } catch NVRAM.Error.unableToGetDataForKey(_, shim_kIOReturnNoResources()) {
+            } catch NVRAM.Error.unableToGetDataForKey(_) {
                 logger.warning("No data contained in the \(source.variable.rawValue) NVRAM variable")
                 continue
             }
@@ -352,30 +271,44 @@ struct ConfigLoader {
     
     private func loadBMCConfig() async throws -> [DecodedData]? {
         logger.info("Loading configuration from Data Center Bootstrap service")
-        
+
+        // Decide the BSS server
+        let bss = selectBootstrapServer()
         let data: Data
         do {
-            data = try await loadNetwork(from: kDInitDataCenterBootstrapServer)
+            data = try await loadNetwork(from: bss)
         } catch {
-            logger.error("Failed to load configuration from \(kDInitDataCenterBootstrapServer): \(error)")
+            logger.error("Failed to load configuration from \(bss): \(error)")
 
-            /// To avoid rev lock with dc-bss change, if the new endpoint doesn't work,
-            /// fallback to the legacy endpoint automatically. This only works when darwin-init
-            /// still understand the legacy config schema. When the support for that is removed,
-            /// this logic needs to be removed as well.
-            logger.log("Falling back to use the legacy Bootstrap endpoint")
-            
-            do {
-                data = try await loadNetwork(from: kDInitDataCenterBootstrapServerFallback)
-            } catch {
-                logger.error("Failed to load configuration from \(kDInitDataCenterBootstrapServerFallback): \(error)")
-                
-                if computer.isFactorySignedRestore {
-                    logger.log("Falling back to use factory endpoint")
-                    data = try await loadFactoryConfig()
-                } else {
-                    throw error
+            let fallback: URL? = switch bss {
+                case kDInitDataCenterBootstrapServer:
+                    kDInitDataCenterBootstrapServerFallback
+                default:
+                    nil
+            }
+
+            if let fallback {
+                /// To avoid rev lock with dc-bss change, if the new endpoint doesn't work,
+                /// fallback to the legacy endpoint automatically. This only works when darwin-init
+                /// still understand the legacy config schema. When the support for that is removed,
+                /// this logic needs to be removed as well.
+                logger.log("Falling back to use the legacy Bootstrap endpoint")
+
+                do {
+                    data = try await loadNetwork(from: fallback)
+                } catch {
+                    logger.error("Failed to load configuration from \(fallback): \(error)")
+
+                    if computer.isFactorySignedRestore {
+                        logger.log("Falling back to use factory endpoint")
+                        data = try await loadFactoryConfig()
+                    } else {
+                        throw error
+                    }
                 }
+            } else {
+                // No fallback was found, throw the original error.
+                throw error
             }
         }
         
@@ -387,41 +320,15 @@ struct ConfigLoader {
         }
     }
 
-    private func loadCNodeConfig() async throws -> [DecodedData]? {
-        logger.info("Loading configuration from remote service")
-
-        let data: Data
-        do {
-            let deviceTypeDesc = String(cString: remote_device_type_get_description(REMOTE_DEVICE_TYPE_COMPUTE_CONTROLLER))
-            data = try loadRemoteService(from: deviceTypeDesc, serviceName: kDInitRemoteServiceName)
-        } catch {
-            logger.error("Failed to load configuration from \(kDInitRemoteServiceName): \(error)")
-            
-            if computer.isFactorySignedRestore {
-                logger.log("Falling back to use factory endpoint")
-                data = try await loadFactoryConfig()
-            } else {
-                throw error
-            }
-        }
-        
-        do {
-            return try decode(data: data, at: [])
-        } catch {
-            logger.warning("Data from remote service is not valid: \(error)")
-            throw error
-        }
-    }
-    
     // MARK: - Data decoding
-    private func decode(data: Data, at loadingPath: [LoadingKey]) throws -> [DecodedData] {
+    func decode(data: Data, at loadingPath: [ConfigLoadingKey]) throws -> [DecodedData] {
         let json = try jsonDecoder.decode(JSON.self, from: data)
         return try decode(json: json, at: loadingPath)
     }
 
     /// Entry point for any JSON, can either be a config (json: dict), an array of
     /// configs (json: array) or a source reference (dict with `source` entry).
-    private func decode(json: JSON, at loadingPath: [LoadingKey]) throws -> [DecodedData] {
+    private func decode(json: JSON, at loadingPath: [ConfigLoadingKey]) throws -> [DecodedData] {
         if case let .dictionary(dictionary) = json {
             return try decode(dict: dictionary, at: loadingPath)
         } else if case let .array(array) = json {
@@ -435,7 +342,7 @@ struct ConfigLoader {
     }
 
     /// Decode a dictionary, which is a source reference, or a config
-    private func decode(dict: [String: JSON], at loadingPath: [LoadingKey]) throws -> [DecodedData] {
+    private func decode(dict: [String: JSON], at loadingPath: [ConfigLoadingKey]) throws -> [DecodedData] {
         return if let source = dict["source"] {
             try decode(source: source, at: loadingPath)
         } else {
@@ -445,7 +352,7 @@ struct ConfigLoader {
 
     /// Decode an array, items must be dictionaries and can either be configs
     /// or source referencs, so they are passed to `decode(dict:)`.
-    private func decode(array: [JSON], at loadingPath: [LoadingKey]) throws -> [DecodedData] {
+    private func decode(array: [JSON], at loadingPath: [ConfigLoadingKey]) throws -> [DecodedData] {
         var result: [DecodedData] = []
         for (idx, item) in array.enumerated() {
             guard case let .dictionary(dict) = item else {
@@ -460,7 +367,7 @@ struct ConfigLoader {
     }
 
     /// Decode a config form JSON.
-    private func decode(config: [String: JSON], at loadingPath: [LoadingKey]) throws -> DecodedData {
+    private func decode(config: [String: JSON], at loadingPath: [ConfigLoadingKey]) throws -> DecodedData {
         let version = Self.detectVersion(root: config)
         let json = JSON.dictionary(config)
         let origin: ConfigOrigin
@@ -487,7 +394,7 @@ struct ConfigLoader {
     /// Decode a source reference: can either be an actual reference to a
     /// config somewhere else (network, rsd) or an embedded config or
     /// an array of configs.
-    private func decode(source: JSON, at loadingPath: [LoadingKey]) throws -> [DecodedData] {
+    private func decode(source: JSON, at loadingPath: [ConfigLoadingKey]) throws -> [DecodedData] {
         if case let .string(str) = source {
             let source = DInitConfigSource(argument: str)
             return [.source(source, loadingPath)]
@@ -498,11 +405,6 @@ struct ConfigLoader {
     }
 
     // MARK: - Version detection
-    enum VersionInfo: Codable {
-        case unknown
-        case v1
-        case v2
-    }
 
     enum DetectedVersion: Codable, CustomStringConvertible {
         case ambiguous
@@ -525,10 +427,10 @@ struct ConfigLoader {
     /// exclusive keys. If that fails we check for structural differences
     /// of common keys (i.e. values that are now dicts but were arrays).
     ///
-    /// There are configs that are valid v1 or v2  and in those cases the
-    /// return value is `VersionInfo.unknown`
+    /// There are configs that are valid v1 or v2 and in those cases the
+    /// return value is `.ambiguous`
     ///
-    /// - Returns: the detected version or `.unknown`.
+    /// - Returns: the detected version or `.ambiguous`.
     static func detectVersion(root: [String: JSON]) -> DetectedVersion {
         let oldKeys = Set(DInitConfig.CodingKeys.allCases.map(\.stringValue))
         let newKeys = Set(Config.CodingKeys.allCases.map(\.stringValue))
@@ -673,21 +575,4 @@ private extension Dictionary where Key == String, Value == JSON {
             nil
         }
     }
-}
-
-extension Array where Element == ConfigLoader.LoadingKey {
-
-    var containsIndex: Bool {
-        self.first { $0.isIndex } != nil
-    }
-
-    var version: ConfigLoader.VersionInfo {
-        for element in self.reversed() {
-            if case let .version(info) = element {
-                return info
-            }
-        }
-        return .unknown
-    }
-
 }

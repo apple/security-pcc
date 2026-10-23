@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,6 +13,7 @@
 // 10/02/2024
 
 import CloudBoardAttestationDAPI
+import CloudBoardCommon
 import CloudBoardDomain
 import CloudBoardLogging
 import Foundation
@@ -96,12 +97,20 @@ internal enum SelectionNegotiation {
 
             /// once set any attempt to use ``beginNewNegotiation`` will throw
             var terminalError: SelectionNegotiationError? = nil
+
+            var toolCallInvoked: Bool = false
         }
 
         private let _state = Mutex<State>(State())
 
         internal init(rules: SelectionNegotiationSetup.Rules) {
             self.rules = rules
+        }
+
+        internal func setToolCallInvoked() {
+            self._state.withLock {
+                $0.toolCallInvoked = true
+            }
         }
 
         // Some operating modes mean we can tolerate not knowing information about the compute nodes,
@@ -119,7 +128,8 @@ internal enum SelectionNegotiation {
         internal func beginNewNegotiation(
             groupID: String?,
             reuse: ReuseTargetConstraints?,
-            treatAsRestrictedChoice: Bool
+            treatAsRestrictedChoice: Bool,
+            requestID: String
         ) throws(SelectionNegotiationError) -> InitiatedNegotiation {
             try self._state.withLock { state throws(SelectionNegotiationError) in
                 if let error = state.terminalError {
@@ -150,6 +160,12 @@ internal enum SelectionNegotiation {
                 if potentialTransitiveTrustCountReachedLimit {
                     // even the always freechoice operating mode doesn't stop this,
                     // if someone is testing and wants to avoid this they can force the maximum higher
+                    freeChoice = false
+                } else if state.toolCallInvoked {
+                    /// If an outbound call is made, request is potentially targetable
+                    SelectionNegotiation.logger.log(
+                        "\(requestID, privacy: .public): Outbound tool-call made during the request, thereby making the request targetable"
+                    )
                     freeChoice = false
                 } else {
                     switch self.rules.operatingMode {
@@ -218,7 +234,7 @@ internal enum SelectionNegotiation {
                     ()
                 case .selectedEnsemble(let ensemble, let rack):
                     state.trustedEnsembles.insert(ensemble)
-                    if self.rules.trustingEnsembleImpliesTrustingRack {
+                    if let rack, !rack.isIrrelevant, self.rules.trustingEnsembleImpliesTrustingRack {
                         state.trustedRackIds.insert(rack)
                     }
                 case .terminalError(let error):
@@ -240,7 +256,7 @@ internal enum SelectionNegotiation {
     internal final class InitiatedNegotiation: Sendable {
         private enum TerminalStatus {
             /// the negotiation cycle completed as a success
-            case selectedSuccessfully(EnsembleInstanceId, RackId)
+            case selectedSuccessfully(EnsembleInstanceId, RackId?)
             /// Covers anything _legal_ where we didn't get to `selectedSuccessfully`
             /// 1: ROPES couldn't find anything so we abandoned it, this is not a privacy or protocol failure
             /// it's reasonable to not find anything
@@ -268,7 +284,7 @@ internal enum SelectionNegotiation {
 
         fileprivate enum CompletionActions {
             case noEnsembleSelected
-            case selectedEnsemble(EnsembleInstanceId, RackId)
+            case selectedEnsemble(EnsembleInstanceId, RackId?)
             case terminalError(SelectionNegotiationError)
         }
 
@@ -285,6 +301,7 @@ internal enum SelectionNegotiation {
 
         // Ensembles advertising these rack_id can be consider trusted (ROPES may select and reserve
         // only one and return it to us)
+        // We ensure only relevant rackIds go in here
         private let trustedRackIds: Set<RackId>
 
         private let pick: PickOptions?
@@ -306,6 +323,10 @@ internal enum SelectionNegotiation {
             self.freeChoice = freeChoice
             self.trustedEnsembles = trustedEnsembles
             self.trustedRackIds = trustedRackIds
+            precondition(
+                trustedRackIds.allSatisfy { !$0.isIrrelevant },
+                "Attempt to consider an irrelevant RackId trusted"
+            )
             self.pick = pick
             // We do a fail fast here rather than make it all the way to ROPES for it to say "I can't do that"
             guard freeChoice || trustedEnsembles.count > 0 || trustedRackIds.count > 0 || pick != nil else {
@@ -414,9 +435,19 @@ internal enum SelectionNegotiation {
                         }
                         // passed validation - provide a securely random selection, without replacement
                         // we know this will work cleanly because we prevalidated the PickOptions
+                        //
+                        // ROPES may scale the announced ratio: if it returns requiredEnsemblesFromROPES * s
+                        // ensembles we accept allowedEnsemblesFromProxy * s of them, preserving the ratio.
+                        // The scale is bounded by ratioCanScaleTo, so an over-large return is simply capped
+                        // (returning fewer is more conservative, never a protocol violation). The earlier
+                        // count check guarantees scale >= 1.
+                        let scale = min(
+                            providedFromROPES.count / pick.requiredEnsemblesFromROPES,
+                            pick.ratioCanScaleTo
+                        )
                         let choice: [EnsembleInstanceId] = .init(
                             providedFromROPES.shuffled().prefix(
-                                pick.allowedEnsemblesFromProxy
+                                pick.allowedEnsemblesFromProxy * scale
                             )
                         )
                         state = .negotiating(allowedByProxy: choice)
@@ -438,15 +469,15 @@ internal enum SelectionNegotiation {
         /// in this case, but no further transitive trust decisions will be possible either way
         internal func selectionMade(
             ensemble: EnsembleInstanceId,
-            rack: RackId
+            validatedRack: RackId
         ) throws {
             let error: SelectionNegotiationError? = self._state.withLock { state in
                 do throws(SelectionNegotiationError) {
                     switch state {
                     case .sentToRopes:
-                        try validateSelection(ensemble, rack)
+                        try validateSelection(ensemble, validatedRack)
                     case .negotiating(allowedByProxy: let allowedByProxy):
-                        try validateSelection(ensemble, rack, pickAllows: allowedByProxy)
+                        try validateSelection(ensemble, validatedRack, pickAllows: allowedByProxy)
                     case .completed(let status):
                         // upstream code should be validating no further selection messages are possible
                         // and will fail closer to the problem so just make sure this is terminal
@@ -455,7 +486,7 @@ internal enum SelectionNegotiation {
                         fatalError("attempt to perform selectionMade on a consumed negotiation")
                     }
                     // if nothing threw it was a success
-                    state = .completed(status: .selectedSuccessfully(ensemble, rack))
+                    state = .completed(status: .selectedSuccessfully(ensemble, validatedRack))
                     return nil
                 } catch {
                     state = .completed(status: .protocolViolation(error))
@@ -466,10 +497,10 @@ internal enum SelectionNegotiation {
         }
 
         /// Assuming it was legal to make a selection, is the worker legal.
-        /// The ensemble and rack came from the attestation, not from external sources
+        /// The ensemble (and rack if present) came from the attestation, not from external sources
         private func validateSelection(
             _ ensemble: EnsembleInstanceId,
-            _ rackId: RackId,
+            _ validatedRack: RackId,
             pickAllows: [EnsembleInstanceId] = []
         ) throws(SelectionNegotiationError) {
             // This function should very clearly and simply articulate every requirement and have 100% code
@@ -482,7 +513,7 @@ internal enum SelectionNegotiation {
             if self.trustedEnsembles.contains(ensemble) {
                 return
             }
-            if self.trustedRackIds.contains(rackId) {
+            if !validatedRack.isIrrelevant, self.trustedRackIds.contains(validatedRack) {
                 precondition(
                     self.allowedToAddToTransitiveTrustSet,
                     "trusted rackids non empty when not allowed to add to transitive trust"

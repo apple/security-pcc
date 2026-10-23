@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,6 +24,8 @@ import Foundation
 import OSLog
 import PrivateCloudCompute
 
+private let logger = Logger(for: .scheduledTask)
+
 /// Scheduled activities are run based on their schedule and system's conditions. The system may decide to expire our
 /// task while it's running. When that happens, the enclosing Task that runs `performScheduledWork` will be
 /// canceled. And types conforming to this protocol must handle Task cancellation. Additionally, the interrupted task will be
@@ -47,36 +49,47 @@ protocol ScheduledTaskStore: AnyObject, Sendable {
     var lastTimeScheduledTaskHasBeenRequestedToReRun: [ScheduledTask.TaskIdentifier: Date] { get set }
 }
 
-final class ScheduledTask<Store: ScheduledTaskStore>: Sendable {
+final class ScheduledTask<
+    Store: ScheduledTaskStore,
+    OSEligibility: OSEligibilityProtocol
+>: Sendable {
     typealias TaskIdentifier = String
 
     private let work: any ScheduledActivity
     private let identifier: TaskIdentifier
-    private let logger = tc2Logger(forCategory: .scheduledTask)
     private let logPrefix: String
     private let store: Store
+    private let osEligibility: OSEligibility
 
-    init(preregisteredIdentifier identifier: TaskIdentifier, work: any ScheduledActivity, store: Store) {
+    init(
+        preregisteredIdentifier identifier: TaskIdentifier,
+        work: any ScheduledActivity,
+        store: Store,
+        osEligibility: OSEligibility
+    ) {
         self.identifier = identifier
         self.work = work
         self.logPrefix = "\(self.identifier):"
         self.store = store
+        self.osEligibility = osEligibility
     }
 
     func register() {
-        #if os(tvOS)
-        self.logger.log("\(self.logPrefix) not registering scheduled task identifier=\(self.identifier)")
-        return
-        #else
-        self.logger.log("\(self.logPrefix) registering scheduled task identifier=\(self.identifier)")
+        logger.log("\(self.logPrefix) registering scheduled task identifier=\(self.identifier)")
         BGSystemTaskScheduler.shared.registerForTask(withIdentifier: self.identifier, using: .global(qos: .background)) { task in
+            guard self.osEligibility.deviceEligibleForPCC else {
+                logger.log("\(self.logPrefix) device not eligible for PCC, skipping")
+                self.skip(task: task)
+                return
+            }
+
             guard self.work.shouldPerformScheduledWork else {
                 self.skip(task: task)
                 return
             }
 
             let workTask = Task(priority: .background) {
-                self.logger.log("\(self.logPrefix) performing scheduled task")
+                logger.log("\(self.logPrefix) performing scheduled task")
                 await self.work.performScheduledWork()
                 if Task.isCancelled {
                     if let retryPolicy = self.work.retryPolicy,
@@ -94,35 +107,34 @@ final class ScheduledTask<Store: ScheduledTaskStore>: Sendable {
                 }
             }
 
-            task.expirationHandlerWithReason = { reason in
-                self.logger.log("\(self.logPrefix) scheduled task is being expired reason=\(reason.rawValue)")
+            task.expirationHandlerWithReasonMask = { mask in
+                logger.log("\(self.logPrefix) scheduled task is being expired, mask=\(String(describing: mask))")
                 workTask.cancel()
             }
         }
-        #endif
     }
 
     private func cancelWithRetryAfter(minimumDelay: TimeInterval, task: BGSystemTask) {
         do {
-            self.logger.log("\(self.logPrefix) scheduled task has been canceled retryAfter=\(minimumDelay)")
+            logger.log("\(self.logPrefix) scheduled task has been canceled retryAfter=\(minimumDelay)")
             try task.setTaskExpiredWithRetryAfter(Double(minimumDelay))
         } catch {
-            self.logger.log("\(self.logPrefix) scheduled task has been canceled and can't be scheduled for retry error=\(error)")
+            logger.log("\(self.logPrefix) scheduled task has been canceled and can't be scheduled for retry error=\(error)")
         }
     }
 
     private func cancelWithoutRetry(task: BGSystemTask) {
-        self.logger.log("\(self.logPrefix) scheduled task has been canceled with no retry")
+        logger.log("\(self.logPrefix) scheduled task has been canceled with no retry")
         task.setTaskCompleted()
     }
 
     private func finish(task: BGSystemTask) {
-        self.logger.log("\(self.logPrefix) scheduled task finished")
+        logger.log("\(self.logPrefix) scheduled task finished")
         task.setTaskCompleted()
     }
 
     private func skip(task: BGSystemTask) {
-        self.logger.log("\(self.logPrefix) scheduled task skipped")
+        logger.log("\(self.logPrefix) scheduled task skipped")
         task.setTaskCompleted()
     }
 }

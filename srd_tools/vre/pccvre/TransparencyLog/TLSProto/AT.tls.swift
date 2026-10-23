@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -343,4 +343,13 @@ extension ATLeafData {
 enum ATReleaseType: UInt8 {
     case production = 0
     case seed = 1
+}
+
+extension ATReleaseType: CustomStringConvertible {
+    var description: String {
+        switch self {
+        case .production: return "production"
+        case .seed: return "seed"
+        }
+    }
 }

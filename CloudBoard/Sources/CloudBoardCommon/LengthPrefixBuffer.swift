@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -15,6 +15,7 @@
 import CloudBoardDomain
 import CloudBoardLogging
 import Foundation
+import os
 
 package enum LengthPrefixBufferError: ReportableError {
     case exceedingMaxMessageSize(maxSize: Int, announcedSize: Int)
@@ -59,6 +60,11 @@ package enum LengthPrefixBufferError: ReportableError {
 /// - maxMessageSize is set per cloudApp at Application Data Path via secure config
 /// - maxMessageSize is set  via hot properties at network protocol layer
 package struct LengthPrefixBuffer {
+    fileprivate static let log = Logger(
+        subsystem: "com.apple.cloudos.cloudboard",
+        category: "LengthPrefixBuffer"
+    )
+
     enum State {
         case waitingForLengthPrefix
         case waitingForData(Int)
@@ -70,6 +76,7 @@ package struct LengthPrefixBuffer {
 
     /// maximum message size in bytes that we are willing to buffer in-memory
     let maxMessageSize: Int
+    package static let defaultSubrequestID: UInt64 = 0
 
     package init(maxMessageSize: Int) {
         self.buffer = Data()
@@ -77,22 +84,33 @@ package struct LengthPrefixBuffer {
         self.maxMessageSize = maxMessageSize
     }
 
-    package mutating func append(_ chunkFragment: FinalizableChunk<Data>) throws -> [FinalizableChunk<Data>] {
+    package mutating func append(
+        _ chunkFragment: FinalizableChunk<Data>,
+        requestID: String,
+        subrequestID: UInt64 = defaultSubrequestID
+    ) throws -> [FinalizableChunk<Data>] {
         self.buffer.append(chunkFragment.chunk)
 
         var result: [FinalizableChunk<Data>] = []
+        let maxMessageSize = self.maxMessageSize
         while !self.buffer.isEmpty {
             switch self.state {
             case .waitingForLengthPrefix:
                 guard let length = buffer.getLength() else {
                     if chunkFragment.isFinal {
+                        Self.log.error(
+                            "Received incomplete data for request with requestID=\(requestID, privacy: .public), subrequestID=\(subrequestID, privacy: .public)"
+                        )
                         throw LengthPrefixBufferError.finalChunkContainsIncompleteMessage
                     }
                     return result
                 }
-                guard length <= self.maxMessageSize else {
+                guard length <= maxMessageSize else {
+                    Self.log.error(
+                        "Received data exceeding maxMessageSize for request with requestID=\(requestID, privacy: .public), subrequestID=\(subrequestID, privacy: .public), maxMessageSize=\(maxMessageSize, privacy: .public)"
+                    )
                     throw LengthPrefixBufferError.exceedingMaxMessageSize(
-                        maxSize: self.maxMessageSize,
+                        maxSize: maxMessageSize,
                         announcedSize: length
                     )
                 }
@@ -106,6 +124,9 @@ package struct LengthPrefixBuffer {
                 }
                 guard self.buffer.count >= length else {
                     if chunkFragment.isFinal {
+                        Self.log.error(
+                            "Received incomplete data for request with requestID=\(requestID, privacy: .public), subrequestID=\(subrequestID, privacy: .public)"
+                        )
                         throw LengthPrefixBufferError.finalChunkContainsIncompleteMessage
                     }
                     return result
@@ -127,6 +148,9 @@ package struct LengthPrefixBuffer {
                 }
 
             case .finalChunkSeen:
+                Self.log.error(
+                    "Received unexpected data for request with requestID=\(requestID, privacy: .public), subrequestID=\(subrequestID, privacy: .public)"
+                )
                 throw LengthPrefixBufferError.receivedAdditionalChunkAfterFinalChunk
             }
         }
@@ -134,14 +158,23 @@ package struct LengthPrefixBuffer {
         return result
     }
 
-    package mutating func validateCompleteDataChunksReceived() throws {
+    package mutating func validateCompleteDataChunksReceived(
+        requestID: String,
+        subrequestID: UInt64 = defaultSubrequestID
+    ) throws {
         switch self.state {
         case .waitingForLengthPrefix, .finalChunkSeen:
             if !self.buffer.isEmpty {
+                Self.log.error(
+                    "Received incomplete data for request with requestID=\(requestID, privacy: .public), subrequestID=\(subrequestID, privacy: .public)"
+                )
                 throw LengthPrefixBufferError.finalChunkContainsIncompleteMessage
             }
         case .waitingForData(let length):
             if length != 0 {
+                Self.log.error(
+                    "Received incomplete data for request with requestID=\(requestID, privacy: .public), subrequestID=\(subrequestID, privacy: .public)"
+                )
                 throw LengthPrefixBufferError.finalChunkContainsIncompleteMessage
             }
         }

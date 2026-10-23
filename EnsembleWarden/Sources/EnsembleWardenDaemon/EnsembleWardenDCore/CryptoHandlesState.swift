@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -34,8 +34,12 @@ internal struct CryptoHandlesState {
     internal var ensemblePorterClient: EnsemblePorterKeyFetcher?
 
     /// Whether this is a multi-turn request requiring CloudBoard crypto material.
+    internal var isMultiTurn: Bool
+
     internal init(ensemblePorterXPCConnection: xpc_connection_t?,
+                  isMultiTurn: Bool,
                   requestID: UUID, spanID: UInt64) throws {
+        self.isMultiTurn = isMultiTurn
         if let ensemblePorterXPCConnection {
             Self.logger.log("""
                 Creating EnsemblePorterKeyFetcher with existing XPC connection. \
@@ -61,6 +65,21 @@ internal struct CryptoHandlesState {
                 request_id=\(requestID, privacy: .public)
                 """)
         }
+    }
+
+    internal init(ensemblePorterEndpoint: XPCEndpoint,
+                  isMultiTurn: Bool,
+                  requestID: UUID, spanID: UInt64) {
+        self.isMultiTurn = isMultiTurn
+        Self.logger.log("""
+            Creating EnsemblePorterKeyFetcher with XPC endpoint. \
+            request_id=\(requestID, privacy: .public)
+            """)
+        self.ensemblePorterClient = EnsemblePorterKeyFetcher(endpoint: ensemblePorterEndpoint)
+        Self.logger.log("""
+            Successfully created EnsemblePorterKeyFetcher from endpoint. \
+            request_id=\(requestID, privacy: .public)
+            """)
     }
 }
 

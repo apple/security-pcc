@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -56,33 +56,44 @@ struct Auditor {
         }
     }
 
-    mutating func update() async throws {
-        try await updateTopLevelTree()
+    enum UpdateMode {
+        /// Download and verify all three trees (AT, PAT, TLT), including the cross-tree bindings.
+        case full
+        /// Download and verify only the Application Tree (AT); skips PAT and TLT.
+        ///
+        /// Note: this only proves the AT log is internally consistent (its leaves reconstruct
+        /// to the root advertised by the AT log head). It does *not* prove that the AT is
+        /// anchored into the Per-Application and Top Level trees.
+        case applicationTreeOnly
     }
 
-    var releaseDigests: [(index: Int, digest: Data)] {
-        get throws {
-            // skip config bag
-            try applicationTree.leaves[1...].enumerated().compactMap { index, leaf in
-                let nodeData = try TransparencyLog.ATLeaf.decodeNodeData(leaf)
-                guard nodeData.type == ATLeafType.RELEASE else {
-                    return nil
-                }
-
-                return (index, nodeData.dataHash)
-            }
+    mutating func update(mode: UpdateMode = .full) async throws {
+        switch mode {
+        case .full:
+            try await updateTopLevelTree()
+        case .applicationTreeOnly:
+            _ = try await updateObjectTree()
         }
     }
 
-    func save() throws {
-        // write all 3 files, then move all 3
+    func save(mode: UpdateMode = .full) throws {
         let encoder = JSONEncoder()
 
+        // The Application Tree is the only tree touched in every mode, so write it first.
         let atURL = storageURL.appending(path: appTreeFile)
         let tempATURL = try FileManager.default.url(for: .itemReplacementDirectory,
                                                     in: .userDomainMask,
                                                     appropriateFor: atURL,
                                                     create: true).appending(path: appTreeFile)
+        try encoder.encode(applicationTree).write(to: tempATURL)
+
+        // In AT-only mode PAT/TLT were never fetched, so leave their checkpoints untouched.
+        if case .applicationTreeOnly = mode {
+            _ = try FileManager.default.replaceItemAt(atURL,
+                                                      withItemAt: tempATURL,
+                                                      backupItemName: "\(appTreeFile).bak")
+            return
+        }
 
         let patURL = storageURL.appending(path: perAppTreeFile)
         let tempPATURL = try FileManager.default.url(for: .itemReplacementDirectory,
@@ -96,7 +107,6 @@ struct Auditor {
                                                           appropriateFor: topLevelURL,
                                                           create: true).appending(path: tltTreeFile)
 
-        try encoder.encode(applicationTree).write(to: tempATURL)
         try encoder.encode(perApplicationTree).write(to: tempPATURL)
         try encoder.encode(topLevelTree).write(to: tempTopLevelURL)
 

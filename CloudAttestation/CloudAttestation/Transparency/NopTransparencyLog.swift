@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -32,12 +32,22 @@ public struct NopTransparencyLog: TransparencyLog {
         self.nonEmptyProofs = nonEmptyProofs
     }
 
-    public func proveInclusion(of digests: [Data]) async throws -> [TransparencyLogProofs] {
+    public func proveInclusion(
+        of digests: [Data],
+        at revision: TransparencyLogRevision?,
+        coveringAll: ATLogDataType?,
+        preferOldest: Bool,
+        releaseType: ATReleaseType
+    ) async throws -> [TransparencyLogProofs] {
         return digests.map { TransparencyLogProofs(nonEmptyProofs: self.nonEmptyProofs, digest: $0) }
     }
 
     public func verifyExpiringInclusion(of digest: Data, proofs: TransparencyLogProofs) async throws -> Date {
         return Date(durationSinceNow: .hours(24))
+    }
+
+    public func proveConsistency(between start: TransparencyLogRevision, and end: TransparencyLogRevision) async throws -> LogConsistency {
+        return LogConsistency()
     }
 }
 

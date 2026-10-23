@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -82,16 +82,18 @@ struct ControlPlaneSetupCommand: ParsableCommand {
 
     func run() throws {
         let launcher = ProcessLauncher()
-        var config = try DarwinInitConfig(launcher: launcher, instance: options.instanceName)
+        let config = try PCCDarwinInitConfig(launcher: launcher, instance: options.instanceName)
         let controlPlaneConfig = try ControlPlaneServerConfig(
             hostname: try hostname(launcher: launcher),
             port: port,
             interval: interval).dictionary()
 
-        var secureConfig = config.dictionary[ControlPlaneServerConfig.Keys.secureConfig] as? [String: Any] ?? [:]
+        let firstEntry = config.firstEntry
+
+        var secureConfig = firstEntry.dictionary[ControlPlaneServerConfig.Keys.secureConfig] as? [String: Any] ?? [:]
         secureConfig[ControlPlaneServerConfig.Keys.controlPlane] = controlPlaneConfig
 
-        config.dictionary[ControlPlaneServerConfig.Keys.secureConfig] = secureConfig
+        firstEntry.dictionary[ControlPlaneServerConfig.Keys.secureConfig] = secureConfig
         try config.save(launcher: launcher, instance: options.instanceName)
         print("Setup done. Please restart the instance '\(options.instanceName)' to take effect.")
     }

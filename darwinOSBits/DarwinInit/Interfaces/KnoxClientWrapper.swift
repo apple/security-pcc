@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -116,10 +116,14 @@ enum KnoxClientWrapper {
             logger.error("Failed to initialize KnoxServiceClient to download \(url.absoluteString)")
             return nil
         }
-        
-        // Set up download file path for cryptex from Knox
+
+        // Set up download file path for cryptex from Knox, ensuring that path traversal isn't possible
         // TODO: downloadName is optional, so should also support this
-		let knoxDestinationPath = destinationDirectory.appending(downloadName)
+        guard let knoxDestinationPath = destinationDirectory.lexicallyResolving(FilePath(downloadName)) else {
+            logger.error("Knox download path would escape destination directory — rejecting")
+            return nil
+        }
+
         guard let destinationPathURL = URL(filePath: knoxDestinationPath) else {
             logger.error("Failed to create directory for Knox download")
             return nil
@@ -265,7 +269,7 @@ enum KnoxClientWrapper {
     }
     
     // put actual decryption code in FilePath+AppleArchive?
-    
+
     /// A tuple that stores download URL parse results.
     typealias KnoxDownloadURLParseResult = (serverURL:URL,
                                             space:String,
@@ -350,9 +354,11 @@ enum KnoxClientWrapper {
         
         var suggestedFileName:String? = nil
         
+        /* If a file name is specified, only use the last component to avoid downloading to arbitrary files like ../../../../../../../../path/to/some/other/directory/from/root` */
         if let fragment = knoxURLComponents.fragment {
             if fragment.hasPrefix("name=") {
-                suggestedFileName = fragment.components(separatedBy: "=")[1]
+                let rawName = fragment.components(separatedBy: "=")[1]
+                suggestedFileName = FilePath(rawName).lastComponent?.string
             }
         }
         else {

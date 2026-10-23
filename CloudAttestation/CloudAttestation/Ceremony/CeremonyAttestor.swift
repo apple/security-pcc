@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -64,6 +64,8 @@ public struct CeremonyAttestor: Attestor {
     public init() {
         self.inner = NodeAttestor()
         self.inner.requireCertificateChain = false
+        self.inner.certificateTransparency = false
+        self.inner.certificateTransparencyFetchFailClosed = false
         self.inner.assetProvider = AssetProvider()
     }
 

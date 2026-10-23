@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -61,12 +61,20 @@ message ATLogInsertResponse {
 enum ATLogDataType {
   UNKNOWN = 0;
   RELEASE = 1;
-  // MODEL = 2; not used
+
   KEYBUNDLE_TGT = 3;
   KEYBUNDLE_OTT = 4;
   KEYBUNDLE_OHTTP = 5;
 
+  SERVER_NODE = 6;
+
   TEST_MARKER = 100;
+}
+
+// Corresponds to the ReleaseType TLS enum. Limited to 256 values.
+enum ATReleaseType {
+  PRODUCTION = 0;
+  SEED = 1;
 }
 
 // ============================ AT Log Proof RPC ===================================== //

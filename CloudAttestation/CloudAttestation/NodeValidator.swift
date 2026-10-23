@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -80,6 +80,10 @@ public struct NodeValidator: Validator, Sendable {
     @_spi(Private)
     public var restrictSecurityPolicies: Bool
 
+    public var certificateTransparency: Bool
+
+    public var certificateTransparencyVerifyFailClosed: Bool
+
     static let logger: Logger = Logger(subsystem: "com.apple.CloudAttestation", category: "NodeValidator")
 
     /// Constructs a ``NodeValidator`` with a default validity duration of 1 day
@@ -119,6 +123,8 @@ public struct NodeValidator: Validator, Sendable {
         self.ensembleTopologyValidation = configuration.ensembleTopologyValidation
         self.allowExpired = configuration.allowExpired
         self.restrictSecurityPolicies = configuration.restrictSecurityPolicies
+        self.certificateTransparency = configuration.certificateTransparency
+        self.certificateTransparencyVerifyFailClosed = configuration.certificateTransparencyVerifyFailClosed
     }
 
     var pinnedSigner: SecKey? = nil
@@ -150,6 +156,9 @@ public struct NodeValidator: Validator, Sendable {
     @PolicyBuilder
     public var policy: some AttestationPolicy {
         X509Policy(required: self.strictCertificateValidation, roots: self.trustAnchors, clock: self.clock)
+        if self.certificateTransparency {
+            CertificateTransparencyPolicy(verifier: self.transparencyVerifier, strict: self.certificateTransparencyVerifyFailClosed)
+        }
         if let pinnedSigner {
             SEPAttestationPolicy(signer: pinnedSigner)
         } else {
@@ -206,18 +215,18 @@ public struct NodeValidator: Validator, Sendable {
 
             Self.logger.log("AttestationBundle passed validation for public key: \(keyData.fingerprint(), privacy: .public)")
 
-            let bundleExpiration = Date(durationSinceNow: self.validity)
+            let now = self.clock ?? .now
+            let bundleExpiration = now.addingTimeInterval(self.validity.timeInterval)
             let keyExpiration = bundle.proto.keyExpiration.date
 
-            // Return the lesser of the expirations
-            var expiration = keyExpiration < bundleExpiration ? keyExpiration : bundleExpiration
+            let expiration = [
+                bundleExpiration,
+                keyExpiration,
+                context.proofExpiration,
+                context.certificateProofExpiration,
+            ].compactMap { $0 }.min()!
 
-            // if transparency proof yielded an expiration, clamp to that
-            if let transparencyExpiration = context.proofExpiration, transparencyExpiration < expiration {
-                expiration = transparencyExpiration
-            }
-
-            let expired = Date.now > expiration
+            let expired = now >= expiration
 
             if expired {
                 if !allowExpired {
@@ -233,7 +242,9 @@ public struct NodeValidator: Validator, Sendable {
                     bundle: bundle,
                     udid: attestation.identity?.udid,
                     routingHint: context.validatedRoutingHint,
-                    releaseDigest: context.releaseDigest
+                    releaseDigest: context.releaseDigest,
+                    appIdentifiers: context.appIdentifiers,
+                    context: context
                 )
             )
         } catch {

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -99,7 +99,8 @@ actor NullCloudController {
                 try await self.registerAsComputeWorkload(
                     workloadTags: workloadTags,
                     maxBatchSize: maxBatchSize,
-                    properties: properties
+                    properties: properties,
+                    appRoutingKeys: self.controller.prefs.appRoutingKeys ?? []
                 )
             }
             let lastRegister = Date.now
@@ -171,14 +172,16 @@ actor NullCloudController {
     func registerAsComputeWorkload(
         workloadTags: [String: RoutingTagValue],
         maxBatchSize: Int,
-        properties: WorkloadProperties
+        properties: WorkloadProperties,
+        appRoutingKeys: [String]
     ) async throws {
         try await self.controller.registerComputeWorkload(
             config: .init(
                 maxBatchSize: maxBatchSize,
                 optimalBatchSize: self.controller.prefs.optimalBatchSize ?? maxBatchSize,
                 currentBatchSize: 0,
-                workloadTags: workloadTags
+                workloadTags: workloadTags,
+                appRoutingKeys: appRoutingKeys
             ),
             properties: properties
         )

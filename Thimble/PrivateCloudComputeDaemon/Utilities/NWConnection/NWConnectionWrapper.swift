@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -29,6 +29,7 @@ final class NWConnectionWrapper: Sendable {
     private let logger: Logger
     private let logPrefix: String
     private let readyEvent: AsyncEvent<Void>?
+    private let maximumReadLength: Int
 
     private enum State {
         case connecting
@@ -44,12 +45,14 @@ final class NWConnectionWrapper: Sendable {
         logger: Logger,
         requestID: UUID,
         logComment: String,
+        maximumReadLength: Int = .max,
         progressContinuation: AsyncStream<ConnectionUpdate>.Continuation?
     ) {
         self.underlying = underlying
         self.logger = logger
         self.logPrefix = "\(requestID): [C\(underlying.identifier)] (\(logComment))"
         self.readyEvent = readyEvent
+        self.maximumReadLength = maximumReadLength
         // We deliberately set up a reference cycle between the self and the underlying connection.
         // We are aware that weak exists. But we prefer to break the reference cycle instead.
         // Performance is much better without weak references.
@@ -118,7 +121,7 @@ final class NWConnectionWrapper: Sendable {
             let (data, contentContext, isComplete, error) = await withCheckedContinuation { continuation in
                 self.underlying.receive(
                     minimumIncompleteLength: 1,
-                    maximumLength: .max
+                    maximumLength: self.maximumReadLength
                 ) { data, contentContext, isComplete, error in
                     continuation.resume(returning: (data, contentContext, isComplete, error))
                 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -14,33 +14,30 @@
 
 
 import Foundation
-import Synchronization
 
 public final class RestrictedExecutionModeViolation: OSLogStreamer.PredicatePlugin {
     public static let allEvents: [any EHUEFEvent.Type] = [ Event.self ]
-    let parser = Mutex<Parser>(Parser())
+    let parser = Parser()
     public func parse(_ fromOSLogEvent: OSLogStreamer.OSLogEvent) -> (any EHUEFEvent)? {
-        parser.withLock {
-            $0.parse(fromOSLogEvent)
-        }
+        parser.parse(fromOSLogEvent)
     }
 
-    static let predicate: String = "((processID == 0) AND (sender == \"AppleMobileFileIntegrity\" OR sender == \"AppleMobileFileIntegrity_development\") AND eventMessage CONTAINS[cd] \"Restricted Execution Mode\")"
+    static let predicate: String = "((processID == 0) AND eventMessage CONTAINS[cd] \"Restricted Execution Mode\")"
     public func getPredicate() -> String {
         return Self.predicate
     }
 
     public func logMessageMatch(_ event: OSLogStreamer.OSLogEvent) -> Bool {
-        return (event.processID == 0) && (event.sender == "AppleMobileFileIntegrity" || event.sender == "AppleMobileFileIntegrity_development") && event.composedMessage.contains("Restricted Execution Mode")
+        return (event.processID == 0) && event.composedMessage.contains("Restricted Execution Mode")
     }
 
     public init() {}
 
-    struct Parser: OSLogStreamer.EventParser {
-        let rrule = /(AMFI: )?When validating (?<binary>.+?):\n +(?<identity>.+?) not allowed for Restricted Execution Mode state \((?<remstate>.+?)\)(: (?<reason>.+?))?/
+    struct Parser: OSLogStreamer.EventParser, @unchecked Sendable {
+        let rrule = /(AMFI: )?When validating (?<binary>.+?):\n +(?<identity>.+?) not allowed for Restricted Execution Mode state \((?<remstate>.+?)\)(: (?<reason>.+?))?$/
         func parse(_ fromOSLogEvent: OSLogStreamer.OSLogEvent) -> (any EHUEFEvent)? {
-            var e = Event()
-            if let result = try? rrule.wholeMatch(in: fromOSLogEvent.composedMessage) {
+            if let result = try? rrule.firstMatch(in: fromOSLogEvent.composedMessage) {
+                var e = Event()
                 e.timestamp = fromOSLogEvent.timestamp.timeIntervalSince1970
                 e.binary = String(result.binary)
                 e.identity = String(result.identity)
@@ -54,8 +51,7 @@ public final class RestrictedExecutionModeViolation: OSLogStreamer.PredicatePlug
 
     public struct Event: EHUEFEvent {
         internal init(fields: [String: EHValueType] = [:], tags: Set<String> = Set<String>(), event_category: EHUEFCategory = .system, event_type: String = "RestrictedExecutionModeViolation", binary: String = "", identity: String = "", remstate: String = "", reason: String = "", timestamp: TimeInterval = 0) {
-            self.fields = fields
-            self.tags = tags
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
             self.event_category = event_category
             self.event_type = event_type
             self.binary = binary
@@ -65,8 +61,7 @@ public final class RestrictedExecutionModeViolation: OSLogStreamer.PredicatePlug
             self.timestamp = timestamp
         }
 
-        public var fields: [String: EHValueType] = [:]
-        public var tags = Set<String>()
+        public var metadata = EHEventMetadata()
 
         public var event_category: EHUEFCategory = .system
         public var event_type: String = "RestrictedExecutionModeViolation"
@@ -77,5 +72,54 @@ public final class RestrictedExecutionModeViolation: OSLogStreamer.PredicatePlug
         public var reason = ""
         public var timestamp: TimeInterval = 0
         public init() {}
+    }
+}
+
+
+extension RestrictedExecutionModeViolation.Event: EHFieldExtractable {
+    public func fieldValue(for field: String) -> Any? {
+        switch field {
+        case "tags": return tags
+        case "fields": return fields
+        case "event_category": return event_category
+        case "event_type": return event_type
+        case "binary": return binary
+        case "identity": return identity
+        case "remstate": return remstate
+        case "reason": return reason
+        case "timestamp": return timestamp
+        default: return nil
+        }
+    }
+}
+
+
+import AST
+
+private enum RK {
+    static let event_type: AST.RegoValue = .string("event_type")
+    static let event_category: AST.RegoValue = .string("event_category")
+    static let tags: AST.RegoValue = .string("tags")
+    static let fields: AST.RegoValue = .string("fields")
+    static let binary: AST.RegoValue = .string("binary")
+    static let identity: AST.RegoValue = .string("identity")
+    static let remstate: AST.RegoValue = .string("remstate")
+    static let reason: AST.RegoValue = .string("reason")
+    static let timestamp: AST.RegoValue = .string("timestamp")
+}
+
+extension RestrictedExecutionModeViolation.Event: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = [:]
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.binary] = .string(binary)
+        obj[RK.identity] = .string(identity)
+        obj[RK.remstate] = .string(remstate)
+        obj[RK.reason] = .string(reason)
+        obj[RK.timestamp] = .number(RegoNumber(decimal: Decimal(timestamp)))
+        return .object(obj)
     }
 }

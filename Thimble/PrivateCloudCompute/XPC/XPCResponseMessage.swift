@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -31,22 +31,58 @@ package enum XPCResponseMessage: Codable, Equatable, Sendable, TC2JSON {
         case unrecognized(Int)
     }
 
-    /// Used in non multi-turn requests.
-    case data(Data)
+    package struct OpenSubresponsePayload: Codable, Equatable, Sendable {
+        package var subrequestId: UInt64
 
-    /// UInt64 - subrequest id
-    case openSubresponse(UInt64)
-    /// UInt64 - subrequest id
-    case subresponseData(UInt64, Data)
-    /// UInt64 - subrequest id
-    case closeSubresponse(UInt64, SubresponseStatus)
+        package init(subrequestId: UInt64) {
+            self.subrequestId = subrequestId
+        }
+    }
+
+    package struct DataPayload: Codable, Equatable, Sendable {
+        package var data: Data
+
+        package init(data: Data) {
+            self.data = data
+        }
+    }
+
+    package struct SubresponseDataPayload: Codable, Equatable, Sendable {
+        package var subrequestId: UInt64
+        package var data: Data
+
+        package init(subrequestId: UInt64, data: Data) {
+            self.subrequestId = subrequestId
+            self.data = data
+        }
+    }
+
+    package struct CloseSubresponsePayload: Codable, Equatable, Sendable {
+        package var subrequestId: UInt64
+        package var status: SubresponseStatus
+
+        package init(subrequestId: UInt64, status: SubresponseStatus) {
+            self.subrequestId = subrequestId
+            self.status = status
+        }
+    }
+
+    /// Used in non multi-turn requests.
+    case data(DataPayload)
+
+    /// Used in multi-turn requests to mark the beginning of a new subresponse.
+    case openSubresponse(OpenSubresponsePayload)
+    /// Used in multi-turn requests for the actual subresponse's data.
+    case subresponseData(SubresponseDataPayload)
+    /// Used in multi-turn requests to mark the end of a subresponse.
+    case closeSubresponse(CloseSubresponsePayload)
 
     var subrequestId: UInt64? {
         switch self {
         case .data: return nil
-        case .openSubresponse(let requestId): return requestId
-        case .subresponseData(let requestId, _): return requestId
-        case .closeSubresponse(let requestId, _): return requestId
+        case .openSubresponse(let payload): return payload.subrequestId
+        case .subresponseData(let payload): return payload.subrequestId
+        case .closeSubresponse(let payload): return payload.subrequestId
         }
     }
 }

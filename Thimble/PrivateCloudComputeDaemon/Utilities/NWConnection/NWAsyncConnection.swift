@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,6 +24,8 @@ import Foundation
 import OSLog
 import PrivateCloudCompute
 import os
+
+private let logger = Logger(for: .network)
 
 /// A protocol for a type that can write to an underlying `NWConnection`.
 ///
@@ -168,6 +170,7 @@ protocol NWAsyncConnectionFactoryProtocol: Sendable {
         on queue: DispatchQueue,
         requestID: UUID,
         logComment: String,
+        maximumReadLength: Int,
         progressContinuation: AsyncStream<ConnectionUpdate>.Continuation?,
         _ body: (Inbound, Outbound, OHTTPSubStreamFactory, MetricsReporter) async throws -> Result
     ) async throws -> Result
@@ -191,6 +194,7 @@ extension NWAsyncConnectionFactoryProtocol {
         on queue: DispatchQueue,
         requestID: UUID,
         logComment: String,
+        maximumReadLength: Int = .max,
         _ body: (Inbound, Outbound, OHTTPSubStreamFactory, MetricsReporter) async throws -> Result
     ) async throws -> Result {
         try await self.connect(
@@ -200,6 +204,7 @@ extension NWAsyncConnectionFactoryProtocol {
             on: queue,
             requestID: requestID,
             logComment: logComment,
+            maximumReadLength: maximumReadLength,
             progressContinuation: nil,
             body
         )
@@ -240,6 +245,7 @@ struct NWAsyncConnection: NWAsyncConnectionFactoryProtocol {
         on queue: DispatchQueue,
         requestID: UUID,
         logComment: String,
+        maximumReadLength: Int = .max,
         progressContinuation: AsyncStream<ConnectionUpdate>.Continuation? = nil,
         _ body: (Inbound, Outbound, OHTTPStreamFactory, ConnectionMetricsReporter) async throws -> Result
     ) async throws -> Result {
@@ -248,7 +254,8 @@ struct NWAsyncConnection: NWAsyncConnectionFactoryProtocol {
             rootConnection: connection,
             rootConnectionReadyEvent: readyEvent,
             queue: queue,
-            requestID: requestID
+            requestID: requestID,
+            maximumReadLength: maximumReadLength
         )
         let metricsReporter = ConnectionMetricsReporter(
             rootConnection: connection,
@@ -261,6 +268,7 @@ struct NWAsyncConnection: NWAsyncConnectionFactoryProtocol {
             requestID: requestID,
             logComment: logComment,
             readyEvent: readyEvent,
+            maximumReadLength: maximumReadLength,
             progressContinuation: progressContinuation,
             inputs: ohttpFactory, metricsReporter,
             body: body
@@ -277,17 +285,18 @@ struct NWAsyncConnection: NWAsyncConnectionFactoryProtocol {
         requestID: UUID,
         logComment: String,
         readyEvent: AsyncEvent<Void>?,
+        maximumReadLength: Int,
         progressContinuation: AsyncStream<ConnectionUpdate>.Continuation? = nil,
         inputs: repeat each Input,
         body: (Inbound, Outbound, repeat each Input) async throws -> Result
     ) async throws -> Result {
-        let logger = tc2Logger(forCategory: .network)
         let connectionWrapper = NWConnectionWrapper(
             underlying: connection,
             readyEvent: readyEvent,
             logger: logger,
             requestID: requestID,
             logComment: logComment,
+            maximumReadLength: maximumReadLength,
             progressContinuation: progressContinuation
         )
 
@@ -318,6 +327,7 @@ struct NWAsyncConnection: NWAsyncConnectionFactoryProtocol {
         on queue: DispatchQueue,
         requestID: UUID,
         logComment: String,
+        maximumReadLength: Int,
         progressContinuation: AsyncStream<ConnectionUpdate>.Continuation?,
         _ body: (Inbound, Outbound, OHTTPStreamFactory, ConnectionMetricsReporter) async throws -> Result
     ) async throws -> Result {
@@ -332,6 +342,7 @@ struct NWAsyncConnection: NWAsyncConnectionFactoryProtocol {
                 on: queue,
                 requestID: requestID,
                 logComment: logComment,
+                maximumReadLength: maximumReadLength,
                 progressContinuation: progressContinuation,
                 body
             )
@@ -343,6 +354,7 @@ struct NWAsyncConnection: NWAsyncConnectionFactoryProtocol {
                 on: queue,
                 requestID: requestID,
                 logComment: logComment,
+                maximumReadLength: maximumReadLength,
                 progressContinuation: progressContinuation,
                 body
             )
@@ -526,12 +538,14 @@ extension NWAsyncConnection {
         private let rootConnection: NWConnection
         private let rootConnectionReadyEvent: AsyncEvent<Void>
         private let requestID: UUID
+        private let maximumReadLength: Int
 
-        fileprivate init(rootConnection: NWConnection, rootConnectionReadyEvent: AsyncEvent<Void>, queue: DispatchQueue, requestID: UUID) {
+        fileprivate init(rootConnection: NWConnection, rootConnectionReadyEvent: AsyncEvent<Void>, queue: DispatchQueue, requestID: UUID, maximumReadLength: Int) {
             self.rootConnection = rootConnection
             self.rootConnectionReadyEvent = rootConnectionReadyEvent
             self.dispatchQueue = queue
             self.requestID = requestID
+            self.maximumReadLength = maximumReadLength
         }
 
         /// Used for node streams.
@@ -550,7 +564,7 @@ extension NWAsyncConnection {
                 throw Error.couldNotCreateConnection
             }
 
-            return try await NWAsyncConnection._wrapping(connection: connection, on: .main, requestID: requestID, logComment: logComment, readyEvent: nil, body: body)
+            return try await NWAsyncConnection._wrapping(connection: connection, on: .main, requestID: requestID, logComment: logComment, readyEvent: nil, maximumReadLength: self.maximumReadLength, body: body)
         }
 
         /// Used for data stream.
@@ -568,7 +582,7 @@ extension NWAsyncConnection {
                 throw Error.couldNotCreateConnection
             }
 
-            return try await NWAsyncConnection._wrapping(connection: connection, on: .main, requestID: requestID, logComment: logComment, readyEvent: nil, body: body)
+            return try await NWAsyncConnection._wrapping(connection: connection, on: .main, requestID: requestID, logComment: logComment, readyEvent: nil, maximumReadLength: self.maximumReadLength, body: body)
         }
 
         /// Used for response bypass stream.
@@ -594,8 +608,8 @@ extension NWAsyncConnection {
                 requestID: requestID,
                 logComment: logComment,
                 readyEvent: connectionReadyEvent,
+                maximumReadLength: self.maximumReadLength,
             ) { inbound, _ in
-                let logger = tc2Logger(forCategory: .network)
                 let logPrefix = "\(requestID): [C\(connection.identifier)] (\(logComment))"
                 // We need to wait for this connection to be ready before calling `updateObliviousHTTPConnection()`
                 try await connectionReadyEvent()

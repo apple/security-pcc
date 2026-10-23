@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -105,8 +105,24 @@ internal final class OSMetricService: Sendable {
                         logger.log("Received unsupported metric type=\(metric.metaData.type, privacy: .public)")
                     }
 
+                } catch CloudMetricsServiceError.metricNotAllowed {
+                    // A metric missing from the audit allow list is a configuration outcome, not a
+                    // daemon failure, and it recurs for every sample the client emits. `MetricsFilter`
+                    // already emits a throttled diagnostic naming the client.
+                    logger.log("""
+                    Dropped an os metric that is not allowed by the audit list \
+                    client=\(metric.client, privacy: .public) \
+                    type=\(metric.metaData.type, privacy: .public) \
+                    label=\(metric.label, privacy: .private)
+                    """)
                 } catch {
-                    logger.error("Error processing log event error=\(String(describing: error), privacy: .public)")
+                    logger.error("""
+                    Error processing log event \
+                    client=\(metric.client, privacy: .public) \
+                    type=\(metric.metaData.type, privacy: .public) \
+                    error=\(String(describing: error), privacy: .public) \
+                    label=\(metric.label, privacy: .private)
+                    """)
                 }
             }
         } onCancel: {

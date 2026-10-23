@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Apple Inc. All Rights Reserved. -->
+<!-- Copyright © 2026 Apple Inc. All Rights Reserved. -->
 
 <!-- APPLE INC. -->
 <!-- PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT -->
@@ -19,7 +19,6 @@
 	<key>com.apple.security.exception.mach-lookup.global-name</key>
 	<array>
 		<string>com.apple.cloudos.cloudboardd.controllerendpoint</string>
-		<string>com.apple.cloudos.cloudboardd_follower.controllerendpoint</string>
 	</array>
 	<key>com.apple.private.sandbox.profile:embedded</key>
 	<string>apple-cloud</string>

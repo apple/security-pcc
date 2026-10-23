@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,6 +22,7 @@ extension PCCFrontend {
             Self.PCCNormalizedNetworkEvent.self,
             Self.PCCNormalizedDnsEvent.self,
             Self.PCCNormalizedDeviceEvent.self,
+            Self.PCCNormalizedSSHEvent.self,
             Self.ProcExitEvent.self,
             Self.IOKitOpenEvent.self,
             Self.SSHLoginEvent.self,
@@ -37,8 +38,7 @@ extension PCCFrontend {
         ]
 
         public struct PCCNormalizedProcessEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .process
             public var event_type: String = "pcc_\(EventNormalizer.NormalizedProcess().event_type)"
             public var start_time: Double = 0
@@ -81,8 +81,7 @@ extension PCCFrontend {
             }
         }
         public struct PCCNormalizedNetworkEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .network
             public var event_type: String = "pcc_\(EventNormalizer.NormalizedNetwork().event_type)"
             public var start_time: Double = 0
@@ -115,8 +114,7 @@ extension PCCFrontend {
             }
         }
         public struct PCCNormalizedDnsEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .network
             public var event_type: String = "pcc_\(EventNormalizer.NormalizedDns().event_type)"
             public var start_time: Double = 0
@@ -162,8 +160,7 @@ extension PCCFrontend {
             }
         }
         public struct PCCNormalizedDeviceEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .resource
             public var event_type: String = "pcc_\(EventNormalizer.NormalizedDevice().event_type)"
             public var timestamp: Double = 0
@@ -192,9 +189,36 @@ extension PCCFrontend {
             }
         }
 
+        public struct PCCNormalizedSSHEvent: EHUEFEvent {
+            public var metadata = EHEventMetadata()
+            public var event_category: EHUEFCategory = .system
+            public var event_type: String = "pcc_\(EventNormalizer.NormalizedSSH().event_type)"
+            public var start_time: Double = 0
+            public var src_addr: String = ""
+            public var username: String = ""
+            public var success: Bool = false
+            public var uid: UInt32 = 0
+            public var pid: Int64 = 0
+            public var action: String = ""
+
+            public var non_normalizable: [String: EHValueType] = [:]
+
+            public init() {}
+            init(from: EventNormalizer.NormalizedSSH) {
+                self.tags = from.tags
+                self.start_time = from.start_time
+                self.src_addr = from.src_addr
+                self.username = from.username
+                self.success = from.success
+                self.uid = from.uid
+                self.pid = from.pid
+                self.action = from.action
+                self.copyHostMetadata(from)
+            }
+        }
+
         public struct ProcExitEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .process
             public var event_type: String = "pcc_proc_exit"
             public var timestamp: TimeInterval = 0
@@ -213,8 +237,7 @@ extension PCCFrontend {
         }
 
         public struct IOKitOpenEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .resource
             public var event_type: String = "pcc_iokit_open"
             public var timestamp: TimeInterval = 0
@@ -237,8 +260,7 @@ extension PCCFrontend {
         }
 
         public struct SSHLoginEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .system
             public var event_type: String = "pcc_ssh_login"
             public var timestamp: TimeInterval = 0
@@ -259,8 +281,7 @@ extension PCCFrontend {
         }
 
         public struct SSHLogoutEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .system
             public var event_type: String = "pcc_ssh_logout"
             public var timestamp: TimeInterval = 0
@@ -278,8 +299,7 @@ extension PCCFrontend {
             }
         }
         public struct NWEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .network
             public var event_type: String = "pcc_nw_open"
             public var startTime: Double = 0
@@ -306,8 +326,7 @@ extension PCCFrontend {
         }
 
         public struct SandboxViolationEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .system
             public var event_type: String = "pcc_SandboxViolation"
             public var process: String = ""
@@ -332,8 +351,7 @@ extension PCCFrontend {
         }
 
         public struct RestrictedExecutionModeViolationEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .system
             public var event_type: String = "pcc_RestrictedExecutionModeViolation"
             public var binary: String = ""
@@ -354,8 +372,7 @@ extension PCCFrontend {
         }
 
         public struct MDNSResponderQueriesEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .system
             public var event_type: String = "pcc_DNSServiceQueryRecord"
             public var rowtype: String = ""
@@ -393,8 +410,7 @@ extension PCCFrontend {
             }
         }
         public struct CryptexInstallEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .system
             public var event_type: String = "pcc_\(CryptexGenerator.CryptexInstallEvent().event_type)"
             public var name: String = ""
@@ -414,8 +430,7 @@ extension PCCFrontend {
             }
         }
         public struct CryptexUninstallEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .system
             public var event_type: String = "pcc_\(CryptexGenerator.CryptexUninstallEvent().event_type)"
             public var name: String = ""
@@ -433,8 +448,7 @@ extension PCCFrontend {
             }
         }
         public struct CryptexUpgradedEvent: EHUEFEvent {
-            public var fields: [String: EHValueType] = [:]
-            public var tags: Set<String> = []
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .system
             public var event_type: String = "pcc_\(CryptexGenerator.CryptexUpgradedEvent().event_type)"
             public var name: String = ""
@@ -453,11 +467,9 @@ extension PCCFrontend {
         }
         public struct AlertEngineEvent: EHUEFEvent {
             public init() {}
-            public var tags = Set<String>()
-
-            public var fields: [String: EHValueType] = [:]
+            public var metadata = EHEventMetadata()
             public var event_category: EHUEFCategory = .alert
-            public var event_type: String = "pcc_\(AlertEngine.AlertEvent().event_type)"
+            public var event_type: String = "pcc_\(RegoEngine.AlertEvent().event_type)"
 
             public var timestamp: TimeInterval = 0
             public var name: String = ""
@@ -465,7 +477,7 @@ extension PCCFrontend {
             public var severity: Double = 0
             public var confidence: Double = 0
             public var payload: String = ""
-            init(from: AlertEngine.AlertEvent) {
+            init(from: RegoEngine.AlertEvent) {
                 self.tags = from.tags
                 self.name = from.name
                 self.timestamp = from.timestamp
@@ -473,7 +485,7 @@ extension PCCFrontend {
                 self.identifier = from.identifier
                 self.severity = from.severity
                 self.confidence = from.confidence
-                self.payload = from.payload
+                self.payload = from.sourceEvent?.jsonString ?? ""
                 self.copyHostMetadata(from)
             }
         }
@@ -505,7 +517,7 @@ extension EHUEFEvent {
 
 final class PCCPrivacyEventCaster: EHTransform {
     public let name = "PCCPrivacyEventCaster"
-    func configure() throws { }
+    func configure() async throws { }
 
     func process(_ event: any EHUEFEvent) async -> EHTransformReturn {
         if let e = event as? EventNormalizer.NormalizedProcess {
@@ -516,6 +528,8 @@ final class PCCPrivacyEventCaster: EHTransform {
             return (.proceed_mutated, [PCCFrontend.PrivacyApprovedEvents.PCCNormalizedDnsEvent(from: e)], nil, nil)
         } else if let e = event as? EventNormalizer.NormalizedDevice {
             return (.proceed_mutated, [PCCFrontend.PrivacyApprovedEvents.PCCNormalizedDeviceEvent(from: e)], nil, nil)
+        } else if let e = event as? EventNormalizer.NormalizedSSH {
+            return (.proceed_mutated, [PCCFrontend.PrivacyApprovedEvents.PCCNormalizedSSHEvent(from: e)], nil, nil)
         } else if let e = event as? ESClient.ESClientProcExitEvent {
             return (.proceed_mutated, [PCCFrontend.PrivacyApprovedEvents.ProcExitEvent(from: e)], nil, nil)
         } else if let e = event as? ESClient.ESClientIOKitOpenEvent {
@@ -538,7 +552,7 @@ final class PCCPrivacyEventCaster: EHTransform {
             return (.proceed_mutated, [PCCFrontend.PrivacyApprovedEvents.CryptexUninstallEvent(from: e)], nil, nil)
         } else if let e = event as? CryptexGenerator.CryptexUpgradedEvent {
             return (.proceed_mutated, [PCCFrontend.PrivacyApprovedEvents.CryptexUpgradedEvent(from: e)], nil, nil)
-        } else if let e = event as? AlertEngine.AlertEvent {
+        } else if let e = event as? RegoEngine.AlertEvent {
             return (.proceed_mutated, [PCCFrontend.PrivacyApprovedEvents.AlertEngineEvent(from: e)], nil, nil)
         }
 

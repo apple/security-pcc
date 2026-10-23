@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -188,7 +188,7 @@ actor ManagedAppStateMachine {
                 message: "Cannot send message to app currently terminating",
                 state: self.state,
                 error: error
-            ).log(to: self.tracingLogger, level: .error)
+            ).log(to: self.tracingLogger, level: .info)
             throw error
         }
     }
@@ -227,7 +227,7 @@ actor ManagedAppStateMachine {
                 message: "Cannot send message to app currently terminating",
                 state: self.state,
                 error: error
-            ).log(to: self.tracingLogger, level: .error)
+            ).log(to: self.tracingLogger, level: .info)
             throw error
         }
     }

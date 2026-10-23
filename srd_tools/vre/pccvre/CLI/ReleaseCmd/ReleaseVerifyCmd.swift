@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,7 +24,16 @@ extension CLI.ReleaseCmd {
     struct ReleaseVerifyCmd: AsyncParsableCommand {
         static var configuration = CommandConfiguration(
             commandName: "verify",
-            abstract: "Verify downloaded assets against release tickets."
+            abstract: "Verify downloaded assets against release tickets.",
+            discussion: """
+            Verifies the integrity of downloaded assets by comparing their measured \
+            digests against the digests in the corresponding release tickets from the \
+            transparency log. The release must have been previously downloaded.
+
+            By default, all OS and code cryptex assets for the release are verified. \
+            Use --image to verify a specific image file. Use --detail to include \
+            digest values, algorithm information, and ticket contents in the output.
+            """
         )
 
         @OptionGroup var globalOptions: CLI.globalOptions
@@ -41,6 +50,14 @@ extension CLI.ReleaseCmd {
 
         @Flag(name: [.customLong("detail")], help: "Output detailed summary of operations.")
         var showDetail: Bool = false
+
+        @Flag(name: [.customLong("verify-nvidia-driver")],
+              help: "For v2 releases: re-derive NVIDIA driver SPDM blocks via NVIDIA's RIM service. Requires network access.")
+        var verifyNvidiaDriver: Bool = false
+
+        @Option(name: [.customLong("container-image-layout")],
+                help: "For v2 releases: path to an OCI image layout — either an unpacked directory or a .tar/.tar.gz oci-archive — whose manifest digest should match the published containerImageDigest. If omitted, the .pcs asset downloaded by `release download` is used when present on disk.")
+        var containerImageLayout: String?
 
         // ReleaseTicketInfo serves as container for information extracted from a release ticket from Transparency Log
         private struct ReleaseTicketInfo {
@@ -68,8 +85,6 @@ extension CLI.ReleaseCmd {
             }
             CLI.logger.log("verify downloaded assets \(logParams.joined(separator: "; "), privacy: .public))")
 
-            var imagePaths: [CryptexHelper] = try imagePath != nil ? [CryptexHelper(path: imagePath!)] : []
-
             var assetHelper: AssetHelper
             do {
                 assetHelper = try AssetHelper(directory: CLIDefaults.assetsDirectory.path)
@@ -77,20 +92,59 @@ extension CLI.ReleaseCmd {
                 throw CLIError("\(CLIDefaults.assetsDirectory.path): \(error)")
             }
 
-            let releaseTickets: SWRelease.Tickets
+            // Load the raw transparency-log leaf payload first so we can dispatch on schema
+            // before deciding which verification path to take.
+            let releaseRawData: Data
             let releaseMetadata: SWRelease.Metadata
             do {
-                (releaseTickets, releaseMetadata) = try assetHelper.loadRelease(
+                (releaseRawData, releaseMetadata) = try assetHelper.loadReleaseRawData(
                     index: releaseIndex,
                     logEnvironment: swlogOptions.environment
                 )
-
-                CLI.logger.log("ticket: \(releaseTickets.digest().bytes.hexString, privacy: .public)")
             } catch {
                 let logmsg = "release lookup [\(swlogOptions.environment):\(releaseIndex)]: \(error)"
                 CLI.logger.error("\(logmsg, privacy: .public)")
 
                 throw CLIError("SW Release info not found for index \(releaseIndex): have assets been downloaded?")
+            }
+
+            // Dispatch on the leaf's ASN.1 version INTEGER (both schemas are
+            // `SEQUENCE { INTEGER version, … }`; v1=1, v2=2). The reader lives
+            // on TransparencyLog.ATLeaf so the discriminator stays in one place.
+            switch TransparencyLog.ATLeaf.releaseSchemaVersion(rawData: releaseRawData) {
+            case 2:
+                do {
+                    try await verifyV2Release(releaseDER: releaseRawData, metadata: releaseMetadata)
+                } catch let error as PCCVREAttestationHelperError {
+                    throw CLIError(
+                        "release rawdata at index \(releaseIndex) rejected by helper: \(error). " +
+                        "Re-download with `release download -R \(releaseIndex)`."
+                    )
+                }
+                // verifyV2Release exits via CLI.exit; this is unreachable.
+                return
+            case 1:
+                break  // fall through to the v1 image4-manifest path below
+            case let v:
+                throw CLIError(
+                    "release rawdata at index \(releaseIndex) has unrecognised schema version " +
+                    "(\(v.map(String.init) ?? "malformed DER")); re-download with " +
+                    "`release download -R \(releaseIndex)`."
+                )
+            }
+
+            // ---- v1 (legacy) path: decode tickets and verify image4 manifests ----
+
+            // CryptexHelper only accepts .aar/.dmg/.ipsw — construct it on the
+            // v1 path only, after the v2 dispatch above (v2 images are .tar.gz).
+            var imagePaths: [CryptexHelper] = try imagePath != nil ? [CryptexHelper(path: imagePath!)] : []
+
+            let releaseTickets: SWRelease.Tickets
+            do {
+                releaseTickets = try SWRelease.Tickets(serializedData: releaseRawData)
+                CLI.logger.log("ticket: \(releaseTickets.digest().bytes.hexString, privacy: .public)")
+            } catch {
+                throw CLIError("decode release tickets: \(error)")
             }
 
             if imagePaths.isEmpty {
@@ -416,6 +470,73 @@ extension CLI.ReleaseCmd {
                         print("      ticket:   \(result.ticketDigest.hexString)")
                     }
                 }
+            }
+        }
+
+        // MARK: - v2 release verification
+
+        /// Re-measure the OS image asset and compare against the published v2 ReleaseV2 DER
+        /// via `pccvre-attestation-helper release verify-image`. The helper handles tarball
+        /// extraction, host-vs-VM auto-detection (via the EFI partition layout), boot-chain
+        /// re-measurement, NVIDIA driver SPDM block re-derivation (under
+        /// `--verify-nvidia-driver`), and re-hashing the OCI manifest from the container
+        /// asset (directory or `.tar.gz`) when one is supplied.
+        private func verifyV2Release(releaseDER: Data, metadata: SWRelease.Metadata) async throws {
+            let osImagePath: String
+            if let imagePath {
+                osImagePath = imagePath
+            } else {
+                // NOTE(rdar://181041139): assumes one .os asset per release. Today the
+                // guest images are baked into the host image (so there is only one);
+                // revisit if host+guest ever ship as separate .os assets.
+                guard let osAsset = metadata.assetsByType(.os)?.first else {
+                    throw CLIError("v2 release has no OS asset in metadata; nothing to verify against")
+                }
+                do {
+                    osImagePath = try CLI.expandAssetPath(osAsset).string
+                } catch {
+                    throw CLIError("locate OS asset on disk: \(error). Run `release download` first.")
+                }
+            }
+
+            // Locate the exported OCI container image. The container asset is hosted on the
+            // CDN (plain HTTP via `release download`); the helper accepts either an unpacked
+            // layout directory or the downloaded oci-archive `.tar.gz` directly, so just
+            // hand it whatever `release download` left on disk.
+            let resolvedContainerLayout: String? = containerImageLayout ?? metadata.assetsByType(.pcs)?.first
+                .flatMap { try? CLI.expandAssetPath($0).string }
+
+            CLI.logger.log("verifying v2 release: image=\(osImagePath, privacy: .public)")
+            print("Release: \(metadata.releaseHash.hexString) (v2)")
+            print("  Image: \(osImagePath)")
+            if let resolvedContainerLayout {
+                print("  Container layout: \(resolvedContainerLayout)")
+            } else {
+                print("  Container layout: (none — containerImageDigest will be reported info-only)")
+            }
+            print()
+
+            let resolver = PCCVREAttestationHelperResolver(environment: swlogOptions.environment)
+            let envelope = try await resolver.releaseVerifyImage(
+                imagePath: osImagePath,
+                releaseDER: releaseDER,
+                verifyNvidiaDriver: verifyNvidiaDriver,
+                containerImageLayout: resolvedContainerLayout
+            )
+
+            print("  \(envelope.summary)")
+            print()
+            if showDetail {
+                print(envelope.detail)
+                print()
+            }
+
+            if envelope.ok {
+                print("SUCCESSFULLY verified image against published v2 release")
+                CLI.exit(withError: ExitCode(0))
+            } else {
+                print("FAILED to verify image against published v2 release")
+                CLI.exit(withError: ExitCode(3))
             }
         }
     }

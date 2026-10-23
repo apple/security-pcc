@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,6 +22,17 @@
 import Foundation
 
 protocol TokenProviderProtocol: Sendable {
-    func requestToken() async throws(TrustedRequestError) -> (tokenGrantingToken: Data, token: Data, salt: Data)
+    func fetchToken() async throws(TrustedRequestError) -> Data
     func prewarm() async throws(TrustedRequestError)
 }
+
+protocol OneTimeTokenProviderProtocol: TokenProviderProtocol {
+    func save(costToken: Data)
+}
+
+protocol ReputationTokenProviderProtocol: TokenProviderProtocol {
+    func generateTokenRequest() async throws(TrustedRequestError) -> Data
+    func save(tokenResponse: Data) async throws(TrustedRequestError)
+}
+
+protocol WaitlistTokenProviderProtocol: TokenProviderProtocol {}

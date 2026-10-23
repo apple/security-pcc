@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,18 +17,15 @@
 //  darwin-init
 //
 
+import DarwinInitConfig
 import Foundation
-#if os(macOS)
 import IOKit
-#endif
 import os
-
-internal import DarwinInitBridging
 
 // MARK: - Error
 public enum NVRAMError: Swift.Error {
     case unableToConnect
-    case unableToGetDataForKey(String, kern_return_t)
+    case unableToGetDataForKey(String)
     case unableToSetDataForKey(String, kern_return_t)
 }
 
@@ -37,12 +34,8 @@ extension NVRAMError: LocalizedError {
         switch self {
         case .unableToConnect:
             return "Unable to connect to NVRAM"
-        case let .unableToGetDataForKey(key, rawValue):
-            var description = "Unable to get value for key \(key) from NVRAM"
-            if let cString = mach_error_string(rawValue) {
-                description += ", " + String(cString: cString)
-            }
-            return description
+        case let .unableToGetDataForKey(key):
+            return "Unable to get value for key \(key) from NVRAM"
         case let .unableToSetDataForKey(key, rawValue):
             var description = "Unable to set value for key \(key) from NVRAM"
             if let cString = mach_error_string(rawValue) {
@@ -82,7 +75,7 @@ public final class RealNVRAM: NVRAM {
 
     public func getData(forKey key: NVRAMVariable) throws -> Data {
         guard let data = IORegistryEntryCreateCFProperty(entry, key.rawValue as CFString, kCFAllocatorDefault, 0)  else {
-            throw Error.unableToGetDataForKey(key.rawValue, shim_kIOReturnNoResources())
+            throw Error.unableToGetDataForKey(key.rawValue)
         }
         return data.takeRetainedValue() as! Data
     }
@@ -101,7 +94,7 @@ public final class VirtuaNVRAM: NVRAM {
 
     public func getData(forKey key: NVRAMVariable) throws -> Data {
         guard let data = _ram[key.rawValue] else {
-            throw Error.unableToGetDataForKey(key.rawValue, shim_kIOReturnNoResources())
+            throw Error.unableToGetDataForKey(key.rawValue)
         }
         return data
     }

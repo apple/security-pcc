@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -32,6 +32,7 @@ package protocol CloudBoardJobHelperAPIClientToServerProtocol: Actor {
     func abandon() async throws
     func warmup(_ info: WarmupInfo) async throws
     func assignLAContext() async throws
+    func queryProxyRequestStatus() async throws -> ProxyRequestStatus
 }
 
 /// call back notifications available to ``CloudBoardJobHelperAPIClientProtocol``
@@ -51,36 +52,44 @@ package protocol CloudBoardJobHelperAPIClientProtocol: CloudBoardJobHelperAPICli
 
 package struct WorkerAttestationInfo: ByteBufferCodable, Sendable, Hashable, CustomStringConvertible {
     /// The id we used when requesting the worker, rather than something identifying the node itself
-    public var workerID: UUID
+    package var workerID: UUID
     /// The id identifying the key within the ``attestationBundle`` on the worker
-    public var keyID: Data
+    package var keyID: Data
     /// The serialized bundle, so we can validate it, and pass it along in the REL
-    public var attestationBundle: Data
+    package var attestationBundle: Data
     /// Present if response bypass was requested, this is then the OHTTP contextId
     /// the bypass will be presented to the client on
-    public var bypassContextID: UInt32?
-    public var spanID: UInt64?
+    package var bypassContextID: UInt32?
+    package var spanID: UInt64?
+    package var workerBuildVersion: String
+    package var workerReleaseType: String
 
-    public init(
+    package init(
         workerID: UUID,
         keyID: Data,
         attestationBundle: Data,
         bypassContextID: UInt32?,
-        spanID: UInt64?
+        spanID: UInt64?,
+        workerBuildVersion: String,
+        workerReleaseType: String
     ) {
         self.workerID = workerID
         self.keyID = keyID
         self.attestationBundle = attestationBundle
         self.bypassContextID = bypassContextID
         self.spanID = spanID
+        self.workerBuildVersion = workerBuildVersion
+        self.workerReleaseType = workerReleaseType
     }
 
-    public var description: String {
+    package var description: String {
         """
         worker: \(self.workerID), 
         key ID: \(self.keyID), 
         \(self.attestationBundle.count) bytes, 
-        bypassContextID: \((self.bypassContextID?.description ?? "nil"))
+        bypassContextID: \((self.bypassContextID?.description ?? "nil")),
+        workerBuildVersion: \(self.workerBuildVersion),
+        workerReleaseType: \(self.workerReleaseType)
         """
     }
 
@@ -91,6 +100,8 @@ package struct WorkerAttestationInfo: ByteBufferCodable, Sendable, Hashable, Cus
         try self.attestationBundle.encode(to: &buffer)
         try self.bypassContextID.encode(to: &buffer)
         try self.spanID.encode(to: &buffer)
+        try self.workerBuildVersion.encode(to: &buffer)
+        try self.workerReleaseType.encode(to: &buffer)
     }
 
     public init(from buffer: inout ByteBuffer) throws {
@@ -99,6 +110,8 @@ package struct WorkerAttestationInfo: ByteBufferCodable, Sendable, Hashable, Cus
         self.attestationBundle = try .init(from: &buffer)
         self.bypassContextID = try .init(from: &buffer)
         self.spanID = try .init(from: &buffer)
+        self.workerBuildVersion = try .init(from: &buffer)
+        self.workerReleaseType = try .init(from: &buffer)
     }
 }
 
@@ -343,6 +356,9 @@ package struct Parameters: ByteBufferCodable, Sendable, Hashable, CustomStringCo
     /// Should only ever be set for a proxy node, to request a NACK (An immediate empty REL and exit)
     public var requestedNack: Bool = false
 
+    /// PAT issuer, which acts as an indirect resource pool identifier for cost token generation
+    public var patIssuer: String?
+
     public init(
         requestID: String,
         oneTimeToken: Data,
@@ -352,7 +368,8 @@ package struct Parameters: ByteBufferCodable, Sendable, Hashable, CustomStringCo
         responseBypassMode: ResponseBypassMode,
         requestBypassed: Bool,
         requestedNack: Bool,
-        traceContext: TraceContext
+        traceContext: TraceContext,
+        patIssuer: String? = nil
     ) {
         self.requestID = requestID
         self.oneTimeToken = oneTimeToken
@@ -363,6 +380,7 @@ package struct Parameters: ByteBufferCodable, Sendable, Hashable, CustomStringCo
         self.requestBypassed = requestBypassed
         self.requestedNack = requestedNack
         self.traceContext = traceContext
+        self.patIssuer = patIssuer
     }
 
     public var description: String {
@@ -375,7 +393,8 @@ package struct Parameters: ByteBufferCodable, Sendable, Hashable, CustomStringCo
         parametersReceived: \(self.parametersReceived),
         plaintextMetadata: \(self.plaintextMetadata),
         requestedNack: \(self.requestedNack),
-        traceContext: \(self.traceContext)
+        traceContext: \(self.traceContext),
+        patIssuer: \(self.patIssuer ?? "nil")
         """
     }
 
@@ -390,6 +409,7 @@ package struct Parameters: ByteBufferCodable, Sendable, Hashable, CustomStringCo
         try self.requestBypassed.encode(to: &buffer)
         try self.requestedNack.encode(to: &buffer)
         try self.traceContext.encode(to: &buffer)
+        try self.patIssuer.encode(to: &buffer)
     }
 
     public init(from buffer: inout ByteBuffer) throws {
@@ -402,6 +422,7 @@ package struct Parameters: ByteBufferCodable, Sendable, Hashable, CustomStringCo
         self.requestBypassed = try .init(from: &buffer)
         self.requestedNack = try .init(from: &buffer)
         self.traceContext = try .init(from: &buffer)
+        self.patIssuer = try .init(from: &buffer)
     }
 }
 

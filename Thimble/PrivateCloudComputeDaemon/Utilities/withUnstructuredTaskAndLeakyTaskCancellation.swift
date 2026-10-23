@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,6 +23,8 @@ import PrivateCloudCompute
 import Synchronization
 import os.log
 
+private let logger = Logger(for: .daemon)
+
 private let numberOfLeakingTasks = Atomic<Int>(0)
 
 /// Runs a given operation in an unstructured task. When the outer task gets canceled, it notifies the task
@@ -35,13 +37,11 @@ nonisolated(nonsending) func withUnstructuredTaskAndLeakyTaskCancellation<T: Sen
 ) async throws -> T {
     try Task.checkCancellation()  // don't start if the outer task has been already cancelled
 
-    let logger = tc2Logger(forCategory: .daemon)
     let logPrefix = UUID().uuidString
 
     let resultSignal = AsyncEvent<T>()
     let task = Task {
         do {
-            // note: "end" is logged only if it ends after cancellation
             logger.log("\(logPrefix, privacy: .public) withUnstructuredTaskAndLeakyTaskCancellation: start")
             let value = try await operation()
             resultSignal.fire(value)
@@ -52,6 +52,8 @@ nonisolated(nonsending) func withUnstructuredTaskAndLeakyTaskCancellation<T: Sen
         if Task.isCancelled {
             let counter = numberOfLeakingTasks.subtract(1, ordering: .relaxed).newValue
             logger.warning("\(logPrefix, privacy: .public) withUnstructuredTaskAndLeakyTaskCancellation: end after being cancelled counter=\(counter)")
+        } else {
+            logger.log("\(logPrefix, privacy: .public) withUnstructuredTaskAndLeakyTaskCancellation: end")
         }
     }
 

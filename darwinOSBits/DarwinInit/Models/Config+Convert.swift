@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,6 +18,7 @@
 //
 //
 
+import DarwinInitConfig
 import Foundation
 
 extension Config: Convertable {
@@ -87,6 +88,7 @@ extension Config: Convertable {
     }
 
 	init(from conv: Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
         self.$authentication = try conv.convert(Authentication.self)
 		self.$caRoots = try container.convert(CARoots.self, forKey: .caRoots)
@@ -165,9 +167,7 @@ extension Config: Convertable {
                 res[usr]?[app]?[key.wrappedValue] = val
 			}
 
-			if !res.isEmpty {
-				self.preferences = res
-			}
+			self.preferences = res
 		}
 
         self.$identification = try conv.convert(Identification.self)
@@ -189,12 +189,10 @@ extension Config: Convertable {
                 ifaces[name.wrappedValue] = val
 			}
 
-			if !ifaces.isEmpty {
-				if network == nil {
-					network = Network()
-				}
-				self.network?.interfaces = ifaces
-			}
+            if network == nil {
+				network = Network()
+            }
+			self.network?.interfaces = ifaces
 		}
 
 		if let narrativeIds = try container.indexedContainer(forKey: .narrativeIdentitiesConfig) {
@@ -317,6 +315,7 @@ extension Config.Authentication: Convertable {
 	typealias VersionOneKeys = Config.Cryptex.VersionOneKeys
 
 	init?(from conv: Converter) throws {
+		self.init()
 		let outer = try conv.container(keyedBy: Config.VersionOneKeys.self)
 
 		guard let array = try outer.indexedContainer(forKey: .cryptexConfig) else {
@@ -371,11 +370,28 @@ extension Config.CARoots: Convertable {
 
 	enum VersionOneKeys: String, CodingKey {
 		case appleCorpRoot = "apple-corporate-root"
+		case customRoots = "custom-roots"
+	}
+
+	init(from converter: Converter) throws {
+		self.init()
+		let container = try converter.container(keyedBy: VersionOneKeys.self)
+		self.$appleCorporateRoot = try container.bool(forKey: .appleCorpRoot)
+		self.$customRoots = try container.convert([CustomRoot].self, forKey: .customRoots)
+	}
+}
+
+extension Config.CARoots.CustomRoot: Convertable {
+
+	enum VersionOneKeys: String, CodingKey {
+		case certificate
 	}
 
 	init(from converter: Converter) throws {
 		let container = try converter.container(keyedBy: VersionOneKeys.self)
-		self.$appleCorporateRoot = try container.bool(forKey: .appleCorpRoot)
+		let certData = try container.str(forCheckedKey: .certificate)
+		self.init(certificate: certData.wrappedValue)
+		self.$certificate.codingPath = certData.codingPath
 	}
 }
 
@@ -383,6 +399,7 @@ extension Config.Cryptex.Network: Convertable {
 	typealias VersionOneKeys = Config.Cryptex.VersionOneKeys
 
 	init?(from conv: Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 
         let bgClass: PathCoded<Bool?> = try container.bool(forKey: .backgroundTrafficClass)
@@ -418,8 +435,8 @@ extension Config.Cryptex.Cryptex: Convertable {
 
 		self.$aeaDecryptionParams = try container.convert(AeaDecryptionParams.self, forKey: .aeaDecryptionParams)
 		self.$cacheable = try container.bool(forKey: .cacheable)
-        self.$signingEnvironment = try container.convert(DInitAuthorizationService.self, forKey: .auth)
-        self.$sha256 = try container.convert(DInitSHA256Digest.self, forKey: .sha256)
+        self.$signingEnvironment = try container.convert(Config.Cryptex.Cryptex.SigningEnvironment.self, forKey: .auth)
+        self.$sha256 = try container.convert(Sha256.self, forKey: .sha256)
         self.$size = try container.uint(forKey: .size)
         self.$variant = try container.str(forKey: .variant)
         self.$jetsamPropertiesVariant = try container.str(forKey: .jetsamPropertiesVariant)
@@ -477,6 +494,7 @@ extension Config.Cryptex: Convertable {
 	typealias CryptexCfg = Cryptex
 
 	init(from conv: Converter) throws {
+		self.init()
 		let container = try conv.indexedContainer()
 
 		var cryptexes: [String: CryptexCfg] = [:]
@@ -537,6 +555,7 @@ extension Config.FeatureFlag: Convertable {
 	}
 
 	init?(from conv: any Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 		$attributeName = try container.str(forKey: .attributeName)
 		$attributeValue = try container.str(forKey: .attributeValue)
@@ -562,6 +581,7 @@ extension Config.Finish: Convertable {
     }
 
 	init?(from conv: any Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 
 		self.$message = try container.str(forKey: .logText)
@@ -573,10 +593,6 @@ extension Config.Finish: Convertable {
                                                     forKey: .resultConfig) {
             self.$onFailure = try resultDict.convert(FailureAction.self, forKey: .failureAction)
         }
-
-        if message == nil && reboot == nil && userspaceReboot == nil && self.onFailure == nil {
-			return nil
-		}
 	}
 }
 
@@ -593,6 +609,7 @@ extension Config.Finish.UserspaceReboot: Convertable {
 extension Config.Identification: Convertable {
 	typealias VersionOneKeys = Config.VersionOneKeys
     init?(from conv: any Converter) throws {
+        self.init()
         let container = try conv.container(keyedBy: VersionOneKeys.self)
 
         self.$computerName = try container.str(forKey: .legacyComputerName)
@@ -645,13 +662,10 @@ extension Config.Log: Convertable {
 	}
 
 	init?(from conv: any Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 		self.$persist = try container.bool(forKey: .systemLoggingEnabled)
 		self.$privacyLevel =  try container.convert(PrivacyLevel.self, forKey: .systemLogPrivacyLevel)
-
-        if self.isEmpty {
-			return nil
-		}
 	}
 }
 
@@ -667,6 +681,7 @@ extension Config.Analytics: Convertable {
 	typealias VersionOneKeys = Config.VersionOneKeys
 
 	init?(from conv: any Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 		self.$submit = try container.objCBool(forKey: .diagnosticsSubmissionEnabled)
 
@@ -699,6 +714,7 @@ extension Config.SecurityPolicy: Convertable {
 	typealias VersionOneKeys = Config.VersionOneKeys
 
 	init?(from conv: Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 
 		self.$version = try container.uint(forKey: .configSecurityPolicyVersion)
@@ -714,6 +730,7 @@ extension Config.SSH: Convertable {
 	typealias VersionOneKeys = Config.VersionOneKeys
 
 	init?(from conv: Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 
 		self.$enabled = try container.objCBool(forKey: .enableSSH)
@@ -729,6 +746,7 @@ extension Config.Start: Convertable {
 	typealias VersionOneKeys = Config.VersionOneKeys
 
 	init?(from conv: Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 
 		self.$issueDCRT = try container.objCBool(forKey: .issueDCRT)
@@ -766,9 +784,7 @@ extension Config.User: Convertable {
         self.$gid.codingPath = gid.codingPath
 
         self.$admin = try container.objCBool(forKey: .isAdmin)
-		self.$plaintextPassword = try container.str(forKey: .password)
 		self.$passwordlessSudo = try container.objCBool(forKey: .passwordlessSudo)
-		self.$sshAuthorizedKey = try container.str(forKey: .sshAuthorizedKeys)
 		self.authentication = try Authentication(from: conv)
 	}
 }
@@ -777,10 +793,13 @@ extension Config.User.Authentication: Convertable {
 	typealias VersionOneKeys = Config.User.VersionOneKeys
 
 	init?(from conv: Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 		self.$esc = try container.convert(ESC.self, forKey: .appleConnectSSHConfig)
 		self.$memento = try container.convert(Memento.self, forKey: .appleAuthenticationConfig)
-		if esc == nil && memento == nil {
+        self.$plaintextPassword = try container.str(forKey: .password)
+        self.$sshAuthorizedKey = try container.str(forKey: .sshAuthorizedKeys)
+		if esc == nil && memento == nil && plaintextPassword == nil && sshAuthorizedKey == nil {
 			return nil
 		}
 	}
@@ -793,6 +812,7 @@ extension Config.User.Authentication.ESC: Convertable {
 	}
 
 	init?(from conv: any Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 		$principals = try container.convert([String].self, forKey: .principals)
 		$groups = try container.convert([String].self, forKey: .groups)
@@ -809,6 +829,7 @@ extension Config.User.Authentication.Memento: Convertable {
 		case ldapServer = "ldap-server"
 	}
 	init?(from conv: any Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 
 		$users = try container.convert([String].self, forKey: .users)
@@ -836,6 +857,7 @@ extension Config.Tailspin: Convertable {
 		case class_configs = "class_configs"
 	}
 	init?(from conv: any Converter) throws {
+		self.init()
 		let container = try conv.container(keyedBy: VersionOneKeys.self)
 		$bufferSizeSet = try container.uint64(forKey: .buffer_size_set)
 		$fullSamplingPeriodSet = try container.uint64(forKey: .full_sampling_period_set)
@@ -902,7 +924,7 @@ extension CredentialString: Convertable {
 }
 
 
-extension DInitAuthorizationService: Convertable {
+extension Config.Cryptex.Cryptex.SigningEnvironment: Convertable {
     init?(from conv: any Converter) throws {
         let container = try conv.singleValueContainer()
         self.init(rawValue: try container.str)
@@ -921,18 +943,18 @@ extension DInitData: Convertable {
 			throw DecodingError.dataCorrupted(context)
 		}
 
-		self.rawValue = data
+		self.init(rawValue: data)
 	}
 }
 
-extension DInitFailureAction: Convertable {
+extension Config.Finish.FailureAction: Convertable {
     init?(from conv: any Converter) throws {
         let container = try conv.singleValueContainer()
         self.init(argument: try container.str)
     }
 }
 
-extension DInitSHA256Digest: Convertable {
+extension Sha256: Convertable {
     init?(from conv: any Converter) throws {
         let container = try conv.singleValueContainer()
         self.init(argument: try container.str)

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,9 +25,14 @@ import os
 /// through both a one-shot `check` RPC and a streaming `watch` RPC.
 actor StatusProvider: Cloudboard_Status_V1_StatusAsyncProvider, Sendable {
     private let statusMonitor: StatusMonitor
+    private var healthMonitors: [ServiceHealthMonitor] = []
 
     init(statusMonitor: StatusMonitor) {
         self.statusMonitor = statusMonitor
+    }
+
+    func setHealthMonitors(_ monitors: [ServiceHealthMonitor]) {
+        self.healthMonitors = monitors
     }
 
     /// Returns the current daemon status as a one-shot response.
@@ -36,37 +41,72 @@ actor StatusProvider: Cloudboard_Status_V1_StatusAsyncProvider, Sendable {
         context _: InternalGRPC.GRPCAsyncServerCallContext
     ) async throws -> Cloudboard_Status_V1_StatusResponse {
         let currentStatus = self.statusMonitor.currentStatus()
-        return currentStatus.toProtoResponse()
+        let loadLevels: [StatusResponsePayload.LoadLevel] = self.healthMonitors.map { monitor in
+            let status = monitor.currentStatus
+            let (maxBatch, currentBatch, optimalBatch): (Int, Int, Int) = switch status {
+            case .healthy(.leader(let loadLevel)):
+                (loadLevel.maxBatchSize, loadLevel.currentBatchSize, loadLevel.optimalBatchSize)
+            case .healthy(.follower), .healthy(.persistentService), .initializing, .unhealthy, .terminal:
+                (0, 0, 0)
+            }
+            return StatusResponsePayload.LoadLevel(
+                cloudApp: monitor.cloudApp,
+                status: StatusResponsePayload.LoadLevel.statusDescription(
+                    maxBatchSize: maxBatch,
+                    currentBatchSize: currentBatch,
+                    optimalBatchSize: optimalBatch
+                ),
+                maxBatchSize: maxBatch,
+                currentBatchSize: currentBatch,
+                optimalBatchSize: optimalBatch
+            )
+        }
+
+        let payload = StatusResponsePayload(
+            cloudboardDaemonStatus: currentStatus.description,
+            loadLevel: loadLevels.isEmpty ? nil : loadLevels
+        )
+
+        var response = Cloudboard_Status_V1_StatusResponse()
+        do {
+            let jsonData = try JSONEncoder().encode(payload)
+            guard let jsonString = String(data: jsonData, encoding: .utf8) else {
+                Self.logger.error("Failed to convert status JSON data to UTF-8 string")
+                response.cloudboardStatusJson = "{\"error\": \"failed to convert JSON data to UTF-8 string\"}"
+                return response
+            }
+            response.cloudboardStatusJson = jsonString
+        } catch {
+            Self.logger
+                .error("Failed to encode status to JSON: \(String(unredacted: error), privacy: .public)")
+            response.cloudboardStatusJson = "{\"error\": \"failed to encode status to JSON\"}"
+        }
+        return response
     }
 }
 
-extension DaemonStatus {
-    /// Converts a DaemonStatus to the protobuf StatusResponse with JSON encoding.
-    func toProtoResponse() -> Cloudboard_Status_V1_StatusResponse {
-        var response = Cloudboard_Status_V1_StatusResponse()
-        let statusDict = ["cloudboardDaemonStatus": self.description]
+private struct StatusResponsePayload: Encodable {
+    var cloudboardDaemonStatus: String
+    var loadLevel: [LoadLevel]?
 
-        let jsonData: Data
-        do {
-            jsonData = try JSONEncoder().encode(statusDict)
-        } catch {
-            // This should never happen with a simple [String: String] dictionary
-            StatusProvider.logger
-                .error("Failed to encode status to JSON: \(String(unredacted: error), privacy: .public)")
-            response.cloudboardStatusJson = "{\"error\": \"failed to encode status to JSON\"}"
-            return response
+    struct LoadLevel: Encodable {
+        var cloudApp: String
+        var status: String
+        var maxBatchSize: Int
+        var currentBatchSize: Int
+        var optimalBatchSize: Int
+
+        static func statusDescription(maxBatchSize: Int, currentBatchSize: Int, optimalBatchSize: Int) -> String {
+            if maxBatchSize == 0 {
+                return "down"
+            } else if optimalBatchSize > 0, currentBatchSize < optimalBatchSize {
+                return "green"
+            } else if currentBatchSize < maxBatchSize {
+                return "yellow"
+            } else {
+                return "red"
+            }
         }
-
-        // Convert JSON data to UTF-8 string
-        guard let jsonString = String(data: jsonData, encoding: .utf8) else {
-            // This should never happen with valid JSON data
-            StatusProvider.logger.error("Failed to convert JSON data to UTF-8 string for status: \(self.description)")
-            response.cloudboardStatusJson = "{\"error\": \"failed to convert JSON data to UTF-8 string\"}"
-            return response
-        }
-
-        response.cloudboardStatusJson = jsonString
-        return response
     }
 }
 

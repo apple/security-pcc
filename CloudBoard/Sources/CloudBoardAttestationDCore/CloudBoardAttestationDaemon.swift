@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -16,11 +16,11 @@ import CFPreferenceCoder
 import CloudAttestation
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardIdentity
 import CloudBoardLogging
 import CloudBoardMetrics
 import Foundation
-import MobileGestaltPrivate
 import NIOCore
 import os
 
@@ -94,8 +94,7 @@ package actor CloudBoardAttestationDaemon {
     /// reads the bootId from this file.
     /// cb_attestationd inserts this into our attestations each time as a piece of application data.
     /// We also advertise this to ROPES through service discovery.
-    internal func loadBootID(customSearchPath: CustomSearchPathDirectory) -> String? {
-        var bootID = nil as String?
+    internal func loadBootID(customSearchPath: CustomSearchPathDirectory) throws -> String {
         do {
             let cacheDirectory: URL = try customSearchPath.lookup(for: .cachesDirectory, in: .userDomainMask)
                 .appending(component: CFPreferences.cbAttestationPreferencesDomain)
@@ -111,42 +110,44 @@ package actor CloudBoardAttestationDaemon {
             } catch {
                 Self.logger
                     .error("Failed to create cache directory, error: \(String(unredacted: error), privacy: .public)")
-                return nil
+                throw error
             }
 
             let bootIdFileURL = cacheDirectory.appending(component: "boot-id")
             if fileManager.fileExists(atPath: bootIdFileURL.path()) {
                 do {
-                    bootID = try Data(contentsOf: bootIdFileURL, options: .uncached).utf8String
+                    let bootID = try Data(contentsOf: bootIdFileURL, options: .uncached).utf8String
                     if let bootID {
                         Self.logger.log("Loaded bootId: \(bootID) from the on disk file: \(bootIdFileURL)")
+                        return bootID
                     } else {
                         Self.logger.error("Failed to decode bootId from disk file as UTF8 string: \(bootIdFileURL)")
+                        throw CloudAttestationProviderError.failedToReadBootID
                     }
                 } catch {
                     Self.logger
                         .error(
                             "Unable to read file \(bootIdFileURL) to load bootId, error: \(String(unredacted: error), privacy: .public)"
                         )
+                    throw error
                 }
             } else {
                 // File doesn't exist. Create bootId and write to file on disk.
-                bootID = Self.generateTimeOrderedBootID()
-                if fileManager.createFile(atPath: bootIdFileURL.path(), contents: bootID?.data) {
-                    if let bootID {
-                        Self.logger.log("Written bootId: \(bootID) to the on disk file: \(bootIdFileURL)")
-                    }
+                let bootID = Self.generateTimeOrderedBootID()
+                if fileManager.createFile(atPath: bootIdFileURL.path(), contents: bootID.data) {
+                    Self.logger.log("Written bootId: \(bootID) to the on disk file: \(bootIdFileURL)")
+                    return bootID
                 } else {
                     Self.logger
-                        .error("Unable to write bootId: \(bootID ?? "nil") to the on disk file: \(bootIdFileURL)")
-                    bootID = nil
+                        .error("Unable to write bootId: \(bootID) to the on disk file: \(bootIdFileURL)")
+                    throw CloudAttestationProviderError.failedToStoreBootID
                 }
             }
         } catch {
             Self.logger
                 .error("Unable to load bootId for ensemble node, error: \(String(unredacted: error), privacy: .public)")
+            throw error
         }
-        return bootID
     }
 
     /// Generates a time-ordered bootID that allows chronological comparison
@@ -170,37 +171,86 @@ package actor CloudBoardAttestationDaemon {
 
     /// The means to make and validate attestations
     /// This is fundamentally different depending on whether we are doing proper Customer validatable
-    /// SEP backed attestation or the in memory keys that allow testing
+    /// SEP backed attestation or the in memory keys that allow testing (or a mix of both)
     private func makeAttestationFunctionality(
         nodeInfo: NodeInfo,
         bootID: String?
     ) throws -> (provider: any AttestationProviderProtocol, validatorFactory: any AttestationValidatorFactoryProtocol) {
         if self.config.useInMemoryKey {
+            /// If the proxy is using test ones then it is unusable by any real clients, as such
+            /// attempting to do validation against real CloudAttestation formats is currently pointless.
+            /// That functionality could be written, but since no-one needs it we don't bother and only
+            /// support test format compute as well.
             let attestationProvider = InMemoryKeyAttestationProvider(
                 // Leave this simple until someone has a use case to test it using in memory keys
                 // By simply agreeing it everywhere any tests using the proxy paths relying on this
                 // "just working" will not have to do anything
                 releaseDigest: CloudBoardAttestation.neverKnownReleaseDigest,
-                ensembleID: self.config.testEnsembleID,
-                bootID: self.config.testBootID,
-                rackID: self.config.testRackID
+                // Unit tests that require an ensembleID should specify it
+                // this value is to help detecting forgetting that
+                ensembleID: nodeInfo.ensembleID ?? "ensemble-id-not-defined",
+                bootID: bootID ?? "boot-id-not-defined",
+                rackID: nodeInfo.rackID.map { RackId($0) } ?? .irrelevant,
+                hardwareID: nodeInfo.testOnlyHardwareID
             )
             return (attestationProvider, InMemoryAttestationValidatorFactory())
-        } else {
-            let attestationProvider = CloudAttestationProvider(
-                configuration: self.config,
-                metrics: self.metrics,
-                releaseDigestExpiryGracePeriod: self.config.transparencyLog.releaseDigestExpiryGracePeriodMinutes,
-                nodeInfo: nodeInfo,
-                bootID: bootID
-            )
-            return (attestationProvider, CloudAttestationValidatorFactory())
         }
+        let attestationProvider = CloudAttestationProvider(
+            configuration: self.config,
+            metrics: self.metrics,
+            releaseDigestExpiryGracePeriod: self.config.transparencyLog.releaseDigestExpiryGracePeriodMinutes,
+            nodeInfo: nodeInfo,
+            bootID: bootID
+        )
+        // If transparency is disabled in general, also disable transitive proof verification
+        let enableTransitiveProofVerification = self.config.cloudAttestation
+            .includeTransparencyLogInclusionProof ? self.config.secureConfig
+            .enableTransitiveProofVerification : false
+        let transparencyCache: CloudBoardTransparencyCache? =
+            if enableTransitiveProofVerification, self.config.secureConfig.transparencyCacheEnabled {
+                CloudBoardTransparencyCache(
+                    configuration: .init(
+                        maxLogEntries: self.config.secureConfig.maximumTransparencyCacheLogEntrySize,
+                        maxConsistencyEntries: self.config.secureConfig.maximumTransparencyCacheConsistencySize,
+                        expirySweepInterval: TimeInterval(
+                            self.config.secureConfig
+                                .transparencyCacheExpirySweepIntervalSeconds
+                        )
+                    ),
+                    metrics: self.metrics,
+                    clock: self.clock
+                )
+            } else {
+                nil
+            }
+
+        if case .customer = self.config.secureConfig.securityPolicy {
+            /// In customer use of test attestations is obviously forbidden.
+            /// Other checks would kick in to trap this but for simplicity and clarity we just provide
+            /// CloudAttestation only assuming validation
+            return (
+                attestationProvider,
+                CloudAttestationValidatorFactory(
+                    enableTransitiveProofVerification: enableTransitiveProofVerification,
+                    transparencyCache: transparencyCache,
+                    pccEnvironment: CloudAttestation.Environment.default
+                )
+            )
+        }
+
+        return (
+            attestationProvider,
+            AutoDetectingAttestationValidatorFactory(
+                enableTransitiveProofVerification: enableTransitiveProofVerification,
+                transparencyCache: transparencyCache,
+                pccEnvironment: CloudAttestation.Environment.default
+            )
+        )
     }
 
-    private func makeReleasesProvider() throws -> (any ReleasesProviderProtocol, IdentityManager?)? {
+    private func makeReleasesProvider() throws -> ((any ReleasesProviderProtocol)?, IdentityManager?) {
         guard self.config.isProxy else {
-            return nil
+            return (nil, nil)
         }
         if let releasesOverride = self.config.transparencyLog.proxiedReleaseDigestsOverride {
             Self.logger.log("Creating releases provider from configuration")
@@ -208,9 +258,9 @@ package actor CloudBoardAttestationDaemon {
         } else if self.config.cloudAttestation.includeTransparencyLogInclusionProof {
             Self.logger.log("Creating releases provider from Transparency Log")
             let identityManager: IdentityManager = .init(
-                useSelfSignedCert: false,
                 metricsSystem: self.metrics,
-                metricProcess: "cb_attestationd"
+                metricProcess: "cb_attestationd",
+                identityBackendType: .narrative()
             )
             return (TransparencyLogReleasesProvider(
                 transparencyLog: SWTransparencyLog(
@@ -226,12 +276,14 @@ package actor CloudBoardAttestationDaemon {
                 pollingIntervalJitter: self.config.transparencyLog.pollingIntervalJitter
             ), identityManager)
         } else {
-            return nil
+            return (nil, nil)
         }
     }
 
     public func start(
-        customSearchPath: CustomSearchPathDirectory
+        customSearchPath: CustomSearchPathDirectory,
+        nodeInfo: NodeInfo? = nil,
+        bootIDKnown: Promise<String, CancellationError>? = nil
     ) async throws {
         Self.logger.log("Starting")
         switch customSearchPath {
@@ -246,7 +298,7 @@ package actor CloudBoardAttestationDaemon {
             }
         }
 
-        let nodeInfo = NodeInfo.load(secureConfig: self.config.secureConfig)
+        let nodeInfo = nodeInfo ?? NodeInfo.load(secureConfig: self.config.secureConfig)
         if let isLeader = nodeInfo.isLeader {
             if !isLeader {
                 Self.logger.log("Not a leader node. Exiting.")
@@ -257,43 +309,64 @@ package actor CloudBoardAttestationDaemon {
         }
         // only start emitting metrics if we are a leader node
         try await CloudBoardMetrics.Uptime.withStandardMetrics(
-            processInfo: Metrics.ProcessInfo.self,
+            processInfo: CloudBoardAttestationMetrics.ProcessInfo.self,
             metrics: self.metrics
         ) {
-            try await self._start(customSearchPath: customSearchPath, nodeInfo: nodeInfo)
+            try await self._start(
+                customSearchPath: customSearchPath,
+                nodeInfo: nodeInfo,
+                bootIDKnown: bootIDKnown
+            )
         }
     }
 
     private func _start(
         customSearchPath: CustomSearchPathDirectory,
-        nodeInfo: NodeInfo
+        nodeInfo: NodeInfo,
+        bootIDKnown: Promise<String, CancellationError>? = nil
     ) async throws {
-        let bootID = self.loadBootID(customSearchPath: customSearchPath)
+        let bootID = try self.loadBootID(customSearchPath: customSearchPath)
+        bootIDKnown?.succeed(with: bootID)
         do {
             let attestationBundleCache = try self.makeAttestationBundleCache(customSearchPath: customSearchPath)
             let (attestationProvider, attestationValidatorFactory) = try self
                 .makeAttestationFunctionality(nodeInfo: nodeInfo, bootID: bootID)
-            let releasesProviderResult = try self.makeReleasesProvider()
+            // When transitive proof verification is enabled, the releases provider is not needed —
+            // trust is established via transitive proofs rather than proxied release sets
+            let (releasesProvider, identityManager): ((any ReleasesProviderProtocol)?, IdentityManager?) =
+                if self.config.secureConfig.enableTransitiveProofVerification {
+                    (nil, nil)
+                } else {
+                    try self.makeReleasesProvider()
+                }
 
             try await withThrowingTaskGroup(of: Void.self) { group in
-                if let (releasesProvider, identityManager) = releasesProviderResult {
+                if let releasesProvider {
                     group.addTask {
                         try await releasesProvider.run()
                     }
+                }
+                if let identityManager {
                     group.addTask {
-                        if let identityManager {
-                            await identityManager.identityUpdateLoop()
-                        }
+                        await identityManager.identityUpdateLoop()
                     }
                 }
 
+                // Disable transitive proof verification if inclusion proofs are disabled altogether
+                let enableTransitiveProofVerification = self.config.cloudAttestation
+                    .includeTransparencyLogInclusionProof ? self.config.secureConfig
+                    .enableTransitiveProofVerification : false
                 group.addTask {
                     try await CloudBoardAttestationServer(
                         apiServer: self.apiServer,
                         attestationProvider: attestationProvider,
                         attestationValidatorFactory: attestationValidatorFactory,
-                        releasesProvider: releasesProviderResult?.0,
+                        releasesProvider: releasesProvider,
                         enableReleaseSetValidation: self.config.enableReleaseSetValidation,
+                        enableTransitiveProofVerification: enableTransitiveProofVerification,
+                        recycleCheckInterval: .seconds(self.config.secureConfig.recycleCheckIntervalSeconds),
+                        unpublishExistingAttestationsOnRecycle: self.config.secureConfig
+                            .unpublishExistingAttestationsOnRecycle,
                         keyLifetime: self.config.keyLifetime,
                         keyExpiryGracePeriod: self.config.keyExpiryGracePeriod,
                         metrics: self.metrics,
@@ -303,6 +376,8 @@ package actor CloudBoardAttestationDaemon {
                             .existingAttestationsAvailableOnlyOnNodeAfterReleaseEntryAddition,
                         maximumValidatedEntryCacheSize: self.config.maximumValidatedEntryCacheSize,
                         isProxy: self.config.isProxy,
+                        transitiveTrustWarmupMaxKeysToValidate: self.config.secureConfig
+                            .transitiveTrustWarmupMaxKeysToValidate,
                         clock: self.clock,
                         workerRackIDCacheTTL: self.config.rackIdCacheLifetime
                     ).run()
@@ -313,10 +388,12 @@ package actor CloudBoardAttestationDaemon {
                         logger: Self.logger,
                         metricsSystem: self.metrics,
                         physicalMemoryFootprintGauge: {
-                            Metrics.CloudBoardAttestationDaemon.PhysicalMemoryFootprintGauge(value: $0)
+                            CloudBoardAttestationMetrics.CloudBoardAttestationDaemon
+                                .PhysicalMemoryFootprintGauge(value: $0)
                         },
                         lifetimeMaxPhysicalMemoryFootprintGauge: {
-                            Metrics.CloudBoardAttestationDaemon.LifetimeMaxPhysicalMemoryFootprintGauge(value: $0)
+                            CloudBoardAttestationMetrics.CloudBoardAttestationDaemon
+                                .LifetimeMaxPhysicalMemoryFootprintGauge(value: $0)
                         }
                     )
                 }

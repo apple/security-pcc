@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,8 +17,12 @@ import CloudBoardLogging
 import os
 import Synchronization
 import System
-#if canImport(CloudAssetDownloaderFramework)
+#if RC_IS_CLOUDOS_ENABLED && os(iOS)
 import CloudAssetDownloaderFramework
+#elseif canImport(CloudAssetDownloaderFramework)
+import CloudAssetDownloaderFramework
+#else
+#warning("CloudAssetDownloaderFramework not available at compile time")
 #endif
 
 typealias CBAssetMetadata = CloudBoardDomain.AssetMetadata

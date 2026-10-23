@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -125,11 +125,11 @@ struct EnsembleConfiguration: CustomStringConvertible, Decodable, ReportableStri
 		    rackID: \(String(describing: self.rackID)),
 		    nodes: [
 		"""
-		for (_, value) in self.nodes {
+		for (key , value) in self.nodes {
 			desc = """
-			\(desc)\n\
-			\t\t(key: "%s", value: \(value))
-			"""
+            \(desc)\n\
+            \t\t(key: \(key), value: \(value))
+            """
 		}
 		desc = "\(desc)\n\t]]"
 		desc = "\(desc)\n}"

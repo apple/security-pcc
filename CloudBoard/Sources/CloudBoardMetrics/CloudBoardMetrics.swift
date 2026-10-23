@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -15,8 +15,12 @@
 import CloudBoardLogging
 import os
 
-#if canImport(CloudMetricsFramework)
+#if RC_IS_CLOUDOS_ENABLED
+import CloudMetricsFramework
+#elseif canImport(CloudMetricsFramework)
 @_weakLinked import CloudMetricsFramework
+#else
+#warning("CloudMetricsFramework not available at compile time")
 #endif
 
 private let logger: os.Logger = .init(
@@ -193,7 +197,6 @@ public protocol HistogramValueConvertible {
 public enum HistogramValue: Hashable, Sendable {
     case integer(Int)
     case floatingPoint(Double)
-    case bucketValues([Int], sum: Double, count: Int)
 }
 
 extension HistogramValue: HistogramValueConvertible {
@@ -211,7 +214,7 @@ extension Int: HistogramValueConvertible {
         switch histogramValue {
         case .integer(let int):
             self = int
-        case .floatingPoint, .bucketValues:
+        case .floatingPoint:
             return nil
         }
     }
@@ -222,7 +225,7 @@ extension Int: HistogramValueConvertible {
 extension Double: HistogramValueConvertible {
     public init?(_ histogramValue: HistogramValue) {
         switch histogramValue {
-        case .integer, .bucketValues:
+        case .integer:
             return nil
         case .floatingPoint(let double):
             self = double
@@ -549,8 +552,6 @@ public struct CloudMetricsSystem: MetricsSystem {
             cloudHistogram.record(value)
         case .floatingPoint(let value):
             cloudHistogram.record(value)
-        case .bucketValues(let buckets, let sum, let count):
-            cloudHistogram.record(bucketValues: buckets, sum: sum, count: count)
         }
         #endif
     }

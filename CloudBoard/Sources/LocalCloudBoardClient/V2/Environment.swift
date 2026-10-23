@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -61,15 +61,23 @@ extension PCCHarness {
         // MARK: - Client Factory Methods
 
         /// Create an application-layer client for making requests with decrypted Data streams
-        /// - Returns: An ApplicationClient instance that can be used to make requests to proxy or compute endpoints
+        /// - Returns: A client that can be used to make requests to proxy or compute endpoints
         public func makeApplicationClient() -> ApplicationClient {
             return ApplicationClient(environment: self)
         }
 
         /// Create a VRE-layer client for making requests with application Data input and PCC protocol responses
-        /// - Returns: A VREClient instance that can be used to make requests to proxy or compute endpoints
+        /// - Returns: A client that can be used to make requests to proxy or compute endpoints
         public func makeVREClient() -> VREClient {
             return VREClient(environment: self)
+        }
+
+        /// Returns the most recent attestation bundle for the provided endpoint
+        public func currentAttestationBundle(for endpoint: any CloudAppEndpoint) async throws
+        -> LocalCloudBoardAttestationBundle {
+            let rawBundle = try await self.gateway.attestationSet(for: endpoint).activeAttestation.attestationBundle
+            let (_, attestation) = try await self.attestationValidator.parseAndValidate(rawBundle)
+            return attestation
         }
 
         // MARK: - Proxy Requests
@@ -483,13 +491,18 @@ extension PCCHarness {
                         self.attestationValidator.queueRELAttestationForValidation(bundle: bundle)
                     }
                 }
+                var outboundCallContext: OutboundCallContext?
+                if requestExecutionLogEntry.hasOutboundCallContext {
+                    outboundCallContext = .init(from: requestExecutionLogEntry.outboundCallContext)
+                }
                 if let trustedProxyAttestationBundle, let endpoint {
                     let requestExecutionLogEntryData = RequestExecutionLogEntry(
                         isNack: isNack,
                         isFinal: requestExecutionLogEntry.final,
                         endpoint: endpoint,
                         trustedProxyAttestationBundle: trustedProxyAttestationBundle,
-                        computeNodeAttestationBundle: computeNodeAttestationBundle
+                        computeNodeAttestationBundle: computeNodeAttestationBundle,
+                        outboundCallContext: outboundCallContext
                     )
                     message = PrivateCloudComputeProtocolResponse.requestExecutionLogEntry(requestExecutionLogEntryData)
                 } else {
@@ -515,6 +528,11 @@ extension PCCHarness {
                     responseStatus: responseStatus
                 )
                 message = PrivateCloudComputeProtocolResponse.subresponseClose(subresponseClose)
+            case .componentTimeMeasurement(let componentTimeMeasurement):
+                let measurement = ComponentTimeMeasurement(from: componentTimeMeasurement)
+                message = PrivateCloudComputeProtocolResponse.componentTimeMeasurement(measurement)
+            case .costToken(let costToken):
+                message = PrivateCloudComputeProtocolResponse.costToken(.init(from: costToken))
             case .none:
                 message = PrivateCloudComputeProtocolResponse.unknown
             @unknown default:
@@ -750,14 +768,22 @@ extension PCCHarness {
                                     case .subresponseOpen(let subOpen):
                                         pccRequestSession
                                             .receiveSubresponseMessage(.subresponseOpen(.init(
-                                                subrequestID: subOpen
-                                                    .subrequestID
+                                                subrequestID: subOpen.subrequestID
                                             )))
                                     case .subresponseClose(let subClose):
                                         pccRequestSession.receiveSubresponseMessage(.subresponseClose(.init(
                                             subrequestID: subClose.subrequestID,
                                             responseStatus: subClose.responseStatus
                                         )))
+                                    case .componentTimeMeasurement(let componentTimeMeasurement):
+                                        Self.logger.info(
+                                            "Received component time measurement: \(componentTimeMeasurement)"
+                                        )
+                                    case .costToken(let costToken):
+                                        Self.logger
+                                            .info(
+                                                "Received cost token in persistent connection: \(costToken.jwt.count) bytes"
+                                            )
                                     case .unknown:
                                         Self.logger.info(
                                             "Unexpectedly received message of unknown type in persistent connection response stream"
@@ -853,11 +879,7 @@ extension PCCHarness {
             cryptoContext: PrivateCloudComputeCryptoContext,
             applicationDataChunkingConfiguration: ApplicationDataChunkingConfiguration
         ) throws {
-            // We generate random tokens here which will fail validation but allow us to track token propagation across
-            // PCC nodes in testing when enforcement is disabled
             var authToken = Proto_PrivateCloudCompute_OpenRequestPayload()
-            authToken.tokenGrantingToken = Data(randomByteCount: 16)
-            authToken.ottSalt = Data(randomByteCount: 16)
             authToken.version = protocolVersion
             if case .enabled(let chunkSize) = applicationDataChunkingConfiguration {
                 authToken.capabilities = .with {

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,12 +22,15 @@
 #if canImport(cloudOSInfo)
 @_weakLinked private import cloudOSInfo
 #endif
+#if canImport(EnsembleTransport)
+@preconcurrency @_weakLinked private import EnsembleTransport
+#endif
 private import EnsembleWardenCommon
 package import EnsembleWardenServer
-private import EnsembleWardenXPCAPI
+private import EnsembleWardenXPC
 private import Foundation
 private import os
-private import XPC
+@preconcurrency package import XPC
 
 /// Daemon that ensures sensitive assets, such as KV-caches, that are
 /// transfered between ensembles are encrypted using application-level
@@ -35,7 +38,7 @@ private import XPC
 ///
 /// This ensures that only legimitate stacks that have the required keys can
 /// decrypt the sensitive data.
-package final class EnsembleWardenDaemon<Factory: MetricsFactory>: Sendable {
+package final class EnsembleWardenDaemon<Factory: MetricsFactory, Transport: EnsembleTransportProviding>: Sendable {
 
     private enum State {
         case stopped
@@ -44,7 +47,7 @@ package final class EnsembleWardenDaemon<Factory: MetricsFactory>: Sendable {
         case shuttingDown
     }
 
-    private let server: EnsembleWardenServerImplementation<DaemonHandler, Factory>
+    private let server: EnsembleWardenServerImplementation<DaemonHandler<Transport, Factory>, Factory>
     /// Stream that has requests for us to initiate a shutdown.
     private let shutdownRequestStream: AsyncStream<Void>
 
@@ -53,24 +56,39 @@ package final class EnsembleWardenDaemon<Factory: MetricsFactory>: Sendable {
     private let ensembleWardenMetrics: EnsembleWardenMetrics<Factory>
 
     package init(ensembleWardenServerXPCServiceName: String = kEnsembleWardenAPIXPCLocalServiceName,
-                 downstreamXPCServiceName: String = kvCacheXPCServiceName,
-                 metricsFactory: Factory) throws {
+                 metricsFactory: Factory,
+                 transportProvider: Transport) throws {
         let (stream, continuation) = AsyncStream<Void>.makeStream()
         self.shutdownRequestStream = stream
         self.ensembleWardenMetrics = EnsembleWardenMetrics(metricsFactory: metricsFactory)
         self.server = .init(
             handler: DaemonHandler(
-                downstreamXPCService: downstreamXPCServiceName,
-                shutdownInitiateContinuation: continuation),
+                shutdownInitiateContinuation: continuation,
+                transportProvider: transportProvider,
+                metrics: self.ensembleWardenMetrics),
             xpcServiceName: ensembleWardenServerXPCServiceName,
             entitlement: kEnsembleWardenClientEntitlement,
             metricsFactory: metricsFactory)
     }
+}
 
-    package static func withEnsembleDKeyProvider() throws -> EnsembleWardenDaemon<OSMetricsBridge> {
-        return try .init(metricsFactory: OSMetricsBridge())
+extension EnsembleWardenDaemon where Transport == EnsembleTransportBackend {
+    package static func make() throws -> EnsembleWardenDaemon<OSMetricsBridge, EnsembleTransportBackend> {
+#if canImport(EnsembleTransport)
+        let transportClient: EnsembleTransportClient? =
+            if #_hasSymbol(EnsembleTransport.EnsembleTransportClient.self) {
+                try EnsembleTransportClient()
+            } else {
+                nil
+            }
+        return try .init(metricsFactory: OSMetricsBridge(), transportProvider: EnsembleTransportBackend(client: transportClient))
+#else
+        return try .init(metricsFactory: OSMetricsBridge(), transportProvider: EnsembleTransportBackend())
+#endif
     }
+}
 
+extension EnsembleWardenDaemon {
     /// Waits for the daemon's XPC server to be running (ready to accept connections).
     ///
     /// Used in tests since we don't have the launchd magic there.
@@ -94,6 +112,24 @@ package final class EnsembleWardenDaemon<Factory: MetricsFactory>: Sendable {
     }
 
     package func run(xpcServiceName: String = kEnsembleWardenAPIXPCLocalServiceName) async throws {
+        try await self.startDaemon {
+            try await self.server.run()
+        }
+    }
+
+    /// Identical to ``run(xpcServiceName:)`` but uses an anonymous XPC listener.
+    ///
+    /// The resulting `XPCEndpoint` is vended via `endpointHandler` before blocking.
+    /// Intended for use in tests where launchd registration is unavailable.
+    package func runAnonymous(endpointHandler: @escaping @Sendable (XPCEndpoint) -> Void) async throws {
+        try await self.startDaemon {
+            try await self.server.runAnonymous(endpointHandler: endpointHandler)
+        }
+    }
+
+    /// Shared daemon lifecycle: starts the server task, shutdown watcher, uptime recorder,
+    /// and a continuation that blocks until shutdown is requested.
+    private func startDaemon(serverTask: @escaping @Sendable () async throws -> Void) async throws {
         let start = Date()
         try self.state.withLock { state in
             switch state {
@@ -120,7 +156,7 @@ package final class EnsembleWardenDaemon<Factory: MetricsFactory>: Sendable {
         try await withThrowingTaskGroup(of: Void.self) { group in
             // XPC Server
             group.addTask {
-                try await self.server.run()
+                try await serverTask()
             }
 
             // Tasks that will trigger a shutdown if we request ourselves to go away

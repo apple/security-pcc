@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -33,22 +33,23 @@ public struct EnsembleAttestor: Attestor {
     /// Creates an instance of ``EnsembleAttestor``.
     public init() {
         // No transparency proofs are utilized for ensembles
-        self.attestor = NodeAttestor(transparencyProver: NopTransparencyLog())
+        self.init(attestor: NodeAttestor(transparencyProver: NopTransparencyLog()))
         self.attestor.preserveSecureConfigs = true
     }
 
     public init(environment: Environment) {
-        self.attestor = NodeAttestor(transparencyProver: NopTransparencyLog(), assetProvider: PCC.AssetProvider(), environment: environment)
+        self.init(attestor: NodeAttestor(transparencyProver: NopTransparencyLog(), assetProvider: PCC.AssetProvider(), environment: environment))
     }
 
     @_spi(Private)
     public init(attestor: NodeAttestor) {
         self.attestor = attestor
+        self.attestor.certificateTransparency = false
     }
 
     @_spi(Private)
     public init(assetProvider: some AttestationAssetProvider) {
-        self.attestor = NodeAttestor(transparencyProver: NopTransparencyLog(), assetProvider: assetProvider)
+        self.init(attestor: NodeAttestor(transparencyProver: NopTransparencyLog(), assetProvider: assetProvider))
     }
 
     /// Returns the attestation bundle.

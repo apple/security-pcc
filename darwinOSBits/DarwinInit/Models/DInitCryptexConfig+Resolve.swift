@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -76,7 +76,7 @@ extension DInitCryptexConfig {
         }
     }
     
-    func resolveCryptexCacheAccessParameter() async throws -> CryptexCacheDelegate.AccessParameter {
+    func buildCacheAccessParameter() async throws -> CryptexCacheDelegate.AccessParameter {
         let aeaDecryptionParameters: AEADecryptionParameters?
         
         do {

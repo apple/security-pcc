@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -40,5 +40,10 @@ enum CloudBoardBridgeAPIXPCClientToServerMessage {
                 traceContext: .init(from: &buffer)
             )
         }
+    }
+
+    struct Ping: CloudBoardAsyncXPCCodableMessage {
+        typealias Success = ExplicitSuccess
+        typealias Failure = Never
     }
 }

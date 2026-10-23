@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -27,6 +27,7 @@ public import Foundation
 public struct EnsembleWardenCryptoHandles {
     public enum EnsemblePorterIdentifier {
         case ensemblePorterHandle(xpc_connection_t)
+        case ensemblePorterEndpoint(XPCEndpoint)
         case followerToken(UUID)
     }
 
@@ -34,6 +35,7 @@ public struct EnsembleWardenCryptoHandles {
 
     /// Whether this is a multi-turn request requiring CloudBoard crypto material.
     /// When false, EnsemblePorter uses its derived FT/ET key without waiting for CloudBoard.
+    package var isMultiTurn: Bool
 
     /// A handle to an ensembleporter instance.
     ///
@@ -53,10 +55,42 @@ public struct EnsembleWardenCryptoHandles {
         }
     }
 
+    package var ensemblePorterEndpoint: XPCEndpoint? {
+        switch self.ensemblePorterIdentifier {
+        case .ensemblePorterEndpoint(let endpoint): return endpoint
+        default: return nil
+        }
+    }
+
+    /// Creates an instance.
+    /// - Parameters:
+    ///   - ftETKeyEncryptionKey: The key encryption key that wraps the ft/et key.
+    ///   - ftEtKeyID: The token that lets ensemblewarden fetch the relevant (wrapped) key from ensembled.
+    @available(*, deprecated, renamed: "init", message: "Just pass ensemblePorterIdentifier")
+    public init(ftETKeyEncryptionKey: SymmetricKey, ftETKeyID: UUID, ensemblePorterIdentifier: EnsemblePorterIdentifier?) {
+        self.ensemblePorterIdentifier = ensemblePorterIdentifier ?? .none
+        self.isMultiTurn = true
+    }
+    /// Creates an instance.
+    /// - Parameters:
+    ///   - ftETKeyEncryptionKey: The key encryption key that wraps the ft/et key.
+    ///   - ftETKeyID: The token that lets ensemblewarden fetch the relevant (wrapped) key from ensembled.
+    @available(*, deprecated, renamed: "init", message: "Just pass ensemblePorterIdentifier")
+    public init(ftETKeyEncryptionKey: SymmetricKey, ftETKeyID: UUID) {
+        self.isMultiTurn = true
+    }
+
     public init(ensemblePorterIdentifier: EnsemblePorterIdentifier) {
         self.ensemblePorterIdentifier = ensemblePorterIdentifier
+        self.isMultiTurn = false
+    }
+
+    public init(ensemblePorterIdentifier: EnsemblePorterIdentifier, isMultiTurn: Bool) {
+        self.ensemblePorterIdentifier = ensemblePorterIdentifier
+        self.isMultiTurn = isMultiTurn
     }
 }
 
+// Sadly we need @unchecked here as xpc_connection_t is not sendable.
 extension EnsembleWardenCryptoHandles: @unchecked Sendable {}
 

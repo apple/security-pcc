@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -14,7 +14,7 @@
 
 
 import Foundation
-#if canImport(LoggingSupport)
+#if canImport(os)
 import os
 #endif
 import Synchronization
@@ -24,55 +24,37 @@ public final class FloodProtectionTransform: EHTransform {
     public static let future_events_quarantined_tag = "future_events_quarantined"
     public struct Configuration: Sendable {
         let maxEventsPerWindow: Int
-        let windowDurationSeconds: TimeInterval
+        let windowDuration: Duration
 
         public init(
             maxEventsPerWindow: Int = 10,
             windowDurationSeconds: TimeInterval = 10.0,
         ) {
             self.maxEventsPerWindow = maxEventsPerWindow
-            self.windowDurationSeconds = windowDurationSeconds
+            self.windowDuration = .seconds(windowDurationSeconds)
         }
     }
 
     private struct FloodTracker {
-        var count: Int
-        var firstEventTime: Date
-        var lastEventTime: Date
+        var count: Int = 0
+        var lastEventTime: ContinuousClock.Instant = .now
 
-        init() {
-            let now = Date()
-            self.count = 0
-            self.firstEventTime = now
-            self.lastEventTime = now
-        }
-
-        mutating func reset() {
-            let now = Date()
-            self.count = 0
-            self.firstEventTime = now
-            self.lastEventTime = now
-        }
-
-        mutating func recordEvent() {
+        mutating func recordAndCheck(
+            now: ContinuousClock.Instant,
+            windowDuration: Duration,
+            maxEvents: Int
+        ) -> (shouldDrop: Bool, willQuarantine: Bool) {
+            if now - lastEventTime > windowDuration {
+                count = 0
+            }
             count += 1
-            lastEventTime = Date()
-        }
-
-        func isWindowExpired(windowDuration: TimeInterval) -> Bool {
-            return Date().timeIntervalSince(lastEventTime) > windowDuration
-        }
-
-        func shouldMute(maxEvents: Int) -> Bool {
-            return count > maxEvents
-        }
-        func nextEventWillQuarantine(maxEvents: Int) -> Bool {
-            return count + 1 > maxEvents
+            lastEventTime = now
+            return (count > maxEvents, count + 1 > maxEvents)
         }
     }
 
     private let configuration: Configuration
-    private let eventTracker = Mutex<LRUCache<String, FloodTracker>>(LRUCache(totalCount: 256))
+    private let eventTracker = Mutex<LRUCache<Int, FloodTracker>>(LRUCache(totalCount: 256))
 
     private let log = EHLog.withCategory(FloodProtectionTransform.self)
 
@@ -91,38 +73,41 @@ public final class FloodProtectionTransform: EHTransform {
         self.init(configuration: config)
     }
 
-    public func configure() throws {
-        os_log(.info, log: self.log, "FloodProtectionTransform configured with maxEvents: \(self.configuration.maxEventsPerWindow), window: \(self.configuration.windowDurationSeconds)s")
+    public func configure() async throws {
+        os_log(.info, log: self.log, "FloodProtectionTransform configured with maxEvents: \(self.configuration.maxEventsPerWindow), window: \(self.configuration.windowDuration)")
     }
 
     public func process(_ event: any EHUEFEvent) async -> EHTransformReturn {
-        guard let similarityEvent = event as? EHEventSimilarityValue  else {
+        guard let similarityEvent = event as? EHEventSimilarityValue else {
             return (.proceed, nil, nil, nil)
         }
 
-        var counterMetrics: [(any EHMetrics.EHMetricDefinitionProtocol, UInt64, [(String, String)]?)] = []
+        var hasher = Hasher()
+        hasher.combine(event.event_type)
+        hasher.combine(similarityEvent.similarityHash)
+        let key = hasher.finalize()
 
-        let dimensions = [
-            (EHMetrics.Labels.Dimensions.event_type.rawValue, event.event_type)
-        ]
+        let now = ContinuousClock.Instant.now
+        let windowDuration = configuration.windowDuration
+        let maxEvents = configuration.maxEventsPerWindow
 
-        let similarityHash = "\(event.event_type)_\(similarityEvent.similarityHash)"
         let (shouldDrop, nextEventWillQuarantine) = eventTracker.withLock { trackers in
-            var currentTracker = trackers[similarityHash] ?? FloodTracker()
-
-            if currentTracker.isWindowExpired(windowDuration: configuration.windowDurationSeconds) {
-                currentTracker.reset()
+            trackers.withValue(forKey: key, default: FloodTracker()) { tracker in
+                tracker.recordAndCheck(
+                    now: now,
+                    windowDuration: windowDuration,
+                    maxEvents: maxEvents
+                )
             }
-
-            currentTracker.recordEvent()
-
-            trackers[similarityHash] = currentTracker
-
-            return (currentTracker.shouldMute(maxEvents: configuration.maxEventsPerWindow), currentTracker.nextEventWillQuarantine(maxEvents: configuration.maxEventsPerWindow))
         }
 
         if shouldDrop {
-            counterMetrics.append((EHMetrics.Labels.Counters.pipeline_floodprotection_drop_count, 1, dimensions))
+            let dimensions = [
+                (EHMetrics.Labels.Dimensions.event_type.rawValue, event.event_type)
+            ]
+            let counterMetrics: EHTransformCounterMetrics = [
+                (EHMetrics.Labels.Counters.pipeline_floodprotection_drop_count, 1, dimensions)
+            ]
 
             return (.drop, nil, counterMetrics, nil)
         } else {

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,9 +19,12 @@
 //  Created by Dhanasekar Thangavel on 11/8/24.
 //
 
+@_weakLinked import CloudAttestation
 import Foundation
 import Network
+import os
 import OSLog
+import Security
 import Security_Private
 import Security_Private.SecCertificateRequest
 import Security_Private.SecIdentityPriv
@@ -37,23 +40,50 @@ public struct EnsembleControlData: Codable {
 	var data: Data
 }
 
+// The TCP maximum package size is 64K 65536
+public let MTU = 65536
+
 class ServerConnection {
-	// The TCP maximum package size is 64K 65536
-	let MTU = 65536
+	// Validates a length prefix parsed from the wire before it is fed to
+	// NWConnection.receive(minimumIncompleteLength:maximumLength:). A length
+	// that is non-positive or exceeds the agreed-upon MTU indicates either a
+	// corrupt stream or a hostile peer trying to coerce the server into
+	// allocating buffers far larger than the protocol permits.
+	static func isValidLengthPrefix(_ length: Int) -> Bool {
+		return length > 0 && length <= MTU
+	}
+
 	private static var nextID: Int = 0
 	let connection: NWConnection
 	let id: Int
 	let delegate: ServerConnectionDelegate
 	var didStopCallback: ((Error?) -> Void)?
 	let node: Int
+	let configuration: EnsembleConfiguration?
+	// Written once on tlsInboundConnQ (stateDidChange .ready), read on receiveQueue.
+	// Lock ensures cross-queue visibility.
+	private let verifiedPeerRankLock = OSAllocatedUnfairLock<Int?>(initialState: nil)
+	private var verifiedPeerRank: Int? {
+		get { verifiedPeerRankLock.withLock { $0 } }
+		set { verifiedPeerRankLock.withLock { $0 = newValue } }
+	}
 	let receiveQueue = DispatchQueue(label: "com.apple.receiveQueue", qos: .userInteractive)
+	// Per-connection queue so TLS handshakes (including EnsembleValidator.DeviceFilter) on
+	// concurrent follower reconnections run in parallel rather than serialising through the
+	// former shared tlsInboundConnQ. Mirrors the per-client queue pattern in ClientImpl.
+	private let connectionQueue: DispatchQueue
 
-	init(nwConnection: NWConnection, delegate: ServerConnectionDelegate, node: Int) {
+	init(nwConnection: NWConnection, delegate: ServerConnectionDelegate, node: Int, configuration: EnsembleConfiguration? = nil) {
 		self.connection = nwConnection
 		self.id = ServerConnection.nextID
 		ServerConnection.nextID += 1
 		self.delegate = delegate
 		self.node = node
+		self.configuration = configuration
+		self.connectionQueue = DispatchQueue(
+			label: "\(kEnsemblerPrefix).serverconn.queue.\(node).\(self.id)",
+			qos: .userInteractive
+		)
 	}
 
 	func start() {
@@ -61,7 +91,7 @@ class ServerConnection {
 			.info("ServerConnection.start on rank \(self.node, privacy: .public): server connection \(self.id, privacy: .public) will start")
 		self.connection.stateUpdateHandler = self.stateDidChange(to:)
 		self.setupReceiveLength()
-		self.connection.start(queue: tlsInboundConnQ)
+		self.connection.start(queue: self.connectionQueue)
 	}
 
 	private func stateDidChange(to state: NWConnection.State) {
@@ -76,6 +106,17 @@ class ServerConnection {
 				.info(
 					"ServerConnection.stateDidChange on rank \(self.node, privacy: .public): server connection \(self.id, privacy: .public) ready"
 				)
+			self.verifiedPeerRank = self.resolveVerifiedPeerRank()
+			// Rank verification is mandatory when attestation config is present.
+			// A nil result means the peer certificate carried no recognisable UDID —
+			// falling back to the body-supplied rank would trust an unverified value,
+			// so close the connection instead (fail closed).
+			if self.configuration != nil, self.verifiedPeerRank == nil {
+				logger.error(
+					"ServerConnection.stateDidChange on rank \(self.node, privacy: .public): cannot verify peer rank from TLS certificate on connection \(self.id, privacy: .public) — closing connection"
+				)
+				self.connectionDidFail(error: ServerError.ServerError(mesage: "peer rank not verifiable from TLS certificate"))
+			}
 		case .failed(let error):
 			logger
 				.error(
@@ -99,17 +140,116 @@ class ServerConnection {
 				)
 		default:
 			logger
-				.info(
+				.warning(
 					"ServerConnection.stateDidChange on rank \(self.node, privacy: .public): server connection \(self.id, privacy: .public) unknown state"
 				)
 		}
 	}
 
+	// Derive the peer's rank from the TLS peer certificate by reading the CloudAttestation
+	// attestation bundle extension (OID 1.2.840.113635.100.6.93). The TLS leaf cert is a
+	// self-signed CloudAttestation cert whose extnValue is a DER OctetString wrapping the
+	// raw protobuf bytes of an AttestationBundle. We unwrap the OctetString, parse the
+	// bundle, and extract the UDID via withUnvalidatedAttestationBundle { $0.udid }.
+	// The UDID format matches config.nodes keys (SEP.Identity.udid: "%08X-%016llX").
+	// Returns nil in two cases:
+	//   • configuration is absent  → no-attestation/test path; caller skips verification.
+	//   • UDID not in config nodes → caller treats this as fatal and closes the connection.
+	private func resolveVerifiedPeerRank() -> Int? {
+		guard let config = self.configuration else { return nil }
+		guard let tlsMeta = connection.metadata(definition: NWProtocolTLS.definition)
+				as? NWProtocolTLS.Metadata else {
+			logger.error(
+				"ServerConnection.resolveVerifiedPeerRank on connection \(self.id, privacy: .public): NWProtocolTLS.Metadata unavailable"
+			)
+			return nil
+		}
+
+		var result: Int? = nil
+		sec_protocol_metadata_access_peer_certificate_chain(
+			tlsMeta.securityProtocolMetadata
+		) { secCert in
+			guard result == nil else { return }  // leaf cert only
+
+			let cert = sec_certificate_copy_ref(secCert).takeRetainedValue()
+
+			// The extension value returned by SecCertificateCopyExtensionValue is the
+			// DER-encoded extnValue field: an OctetString wrapping the raw protobuf bytes.
+			let attestationOID = "1.2.840.113635.100.6.93" as CFString
+			guard let extData = SecCertificateCopyExtensionValue(cert, attestationOID, nil) as? Data else {
+				logger.error(
+					"ServerConnection.resolveVerifiedPeerRank on connection \(self.id, privacy: .public): attestation extension (OID 1.2.840.113635.100.6.93) absent from peer certificate"
+				)
+				return
+			}
+
+			guard let protoData = ServerConnection.derOctetStringBytes(from: extData),
+				  let bundle = try? AttestationBundle(data: protoData) else {
+				logger.error(
+					"ServerConnection.resolveVerifiedPeerRank on connection \(self.id, privacy: .public): failed to parse AttestationBundle from peer certificate extension"
+				)
+				return
+			}
+
+			let udid = bundle.withUnvalidatedAttestationBundle { $0.udid }
+			guard let udid else {
+				logger.error(
+					"ServerConnection.resolveVerifiedPeerRank on connection \(self.id, privacy: .public): UDID absent from peer attestation bundle"
+				)
+				return
+			}
+
+			logger.debug(
+				"ServerConnection.resolveVerifiedPeerRank on connection \(self.id, privacy: .public): derived UDID \(udid, privacy: .public)"
+			)
+
+			guard let nodeConfig = config.nodes[udid] else {
+				logger.error(
+					"ServerConnection.resolveVerifiedPeerRank on connection \(self.id, privacy: .public): UDID \(udid, privacy: .public) not found in config nodes"
+				)
+				return
+			}
+
+			logger.info(
+				"ServerConnection.resolveVerifiedPeerRank on connection \(self.id, privacy: .public): UDID \(udid, privacy: .public) → rank \(nodeConfig.rank, privacy: .public)"
+			)
+			result = nodeConfig.rank
+		}
+		return result
+	}
+
+	// Unwrap a DER-encoded OctetString (tag 0x04) and return its content bytes.
+	// SecCertificateCopyExtensionValue returns the raw DER bytes of the extnValue field,
+	// which is an OctetString; this strips the tag+length header to expose the payload.
+	private static func derOctetStringBytes(from data: Data) -> Data? {
+		var idx = data.startIndex
+		guard idx < data.endIndex, data[idx] == 0x04 else { return nil }
+		data.formIndex(after: &idx)
+		guard idx < data.endIndex else { return nil }
+		let firstLengthByte = data[idx]
+		data.formIndex(after: &idx)
+		let length: Int
+		if firstLengthByte & 0x80 == 0 {
+			length = Int(firstLengthByte)
+		} else {
+			let numBytes = Int(firstLengthByte & 0x7F)
+			guard data.distance(from: idx, to: data.endIndex) >= numBytes else { return nil }
+			var len = 0
+			for _ in 0..<numBytes {
+				len = (len << 8) | Int(data[idx])
+				data.formIndex(after: &idx)
+			}
+			length = len
+		}
+		guard data.distance(from: idx, to: data.endIndex) >= length else { return nil }
+		return data[idx..<data.index(idx, offsetBy: length)]
+	}
+
 	private func setupReceiveLength() {
 		self.receiveQueue.async {
 			self.connection
-				.receive(minimumIncompleteLength: 4, maximumLength: 4) { data, _, _, _ in
-					logger.info(
+				.receive(minimumIncompleteLength: 4, maximumLength: 4) { data, _, isComplete, error in
+					logger.debug(
 						"""
 						ServerConnection.setupReceiveLength on rank \(
 							self.node, privacy: .public
@@ -118,26 +258,69 @@ class ServerConnection {
 						"""
 					)
 
-					guard let data else { return }
+					if let error {
+						logger.error("ServerConnection.setupReceiveLength on rank \(self.node, privacy: .public): receive error on connection \(self.id, privacy: .public): \(error, privacy: .public)")
+						self.connectionDidFail(error: error)
+						return
+					}
+					guard let data else {
+						if isComplete {
+							self.connectionDidEnd()
+						} else {
+							logger.error("ServerConnection.setupReceiveLength on rank \(self.node, privacy: .public): received nil data with no error on connection \(self.id, privacy: .public)")
+						}
+						return
+					}
 					let lengthPrefix = data.withUnsafeBytes { $0.load(as: UInt32.self) }.bigEndian
-					self.setupReceiveMessage(length: Int(lengthPrefix))
+					let length = Int(lengthPrefix)
+					guard ServerConnection.isValidLengthPrefix(length) else {
+						logger.error(
+							"""
+							ServerConnection.setupReceiveLength on rank \(self.node, privacy: .public): \
+							length prefix \(length, privacy: .public) on connection \(self.id, privacy: .public) \
+							is out of bounds (MTU=\(MTU, privacy: .public)); closing connection
+							"""
+						)
+						self.connectionDidFail(error: ServerError.ServerError(
+							mesage: "length prefix \(length) exceeds MTU \(MTU)"
+						))
+						return
+					}
+					self.setupReceiveMessage(length: length)
 				}
 		}
 	}
 
 	private func setupReceiveMessage(length: Int) {
-		logger.info(
+		logger.debug(
 			"""
 			ServerConnection.setupReceiveMessage on rank \(self.node, privacy: .public): Received a message
 			"""
 		)
+
+		// Defence in depth: callers are expected to validate, but a misbehaving
+		// caller (or a future code path) must never be allowed to ask the
+		// transport for a frame larger than the protocol's MTU.
+		guard ServerConnection.isValidLengthPrefix(length) else {
+			logger.error(
+				"""
+				ServerConnection.setupReceiveMessage on rank \(self.node, privacy: .public): \
+				refusing to receive message of length \(length, privacy: .public) on connection \
+				\(self.id, privacy: .public) (MTU=\(MTU, privacy: .public)); closing connection
+				"""
+			)
+			self.connectionDidFail(error: ServerError.ServerError(
+				mesage: "message length \(length) exceeds MTU \(MTU)"
+			))
+			return
+		}
 
 		self.receiveQueue.async {
 			self.connection
 				.receive(minimumIncompleteLength: length, maximumLength: length) { data, _, isComplete, error in
 
                     let dataSize = data?.count ?? 0
-					logger.info(
+					logger.debug(
                         """
                         ServerConnection.setupReceiveMessage on  rank \(self.node, privacy: .public): Received a message
                         on connection id \(self.id, privacy: .public) size: \(
@@ -152,9 +335,9 @@ class ServerConnection {
 
 						let decoder = JSONDecoder()
 						do {
-							let decodedData = try decoder.decode(EnsembleControlData.self, from: jsonData)
+	                        let decodedData = try decoder.decode(EnsembleControlData.self, from: jsonData)
 
-							logger.info(
+							logger.debug(
 								"""
 								ServerConnection.setupReceiveMessage on rank \(self.node, privacy: .public): Received a messagefrom rank \(
 									decodedData.rank,
@@ -164,28 +347,49 @@ class ServerConnection {
 								"""
 							)
 
+							// If TLS peer rank was resolved from the remote host, require it to
+							// match the body-supplied rank. A mismatch means a peer is claiming
+							// a rank it was not verified for; close the connection immediately.
+							if let verifiedRank = self.verifiedPeerRank, decodedData.rank != verifiedRank {
+								logger.error(
+									"""
+									ServerConnection.setupReceiveMessage on rank \(self.node, privacy: .public): \
+									rank mismatch on connection \(self.id, privacy: .public): \
+									body rank \(decodedData.rank, privacy: .public) \
+									!= TLS-verified rank \(verifiedRank, privacy: .public). Closing connection.
+									"""
+								)
+								self.connectionDidFail(error: ServerError.ServerError(mesage: "rank mismatch"))
+								return
+							}
+							let effectiveRank = self.verifiedPeerRank ?? decodedData.rank
 
-							let responseData = self.delegate.incomingMessage(node: decodedData.rank, message: decodedData.data)
-
-                            
-							// Send response data if provided, otherwise send acknowledgment
-							if let responseData = responseData {
-                                logger.info(
+                            self.delegate.incomingMessage(node: effectiveRank, message: decodedData.data) { [weak self] responseData in
+                                guard let self else {
+                                    logger.error(
+                                        "ServerConnection: connection torn down before response could be sent for message from rank \(decodedData.rank, privacy: .public)"
+                                    )
+                                    return
+                                }
+                                // Send response data if provided, otherwise send acknowledgment
+                                if let responseData = responseData {
+                                    // data message always sends back response, either response data or error
+                                    logger.debug(
                                     """
                                     ServerConnection.setupReceiveMessage on rank \(self.node, privacy: .public): sending response to rank \(decodedData.rank, privacy: .public) of size \(responseData.count)
                                     """
-                                )
-                                self.sendResponse(data: responseData)
-							} else {
-								self.sendAck(messageData: decodedData.data)
-                                logger.info(
-                                    """
-                                    ServerConnection.setupReceiveMessage on rank \(self.node, privacy: .public): sending Ack to rank \(decodedData.rank, privacy: .public)
-                                    """
-                                )
-							}
+                                    )
+                                    self.sendResponse(data: responseData)
+                                } else {
+                                    // control message sends ack — for data messages this indicates a bug
+                                    logger.warning(
+                                        "ServerConnection.setupReceiveMessage on rank \(self.node, privacy: .public): responseData was nil for message from rank \(decodedData.rank, privacy: .public) — sending ack (expected for control msgs, unexpected for data msgs)"
+                                    )
+                                    self.sendAck(messageData: decodedData.data)
+                                }
+                            }
 						} catch {
-							logger.info(
+							logger.error(
 								"""
 								ServerConnection.setupReceiveMessage on rank \(
 									self
@@ -200,13 +404,18 @@ class ServerConnection {
 					}
 					if isComplete {
 						logger
-							.info(
+							.debug(
 								"ServerConnection.setupReceiveMessage on rank \(self.node, privacy: .public): server receive complete, ending connection"
 							)
 						self.connectionDidEnd()
 					} else if let error {
 						self.connectionDidFail(error: error)
 					} else {
+                        logger.debug(
+                            """
+                            ServerConnection.setupReceiveMessage on rank \(self.node, privacy: .public):  setting up other receive"
+                            """
+                        )
 						self.setupReceiveLength()
 					}
 				}
@@ -224,8 +433,8 @@ class ServerConnection {
                     return
                 }
                 logger
-                    .info(
-                        "ServerConnection.sendAck on rank \(self.node, privacy: .public):  server connection \(self.id, privacy: .public) did send, data: \(msgData as NSData, privacy: .private)"
+                    .debug(
+                        "ServerConnection.sendAck on rank \(self.node, privacy: .public):  server connection \(self.id, privacy: .public) did send, \(msgData.count, privacy: .public) bytes"
                     )
             })
 		} catch {
@@ -248,7 +457,7 @@ class ServerConnection {
 		messageData.append(lengthData)
 		messageData.append(data)
 		
-		logger.info(
+		logger.debug(
 			"ServerConnection.sendResponse on rank \(self.node, privacy: .public): sending \(data.count) bytes with 4-byte length prefix (total: \(messageData.count) bytes)"
 		)
 		
@@ -258,14 +467,14 @@ class ServerConnection {
 				return
 			}
 			logger
-				.info(
-					"ServerConnection.sendResponse on rank \(self.node, privacy: .public):  server connection \(self.id, privacy: .public) did send, data: \(data as NSData, privacy: .private)"
+				.debug(
+					"ServerConnection.sendResponse on rank \(self.node, privacy: .public):  server connection \(self.id, privacy: .public) did send, \(data.count, privacy: .public) bytes"
 				)
 		})
 	}
 
 	func stop() {
-		logger.info("ServerConnection.stop on rank \(self.node, privacy: .public):  server connection \(self.id, privacy: .public) will stop")
+		logger.debug("ServerConnection.stop on rank \(self.node, privacy: .public):  server connection \(self.id, privacy: .public) will stop")
 		if self.connection.state != .cancelled {
 			self.stop(error: nil)
 		}
@@ -273,7 +482,7 @@ class ServerConnection {
 
 	private func connectionDidFail(error: Error) {
 		logger
-			.info(
+			.error(
 				"ServerConnection.connectionDidFail on rank \(self.node, privacy: .public): server connection \(self.id, privacy: .public) did fail, error: \(error, privacy: .public)"
 			)
 		self.stop(error: error)
@@ -281,7 +490,7 @@ class ServerConnection {
 
 	private func connectionDidEnd() {
 		logger
-			.info(
+			.debug(
 				"ServerConnection.connectionDidEnd on rank \(self.node, privacy: .public): server connection  server connection \(self.id, privacy: .public) did end"
 			)
 		self.stop(error: nil)
@@ -289,7 +498,7 @@ class ServerConnection {
 
 	private func stop(error: Error?) {
 		logger
-			.info(
+			.debug(
 				"ServerConnection.stop on rank \(self.node, privacy: .public): server connection  server stopping connection \(self.id, privacy: .public)"
 			)
 
@@ -309,13 +518,17 @@ public class Server {
 	let listener: NWListener
 	var delegate: ServerConnectionDelegate
 	let node: Int
-	private var connectionsByID: [Int: ServerConnection] = [:]
+	let configuration: EnsembleConfiguration?
+	// connectionsByID is accessed from both tlsInboundQ (didAccept adds) and each
+	// connection's own connectionQueue (connectionDidStop removes), so it needs a lock.
+	private let connectionsByID = OSAllocatedUnfairLock(initialState: [Int: ServerConnection]())
 
 	init(
 		port: UInt16,
 		tlsOptions: NWProtocolTLS.Options,
 		delegate: ServerConnectionDelegate,
-		node: Int
+		node: Int,
+		configuration: EnsembleConfiguration? = nil
 	) throws {
 		self.port = NWEndpoint.Port(rawValue: port)!
 
@@ -335,6 +548,7 @@ public class Server {
 		self.listener = try NWListener(using: parameters, on: self.port)
 		self.delegate = delegate
 		self.node = node
+		self.configuration = configuration
 	}
 
 	func start() {
@@ -370,9 +584,10 @@ public class Server {
 		let connection = ServerConnection(
 			nwConnection: nwConnection,
 			delegate: self.delegate,
-			node: self.node
+			node: self.node,
+			configuration: self.configuration
 		)
-		self.connectionsByID[connection.id] = connection
+		connectionsByID.withLock { $0[connection.id] = connection }
 		connection.didStopCallback = { _ in
 			self.connectionDidStop(connection)
 		}
@@ -381,7 +596,7 @@ public class Server {
 	}
 
 	private func connectionDidStop(_ connection: ServerConnection) {
-		self.connectionsByID.removeValue(forKey: connection.id)
+		connectionsByID.withLock { _ = $0.removeValue(forKey: connection.id) }
 		logger
 			.info(
 				"Server.connectionDidStop on rank \(self.node, privacy: .public): server did close connection \(connection.id, privacy: .public)"
@@ -394,11 +609,13 @@ public class Server {
 		if self.listener.state != .cancelled {
 			self.listener.cancel()
 		}
-		for connection in self.connectionsByID.values {
-			connection.didStopCallback = nil
-			connection.stop()
+		connectionsByID.withLock { connections in
+			for connection in connections.values {
+				connection.didStopCallback = nil
+				connection.stop()
+			}
+			connections.removeAll()
 		}
-		self.connectionsByID.removeAll()
 	}
 }
 

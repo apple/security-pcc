@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,6 +19,7 @@
 
 import ArgumentParserInternal
 internal import DarwinInitBridging
+internal import DarwinPrivate.os.variant
 
 public struct DarwinInitCommand: AsyncParsableCommand {
     public static let configuration = CommandConfiguration(
@@ -36,7 +37,7 @@ subcommand "apply" is used by DarwinOS when DarwinOS boots for the first time.
     #if os(macOS)
         return
     #elseif os(iOS)
-        if shim_allows_internal_security_policies() {
+        if os_variant_allows_internal_security_policies(nil) {
             return
         }
         guard RealComputer.shared.isBMC || RealComputer.shared.isComputeNode || RealComputer.shared.isVM || RealComputer.shared.nvramConfigAllowedOnCustomerOS else {

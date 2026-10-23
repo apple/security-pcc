@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,7 +23,7 @@ package import EnsemblePorterCommon
 private import os
 @_spi(OSMetric) private import os
 private import Synchronization
-@preconcurrency private import XPC
+@preconcurrency package import XPC
 
 package final class EnsemblePorterXPCServer<IntraEnsembleTransponder: EnsembleTransponder>: Sendable {
 
@@ -31,9 +31,9 @@ package final class EnsemblePorterXPCServer<IntraEnsembleTransponder: EnsembleTr
         /// Continuations will be resumed when the server is running.
         case notStarted([CheckedContinuation<Void, Never>])
         /// Continuations will be resumed when the server is running.
-        case starting([CheckedContinuation<Void, Never>])
-        /// Continuations will be resumed when the server is stopped.
-        case running(CheckedContinuation<Void, Never>)
+        case starting(AsyncStream<Void>.Continuation, [CheckedContinuation<Void, Never>])
+        /// Server is accepting connections. The stream continuation is finished to trigger shutdown.
+        case running(AsyncStream<Void>.Continuation)
         case stopped
     }
 
@@ -64,9 +64,9 @@ package final class EnsemblePorterXPCServer<IntraEnsembleTransponder: EnsembleTr
                 case .notStarted(var continuations):
                     continuations.append(continuation)
                     state = .notStarted(continuations)
-                case .starting(var continuations):
+                case .starting(let shutdownContinuation, var continuations):
                     continuations.append(continuation)
-                    state = .starting(continuations)
+                    state = .starting(shutdownContinuation, continuations)
                 case .running:
                     continuation.resume()
                 case .stopped:
@@ -78,10 +78,56 @@ package final class EnsemblePorterXPCServer<IntraEnsembleTransponder: EnsembleTr
     }
 
     package func run() async throws {
+        logger.log("Starting XPC server on service: \(self.xpcServiceName, privacy: .public)")
+
+        let listener: XPCListener
+        do {
+            listener = try XPCListener(
+                service: xpcServiceName,
+                targetQueue: .init(label: "com.apple.ensembleporter.xpcserver", qos: .userInitiated),
+                incomingSessionHandler: self.makeIncomingSessionHandler()
+            )
+        } catch {
+            self.metrics.incrementXPC(error: .transportFailed)
+            self.logger.error("Failed to create XPC listener. error=\(String(describing: error), privacy: .public)")
+            throw error
+        }
+
+        try await self.serve(listener: listener)
+    }
+
+    package func runAnonymous(endpointHandler: @Sendable (XPCEndpoint) -> Void) async throws {
+        self.logger.log("Starting anonymous XPC server")
+
+        let listener = XPCListener(
+            targetQueue: .init(label: "com.apple.ensembleporter.xpcserver", qos: .userInitiated),
+            incomingSessionHandler: self.makeIncomingSessionHandler()
+        )
+
+        // Vend the endpoint to the caller before blocking
+        endpointHandler(listener.endpoint)
+
+        try await self.serve(listener: listener)
+    }
+
+    private func makeIncomingSessionHandler() -> @Sendable (XPCListener.IncomingSessionRequest) -> XPCListener.IncomingSessionRequest.Decision {
+        return { request in
+            request.accept { _ in
+                let response = EnsemblePorterXPCHandler(serverHandler: self.handler, entitlement: self.entitlement, metrics: self.metrics)
+                self.metrics.incrementXPC()
+                return response
+            }
+        }
+    }
+
+    /// Transitions to the starting state, blocks until shutdown or task cancellation, then cleans up.
+    private func serve(listener: XPCListener) async throws {
+        let (shutdownStream, shutdownContinuation) = AsyncStream<Void>.makeStream()
+
         try self.state.withLock { state in
             switch state {
             case .notStarted(let continuations):
-                state = .starting(continuations)
+                state = .starting(shutdownContinuation, continuations)
             default:
                 throw EnsemblePorterError.invalidStateTransition(existing: String(describing: state), proposed: "starting")
             }
@@ -90,49 +136,27 @@ package final class EnsemblePorterXPCServer<IntraEnsembleTransponder: EnsembleTr
             self.state.withLock { $0 = .stopped }
         }
 
-        logger.log("Starting XPC server on service: \(self.xpcServiceName, privacy: .public)")
-
-        let listener: XPCListener
-        do {
-            listener = try XPCListener(
-                service: xpcServiceName,
-                targetQueue: .init(label: "com.apple.ensembleporter.xpcserver", qos: .userInitiated)
-            ) { request in
-                return request.accept { _ in
-                    let response = EnsemblePorterXPCHandler(serverHandler: self.handler, entitlement: self.entitlement, metrics: self.metrics)
-                    self.metrics.incrementXPC()
-                    return response
-                }
+        let waitingContinuations = self.state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            switch state {
+            case .starting(let sc, let continuations):
+                state = .running(sc)
+                return continuations
+            case .stopped:
+                // shutdown() was called while still starting
+                return []
+            case .running, .notStarted:
+                let stateDescription = String(describing: state)
+                self.logger.error("Unexpected state in serve(). state=\(stateDescription, privacy: .public)")
+                return []
             }
-        } catch {
-            self.metrics.incrementXPC(error: .transportFailed)
-            self.logger.error("Failed to create XPC listener. error=\(String(describing: error), privacy: .public)")
-            throw error
+        }
+        // Resume all waiting continuations now that we're running
+        for continuation in waitingContinuations {
+            continuation.resume()
         }
 
-        await withTaskCancellationHandler(operation: {
-            await withCheckedContinuation { continuation in
-                let waitingContinuations = self.state.withLock { state -> [CheckedContinuation<Void, Never>] in
-                    let waiting: [CheckedContinuation<Void, Never>]
-                    switch state {
-                    case .starting(let continuations):
-                        waiting = continuations
-                    default:
-                        assertionFailure("Invalid state")
-                        waiting = []
-                    }
-                    state = .running(continuation)
-                    return waiting
-                }
-                // Resume all waiting continuations now that we're running
-                for continuation in waitingContinuations {
-                    continuation.resume()
-                }
-                withExtendedLifetime(listener) {}
-            }
-        }, onCancel: {
-            try? self.shutdown()
-        })
+        // Block until shutdown() finishes the stream or the task is cancelled.
+        for await _ in shutdownStream {}
         listener.cancel()
     }
 
@@ -141,9 +165,17 @@ package final class EnsemblePorterXPCServer<IntraEnsembleTransponder: EnsembleTr
         try self.state.withLock { state in
             switch state {
             case .running(let continuation):
-                continuation.resume()
+                continuation.finish()
                 state = .stopped
-            case .stopped, .notStarted, .starting:
+            case .starting(let continuation, let waiters):
+                // Shutdown requested before fully started. Finish the stream so
+                // serve() exits as soon as it reaches the for-await loop.
+                continuation.finish()
+                state = .stopped
+                for c in waiters {
+                    c.resume()
+                }
+            case .stopped, .notStarted:
                 throw EnsemblePorterError.notRunning
             }
         }

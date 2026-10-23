@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -149,7 +149,7 @@ struct CryptexHelper {
             try self.ejectDMG()
         }
 
-        try? FileManager.default.removeItem(at: mountPoint)
+        try? Globals.computer.fileSystem.removeItem(at: mountPoint)
         self.mountPoint = nil
     }
 

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -26,6 +26,7 @@ extension CLI {
             shouldDisplay: CLI.internalBuild,
             subcommands: [
                 AuditCmd.self,
+                LeavesCmd.self,
                 VerifyInclusionCmd.self
             ]
         )

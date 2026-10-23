@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,6 +18,8 @@
 //
 //  Created by Oliver Chick ORAC on 2025-07-31.
 //
+
+package import Foundation
 
 /// Configuration constants for EnsemblePorter services.
 ///
@@ -72,4 +74,32 @@ package enum EnsemblePorterConstants {
 
     /// Entitlement required to provide crypto material that has been encrypted with an intra-ensemble key.
     package static let provideEncryptedCryptoMaterialEntitlement = "com.apple.cloudos.ensembleporter.provide_encrypted_crypto_material"
+
+    // MARK: heartbeat
+
+    /// How often the leader sends heartbeats to each follower.
+    package static let heartbeatSendInterval: Duration = .seconds(2)
+
+    /// Number of consecutive heartbeat failures to a single follower before the leader gives up.
+    package static let maxConsecutiveHeartbeatFailures: Int = 3
+
+    /// How long the controller waits without a heartbeat before removing an instance.
+    package static let heartbeatTimeoutDuration: Duration =
+        heartbeatSendInterval * maxConsecutiveHeartbeatFailures * 11 / 10
+
+    /// Network timeout for a single heartbeat send (90% of send interval).
+    /// Must be less than ``heartbeatSendInterval`` to prevent sends from backing up.
+    package static let heartbeatSendTimeout: TimeInterval = {
+        let c = heartbeatSendInterval.components
+        let seconds = TimeInterval(c.seconds)
+            + TimeInterval(c.attoseconds) / 1_000_000_000_000_000_000
+        return 0.9 * seconds
+    }()
+
+    // MARK: porter pool
+
+    /// Hard ceiling on porter instances managed by a single follower-side controller.
+    /// Sized as a leak guard well above expected steady-state concurrency. Hitting this cap
+    /// evicts a live porter and is alarm-worthy (see `controllerMaxPortersReachedCount` metric).
+    package static let maxPorterInstances: Int = 10
 }

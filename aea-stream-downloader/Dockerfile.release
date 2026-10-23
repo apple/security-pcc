@@ -1,0 +1,100 @@
+# syntax=docker/dockerfile:1
+ARG swiftVersion=6.3
+
+# ================================
+# Build image
+# ================================
+FROM docker.apple.com/coreosvn/apple-archive-ubi9mw:1 as aea
+FROM docker.apple.com/base-images/ubi9/swift$swiftVersion-builder as base
+
+RUN yum install -y libacl-devel bzip2-devel openssl-devel
+
+# ================================
+# base image updated + Package
+# ================================
+FROM base as base-packages
+
+# Set up a build area
+WORKDIR /build
+
+RUN mkdir -p ~/.ssh && \
+    chmod 700 ~/.ssh && \
+    chmod 644 ~/.ssh/known_hosts
+
+# First just resolve dependencies.
+# Cached layer as long as Package.swift/Package.resolved
+# files do not change.
+COPY ./Package.* ./
+RUN --mount=type=ssh,id=SSH_KEY_MIRKWOOD_CONFIG,required=false swift package resolve
+
+# ================================
+# aea layer
+# ================================
+FROM base-packages as base-packages-aea
+
+# Only copy static archives (.a) so AppleArchive is linked statically
+# into the binary and we don't need its .so at runtime. The archives
+# ship with a `_static` suffix; rename them so the modulemap's
+# `link "AppleArchive"`/`link "compression"` resolves correctly.
+COPY --from=aea /AppleArchiveRoots/usr/lib/*.a /usr/lib64/
+COPY --from=aea /AppleArchiveRoots/usr/lib/*.a /usr/lib/
+COPY --from=aea /AppleArchiveRoots/usr/include/ /usr/include/
+RUN mv /usr/lib64/libAppleArchive_static.a /usr/lib64/libAppleArchive.a \
+    && mv /usr/lib64/libcompression_static.a /usr/lib64/libcompression.a \
+    && mv /usr/lib/libAppleArchive_static.a /usr/lib/libAppleArchive.a \
+    && mv /usr/lib/libcompression_static.a /usr/lib/libcompression.a
+
+# ================================
+# Sources layer
+# ================================
+FROM base-packages-aea as sources
+
+# Copy source files into container
+COPY Sources/ Sources/
+COPY Tests/ Tests/
+
+# ================================
+# Build everything, with optimizations
+# ================================
+FROM sources as build
+RUN --mount=type=ssh,id=SSH_KEY_MIRKWOOD_CONFIG,required=false swift build -c release --static-swift-stdlib
+
+# Strip debug info from the binary. `--strip-debug` keeps the symbol
+# table so backtraces produced by swift-backtrace stay symbolicated.
+RUN strip --strip-debug /build/.build/release/aea-stream-downloader
+
+# ================================
+# Runtime image
+# ================================
+FROM docker.apple.com/base-images/ubi9-micro/ubi-micro-runtime
+
+# AppleArchive's static archive references symbols from libbz2, liblzma,
+# and libcrypto; the resulting binary keeps NEEDED entries on those .sos.
+# libcrypto in turn needs libz. The Swift static stdlib pulls in libxml2
+# (Foundation), libstdc++ (libdispatch) and libgcc_s. ubi-micro-runtime
+# doesn't ship any of them, so copy them from the build image.
+COPY --from=build /usr/lib64/libbz2.so.1* /usr/lib64/
+COPY --from=build /usr/lib64/liblzma.so.5* /usr/lib64/
+COPY --from=build /usr/lib64/libcrypto.so.3* /usr/lib64/
+COPY --from=build /usr/lib64/libz.so.1* /usr/lib64/
+COPY --from=build /usr/lib64/libxml2.so.2* /usr/lib64/
+COPY --from=build /usr/lib64/libstdc++.so.6* /usr/lib64/
+COPY --from=build /usr/lib64/libgcc_s.so.1* /usr/lib64/
+
+# Copy the built binary. AppleArchive and the Swift stdlib are statically
+# linked.
+COPY --from=build /build/.build/release/aea-stream-downloader /usr/local/bin/aea-stream-downloader
+
+# Copy the static swift-backtrace helper so the Swift runtime can produce
+# symbolicated backtraces on crash. The dynamic variant needs the swift
+# stdlib .so's, which we don't ship; the static one only depends on libs
+# already present in this image (libstdc++, libm, libgcc_s, libc).
+COPY --from=build /usr/libexec/swift/linux/swift-backtrace-static /usr/libexec/swift/linux/swift-backtrace-static
+
+# Default backtrace settings: enable, and use fast (.symtab-based)
+# symbolication. The full mode requires DWARF debug info, which the
+# `strip --strip-debug` step in the build stage removed. .symtab is
+# preserved, so fast mode yields demangled function names.
+ENV SWIFT_BACKTRACE=enable=on,symbolicate=fast,swift-backtrace=/usr/libexec/swift/linux/swift-backtrace-static
+
+ENTRYPOINT ["/usr/local/bin/aea-stream-downloader"]

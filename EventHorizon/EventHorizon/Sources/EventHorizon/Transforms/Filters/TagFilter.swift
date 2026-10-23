@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -61,8 +61,8 @@ public final class TagFilter: EHTransform {
 
         let curEvent = event
         var curEvents = [curEvent]
-        var counterMetrics: [(any EHMetrics.EHMetricDefinitionProtocol, UInt64, [(String, String)]?)] = []
-        var gaugeMetrics: [(any EHMetrics.EHMetricDefinitionProtocol, Double, [(String, String)]?)] = []
+        var counterMetrics: EHTransformCounterMetrics = []
+        var gaugeMetrics: EHTransformGaugeMetrics = []
 
         for transform in transforms {
             let (resp, newEvents, tcounterMetrics, tgaugeMetrics) = await transform.process(curEvent)
@@ -82,9 +82,9 @@ public final class TagFilter: EHTransform {
         return (.proceed, nil, counterMetrics, gaugeMetrics)
     }
 
-    public func configure() throws {
+    public func configure() async throws {
         for transform in transforms {
-            try transform.configure()
+            try await transform.configure()
         }
     }
 }

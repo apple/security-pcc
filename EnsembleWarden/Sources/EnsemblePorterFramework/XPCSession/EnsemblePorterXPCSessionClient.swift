@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,7 +25,7 @@ package import EnsembleWardenServer
 package import Foundation
 private import os
 private import Synchronization
-@_spi(SessionConnectionCompatibility) @preconcurrency private import XPC
+@_spi(SessionConnectionCompatibility) @preconcurrency package import XPC
 private import XPCOverlay
 
 /// XPC session-based client for EnsemblePorter communication.
@@ -34,8 +34,13 @@ private import XPCOverlay
 /// EnsemblePorter daemon service, using the older school XPCSession technology..
 package final class EnsemblePorterXPCSessionClient: EnsemblePorterClient, Sendable {
 
+    package enum ConnectionTarget: Sendable {
+        case machService(String)
+        case endpoint(XPCEndpoint)
+    }
+
     private enum State: Sendable, CustomStringConvertible {
-        case notConnected(String)
+        case notConnected(ConnectionTarget)
         case connected(XPCSession)
         case failed
         case closed
@@ -59,7 +64,11 @@ package final class EnsemblePorterXPCSessionClient: EnsemblePorterClient, Sendab
     private let state: Mutex<State>
 
     package init(xpcServiceName: String = EnsemblePorterConstants.xpcKeyFetcherClientName) {
-        self.state = .init(.notConnected(xpcServiceName))
+        self.state = .init(.notConnected(.machService(xpcServiceName)))
+    }
+
+    package init(endpoint: XPCEndpoint) {
+        self.state = .init(.notConnected(.endpoint(endpoint)))
     }
 
     package init(existingConnection: xpc_connection_t) throws {
@@ -99,21 +108,29 @@ package final class EnsemblePorterXPCSessionClient: EnsemblePorterClient, Sendab
         }
     }
 
-    private func createXPCSession(serviceName: String) throws -> XPCSession {
-        Self.logger.log("Creating XPC session. xpc_service_name=\(serviceName, privacy: .public)")
-
-        return try XPCSession(machService: serviceName) { error in
-            // Error straight from XPC so we can log
-            Self.logger.log("XPC session cancelled. error=\(error, privacy: .public)")
-            self.state.withLock { $0 = .failed }
+    private func createXPCSession(target: ConnectionTarget) throws -> XPCSession {
+        switch target {
+        case .machService(let serviceName):
+            Self.logger.log("Creating XPC session. xpc_service_name=\(serviceName, privacy: .public)")
+            return try XPCSession(machService: serviceName) { error in
+                // Error straight from XPC so we can log
+                Self.logger.log("XPC session cancelled. error=\(error, privacy: .public)")
+                self.state.withLock { $0 = .failed }
+            }
+        case .endpoint(let endpoint):
+            Self.logger.log("Creating XPC session from endpoint.")
+            return try XPCSession(endpoint: endpoint) { error in
+                Self.logger.log("XPC session cancelled. error=\(error, privacy: .public)")
+                self.state.withLock { $0 = .failed }
+            }
         }
     }
 
     private func getSession() throws -> XPCSession {
         try self.state.withLock { state in
             switch state {
-            case .notConnected(let serviceName):
-                let session = try createXPCSession(serviceName: serviceName)
+            case .notConnected(let target):
+                let session = try self.createXPCSession(target: target)
                 state = .connected(session)
                 return session
             case .connected(let session):
@@ -154,12 +171,12 @@ package final class EnsemblePorterXPCSessionClient: EnsemblePorterClient, Sendab
         let result = try await withCheckedThrowingContinuation { continuation in
             return PrismTracing.withSyncResumed(requestID: requestID) {
                 do {
-                    PrismTracing.logCheckpoint(name: "Sending XPC request")
+                    PrismTracing.logCheckpoint(name: "Sending XPC request", level: .debug)
                     try session.send(xpcRequest) { (xpcResponse: Result<EnsemblePorterXPCAPI.Response, Error>) in
                         PrismTracing.withSyncResumed(requestID: requestID) {
                             switch xpcResponse {
                             case .success(let response):
-                                PrismTracing.logCheckpoint(name: "Decoding XPC success response")
+                                PrismTracing.logCheckpoint(name: "Decoding XPC success response", level: .debug)
                                 switch response {
                                 case .fetch(let fetchResponse): continuation.resume(returning: fetchResponse as! Req.Response)
                                 case .provide(let provideResponse): continuation.resume(returning: provideResponse as! Req.Response)
@@ -189,7 +206,7 @@ package final class EnsemblePorterXPCSessionClient: EnsemblePorterClient, Sendab
                 }
             }
         }
-        PrismTracing.logCheckpoint(name: "Returning result of XPC call")
+        PrismTracing.logCheckpoint(name: "Returning result of XPC call", level: .debug)
         return result
     }
 
@@ -210,6 +227,67 @@ package final class EnsemblePorterXPCSessionClient: EnsemblePorterClient, Sendab
         }
     }
 
+    package func fetchKey(forTurnNumber turnNumber: Int, requestID: UUID, spanID: UInt64) async throws -> SymmetricKey {
+        try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
+            let request = EnsemblePorterXPCAPI.Fetch(turnNumber: turnNumber, requestID: requestID, spanID: spanID)
+            let response: EnsemblePorterXPCAPI.Fetch.Response
+            do {
+                response = try await sendRequest(request)
+            } catch {
+                Self.logger.error("""
+                    Error fetching turn key. \
+                    error=\(String(reportable: error), privacy: .public) \
+                    request_id=\(requestID, privacy: .public) \
+                    span_id=\(spanID, privacy: .public)
+                    """)
+                throw error
+            }
+
+            switch response {
+            case .success(let dataResponse):
+                return SymmetricKey(data: dataResponse.data)
+            case .failure(let error):
+                Self.logger.error("""
+                    Error fetching turn key. \
+                    error=\(String(reportable: error), privacy: .public) \
+                    request_id=\(requestID, privacy: .public) \
+                    span_id=\(spanID, privacy: .public)
+                    """)
+                throw error
+            }
+        }
+    }
+
+    package func getNumberOfTurnKeys(requestID: UUID, spanID: UInt64) async throws -> Int {
+        try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
+            let request = EnsemblePorterXPCAPI.GetNumberOfTurnKeys(requestID: requestID, spanID: spanID)
+            let response: EnsemblePorterXPCAPI.GetNumberOfTurnKeys.Response
+            do {
+                response = try await sendRequest(request)
+            } catch {
+                Self.logger.error("""
+                    Error getting number of turn keys. \
+                    error=\(String(reportable: error), privacy: .public) \
+                    request_id=\(requestID, privacy: .public) \
+                    span_id=\(spanID, privacy: .public)
+                    """)
+                throw error
+            }
+
+            switch response {
+            case .success(let countResponse):
+                return countResponse.count
+            case .failure(let error):
+                Self.logger.error("""
+                    Error getting number of turn keys. \
+                    error=\(String(reportable: error), privacy: .public) \
+                    request_id=\(requestID, privacy: .public) \
+                    span_id=\(spanID, privacy: .public)
+                    """)
+                throw error
+            }
+        }
+    }
 
     package func fetchFollowerTokens(requestID: UUID, spanID: UInt64) async throws -> FollowerTokens {
         try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {

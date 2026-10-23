@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,7 +23,7 @@ extension InvokeWorkloadRequestStreamHandler {
         let cloudApp: String
 
         mutating func enforceLimit(
-            _ maxCumulativeRequestBytes: Int,
+            _ maxCumulativeRequestBytes: Int?,
             on request: Com_Apple_Cloudboard_Api_V1_InvokeWorkloadRequest,
             metrics: any MetricsSystem
         ) throws {
@@ -33,6 +33,8 @@ extension InvokeWorkloadRequestStreamHandler {
             case .none, .setup, .parameters, .terminate:
                 return
             }
+
+            guard let maxCumulativeRequestBytes else { return }
 
             if self.currentCumulativeRequestBytes > maxCumulativeRequestBytes {
                 let logMetadata = CloudBoardProvider.logMetadata()

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -30,6 +30,6 @@ final class MockEventCatcher: EHTransform {
         return (.proceed, nil, nil, nil)
     }
 
-    func configure() throws {
+    func configure() async throws {
     }
 }

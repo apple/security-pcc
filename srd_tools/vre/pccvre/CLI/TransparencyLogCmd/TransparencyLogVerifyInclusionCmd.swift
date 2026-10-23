@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -37,13 +37,50 @@ extension CLI.TransparencyLogCmd {
         var file: String
 
         func run() async throws {
-            let attestationBundle: AttestationBundle
-            do {
-                attestationBundle = try .init(from: file, format: attestOptions.format, requestIndex: attestOptions.requestIndex, attestationIndex: attestOptions.attestationIndex)
-            } catch {
-                throw CLIError("read attestation bundle: \(error)")
+            let proofBytes: Data
+            let releaseDigest: Data
+
+            switch try attestOptions.loadAndDispatch(file: file) {
+            case .v2(let nodeBytes):
+                // The helper's `release attestation` returns the workload
+                // release digest and the serialized ATLogProofs witnessed at
+                // attestation time (hex-encoded); those bytes are
+                // wire-compatible with CloudAttestation's ATLogProofs, so the
+                // merkle math below is identical for v1 and v2.
+                let resolver = PCCVREAttestationHelperResolver(environment: transparencyLogOptions.environment)
+                let envelope = try await attestOptions.runV2Helper(
+                    nodeBytes: nodeBytes,
+                    via: resolver,
+                    subcommand: ["release", "attestation"]
+                )
+                guard envelope.ok else {
+                    throw CLIError("extract release from v2 bundle: \(envelope.summary)")
+                }
+                let detail = try Self.decodeV2Detail(envelope.detail)
+                guard let proof = detail.softwareTransparencyProof else {
+                    throw CLIError(
+                        "v2 bundle carries no software transparency proof; " +
+                        "verify-inclusion needs one witnessed at attestation time."
+                    )
+                }
+                proofBytes = proof
+                releaseDigest = detail.workloadDigest
+
+            case .v1(let nodeBytes, let fileData):
+                let attestationBundle = try attestOptions.decodeV1Bundle(nodeBytes: nodeBytes, fileData: fileData)
+                proofBytes = try attestationBundle.atLogProofs
+                let release = try Release(bundle: attestationBundle)
+                releaseDigest = Data(release.digest())
             }
 
+            try verifyInclusion(proofBytes: proofBytes, releaseDigest: releaseDigest)
+        }
+
+        /// Shared v1/v2 core: decode `proofBytes` as an `ATLogProofs`, verify
+        /// its merkle inclusion path against the locally-downloaded copy of
+        /// the transparency tree, then confirm the leaf's `dataHash` matches
+        /// `releaseDigest`.
+        private func verifyInclusion(proofBytes: Data, releaseDigest: Data) throws {
             let storageURL = FileManager.fileURL(transparencyLogOptions.storage)
                 .appending(path: transparencyLogOptions.environment.rawValue)
 
@@ -51,7 +88,7 @@ extension CLI.TransparencyLogCmd {
             var applicationTree = try decoder.decode(MerkleTree<SHA256>.self,
                                                      from: Data(contentsOf: storageURL.appending(path: "applicationTree.json")))
 
-            let logProofs = try CloudAttestation.PrivateCloudCompute_TransparencyLog_ATLogProofs(serializedBytes: attestationBundle.atLogProofs) // bundle.transparencyProofs.proofs
+            let logProofs = try CloudAttestation.PrivateCloudCompute_TransparencyLog_ATLogProofs(serializedBytes: proofBytes)
             let inclusionProof = logProofs.inclusionProof
             let leafBytes = logProofs.inclusionProof.nodeBytes
             let logHead = try CloudAttestation.LogHead(serializedBytes: inclusionProof.slh.object)
@@ -66,18 +103,43 @@ extension CLI.TransparencyLogCmd {
                 throw CLIError("Failed to verify inclusion proof")
             }
 
-            // now check that the Release actually matches the hash in the ATLeaf node.
-            let release = try Release(bundle: attestationBundle)
-
+            // now check that the release digest actually matches the hash in the ATLeaf node.
             let changeLogNode = try CloudAttestation.ChangeLogNodeV2(serializedBytes: leafBytes)
             var transparencyByteBuffer = TransparencyByteBuffer(data: changeLogNode.mutation)
             let atLeaf = try ATLeafData(bytes: &transparencyByteBuffer)
 
-            guard release.digest().elementsEqual(atLeaf.dataHash) else {
+            guard releaseDigest.elementsEqual(atLeaf.dataHash) else {
                 throw CLIError("Release digest from attestaton bundle does not match digest in ATLeaf node")
             }
 
             print("Successfully verified inclusion proof ✅ (revision: \(logHead.revision), index: \(inclusionProof.nodePosition), logSize: \(logHead.logSize), rootDigest: \(applicationTree.rootDigest.hexString))")
+        }
+
+        /// Minimal decode of the helper's `release attestation -f json`
+        /// `detail` payload — only the fields verify-inclusion needs.
+        private struct V2Detail {
+            let workloadDigest: Data
+            let softwareTransparencyProof: Data?
+        }
+
+        private static func decodeV2Detail(_ json: String) throws -> V2Detail {
+            guard let data = json.data(using: .utf8),
+                  let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let workloadHex = obj["workloadDigest"] as? String,
+                  let workloadDigest = Data(hexString: workloadHex)
+            else {
+                throw CLIError("decode helper release-attestation detail: missing/malformed workloadDigest")
+            }
+            let proof: Data?
+            if let proofHex = obj["softwareTransparencyProof"] as? String {
+                guard let decoded = Data(hexString: proofHex) else {
+                    throw CLIError("decode helper release-attestation detail: softwareTransparencyProof is not valid hex")
+                }
+                proof = decoded
+            } else {
+                proof = nil
+            }
+            return V2Detail(workloadDigest: workloadDigest, softwareTransparencyProof: proof)
         }
     }
 }

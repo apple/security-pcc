@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -15,3 +15,5 @@
 internal let kAttestationAPIXPCLocalServiceName = "com.apple.cloudos.cb_attestationd"
 internal let kAttestationAPIXPCLocalServiceEntitlement = "com.apple.private.cloudos.cb_attestationd"
 internal let kAttestationAPIXPCLocalServiceKeyAccessEntitlement = "com.apple.private.cloudos.cb_attestationd.keyaccess"
+internal let kAttestationAPIXPCLocalServiceAttestationAccessEntitlement =
+    "com.apple.private.cloudos.cb_attestationd.attestationaccess"

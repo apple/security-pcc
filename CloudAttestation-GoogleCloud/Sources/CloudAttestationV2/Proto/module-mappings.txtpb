@@ -1,0 +1,19 @@
+# Maps proto source files to Swift module names.
+# See https://github.com/apple/swift-protobuf/blob/main/Documentation/PLUGIN.md
+
+mapping {
+  module_name: "GCPv1"
+  proto_file_path: "attestation.proto"
+  proto_file_path: "algorithms.proto"
+  proto_file_path: "key_claims.proto"
+  proto_file_path: "crypto_types.proto"
+  proto_file_path: "payload.proto"
+  proto_file_path: "api.proto"
+}
+
+mapping {
+  module_name: "PrivateCloudCompute"
+  proto_file_path: "ATServiceApi.proto"
+  proto_file_path: "Transparency.proto"
+  proto_file_path: "PrivateCloudComputeEnvironment.proto"
+}

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -43,7 +43,12 @@ public struct SelfSignedIdentity {
     }
 
     public func makeResolvedIdentity() throws -> IdentityManager.ResolvedIdentity {
-        try .init(base: self.make())
+        let (identity, certificate) = try self.makeWithCertificate()
+        return .init(
+            base: identity,
+            chain: [certificate],
+            credential: .init(identity: identity, certificates: [certificate], persistence: .none)
+        )
     }
 
     public func makeWithCertificate() throws -> (SecIdentity, SecCertificate) {

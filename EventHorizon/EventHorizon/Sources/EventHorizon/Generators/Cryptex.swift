@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -37,8 +37,7 @@ public class CryptexGenerator: EHGenerator, AllEventsIterable {
 
     public struct CryptexInstallEvent: EHUEFEvent {
         internal init(tags: Set<String> = Set<String>(), fields: [String: EHValueType] = [:], event_category: EHUEFCategory = .system, event_type: String = "cryptex_install", name: String = "", identifier: String = "", version: String = "", alreadyInstalled: Bool = false, timestamp: Double = 0) {
-            self.tags = tags
-            self.fields = fields
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
             self.event_category = event_category
             self.event_type = event_type
             self.name = name
@@ -48,9 +47,7 @@ public class CryptexGenerator: EHGenerator, AllEventsIterable {
             self.timestamp = timestamp
         }
 
-        public var tags = Set<String>()
-
-        public var fields: [String: EHValueType] = [:]
+        public var metadata = EHEventMetadata()
         public var event_category: EHUEFCategory = .system
         public var event_type: String = "cryptex_install"
 
@@ -63,8 +60,7 @@ public class CryptexGenerator: EHGenerator, AllEventsIterable {
     }
     public struct CryptexUninstallEvent: EHUEFEvent {
         internal init(tags: Set<String> = Set<String>(), fields: [String: EHValueType] = [:], event_category: EHUEFCategory = .system, event_type: String = "cryptex_uninstall", name: String = "", identifier: String = "", version: String = "", timestamp: Double = 0) {
-            self.tags = tags
-            self.fields = fields
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
             self.event_category = event_category
             self.event_type = event_type
             self.name = name
@@ -73,9 +69,7 @@ public class CryptexGenerator: EHGenerator, AllEventsIterable {
             self.timestamp = timestamp
         }
 
-        public var tags = Set<String>()
-
-        public var fields: [String: EHValueType] = [:]
+        public var metadata = EHEventMetadata()
         public var event_category: EHUEFCategory = .system
         public var event_type: String = "cryptex_uninstall"
 
@@ -87,8 +81,7 @@ public class CryptexGenerator: EHGenerator, AllEventsIterable {
     }
     public struct CryptexUpgradedEvent: EHUEFEvent {
         internal init(tags: Set<String> = Set<String>(), fields: [String: EHValueType] = [:], event_category: EHUEFCategory = .system, event_type: String = "cryptex_upgraded", name: String = "", identifier: String = "", version: String = "", timestamp: Double = 0) {
-            self.tags = tags
-            self.fields = fields
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
             self.event_category = event_category
             self.event_type = event_type
             self.name = name
@@ -97,9 +90,7 @@ public class CryptexGenerator: EHGenerator, AllEventsIterable {
             self.timestamp = timestamp
         }
 
-        public var tags = Set<String>()
-
-        public var fields: [String: EHValueType] = [:]
+        public var metadata = EHEventMetadata()
         public var event_category: EHUEFCategory = .system
         public var event_type: String = "cryptex_upgraded"
 
@@ -193,5 +184,116 @@ public class CryptexGenerator: EHGenerator, AllEventsIterable {
             }
         }, nil)
         #endif
+    }
+}
+
+
+extension CryptexGenerator.CryptexInstallEvent: EHFieldExtractable {
+    public func fieldValue(for field: String) -> Any? {
+        switch field {
+        case "tags": return tags
+        case "fields": return fields
+        case "event_category": return event_category
+        case "event_type": return event_type
+        case "name": return name
+        case "identifier": return identifier
+        case "version": return version
+        case "alreadyInstalled": return alreadyInstalled
+        case "timestamp": return timestamp
+        default: return nil
+        }
+    }
+}
+
+extension CryptexGenerator.CryptexUninstallEvent: EHFieldExtractable {
+    public func fieldValue(for field: String) -> Any? {
+        switch field {
+        case "tags": return tags
+        case "fields": return fields
+        case "event_category": return event_category
+        case "event_type": return event_type
+        case "name": return name
+        case "identifier": return identifier
+        case "version": return version
+        case "timestamp": return timestamp
+        default: return nil
+        }
+    }
+}
+
+extension CryptexGenerator.CryptexUpgradedEvent: EHFieldExtractable {
+    public func fieldValue(for field: String) -> Any? {
+        switch field {
+        case "tags": return tags
+        case "fields": return fields
+        case "event_category": return event_category
+        case "event_type": return event_type
+        case "name": return name
+        case "identifier": return identifier
+        case "version": return version
+        case "timestamp": return timestamp
+        default: return nil
+        }
+    }
+}
+
+
+import AST
+
+private enum RK {
+    static let event_type: AST.RegoValue = .string("event_type")
+    static let event_category: AST.RegoValue = .string("event_category")
+    static let tags: AST.RegoValue = .string("tags")
+    static let fields: AST.RegoValue = .string("fields")
+    static let name: AST.RegoValue = .string("name")
+    static let identifier: AST.RegoValue = .string("identifier")
+    static let version: AST.RegoValue = .string("version")
+    static let alreadyInstalled: AST.RegoValue = .string("alreadyInstalled")
+    static let timestamp: AST.RegoValue = .string("timestamp")
+}
+
+extension CryptexGenerator.CryptexInstallEvent: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = [:]
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.name] = .string(name)
+        obj[RK.identifier] = .string(identifier)
+        obj[RK.version] = .string(version)
+        obj[RK.alreadyInstalled] = .boolean(alreadyInstalled)
+        obj[RK.timestamp] = .number(RegoNumber(decimal: Decimal(timestamp)))
+        return .object(obj)
+    }
+}
+
+extension CryptexGenerator.CryptexUninstallEvent: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = [:]
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.name] = .string(name)
+        obj[RK.identifier] = .string(identifier)
+        obj[RK.version] = .string(version)
+        obj[RK.timestamp] = .number(RegoNumber(decimal: Decimal(timestamp)))
+        return .object(obj)
+    }
+}
+
+extension CryptexGenerator.CryptexUpgradedEvent: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = [:]
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.name] = .string(name)
+        obj[RK.identifier] = .string(identifier)
+        obj[RK.version] = .string(version)
+        obj[RK.timestamp] = .number(RegoNumber(decimal: Decimal(timestamp)))
+        return .object(obj)
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,8 +13,12 @@
 // 10/02/2024
 
 import CloudBoardHealth
-#if canImport(SystemServiceMonitor)
+#if RC_IS_CLOUDOS_ENABLED && os(iOS)
+import SystemServiceMonitor
+#elseif canImport(SystemServiceMonitor)
 @_weakLinked import SystemServiceMonitor
+#else
+#warning("SystemServiceMonitor not available at compile time")
 #endif
 import CloudBoardLogging
 import Foundation

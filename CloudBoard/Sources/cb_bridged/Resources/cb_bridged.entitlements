@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Apple Inc. All Rights Reserved. -->
+<!-- Copyright © 2026 Apple Inc. All Rights Reserved. -->
 
 <!-- APPLE INC. -->
 <!-- PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT -->
@@ -16,35 +16,47 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>application-identifier</key>
-    <string>com.apple.cloudos.cb_bridged</string>
-    <key>com.apple.private.sandbox.profile:embedded</key>
-    <string>apple-cloud</string>
-    <key>com.apple.private.system-keychain</key>
-    <true/>
-    <key>com.apple.security.exception.shared-preference.read-only</key>
-    <array>
-        <string>com.apple.acdc.cloudmetricsd</string>
-        <string>com.apple.securityd</string>
-    </array>
-    <key>com.apple.security.exception.mach-lookup.global-name</key>
-    <array>
-        <string>com.apple.acdc.cloudmetricsd</string>
-        <string>com.apple.cloudos.AppleComputeEnsembler.service</string>
-    </array>
-    <key>com.apple.security.exception.files.absolute-path.read-only</key>
-    <array>
-        <string>/private/var/db/secureconfig/</string>
-    </array>
-    <key>com.apple.security.network.client</key>
-    <true/>
-    <key>com.apple.acdc.cloudmetrics.client</key>
-    <string>cb_bridged</string>
-    <key>com.apple.private.AppleComputeEnsembler.read</key>
-    <true/>
-    <key>keychain-access-groups</key>
-    <array>
-        <string>com.apple.narrativecertd</string>
-    </array>
+	<key>com.apple.private.cloudos.PrivateFilterClientRouter</key>
+	<true/>
+	<key>application-identifier</key>
+	<string>com.apple.cloudos.cb_bridged</string>
+	<key>com.apple.private.sandbox.profile:embedded</key>
+	<string>apple-cloud</string>
+	<key>com.apple.private.system-keychain</key>
+	<true/>
+	<key>com.apple.security.exception.shared-preference.read-only</key>
+	<array>
+		<string>com.apple.acdc.cloudmetricsd</string>
+		<string>com.apple.cloudos.cloudboardd</string>
+		<string>com.apple.securityd</string>
+	</array>
+	<key>com.apple.security.exception.mach-lookup.global-name</key>
+	<array>
+		<string>com.apple.acdc.cloudmetricsd</string>
+		<string>com.apple.cloudos.AppleComputeEnsembler.service</string>
+		<string>com.apple.narrativecertd</string>
+		<string>com.apple.cloudos.cb_pclienthelper</string>
+		<string>com.apple.cloudos.PrivateFilterClientRouter.bridge-control</string>
+	</array>
+	<key>com.apple.security.exception.files.absolute-path.read-only</key>
+	<array>
+		<string>/private/var/db/secureconfig/</string>
+	</array>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.acdc.cloudmetrics.client</key>
+	<string>cb_bridged</string>
+	<key>com.apple.private.AppleComputeEnsembler.read</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>com.apple.narrativecertd</string>
+	</array>
+	<key>com.apple.private.narrativecertd.configure</key>
+	<true/>
+	<key>com.apple.private.xpc.launchd.job-manager</key>
+	<string>com.apple.cloudos.cb_bridged</string>
+	<key>com.apple.private.cloudos.cb_pclienthelper</key>
+	<true/>
 </dict>
 </plist>

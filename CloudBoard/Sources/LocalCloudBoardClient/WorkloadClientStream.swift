@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -155,8 +155,12 @@ class WorkloadAsyncClientStream {
             }
             $0.workload = .init(type: metaData.workloadType, parameters: metaData.workloadParameters)
             $0.requestID = requestID
+            $0.traceContextV1 = .with {
+                $0.traceID = requestID
+            }
             $0.requestBypassed = requestBypassed
             $0.requestNack = requestNack
+            $0.patIssuer = metaData.patIssuer
             if let responseBypass {
                 $0.trustedProxyMetadata = .with {
                     $0.responseBypassMode = responseBypass

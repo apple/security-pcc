@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -52,6 +52,10 @@ extension ThreadSafeArray {
                 $0[index] = newValue
             }
         }
+    }
+
+    func filter(_ isIncluded: @Sendable (T) -> Bool) -> [T] {
+        self.storage.withLock { $0.filter(isIncluded) }
     }
 }
 

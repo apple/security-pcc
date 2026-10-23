@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -33,8 +33,6 @@ struct FeatureUsageSummaryMetric: CloudTelemetryReportable, Equatable {
         case environment = "env"
         /// Information about the device's hardware and software versions
         case clientInfo = "appleClientInfo"
-        /// Device locale when the daily aggregation is generated
-        case locale = "appleLocale"
         /// Feature identifier provided by the client adopter
         case featureID = "appleFeatureID"
         /// A random UUID used to group together FeatureUsageSummary events sent on the same day. This is an implementation detail and is not stored.
@@ -50,7 +48,6 @@ struct FeatureUsageSummaryMetric: CloudTelemetryReportable, Equatable {
         periodStart: Date,
         environment: String,
         systemInfo: SystemInfo,
-        locale: Locale,
         samplingUUID: UUID,
         trustedRequestSuccessCount: Int64,
     ) {
@@ -59,7 +56,6 @@ struct FeatureUsageSummaryMetric: CloudTelemetryReportable, Equatable {
             .periodStart: .int(Int64(periodStart.timeIntervalSince1970)),
             .environment: .string(environment),
             .clientInfo: .string(systemInfo.osInfoWithDeviceModel),
-            .locale: .string(locale.identifier),
             .samplingUUID: .uuid(samplingUUID),
             .trustedRequestSuccessCount: .int(trustedRequestSuccessCount),
         ]

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,7 @@
 private import AppServerSupport.OSLaunchdJob
 private import CryptoKit
 private import EnsembleWardenCommon
-private import EnsembleWardenXPCAPI
+@_exported public import EnsembleWardenXPC
 public import Foundation
 public import IOSurface
 internal import os
@@ -70,13 +70,15 @@ public final class EnsembleWardenClient: Sendable {
     }
 
     public func publish(serializedXPCRequest: Data, privateData: [IOSurface], purpose: KVCacheTransferPurpose, spanID: UInt64) async throws {
-        try await self.clientImplementation.publish(serializedXPCRequest: serializedXPCRequest, privateData: privateData, purpose: purpose, spanID: spanID)
+        self.logger.warning("publish(serializedXPCRequest:) is no longer supported. span_id=\(spanID.hexEncoded, privacy: .public)")
     }
     public func fetch(serializedXPCRequest: Data, spanID: UInt64) async throws -> [IOSurface] {
-        try await self.clientImplementation.fetch(serializedXPCRequest: serializedXPCRequest, spanID: spanID)
+        self.logger.warning("fetch(serializedXPCRequest:) is no longer supported. span_id=\(spanID.hexEncoded, privacy: .public)")
+        return []
     }
     public func fetch(serializedXPCRequest: Data, spanID: UInt64, range: ClosedRange<Int>) async throws -> [IOSurface] {
-        try await self.clientImplementation.fetch(serializedXPCRequest: serializedXPCRequest, spanID: spanID, range: range)
+        self.logger.warning("fetch(serializedXPCRequest:range:) is no longer supported. span_id=\(spanID.hexEncoded, privacy: .public)")
+        return []
     }
 
     public func dropAll() async throws {
@@ -88,7 +90,12 @@ package final class EnsembleWardenClientImplementation<Factory: MetricsFactory>:
     /// This must match the "_managedBy" key in the launchd plist of ensemblewardend.
     private let managedByLabel = "com.apple.cloudos.ensemblewardenframework"
 
-    private let xpcServiceName: String
+    private enum ConnectionTarget: Sendable {
+        case machService(String)
+        case endpoint(XPCEndpoint)
+    }
+
+    private let connectionTarget: ConnectionTarget
     /// By default we use process isolation of ensemblewardend.
     ///
     /// This is built using launchd's OSLaunchdJob. However this isn't really testable.
@@ -99,6 +106,13 @@ package final class EnsembleWardenClientImplementation<Factory: MetricsFactory>:
     /// ensembleWardenID created for logging before requestID given.
     private let ensembleWardenID: UUID = UUID()
     private let ensembleWardenMetrics: EnsembleWardenMetrics<Factory>
+
+    private var connectionTargetDescription: String {
+        switch self.connectionTarget {
+        case .machService(let name): return name
+        case .endpoint: return "<anonymous-endpoint>"
+        }
+    }
 
     private enum State: Sendable {
         /// We haven't yet connected to a daemon, so we can create a new daemon+connection.
@@ -127,11 +141,9 @@ package final class EnsembleWardenClientImplementation<Factory: MetricsFactory>:
     }
 
 
-    /// Initialiser for connecting to services that aren't kv-cache-transfer.
-    ///
-    /// Allows us to specify custom xpcServiceNames.
-    package init(xpcServiceName: String, processIsolation: Bool = true, requestID: UUID, metricsFactory: Factory) {
-        self.xpcServiceName = xpcServiceName
+    /// Initialiser for connecting via an anonymous XPC endpoint (e.g. in tests).
+    package init(endpoint: XPCEndpoint, processIsolation: Bool = false, requestID: UUID, metricsFactory: Factory) {
+        self.connectionTarget = .endpoint(endpoint)
         self.processIsolation = processIsolation
         self.signposter = OSSignposter(logger: self.logger)
         self.ensembleWardenMetrics = EnsembleWardenMetrics(metricsFactory: metricsFactory)
@@ -143,7 +155,7 @@ package final class EnsembleWardenClientImplementation<Factory: MetricsFactory>:
     }
 
     package init(xpcServiceName: String, processIsolation: Bool = true, metricsFactory: Factory) {
-        self.xpcServiceName = xpcServiceName
+        self.connectionTarget = .machService(xpcServiceName)
         self.processIsolation = processIsolation
         self.signposter = OSSignposter(logger: self.logger)
         self.ensembleWardenMetrics = EnsembleWardenMetrics(metricsFactory: metricsFactory)
@@ -152,20 +164,22 @@ package final class EnsembleWardenClientImplementation<Factory: MetricsFactory>:
     /// Starts up an instance of ensemblewardend so that the costs of process startup are paid before
     /// we hit the hot-path of requests.
     package func prewarm(spanID: UInt64) throws {
-        try self.state.withLock { state in
-            switch state {
-            case .notYetConnected:
-                let session = try doPrewarm()
-                state = .prewarmed(session)
-            case .sendingCryptoHandles:
-                throw EnsembleWardenError.invalidStateTransition
-            case .prewarmed, .ready(_, _):
-                logger.warning("""
-                                Client prewarmed twice. \
-                                ensemble_warden_id=\(self.ensembleWardenID, privacy: .public)
-                                """)
-            case .noLongerValid:
-                throw EnsembleWardenError.clientNoLongerActive
+        try self.ensembleWardenMetrics.reportingSyncClientMetrics(operationName: .prewarm) {
+            try self.state.withLock { state in
+                switch state {
+                case .notYetConnected:
+                    let session = try doPrewarm()
+                    state = .prewarmed(session)
+                case .sendingCryptoHandles:
+                    throw EnsembleWardenError.invalidStateTransition
+                case .prewarmed, .ready(_, _):
+                    logger.warning("""
+                                    Client prewarmed twice. \
+                                    ensemble_warden_id=\(self.ensembleWardenID, privacy: .public)
+                                    """)
+                case .noLongerValid:
+                    throw EnsembleWardenError.clientNoLongerActive
+                }
             }
         }
     }
@@ -177,8 +191,7 @@ package final class EnsembleWardenClientImplementation<Factory: MetricsFactory>:
         }
         logger.log("""
             Prewarming ensemblewardend. \
-            ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
-            span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
+            ensemble_warden_id=\(self.ensembleWardenID, privacy: .public)
             """)
         do {
             let session = try self.processIsolation ? freshProcess() : singleProcess()
@@ -187,15 +200,13 @@ package final class EnsembleWardenClientImplementation<Factory: MetricsFactory>:
             try session.sendSync(EnsembleWardenDaemonXPC.Request.empty(.init()))
             logger.debug("""
                 Finished prewarming ensemblewardend. \
-                ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
-                span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
+                ensemble_warden_id=\(self.ensembleWardenID, privacy: .public)
                 """)
             return session
         } catch {
             logger.error("""
                 Error prewarming ensemblewardend. \
                 ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
-                span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public) \
                 error=\(String(reportable: error), privacy: .public)
                 """)
             throw error
@@ -211,11 +222,13 @@ package final class EnsembleWardenClientImplementation<Factory: MetricsFactory>:
                 span_id=\(spanID.hexEncoded, privacy: .public)
                 """)
         do {
-
             let message = EnsembleWardenDaemonXPC.Start(
                 ensemblePorterConnection: cryptoHandles.ensemblePorterHandle,
+                ensemblePorterEndpoint: cryptoHandles.ensemblePorterEndpoint,
                 followerToken: cryptoHandles.followerToken,
-                requestID: requestID)
+                requestID: requestID,
+                isMultiTurn: cryptoHandles.isMultiTurn
+            )
             let response = try await session.sendXPC(request: message)
             switch response {
             case .success(let tokens):
@@ -251,20 +264,22 @@ package final class EnsembleWardenClientImplementation<Factory: MetricsFactory>:
     ///     ensemblewarden on the followers.
     package func supply(cryptoHandles: EnsembleWardenCryptoHandles,
                        requestID: UUID, spanID: UInt64) async throws -> FollowerTokens {
-        do {
-            return try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
-                try await PrismTracing.withSpan(name: "EnsembleWardenSupplyKey") {
-                    return try await self.doSupply(cryptoHandles: cryptoHandles)
+        return try await self.ensembleWardenMetrics.reportingClientMetrics(operationName: .supply) {
+            do {
+                return try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
+                    try await PrismTracing.withSpan(name: "EnsembleWardenSupplyKey") {
+                        return try await self.doSupply(cryptoHandles: cryptoHandles)
+                    }
                 }
+            } catch {
+                logger.error("""
+                    Supply failed. \
+                    error=\(String(reportable: error), privacy: .public) \
+                    ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
+                    span_id=\(spanID.hexEncoded, privacy: .public)
+                    """)
+                throw error
             }
-        } catch {
-            logger.error("""
-                Supply failed. \
-                error=\(String(reportable: error), privacy: .public) \
-                ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
-                span_id=\(spanID.hexEncoded, privacy: .public)
-                """)
-            throw error
         }
     }
 
@@ -354,11 +369,14 @@ package final class EnsembleWardenClientImplementation<Factory: MetricsFactory>:
 
         logger.log("""
                     Creating process-isolated XPC connection. \
-                    mach_service=\(self.xpcServiceName, privacy: .public) \
+                    mach_service=\(self.connectionTargetDescription, privacy: .public) \
                     instance_uuid=\(instanceUUID, privacy: .public) \
                     ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
                     span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
                     """)
+        guard case .machService(let xpcServiceName) = self.connectionTarget else {
+            throw EnsembleWardenError.invalidStateTransition
+        }
         let xpcConnection = xpc_connection_create_mach_service(xpcServiceName, nil, 0)
 
         withUnsafeMutablePointer(to: &instanceUUID) { id in
@@ -425,20 +443,34 @@ package final class EnsembleWardenClientImplementation<Factory: MetricsFactory>:
     }
 
     private func singleProcess() throws -> XPCSession {
-        logger.log("""
-                    Creating XPC session. \
-                    mach_service=\(self.xpcServiceName, privacy: .public) \
-                    ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
-                    span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
-                    """)
-        let requestID = PrismTracing.requestID
-        return try XPCSession(machService: self.xpcServiceName) { error in
-            self.logger.log("""
-                            XPC session cancelled. \
-                            error=\(error, privacy: .public) \
-                            ensemble_warden_id=\(self.ensembleWardenID, privacy: .public)
-                            """)
-            self.state.withLock { $0 = .noLongerValid }
+        switch self.connectionTarget {
+        case .machService(let serviceName):
+            logger.log("""
+                        Creating XPC session. \
+                        mach_service=\(serviceName, privacy: .public) \
+                        ensemble_warden_id=\(self.ensembleWardenID, privacy: .public)
+                        """)
+            return try XPCSession(machService: serviceName) { error in
+                self.logger.log("""
+                                XPC session cancelled. \
+                                error=\(error, privacy: .public) \
+                                ensemble_warden_id=\(self.ensembleWardenID, privacy: .public)
+                                """)
+                self.state.withLock { $0 = .noLongerValid }
+            }
+        case .endpoint(let endpoint):
+            logger.log("""
+                        Creating XPC session from endpoint. \
+                        ensemble_warden_id=\(self.ensembleWardenID, privacy: .public)
+                        """)
+            return try XPCSession(endpoint: endpoint) { error in
+                self.logger.log("""
+                                XPC session cancelled. \
+                                error=\(error, privacy: .public) \
+                                ensemble_warden_id=\(self.ensembleWardenID, privacy: .public)
+                                """)
+                self.state.withLock { $0 = .noLongerValid }
+            }
         }
     }
 
@@ -452,183 +484,40 @@ extension EnsembleWardenClientImplementation {
         defer {
             self.signposter.endInterval("EW.finish.signpost", finishInterval)
         }
-        let (session, requestID): (XPCSession?, UUID?) = try self.state.withLock { state in
-            switch state {
-            case .notYetConnected:
-                state = .noLongerValid
-                return (nil, nil)
-            case .prewarmed(let session), .sendingCryptoHandles(let session):
-                state = .noLongerValid
-                return (session, nil)
-            case .ready(let session, let requestID):
-                state = .noLongerValid
-                return (session, requestID)
-            case .noLongerValid:
-                logger.error("Client already finished")
-                throw EnsembleWardenError.clientNoLongerActive
-            }
-        }
-        if let session {
-            if let requestID {
-                logger.log("""
-                   Ending EnsembleWarden connection. \
-                   ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
-                   request_id=\(requestID, privacy: .public) \
-                   span_id=\(spanID.hexEncoded, privacy: .public)
-                   """)
-            } else {
-                logger.log("""
-                   Ending EnsembleWarden connection. \
-                   ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
-                   span_id=\(spanID.hexEncoded, privacy: .public)
-                   """)
-            }
-            session.cancel(reason: "close")
-        }
-    }
-
-    /// Fetch ioSurface and decrypt them so they can be used by the caller
-    /// - Parameters:
-    ///   - serializedXPCRequest: An serialised request protobuf that identifies the ioSurfaces to be fetched.
-    ///   - spanID: A UUID to help with logging
-    /// - Returns: Decrypted private data in IOSurfaces
-    package func fetch(serializedXPCRequest: Data, spanID: UInt64) async throws -> [IOSurface] {
-        let fetchInterval = self.signposter.beginInterval("EW.fetch.signpost")
-        defer {
-            self.signposter.endInterval("EW.fetch.signpost", fetchInterval)
-        }
-
-        do {
-            return try await self.ensembleWardenMetrics.reportingClientMetrics(operationName: "fetch") {
-                let (session, requestID) = try self.state.withLock { state in
-                    switch state {
-                    case .notYetConnected, .prewarmed(_), .sendingCryptoHandles:
-                        throw EnsembleWardenError.keyIDNotSupplied
-                    case .ready(let session, let requestID):
-                        return (session, requestID)
-                    case .noLongerValid:
-                        throw EnsembleWardenError.clientNoLongerActive
-                    }
-                }
-                return try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
-                    try await PrismTracing.withSpan(name: "EnsembleWardenFetch") {
-                        return try await self.doFetch(serializedXPCRequest: serializedXPCRequest, session: session)
-                    }
+        try await self.ensembleWardenMetrics.reportingClientMetrics(operationName: .finish) {
+            let (session, requestID): (XPCSession?, UUID?) = try self.state.withLock { state in
+                switch state {
+                case .notYetConnected:
+                    state = .noLongerValid
+                    return (nil, nil)
+                case .prewarmed(let session), .sendingCryptoHandles(let session):
+                    state = .noLongerValid
+                    return (session, nil)
+                case .ready(let session, let requestID):
+                    state = .noLongerValid
+                    return (session, requestID)
+                case .noLongerValid:
+                    logger.error("Client already finished")
+                    throw EnsembleWardenError.clientNoLongerActive
                 }
             }
-        } catch {
-            logger.error("""
-                Fetch failed. \
-                error=\(String(reportable: error), privacy: .public) \
-                ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
-                span_id=\(spanID.hexEncoded, privacy: .public)
-                """)
-            throw error
-        }
-    }
-
-    private func doFetch(serializedXPCRequest: Data, session: XPCSession) async throws -> [IOSurface] {
-        let fetchMessage = EnsembleWardenDaemonXPC.Fetch(
-            serializedXPCRequest: serializedXPCRequest,
-            requestID: PrismTracing.requestID,
-            spanID: PrismTracing.spanID)
-
-        let response = try await session.sendXPC(request: fetchMessage)
-        let ioSurfaces: [IOSurface]
-        switch response {
-        case .success(let returned): ioSurfaces = returned
-        case .failure(let error): throw error
-        }
-        _ = try ioSurfaces.map { try $0.takeOwnership() }
-        return ioSurfaces
-    }
-
-    /// Fetch a specific range of the ioSurface data and decrypt it so it can
-    /// be used by the caller
-    /// - Parameters:
-    ///   - serializedXPCRequest: A serialized request protobuf that
-    ///   identifies the ioSurfaces to be fetched
-    ///   - spanID: A UUID to help with logging
-    ///   - range: The byte range to fetch within the ioSurfaces
-    /// - Returns: Decrypted private data in IOSurfaces
-    /// - Note: If the request identifies multiple ioSurfaces then the range
-    /// must be valid for all of them otherwise an error is thrown.
-    package func fetch(
-        serializedXPCRequest: Data,
-        spanID: UInt64,
-        range: ClosedRange<Int>
-    ) async throws -> [IOSurface] {
-        guard range.lowerBound >= 0, range.upperBound >= 0 else {
-            throw EnsembleWardenError.invalidIOSurfaceRange
-        }
-
-        let inSurfaces = try await fetch(
-            serializedXPCRequest: serializedXPCRequest, spanID: spanID)
-        var outSurfaces: [IOSurface] = []
-
-        /// Only one surface is used in practice. However, the API uses arrays
-        /// of surfaces so assume we want to trim them all if there is more
-        /// than one.
-        for inSurface in inSurfaces {
-            guard let outSurface = try IOSurface(
-                from: inSurface, at: range) else {
-                throw EnsembleWardenError.failedToCreateIOSurface
-            }
-            outSurfaces.append(outSurface)
-        }
-
-        return outSurfaces
-    }
-
-    /// Performs a publish operation to the ensemble warden daemon.
-    /// - Parameters:
-    ///   - serializedXPCRequest: The serialized XPC request to publish.
-    ///   - privateData: The private data to publish.
-    ///   - purpose: The purpose of the KV$ transfer that we're about to initiate. Eg is it for FT/ET?
-    ///   - spanID: The span ID to use for this operation.
-    package func publish(serializedXPCRequest: Data, privateData: [IOSurface], purpose: KVCacheTransferPurpose, spanID: UInt64) async throws {
-        let publishInterval = self.signposter.beginInterval("EW.publish.signpost")
-        defer {
-            self.signposter.endInterval("EW.publish.signpost", publishInterval)
-        }
-        do {
-            try await self.ensembleWardenMetrics.reportingClientMetrics(operationName: "publish") {
-                let (session, requestID) = try self.state.withLock { state in
-                    switch state {
-                    case .notYetConnected, .prewarmed(_), .sendingCryptoHandles:
-                        logger.error("KeyID not yet supplied")
-                        throw EnsembleWardenError.keyIDNotSupplied
-                    case .ready(let session, let requestID):
-                        return (session, requestID)
-                    case .noLongerValid:
-                        logger.error("Client no active")
-                        throw EnsembleWardenError.clientNoLongerActive
-                    }
+            if let session {
+                if let requestID {
+                    logger.log("""
+                       Ending EnsembleWarden connection. \
+                       ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
+                       request_id=\(requestID, privacy: .public) \
+                       span_id=\(spanID.hexEncoded, privacy: .public)
+                       """)
+                } else {
+                    logger.log("""
+                       Ending EnsembleWarden connection. \
+                       ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
+                       span_id=\(spanID.hexEncoded, privacy: .public)
+                       """)
                 }
-                return try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
-                    try await PrismTracing.withSpan(name: "EnsembleWardenPublish") {
-                        let message = EnsembleWardenDaemonXPC.Publish(
-                            serializedXPCRequest: serializedXPCRequest,
-                            ioSurfaces: privateData,
-                            purpose: .init(purpose: purpose),
-                            requestID: PrismTracing.requestID,
-                            spanID: PrismTracing.spanID)
-                        let response = try await session.sendXPC(request: message)
-                        switch response {
-                            case .success(_): break
-                            case .failure(let error): throw error
-                        }
-                    }
-                }
+                session.cancel(reason: "close")
             }
-        } catch {
-            logger.error("""
-                Publish failed. \
-                error=\(String(reportable: error), privacy: .public) \
-                ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
-                span_id=\(spanID.hexEncoded, privacy: .public)
-                """)
-            throw error
         }
     }
 
@@ -638,7 +527,7 @@ extension EnsembleWardenClientImplementation {
     ///   - ioSurfaces: The IOSurfaces to prefault
     ///   - spanID: The span ID to use for this operation
     package func prefault(ioSurfaces: [IOSurface], spanID: UInt64) async throws {
-        try await self.ensembleWardenMetrics.reportingClientMetrics(operationName: "prefault") {
+        try await self.ensembleWardenMetrics.reportingClientMetrics(operationName: .prefault) {
             let (session, _) = try self.getSession()
             return try await PrismTracing.withSpan(name: "EnsembleWardenPrefault") {
                 let request = EnsembleWardenDaemonXPC.Prefault(
@@ -663,7 +552,7 @@ extension EnsembleWardenClientImplementation {
 
         do {
             return try await self.ensembleWardenMetrics.reportingClientMetrics(
-                operationName: "dropAll") {
+                operationName: .dropAll) {
 
                 let session = try self.state.withLock { state in
                     switch state {
@@ -708,7 +597,7 @@ extension EnsembleWardenClient {
         try await self.clientImplementation.publish(identifier: identifier, privateData: privateData, privateMetadata: privateMetadata, ttl: ttl, purpose: purpose, spanID: spanID)
     }
 
-    public func fetch(identifier: String, range: ClosedRange<Int>?, host: String, spanID: UInt64) async throws -> IOSurface {
+    public func fetch(identifier: String, range: ClosedRange<Int>?, host: String, spanID: UInt64) async throws -> EnsembleWardenFetchedData {
         try await self.clientImplementation.fetch(identifier: identifier, range: range, host: host, spanID: spanID)
     }
 
@@ -753,7 +642,7 @@ extension EnsembleWardenClientImplementation {
         }
         do {
             try await self.ensembleWardenMetrics.reportingClientMetrics(
-                operationName: "publish2") {
+                operationName: .publish2, purpose: purpose) {
                 let (session, requestID) = try self.getSession()
                 return try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
                     try await PrismTracing.withSpan(name: "EnsembleWardenPublish2Client") {
@@ -821,14 +710,19 @@ extension EnsembleWardenClientImplementation {
         range: ClosedRange<Int>?,
         host: String,
         spanID: UInt64
-    ) async throws -> IOSurface {
+    ) async throws -> EnsembleWardenFetchedData {
+        logger.log("""
+            \(#function, privacy: .public): \
+            identifier=\(identifier, privacy: .public) \
+            host=\(host, privacy: .public)
+            """)
         let interval = self.signposter.beginInterval("EW.fetch2.signpost")
         defer {
             self.signposter.endInterval("EW.fetch2.signpost", interval)
         }
         do {
             return try await self.ensembleWardenMetrics.reportingClientMetrics(
-                operationName: "fetch2") {
+                operationName: .fetch2) {
                 let (session, requestID) = try self.getSession()
                 return try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
                     try await PrismTracing.withSpan(name: "EnsembleWardenFetch2") {
@@ -852,7 +746,7 @@ extension EnsembleWardenClientImplementation {
         range: ClosedRange<Int>?,
         host: String,
         session: XPCSession
-    ) async throws -> IOSurface {
+    ) async throws -> EnsembleWardenFetchedData {
         logger.debug("""
             Fetching IOSurface from ensemblewardend (new API). \
             ensemble_warden_id=\(self.ensembleWardenID, privacy: .public) \
@@ -868,13 +762,12 @@ extension EnsembleWardenClientImplementation {
             spanID: PrismTracing.spanID)
 
         let response = try await session.sendXPC(request: request)
-        let ioSurface: IOSurface
+        let fetchedData: EnsembleWardenFetchedData
         switch response {
-        case .success(let returned): ioSurface = returned
+        case .success(let returned): fetchedData = returned
         case .failure(let error): throw error
         }
-        try ioSurface.takeOwnership()
-        return ioSurface
+        return fetchedData
     }
 
     /// Fetch IOSurface metadata associated with the specified identifier
@@ -891,6 +784,11 @@ extension EnsembleWardenClientImplementation {
         host: String,
         spanID: UInt64
     ) async throws -> IOSurface? {
+        logger.log("""
+            \(#function, privacy: .public): \
+            identifier=\(identifier, privacy: .public) \
+            host=\(host, privacy: .public)
+            """)
         let interval = self.signposter.beginInterval(
             "EW.fetchMetadata.signpost")
         defer {
@@ -899,7 +797,7 @@ extension EnsembleWardenClientImplementation {
         }
         do {
             return try await self.ensembleWardenMetrics.reportingClientMetrics(
-                operationName: "fetchMetadata") {
+                operationName: .fetchMetadata) {
                 let (session, requestID) = try self.getSession()
                 return try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
                     try await PrismTracing.withSpan(name: "EnsembleWardenFetchMetadata") {
@@ -976,7 +874,7 @@ extension EnsembleWardenClientImplementation {
         }
         do {
             return try await self.ensembleWardenMetrics.reportingClientMetrics(
-                operationName: "delete") {
+                operationName: .delete) {
                 let (session, requestID) = try self.getSession()
                 return try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
                     try await PrismTracing.withSpan(name: "EnsembleWardenDeleteClient") {
@@ -1031,6 +929,8 @@ fileprivate extension EnsembleWardenDaemonXPC.TransferPurpose {
         switch purpose {
         case .ftET:
             self = .ftET
+        case .multiTurn:
+            self = .multiTurn
         }
     }
 }

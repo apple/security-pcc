@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -80,69 +80,80 @@ public struct Proto_AttestationBundle: @unchecked Sendable {
 
   /// DER encoded SEP attestation blob.
   public var sepAttestation: Data {
-    get {return _storage._sepAttestation}
+    get {_storage._sepAttestation}
     set {_uniqueStorage()._sepAttestation = newValue}
   }
 
   /// Image4 Manifest DER blob.
   public var apTicket: Data {
-    get {return _storage._apTicket}
+    get {_storage._apTicket}
     set {_uniqueStorage()._apTicket = newValue}
   }
 
   public var sealedHashes: Proto_SealedHashLedger {
-    get {return _storage._sealedHashes ?? Proto_SealedHashLedger()}
+    get {_storage._sealedHashes ?? Proto_SealedHashLedger()}
     set {_uniqueStorage()._sealedHashes = newValue}
   }
   /// Returns true if `sealedHashes` has been explicitly set.
-  public var hasSealedHashes: Bool {return _storage._sealedHashes != nil}
+  public var hasSealedHashes: Bool {_storage._sealedHashes != nil}
   /// Clears the value of `sealedHashes`. Subsequent reads from it will return its default value.
   public mutating func clearSealedHashes() {_uniqueStorage()._sealedHashes = nil}
 
   /// DCIK certificate for Private Cloud Compute
   public var provisioningCertificateChain: [Data] {
-    get {return _storage._provisioningCertificateChain}
+    get {_storage._provisioningCertificateChain}
     set {_uniqueStorage()._provisioningCertificateChain = newValue}
   }
 
   /// Use-case specific data. sha256 digest of this is included in the nonce
   public var appData: Data {
-    get {return _storage._appData}
+    get {_storage._appData}
     set {_uniqueStorage()._appData = newValue}
   }
 
   /// Unix timestamp of the key's expiration, as hinted by the attested device
   public var keyExpiration: InternalSwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _storage._keyExpiration ?? InternalSwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_storage._keyExpiration ?? InternalSwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._keyExpiration = newValue}
   }
   /// Returns true if `keyExpiration` has been explicitly set.
-  public var hasKeyExpiration: Bool {return _storage._keyExpiration != nil}
+  public var hasKeyExpiration: Bool {_storage._keyExpiration != nil}
   /// Clears the value of `keyExpiration`. Subsequent reads from it will return its default value.
   public mutating func clearKeyExpiration() {_uniqueStorage()._keyExpiration = nil}
 
+  /// Transparency proofs of the identifying certificate.
+  public var certificateTransparencyProofs: Proto_TransparencyProofs {
+    get {_storage._certificateTransparencyProofs ?? Proto_TransparencyProofs()}
+    set {_uniqueStorage()._certificateTransparencyProofs = newValue}
+  }
+  /// Returns true if `certificateTransparencyProofs` has been explicitly set.
+  public var hasCertificateTransparencyProofs: Bool {_storage._certificateTransparencyProofs != nil}
+  /// Clears the value of `certificateTransparencyProofs`. Subsequent reads from it will return its default value.
+  public mutating func clearCertificateTransparencyProofs() {_uniqueStorage()._certificateTransparencyProofs = nil}
+
+  /// Transparency proofs of the running software
   public var transparencyProofs: Proto_TransparencyProofs {
-    get {return _storage._transparencyProofs ?? Proto_TransparencyProofs()}
+    get {_storage._transparencyProofs ?? Proto_TransparencyProofs()}
     set {_uniqueStorage()._transparencyProofs = newValue}
   }
   /// Returns true if `transparencyProofs` has been explicitly set.
-  public var hasTransparencyProofs: Bool {return _storage._transparencyProofs != nil}
+  public var hasTransparencyProofs: Bool {_storage._transparencyProofs != nil}
   /// Clears the value of `transparencyProofs`. Subsequent reads from it will return its default value.
   public mutating func clearTransparencyProofs() {_uniqueStorage()._transparencyProofs = nil}
 
   /// Local boot policy used on macOS
   public var localPolicy: Proto_LocalPolicy {
-    get {return _storage._localPolicy ?? Proto_LocalPolicy()}
+    get {_storage._localPolicy ?? Proto_LocalPolicy()}
     set {_uniqueStorage()._localPolicy = newValue}
   }
   /// Returns true if `localPolicy` has been explicitly set.
-  public var hasLocalPolicy: Bool {return _storage._localPolicy != nil}
+  public var hasLocalPolicy: Bool {_storage._localPolicy != nil}
   /// Clears the value of `localPolicy`. Subsequent reads from it will return its default value.
   public mutating func clearLocalPolicy() {_uniqueStorage()._localPolicy = nil}
 
   /// System, firmware & restore manifest used on macOS
   public var sfrManifest: Data {
-    get {return _storage._sfrManifest}
+    get {_storage._sfrManifest}
     set {_uniqueStorage()._sfrManifest = newValue}
   }
 
@@ -169,11 +180,11 @@ public struct Proto_AppData: Sendable {
 
   /// Empty for Compute Node, PrivateCloudCompute_ProxyNodeMetadata for Proxy Node
   public var metadata: InternalSwiftProtobuf.Google_Protobuf_Any {
-    get {return _metadata ?? InternalSwiftProtobuf.Google_Protobuf_Any()}
+    get {_metadata ?? InternalSwiftProtobuf.Google_Protobuf_Any()}
     set {_metadata = newValue}
   }
   /// Returns true if `metadata` has been explicitly set.
-  public var hasMetadata: Bool {return self._metadata != nil}
+  public var hasMetadata: Bool {self._metadata != nil}
   /// Clears the value of `metadata`. Subsequent reads from it will return its default value.
   public mutating func clearMetadata() {self._metadata = nil}
 
@@ -184,7 +195,7 @@ public struct Proto_AppData: Sendable {
   fileprivate var _metadata: InternalSwiftProtobuf.Google_Protobuf_Any? = nil
 }
 
-public struct Proto_LocalPolicy: @unchecked Sendable {
+public struct Proto_LocalPolicy: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -255,7 +266,7 @@ public struct Proto_SealedHash: Sendable {
 
   public var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
-  public struct Entry: @unchecked Sendable {
+  public struct Entry: Sendable {
     // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
     // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
     // methods supported on all messages.
@@ -312,7 +323,7 @@ public struct Proto_SealedHash: Sendable {
 
     /// A tagged union of different payloads that are written to a Software Sealed Hash Register.
     /// Each payload should have enough information in of itself to reconstruct the above `digest` value.
-    public enum OneOf_Info: Equatable, @unchecked Sendable {
+    public enum OneOf_Info: Equatable, Sendable {
       /// Generic unknown bytes
       case generic(Data)
       /// Information over a cryptex that result to `digest` when hashed canonically using `alg`
@@ -368,7 +379,7 @@ public struct Proto_SealedHash: Sendable {
   public init() {}
 }
 
-public struct Proto_Cryptex: @unchecked Sendable {
+public struct Proto_Cryptex: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -391,7 +402,7 @@ public struct Proto_Cryptex: @unchecked Sendable {
   public init() {}
 }
 
-public struct Proto_SecureConfig: @unchecked Sendable {
+public struct Proto_SecureConfig: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -416,11 +427,11 @@ public struct Proto_TransparencyProofs: Sendable {
   // methods supported on all messages.
 
   public var proofs: PrivateCloudCompute_TransparencyLog_ATLogProofs {
-    get {return _proofs ?? PrivateCloudCompute_TransparencyLog_ATLogProofs()}
+    get {_proofs ?? PrivateCloudCompute_TransparencyLog_ATLogProofs()}
     set {_proofs = newValue}
   }
   /// Returns true if `proofs` has been explicitly set.
-  public var hasProofs: Bool {return self._proofs != nil}
+  public var hasProofs: Bool {self._proofs != nil}
   /// Clears the value of `proofs`. Subsequent reads from it will return its default value.
   public mutating func clearProofs() {self._proofs = nil}
 
@@ -436,26 +447,12 @@ public struct Proto_TransparencyProofs: Sendable {
 fileprivate let _protobuf_package = "proto"
 
 extension Proto_HashAlg: InternalSwiftProtobuf._ProtoNameProviding {
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "HASH_ALG_UNKNOWN"),
-    1: .same(proto: "HASH_ALG_SHA256"),
-    2: .same(proto: "HASH_ALG_SHA384"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0HASH_ALG_UNKNOWN\0\u{1}HASH_ALG_SHA256\0\u{1}HASH_ALG_SHA384\0")
 }
 
 extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".AttestationBundle"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "sep_attestation"),
-    2: .standard(proto: "ap_ticket"),
-    3: .standard(proto: "sealed_hashes"),
-    4: .standard(proto: "provisioning_certificate_chain"),
-    5: .standard(proto: "app_data"),
-    6: .standard(proto: "key_expiration"),
-    8: .standard(proto: "transparency_proofs"),
-    9: .standard(proto: "local_policy"),
-    10: .standard(proto: "sfr_manifest"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}sep_attestation\0\u{3}ap_ticket\0\u{3}sealed_hashes\0\u{3}provisioning_certificate_chain\0\u{3}app_data\0\u{3}key_expiration\0\u{3}certificate_transparency_proofs\0\u{3}transparency_proofs\0\u{3}local_policy\0\u{3}sfr_manifest\0")
 
   fileprivate class _StorageClass {
     var _sepAttestation: Data = Data()
@@ -464,19 +461,16 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
     var _provisioningCertificateChain: [Data] = []
     var _appData: Data = Data()
     var _keyExpiration: InternalSwiftProtobuf.Google_Protobuf_Timestamp? = nil
+    var _certificateTransparencyProofs: Proto_TransparencyProofs? = nil
     var _transparencyProofs: Proto_TransparencyProofs? = nil
     var _localPolicy: Proto_LocalPolicy? = nil
     var _sfrManifest: Data = Data()
 
-    #if swift(>=5.10)
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
       // This will force a copy to be made of this reference when the first mutation occurs;
       // hence, it is safe to mark this as `nonisolated(unsafe)`.
       static nonisolated(unsafe) let defaultInstance = _StorageClass()
-    #else
-      static let defaultInstance = _StorageClass()
-    #endif
 
     private init() {}
 
@@ -487,6 +481,7 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
       _provisioningCertificateChain = source._provisioningCertificateChain
       _appData = source._appData
       _keyExpiration = source._keyExpiration
+      _certificateTransparencyProofs = source._certificateTransparencyProofs
       _transparencyProofs = source._transparencyProofs
       _localPolicy = source._localPolicy
       _sfrManifest = source._sfrManifest
@@ -514,6 +509,7 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
         case 4: try { try decoder.decodeRepeatedBytesField(value: &_storage._provisioningCertificateChain) }()
         case 5: try { try decoder.decodeSingularBytesField(value: &_storage._appData) }()
         case 6: try { try decoder.decodeSingularMessageField(value: &_storage._keyExpiration) }()
+        case 7: try { try decoder.decodeSingularMessageField(value: &_storage._certificateTransparencyProofs) }()
         case 8: try { try decoder.decodeSingularMessageField(value: &_storage._transparencyProofs) }()
         case 9: try { try decoder.decodeSingularMessageField(value: &_storage._localPolicy) }()
         case 10: try { try decoder.decodeSingularBytesField(value: &_storage._sfrManifest) }()
@@ -547,6 +543,9 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
       try { if let v = _storage._keyExpiration {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
       } }()
+      try { if let v = _storage._certificateTransparencyProofs {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 7)
+      } }()
       try { if let v = _storage._transparencyProofs {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
       } }()
@@ -571,6 +570,7 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
         if _storage._provisioningCertificateChain != rhs_storage._provisioningCertificateChain {return false}
         if _storage._appData != rhs_storage._appData {return false}
         if _storage._keyExpiration != rhs_storage._keyExpiration {return false}
+        if _storage._certificateTransparencyProofs != rhs_storage._certificateTransparencyProofs {return false}
         if _storage._transparencyProofs != rhs_storage._transparencyProofs {return false}
         if _storage._localPolicy != rhs_storage._localPolicy {return false}
         if _storage._sfrManifest != rhs_storage._sfrManifest {return false}
@@ -585,12 +585,7 @@ extension Proto_AttestationBundle: InternalSwiftProtobuf.Message, InternalSwiftP
 
 extension Proto_AppData: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".AppData"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "version"),
-    2: .same(proto: "domain"),
-    3: .same(proto: "name"),
-    4: .same(proto: "metadata"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{1}domain\0\u{1}name\0\u{1}metadata\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -639,10 +634,7 @@ extension Proto_AppData: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._M
 
 extension Proto_LocalPolicy: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".LocalPolicy"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "policy"),
-    2: .same(proto: "implementation"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}policy\0\u{1}implementation\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -676,17 +668,12 @@ extension Proto_LocalPolicy: InternalSwiftProtobuf.Message, InternalSwiftProtobu
 }
 
 extension Proto_LocalPolicy.Implementation: InternalSwiftProtobuf._ProtoNameProviding {
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "IMPLEMENTATION_UNKNOWN"),
-    1: .same(proto: "IMPLEMENTATION_EC384SHA384"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0IMPLEMENTATION_UNKNOWN\0\u{1}IMPLEMENTATION_EC384SHA384\0")
 }
 
 extension Proto_SealedHashLedger: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".SealedHashLedger"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "slots"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}slots\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -716,10 +703,7 @@ extension Proto_SealedHashLedger: InternalSwiftProtobuf.Message, InternalSwiftPr
 
 extension Proto_SealedHash: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".SealedHash"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "hash_alg"),
-    2: .same(proto: "entries"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}hash_alg\0\u{1}entries\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -754,15 +738,7 @@ extension Proto_SealedHash: InternalSwiftProtobuf.Message, InternalSwiftProtobuf
 
 extension Proto_SealedHash.Entry: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = Proto_SealedHash.protoMessageName + ".Entry"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "flags"),
-    2: .same(proto: "digest"),
-    7: .same(proto: "generic"),
-    3: .same(proto: "cryptex"),
-    4: .standard(proto: "cryptex_salt"),
-    5: .standard(proto: "secure_config"),
-    6: .same(proto: "metadata"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}flags\0\u{1}digest\0\u{1}cryptex\0\u{3}cryptex_salt\0\u{3}secure_config\0\u{1}metadata\0\u{1}generic\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -871,18 +847,12 @@ extension Proto_SealedHash.Entry: InternalSwiftProtobuf.Message, InternalSwiftPr
 }
 
 extension Proto_SealedHash.Entry.Flags: InternalSwiftProtobuf._ProtoNameProviding {
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "FLAG_NONE"),
-    2: .same(proto: "FLAG_RATCHET"),
-    4: .same(proto: "FLAG_RATCHET_LOCK"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0FLAG_NONE\0\u{2}\u{2}FLAG_RATCHET\0\u{2}\u{2}FLAG_RATCHET_LOCK\0")
 }
 
 extension Proto_Cryptex: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".Cryptex"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "image4_manifest"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}image4_manifest\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -931,11 +901,7 @@ extension Proto_Cryptex.Salt: InternalSwiftProtobuf.Message, InternalSwiftProtob
 
 extension Proto_SecureConfig: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".SecureConfig"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "entry"),
-    2: .same(proto: "metadata"),
-    3: .same(proto: "data"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}entry\0\u{1}metadata\0\u{1}data\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -975,9 +941,7 @@ extension Proto_SecureConfig: InternalSwiftProtobuf.Message, InternalSwiftProtob
 
 extension Proto_TransparencyProofs: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".TransparencyProofs"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "proofs"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}proofs\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {

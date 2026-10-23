@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,5 +21,5 @@
 
 private import EnsemblePorterDCore
 
-try await EnsemblePorter(autoShutdownTimeout: .seconds(120)).run()
+try await EnsemblePorter().run()
 

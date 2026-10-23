@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -48,7 +48,6 @@ message Chunk {
   bool is_final = 2;
 }
 
-
 message Attestation {
   // Bundle bytes.
   bytes attestation_bundle = 1;
@@ -62,8 +61,8 @@ message Attestation {
   // Same expiration time as inside the attestation bundle. Field will be removed in the future.
   optional google.protobuf.Timestamp expiration_time = 4 [deprecated = true];
 
-  optional string cloudos_version = 5;
-  optional string cloudos_release_type = 6;
+  optional string node_build_version = 5;
+  optional string node_release_type = 6;
 
   // Client must verify cleartext cell_id against the cell_id encoded in attestation_bundle by CloudBoard,
   // and drop the attestation if mismatch.

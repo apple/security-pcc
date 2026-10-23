@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,163 +22,77 @@
 import Foundation
 import OSLog
 
-private let logger = tc2Logger(forCategory: .client)
+private let logger = Logger(for: .client)
+private let lengthPrefixByteCount = MemoryLayout<UInt32>.size
+
+// Protect against absurd length prefixes. If an input is going to force us to
+// run out of resources, it is going to have to provide the actual data.
+private let maximumReservedBufferSize = 1024 * 1024
 
 /// Prefix based assembly
 ///
 /// Reads 4-byte prefix from first chunk to determine total size,
 /// then merges chunks until reassembled
 struct DataAssembler<Base: AsyncSequence>: AsyncSequence where Base.Element == Data {
-    typealias Element = Data
-
-    let base: Base
+    private let base: Base
 
     init(_ base: Base) {
         self.base = base
     }
 
     func makeAsyncIterator() -> AsyncIterator {
-        AsyncIterator(base: self.base.makeAsyncIterator())
+        AsyncIterator(self.base.makeAsyncIterator())
     }
 
     struct AsyncIterator: AsyncIteratorProtocol {
-        typealias Element = Data
-
-        enum State {
-            case needLength
-            case needBody(totalSize: UInt32, buffer: Data, bytesReceived: Int)
-            case finished((any Error)?)
-        }
-
         private var base: Base.AsyncIterator
-        private var pendingData: Data
-        private var state: State = .needLength
 
-        init(base: Base.AsyncIterator) {
+        init(_ base: Base.AsyncIterator) {
             self.base = base
-            self.pendingData = Data()
         }
 
         mutating func next() async throws -> Data? {
-            while true {
-                switch self.state {
-                case .needLength:
-                    if let totalSize = self.extractPrefixSize() {
-                        var buffer = Data()
-                        buffer.reserveCapacity(Int(totalSize))
-
-                        // The remaining data in pendingData after reading the prefix is the first chunk data
-                        let firstChunkData = pendingData
-
-                        // The prefix size is too large, possible this data was not meant to
-                        // be chunked or the first chunk's data is less than the chunkSize
-                        guard firstChunkData.count <= totalSize else {
-                            logger.error(
-                                "First chunk size \(firstChunkData.count) exceeds total size \(totalSize) from prefix - invalid framing"
-                            )
-                            self.state = .finished(PrivateCloudComputeError(code: .unableToAssembleDataSizeMismatch))
-                            continue
-                        }
-
-                        buffer.append(firstChunkData)
-                        pendingData = Data()
-
-                        let bytesReceived = buffer.count
-                        self.state = .needBody(
-                            totalSize: totalSize, buffer: buffer, bytesReceived: bytesReceived)
-                    } else {
-                        await self.loadMore()
-                    }
-
-                case .needBody(let totalSize, var buffer, let bytesReceived):
-                    if bytesReceived == totalSize {
-                        self.state = .needLength
-                        logger.debug("Reassembly complete size=\(buffer.count)")
-                        return buffer
-                    }
-
-                    if bytesReceived < totalSize {
-                        await self.loadMore()
-
-                        if !pendingData.isEmpty {
-                            let newBytesReceived = bytesReceived + pendingData.count
-
-                            // Validate chunk doesn't exceed expected size
-                            guard newBytesReceived <= totalSize else {
-                                logger.error(
-                                    "Chunk too large: received=\(newBytesReceived) expected=\(totalSize)"
-                                )
-                                self.state = .finished(PrivateCloudComputeError(code: .unableToAssembleDataChunkTooLarge))
-                                continue
-                            }
-
-                            buffer.append(pendingData)
-                            pendingData = Data()
-
-                            logger.debug(
-                                "Reassembly progress: \(newBytesReceived)/\(totalSize) bytes")
-
-                            self.state = .needBody(
-                                totalSize: totalSize, buffer: buffer,
-                                bytesReceived: newBytesReceived)
-                        }
-                        continue
-                    }
-
-                    logger.error(
-                        "Size mismatch: received=\(bytesReceived) expected=\(totalSize)")
-                    self.state = .finished(PrivateCloudComputeError(code: .unableToAssembleDataSizeMismatch))
-
-                case .finished(let error):
-                    if let error {
-                        throw error
-                    }
-                    return nil
-                }
-            }
-        }
-
-        private mutating func loadMore() async {
-            do {
-                if let data = try await self.base.next() {
-                    self.pendingData.append(data)
-                } else {
-                    switch self.state {
-                    case .needLength:
-                        if self.pendingData.isEmpty {
-                            self.state = .finished(nil)
-                        } else {
-                            let error =
-                                PrivateCloudComputeError(code: .unableToAssembleDataExpectedAdditionalChunks)
-                            self.state = .finished(error)
-                        }
-
-                    case .needBody:
-                        let error =
-                            PrivateCloudComputeError(code: .unableToAssembleDataExpectedAdditionalChunks)
-                        self.state = .finished(error)
-
-                    case .finished:
-                        break
-                    }
-                }
-            } catch {
-                self.state = .finished(error)
-            }
-        }
-
-        /// Reads & removes the 4-byte total size prefix from pendingData.
-        private mutating func extractPrefixSize() -> UInt32? {
-            guard pendingData.count >= 4 else {
+            guard let firstChunk = try await base.next(isolation: #isolation) else {
                 return nil
             }
 
-            let totalSize = pendingData.prefix(4).withUnsafeBytes { buffer in
-                UInt32(bigEndian: buffer.load(as: UInt32.self))
+            let sizePrefixData = firstChunk.prefix(lengthPrefixByteCount)
+            guard let totalSize = UInt32(dataInNetworkByteOrder: sizePrefixData) else {
+                logger.error("Expected larger first chunk, count=\(firstChunk.count)")
+                throw PrivateCloudComputeError(code: .unableToAssembleDataSizeMismatch)
             }
 
-            pendingData.removeFirst(4)
-            return totalSize
+            var buffer = Data()
+            buffer.reserveCapacity(Swift.min(Int(totalSize), maximumReservedBufferSize))
+
+            buffer.append(firstChunk.dropFirst(lengthPrefixByteCount))
+            logger.debug("Reassembly progress: count=\(buffer.count), totalSize=\(totalSize)")
+
+            guard buffer.count <= totalSize else {
+                logger.error("Expected smaller first chunk, count=\(buffer.count), totalSize=\(totalSize)")
+                throw PrivateCloudComputeError(code: .unableToAssembleDataSizeMismatch)
+            }
+
+            while buffer.count < totalSize, let chunk = try await base.next(isolation: #isolation) {
+                buffer.append(chunk)
+                logger.debug("Reassembly progress: count=\(buffer.count), totalSize=\(totalSize)")
+            }
+
+            if buffer.count < totalSize {
+                logger.error("Expected more chunks, count=\(buffer.count), totalSize=\(totalSize)")
+                throw PrivateCloudComputeError(code: .unableToAssembleDataExpectedAdditionalChunks)
+            } else if buffer.count > totalSize {
+                logger.error("Expected less data, count=\(buffer.count), totalSize=\(totalSize)")
+                throw PrivateCloudComputeError(code: .unableToAssembleDataChunkTooLarge)
+            }
+
+            return buffer
         }
+    }
+}
+
+extension AsyncSequence where Element == Data {
+    func assembledChunkedPayloadData() -> DataAssembler<Self> {
+        return DataAssembler(self)
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -34,7 +34,7 @@ extension Array where Element == DInitCryptexConfig {
             let configuration = config.resolveDownloadConfiguration()
             let authentication = config.resolveDownloadAuthentication()
             
-            let delegateAccessParameter = try await config.resolveCryptexCacheAccessParameter()
+            let delegateAccessParameter = try await config.buildCacheAccessParameter()
             
             do {
                 try await cryptexCache.access(entryBackedByResourceAt: config.url,

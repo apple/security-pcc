@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,9 +20,12 @@
 //
 
 import InternalSwiftProtobuf
+import os.log
 
 extension PCC {
     public struct ProxyNodeAttestor: Attestor {
+        static let logger: Logger = Logger(subsystem: "com.apple.CloudAttestation", category: "PCC.ProxyNodeAttestor")
+
         public var attestingKey: SecKey {
             get throws {
                 try inner.attestingKey
@@ -46,15 +49,18 @@ extension PCC {
         }
 
         @_spi(Private)
-        public var transparencyProver: any TransparencyProver {
-            get {
-                self.inner.transparencyProver
-            }
-            set {
-                self.inner.transparencyProver = newValue
-            }
-        }
+        public var transparencyProver: TransparencyProver
 
+        @_spi(Private)
+        public var certificateTransparency: Bool
+
+        @_spi(Private)
+        public var certificateTransparencyFetchFailClosed: Bool
+
+        @_spi(Private)
+        public var certificateTransparencyShouldRecycleProxyAttestation: Bool
+
+        @_spi(Private)
         public var sepProtocol: any SEP.AttestationProtocol {
             get {
                 self.inner.sepProtocol
@@ -64,19 +70,47 @@ extension PCC {
             }
         }
 
+        @_spi(Private)
+        public var transitiveReleaseTransparency = false
+
+        /// Creates a new ``ProxyNodeAttestor`` using transitive release transparency.
+        public init() {
+            self = .init(transparencyProver: SWTransparencyLog(environment: Environment.current))
+        }
+
+        /// Creates a new ``ProxyNodeAttestor`` using transitive release transparency.
+        /// - Parameter transparencyProver: A transparency prover to use.
+        public init(transparencyProver: TransparencyProver) {
+            self = .init(transparencyProver: transparencyProver, assetProvider: PCC.AssetProvider(), environment: Environment.current)
+        }
+
         /// Creates a new ``ProxyNodeAttestor``.
         /// - Parameter proxiedReleases: An array of SHA256 digests of releases this proxy handles.
+        @available(*, deprecated, renamed: "init()", message: "use the initializer without proxiedReleases")
         public init(proxiedReleases: [Data]) {
             self.inner = NodeAttestor()
             self.proxiedReleases = proxiedReleases
+            self.transparencyProver = self.inner.transparencyProver
+
+            let configuration = Configuration(for: Environment.current)
+            self.certificateTransparency = configuration.certificateTransparency
+            self.certificateTransparencyFetchFailClosed = configuration.certificateTransparencyFetchFailClosed
+            self.certificateTransparencyShouldRecycleProxyAttestation = configuration.certificateTransparencyShouldRecycleProxyAttestation
         }
 
         /// Creates a new ``ProxyNodeAttestor``.
         /// - Parameter proxiedReleases: An array of SHA256 digests of releases this proxy handles.
         /// - Parameter transparencyProver: A transparency prover to use.
+        @available(*, deprecated, renamed: "init(transparencyProver:)", message: "use the initializer without proxiedReleases")
         public init(proxiedReleases: [Data], transparencyProver: some TransparencyProver) {
             self.inner = NodeAttestor(transparencyProver: transparencyProver)
             self.proxiedReleases = proxiedReleases
+            self.transparencyProver = self.inner.transparencyProver
+
+            let configuration = Configuration(for: Environment.current)
+            self.certificateTransparency = configuration.certificateTransparency
+            self.certificateTransparencyFetchFailClosed = configuration.certificateTransparencyFetchFailClosed
+            self.certificateTransparencyShouldRecycleProxyAttestation = configuration.certificateTransparencyShouldRecycleProxyAttestation
         }
 
         /// Creates a new ``ProxyNodeAttestor``.
@@ -85,9 +119,34 @@ extension PCC {
         /// - Parameter assetProvider: An asset providerto use.
         /// - Parameter environment: The environment for the attestation.
         @_spi(Private)
+        @available(*, deprecated, renamed: "init(transparencyProver:assetProvider:environment:)", message: "use the initializer without proxiedReleases")
         public init(proxiedReleases: [Data], transparencyProver: some TransparencyProver, assetProvider: some AttestationAssetProvider, environment: Environment) {
             self.inner = NodeAttestor(transparencyProver: transparencyProver, assetProvider: assetProvider, environment: environment)
             self.proxiedReleases = proxiedReleases
+            self.transparencyProver = transparencyProver
+
+            let configuration = Configuration(for: Environment.current)
+            self.certificateTransparency = configuration.certificateTransparency
+            self.certificateTransparencyFetchFailClosed = configuration.certificateTransparencyFetchFailClosed
+            self.certificateTransparencyShouldRecycleProxyAttestation = configuration.certificateTransparencyShouldRecycleProxyAttestation
+        }
+
+        /// Creates a new ``ProxyNodeAttestor`` using transitive release transparency.
+        /// - Parameter transparencyProver: A transparency prover to use.
+        /// - Parameter assetProvider: An asset providerto use.
+        /// - Parameter environment: The environment for the attestation.
+        @_spi(Private)
+        public init(transparencyProver: some TransparencyProver, assetProvider: some AttestationAssetProvider, environment: Environment) {
+            self.inner = NodeAttestor(transparencyProver: NopTransparencyLog(), assetProvider: assetProvider, environment: environment)
+            self.transparencyProver = transparencyProver
+
+            self.transitiveReleaseTransparency = true
+            self.proxiedReleases = []
+
+            let configuration = Configuration(for: environment)
+            self.certificateTransparency = configuration.certificateTransparency
+            self.certificateTransparencyFetchFailClosed = configuration.certificateTransparencyFetchFailClosed
+            self.certificateTransparencyShouldRecycleProxyAttestation = configuration.certificateTransparencyShouldRecycleProxyAttestation
         }
 
         public func attest(key: SecKey, using attestingKey: SecKey, expiration: Date, nonce: Data?) async throws -> AttestationBundle {
@@ -95,7 +154,17 @@ extension PCC {
                 throw NodeAttestor.Error.nonceProvided
             }
 
-            let releaseProofs = try await transparencyProver.proveInclusion(of: proxiedReleases)
+            let releaseProofs: [TransparencyLogProofs]
+
+            if transitiveReleaseTransparency {
+                // When transitively verifying transparency proofs, the included release proofs aren't load bearing
+                // anymore. To not break old clients we do need to provide some proofs, so we're opting to provide proofs
+                // of the proxy node.
+                let release = try Release.local(assetProvider: self.inner.assetProvider)
+                releaseProofs = [try await transparencyProver.proveInclusion(of: Data(release.digest()), at: nil, coveringAll: .release, preferOldest: false)]
+            } else {
+                releaseProofs = try await transparencyProver.proveInclusion(of: proxiedReleases)
+            }
 
             let appData = try Proto_AppData.with {
                 $0.domain = "com.apple.PrivateCloudCompute"
@@ -111,19 +180,28 @@ extension PCC {
 
                             return PrivateCloudCompute_ProxyNodeMetadata.ProxiedRelease.with { release in
                                 release.digest = digest
-                                release.transparencyProofs = Proto_TransparencyProofs.with {
-                                    $0.proofs = proofs.proofs
-                                }
+                                release.transparencyProofs = proofs.proto
                             }
                         }
                     }
                 )
+            }.serializedData()
+
+            let nonce = Data(appData.digest())
+            var bundle = try await inner.attest(key: key, using: attestingKey, expiration: expiration, nonce: nonce)
+            bundle.proto.appData = appData
+
+            if transitiveReleaseTransparency, let proofs = releaseProofs.first {
+                bundle.proto.transparencyProofs = proofs.proto
             }
 
-            let data = try appData.serializedData()
-            let nonce = Data(data.digest())
-            var bundle = try await inner.attest(key: key, using: attestingKey, expiration: expiration, nonce: nonce)
-            bundle.proto.appData = data
+            // Populate Certificate Transparency proofs
+            let certificateTransparencyPopulator = ProxyNodeCertificateTransparencyPopulator(
+                certificateTransparency: self.certificateTransparency,
+                certificateTransparencyFetchFailClosed: self.certificateTransparencyFetchFailClosed,
+                transparencyProver: self.transparencyProver
+            )
+            try await certificateTransparencyPopulator.populateProofs(for: &bundle, expiration: expiration)
 
             // To ensure that trusted proxy attestations are rejected by older clients
             // without trusted proxy support, confirm that the attestation does not contain
@@ -131,6 +209,69 @@ extension PCC {
             try await DarwinInitPolicy(restrictedSecurityPolicies: [.customer]).evaluate(bundle: bundle)
 
             return bundle
+        }
+
+        public func shouldRecycle(bundle: AttestationBundle) async throws -> Bool {
+            let release = Data(try Release(bundle: bundle).digest())
+            Self.logger.log("Evaluating if proxy attestation should recycle, release=\(release.hexString, privacy: .public)")
+
+            let recentProofsRelease = try await transparencyProver.proveInclusion(of: release, at: nil, coveringAll: .release, preferOldest: true)
+
+            let recentReleaseRevision = try recentProofsRelease.proofs.inclusionProof.logRevision
+            let bundleRevision = try bundle.proto.transparencyProofs.proofs.inclusionProof.logRevision
+
+            Self.logger.log("Revisions for release: proxyNode=\(bundleRevision, privacy: .public), recentRelease=\(recentReleaseRevision, privacy: .public)")
+
+            if recentReleaseRevision.treeID != bundleRevision.treeID {
+                Self.logger.log("Recycling for tree roll (release)")
+                return true
+            }
+
+            let targetRevision: UInt64
+
+            if certificateTransparencyShouldRecycleProxyAttestation {
+                let recentProofsCertificate = try await transparencyProver.proveInclusion(of: release, at: nil, coveringAll: .serverNode, preferOldest: true)
+                let recentCertificateRevision = try recentProofsCertificate.proofs.inclusionProof.logRevision
+
+                Self.logger.log("Revisions for certificate: proxyNode=\(bundleRevision, privacy: .public), recentCertificate=\(recentCertificateRevision, privacy: .public)")
+
+                if recentCertificateRevision.treeID != bundleRevision.treeID {
+                    Self.logger.log("Recycling for tree roll (certificate)")
+                    return true
+                }
+
+                targetRevision = max(recentReleaseRevision.revision, recentCertificateRevision.revision)
+            } else {
+                targetRevision = recentReleaseRevision.revision
+            }
+
+            if targetRevision > bundleRevision.revision {
+                Self.logger.log(
+                    "Recycling because proxy node revision is older than target proxyNodeRevision=\(bundleRevision.revision, privacy: .public) targetRevision=\(targetRevision, privacy: .public)"
+                )
+                return true
+            }
+
+            Self.logger.info(
+                "Proxy attestation does not need to recycle proxyNodeRevision=\(bundleRevision.revision, privacy: .public) targetRevision=\(targetRevision, privacy: .public)"
+            )
+            return false
+        }
+    }
+}
+
+extension PCC.ProxyNodeAttestor {
+    struct ProxyNodeCertificateTransparencyPopulator: CertificateTransparencyPopulator {
+        static let logger: Logger = Logger(subsystem: "com.apple.CloudAttestation", category: "ProxyNodeCertificateTransparencyPopulator")
+
+        let certificateTransparency: Bool
+
+        let certificateTransparencyFetchFailClosed: Bool
+
+        let transparencyProver: any TransparencyProver
+
+        func fetch(fingerprint: Data) async throws -> TransparencyLogProofs {
+            try await self.transparencyProver.proveInclusion(of: fingerprint, at: nil, coveringAll: .serverNode, preferOldest: false)
         }
     }
 }

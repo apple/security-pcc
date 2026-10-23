@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -45,6 +45,16 @@ public struct CeremonyValidator: Validator {
         self.inner.strictCertificateValidation = false
         // Don't require ensemble fingerprints
         self.inner.ensembleTopologyValidation = false
+        // Don't require Certificate Transparency
+        self.inner.certificateTransparency = false
+        self.inner.certificateTransparencyVerifyFailClosed = false
+    }
+
+    /// Creates a new ``CeremonyValidator`` that validates against the specified date.
+    /// - Parameter verificationDate: The date to use for validation instead of the current time.
+    public init(verificationDate: Date) {
+        self.init()
+        self.inner.clock = verificationDate
     }
 
     /// The policy to use for validation.
@@ -64,7 +74,7 @@ public struct CeremonyValidator: Validator {
     ) async throws -> (key: PublicKeyData, expiration: Date, attestation: Validated.AttestationBundle) {
         var validatorCopy = self.inner
         validatorCopy.pinnedSigner = key
-        return try await self.validate(bundle: bundle, nonce: nonce)
+        return try await validatorCopy.validate(bundle: bundle, nonce: nonce)
     }
 
     public func validate(

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -36,7 +36,8 @@ extension CloudBoardAttestationAPIXPCServer {
         self.init(
             listener: CloudBoardAsyncXPCListener(
                 localService: kAttestationAPIXPCLocalServiceName,
-                entitlement: kAttestationAPIXPCLocalServiceEntitlement
+                entitlement: kAttestationAPIXPCLocalServiceEntitlement,
+                singleClient: false
             ),
             delegate: nil
         )
@@ -53,7 +54,8 @@ extension CloudBoardAttestationAPIXPCServer: CloudBoardAttestationAPIServerToCli
 
     public func attestationRotated(newAttestationSet: AttestationSet) async throws {
         await self.listener.broadcast(
-            CloudBoardAttestationAPIXPCServerToClientMessages.AttestationRotated(newAttestationSet: newAttestationSet)
+            CloudBoardAttestationAPIXPCServerToClientMessages.AttestationRotated(newAttestationSet: newAttestationSet),
+            requiringEntitlement: kAttestationAPIXPCLocalServiceAttestationAccessEntitlement
         )
     }
 }
@@ -67,7 +69,7 @@ extension CloudBoardAttestationAPIXPCServer: CloudBoardAttestationAPIServerProto
         await self.listener.listen(buildMessageHandlerStore: self.configureHandlers)
     }
 
-    internal func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
+    internal nonisolated func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
         handlers.register(CloudBoardAttestationAPIXPCClientToServerMessages.RequestAttestationSet.self) { _ in
             guard let delegate = await self.delegate else {
                 throw CloudBoardAttestationAPIError.noDelegateSet
@@ -109,6 +111,16 @@ extension CloudBoardAttestationAPIXPCServer: CloudBoardAttestationAPIServerProto
             }
             return try await delegate.validateWorkerAttestation(
                 proxyAttestationKeyID: message.proxyAttestationKeyID,
+                rawWorkerAttestationBundle: message.rawWorkerAttestationBundle
+            )
+        }
+        handlers.register(
+            CloudBoardAttestationAPIXPCClientToServerMessages.RequestWarmWorkerValidation.self
+        ) { message in
+            guard let delegate = await self.delegate else {
+                throw CloudBoardAttestationAPIError.noDelegateSet
+            }
+            return try await delegate.warmWorkerValidation(
                 rawWorkerAttestationBundle: message.rawWorkerAttestationBundle
             )
         }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -56,56 +56,6 @@ public struct HeartbeatHTTPClient: Sendable {
 
         var errorDescription: String? {
             self.description
-        }
-    }
-
-    /// A delegate that handles mTLS and self-signed server certificates.
-    private actor AuthDelegate: NSObject, URLSessionDelegate {
-        /// Whether to allow self-signed server certificates.
-        private let allowSelfSignedCertificates: Bool
-
-        /// The underlying credential provider, which is invoked on every client certificate challenge.
-        private var credentialProvider: @Sendable () async -> URLCredential?
-
-        /// Creates a new delegate.
-        /// - Parameter allowSelfSignedCertificates: Whether to allow self-signed server certificates.
-        init(allowSelfSignedCertificates: Bool) {
-            self.allowSelfSignedCertificates = allowSelfSignedCertificates
-            self.credentialProvider = { nil }
-        }
-
-        /// Updates the current credential provider.
-        /// - Parameter provider: The provider closure to be invoked to fetch the credential.
-        func updateCredentialProvider(_ provider: @escaping @Sendable () async -> URLCredential?) {
-            self.credentialProvider = provider
-        }
-
-        func urlSession(
-            _: URLSession,
-            didReceive challenge: URLAuthenticationChallenge
-        ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-            switch challenge.protectionSpace.authenticationMethod {
-            case NSURLAuthenticationMethodClientCertificate:
-                if let credential = await credentialProvider() {
-                    HeartbeatHTTPClient.logger.debug("mTLS credential provided.")
-                    return (.useCredential, credential)
-                } else {
-                    HeartbeatHTTPClient.logger.debug("mTLS credential not provided.")
-                    return (.performDefaultHandling, nil)
-                }
-            case NSURLAuthenticationMethodServerTrust where self.allowSelfSignedCertificates:
-                HeartbeatHTTPClient.logger
-                    .warning(
-                        "Encountered a self-signed certificate and allowSelfSignedCertificates == true, allowing the connection to proceed."
-                    )
-                guard let trust = challenge.protectionSpace.serverTrust else {
-                    return (.performDefaultHandling, nil)
-                }
-                let credential = URLCredential(trust: trust)
-                return (.useCredential, credential)
-            default:
-                return (.performDefaultHandling, nil)
-            }
         }
     }
 

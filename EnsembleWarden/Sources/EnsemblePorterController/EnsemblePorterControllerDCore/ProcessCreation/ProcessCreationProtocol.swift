@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -36,5 +36,17 @@ package protocol ProcessCreationProtocol: Sendable {
 
     /// Removes a porter instance and performs cleanup
     func removeInstance(instanceUUID: UUID) async throws
-}
 
+    /// Checks whether a porter instance is currently running
+    func isInstanceRunning(instanceUUID: UUID) -> Bool
+
+    /// Returns the number of currently running porter instances
+    func runningInstanceCount() throws -> Int
+
+    /// Returns the UUIDs of all currently running porter instances.
+    ///
+    /// On production this reflects launchd's view of managed jobs, which can include
+    /// instances created by previous incarnations of the controller (zombies). The
+    /// controller relies on this to reconcile its in-memory bookkeeping with reality.
+    func runningInstances() throws -> [UUID]
+}

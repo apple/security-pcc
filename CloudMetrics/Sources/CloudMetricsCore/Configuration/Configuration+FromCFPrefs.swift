@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -131,6 +131,23 @@ extension Configuration {
             let destinations: [String] = checkAndConvert(dict: ruleDict, key: "Destinations", defaultValue: [])
             let client: String = checkAndConvert(dict: ruleDict, key: "Client", defaultValue: "")
             let dimensions: [String: [String]] = checkAndConvert(dict: ruleDict, key: "Dimensions", defaultValue: [:])
+            let aggregateOnNode: Bool = checkAndConvert(dict: ruleDict, key: "AggregateOnNode", defaultValue: false)
+            let minPublishCount: Int = checkAndConvert(dict: ruleDict, key: "MinPublishCount", defaultValue: 0)
+            // Accept both "LaplaceNoiseInjection" (current) and "GaussianNoiseInjection" (legacy).
+            let laplaceNoiseInjectionDict: NSDictionary? =
+                checkAndConvert(dict: ruleDict, key: "LaplaceNoiseInjection", defaultValue: nil)
+                ?? checkAndConvert(dict: ruleDict, key: "GaussianNoiseInjection", defaultValue: nil)
+            let laplaceNoiseInjection: Configuration.LaplaceNoiseInjection? = laplaceNoiseInjectionDict.flatMap { dict in
+                guard let bucketsArray = dict["Buckets"] as? [NSDictionary] else { return nil }
+                let buckets: [Configuration.BucketPublishRule] = bucketsArray.compactMap { bucketDict in
+                    guard let minPublishCount = bucketDict["MinPublishCount"] as? Int,
+                          let noiseSigmaThreshold = bucketDict["NoiseSigmaThreshold"] as? Double,
+                          let noiseSigmaPublish = bucketDict["NoiseSigmaPublish"] as? Double else { return nil }
+                    let noiseSigmaCount = bucketDict["NoiseSigmaCount"] as? Double ?? noiseSigmaThreshold
+                    return .init(minPublishCount: minPublishCount, noiseSigmaThreshold: noiseSigmaThreshold, noiseSigmaCount: noiseSigmaCount, noiseSigmaPublish: noiseSigmaPublish)
+                }
+                return .init(buckets: buckets)
+            }
             let metricType: CloudMetricType
             if let type {
                 guard let type = CloudMetricType(rawValue: type) else {
@@ -149,7 +166,10 @@ extension Configuration {
                 minPublishInterval: .seconds(minPublishInterval),
                 type: metricType,
                 destinations: destinations.map({ try Configuration.Destination(id: $0) }),
-                dimensions: dimensions)
+                dimensions: dimensions,
+                aggregateOnNode: aggregateOnNode,
+                minPublishCount: minPublishCount,
+                laplaceNoiseInjection: laplaceNoiseInjection)
             return rulePlist
         }
         var ignoredMetrics: [String: [String]] = [:]

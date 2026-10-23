@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -36,10 +36,10 @@ struct LocalHostnameCommand: ParsableCommand {
         var config = try options.readInputConfig()
 
         if let newValue {
-            config.localHostname = newValue
+            try config.setLocalHostname(newValue)
             try options.writeOutputConfig(config)
         } else {
-            print(config.localHostname ?? "")
+            print(try config.localHostname ?? "")
         }
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,6 +24,8 @@ import PrivateCloudCompute
 import Synchronization
 import os
 
+private let logger = Logger(for: .trustedRequest)
+
 final class TrustedRequestProgressReader: Sendable {
     typealias Value = PrivateCloudCompute.PrivateCloudComputeConnection.Progress
     enum State {
@@ -33,7 +35,6 @@ final class TrustedRequestProgressReader: Sendable {
     }
 
     private let stateLock: Mutex<State> = Mutex(.waitingForDemand(Deque<Value>(), finished: false))
-    private let logger = tc2Logger(forCategory: .trustedRequest)
 
     /// Called from the TrustedRequest
     func forward(_ connectionUpdate: ConnectionUpdate) {
@@ -42,7 +43,7 @@ final class TrustedRequestProgressReader: Sendable {
             if let stateChange = NetworkStateChangeInfo(state: state) {
                 self.forward(.networkStateChange(stateChange))
             } else {
-                self.logger.error("Couldn't create NetworkStateChange from NWConnection.State, state=\(String(describing: state))")
+                logger.error("Couldn't create NetworkStateChange from NWConnection.State, state=\(String(describing: state))")
             }
 
         case .connectionProgress(let connectionProgressReport):

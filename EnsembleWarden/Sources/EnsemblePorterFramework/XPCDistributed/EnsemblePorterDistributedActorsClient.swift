@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -115,6 +115,13 @@ package final class EnsemblePorterDistributedActorsClient<Provide: EnsemblePorte
         try await self.fetchActor.fetchFollowerTokens(requestID: requestID, spanID: spanID).get()
     }
 
+    package func fetchKey(forTurnNumber turnNumber: Int, requestID: UUID, spanID: UInt64) async throws -> SymmetricKey {
+        try await SymmetricKey(data: self.fetchActor.fetchKey(forTurnNumber: turnNumber).get())
+    }
+
+    package func getNumberOfTurnKeys(requestID: UUID, spanID: UInt64) async throws -> Int {
+        try await self.fetchActor.getNumberOfTurnKeys().get()
+    }
 
     package func fetchFTETKey(requestID: UUID, spanID: UInt64) async throws -> SymmetricKey {
         let data = try await self.fetchActor.fetchFTETKey(requestID: requestID, spanID: spanID).get()

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,9 +12,11 @@
 // EA1937
 // 10/02/2024
 
+import struct AppleCertificates.PolicyAPRN
 import CloudBoardIdentity
 import CloudBoardLogging
 import CloudBoardMetrics
+import CloudBoardPlatformUtilities
 import Dispatch
 import Foundation
 import GRPCClientConfiguration
@@ -37,26 +39,23 @@ extension GRPCTLSConfiguration {
 
     private static let supportedAPRNDomains = ["sdr", "aci-kube"]
 
+    private static func makeBaseTLSOptions(identityCallback: @escaping IdentityCallback) -> NWProtocolTLS.Options {
+        let options = NWProtocolTLS.Options()
+        options.setChallengeBlock(identityCallback)
+        sec_protocol_options_set_min_tls_protocol_version(options.securityProtocolOptions, .TLSv13)
+        for `protocol` in ["grpc-exp", "h2", "http/1.1"] {
+            sec_protocol_options_add_tls_application_protocol(options.securityProtocolOptions, `protocol`)
+        }
+        return options
+    }
+
     static func cloudboardProviderConfiguration(
         identityCallback: @escaping IdentityCallback,
         expectedPeerAPRNs: [APRN]?,
         metricsSystem: MetricsSystem
     ) throws -> GRPCTLSConfiguration {
-        let options = NWProtocolTLS.Options()
+        let options = Self.makeBaseTLSOptions(identityCallback: identityCallback)
 
-        options.setChallengeBlock(identityCallback)
-
-        // Require TLSv1.3
-        sec_protocol_options_set_min_tls_protocol_version(options.securityProtocolOptions, .TLSv13)
-
-        for `protocol` in ["grpc-exp", "h2", "http/1.1"] {
-            sec_protocol_options_add_tls_application_protocol(
-                options.securityProtocolOptions,
-                `protocol`
-            )
-        }
-
-        // Set the challenge block.
         if let expectedPeerAPRNs, !expectedPeerAPRNs.isEmpty {
             // Ensure all expected peer APRNs have a supported domain
             for expectedPeerAPRN in expectedPeerAPRNs {
@@ -76,6 +75,30 @@ extension GRPCTLSConfiguration {
             )
         } else {
             Self.validatorLogger.warning("No peer APRNs configured, disabling client certificate validation")
+        }
+
+        return GRPCTLSConfiguration.makeServerConfigurationBackedByNetworkFramework(options: options)
+    }
+
+    static func cloudboardProviderConfiguration(
+        identityCallback: @escaping IdentityCallback,
+        expectedPeerPolicyAPRNs: [PolicyAPRN],
+        metricsSystem: MetricsSystem
+    ) throws -> GRPCTLSConfiguration {
+        let options = Self.makeBaseTLSOptions(identityCallback: identityCallback)
+
+        if !expectedPeerPolicyAPRNs.isEmpty {
+            sec_protocol_options_set_peer_authentication_required(options.securityProtocolOptions, true)
+            sec_protocol_options_set_verify_block(
+                options.securityProtocolOptions,
+                Self.policyValidationBlock(
+                    expectedPolicyAPRNs: expectedPeerPolicyAPRNs,
+                    metricsSystem: metricsSystem
+                ),
+                Self.verifyQueue
+            )
+        } else {
+            Self.validatorLogger.warning("No peer PolicyAPRNs configured, disabling client certificate validation")
         }
 
         return GRPCTLSConfiguration.makeServerConfigurationBackedByNetworkFramework(options: options)
@@ -199,16 +222,6 @@ extension GRPCTLSConfiguration {
     }
 }
 
-extension SecCertificate {
-    func hasExtension(oid: String) -> Bool {
-        return SecCertificateCopyExtensionValue(
-            self,
-            oid as CFString,
-            nil
-        ) != nil
-    }
-}
-
 enum TLSConfigurationError: Error, ReportableError {
     case unknownAPRNDomain(APRN)
 
@@ -218,18 +231,4 @@ enum TLSConfigurationError: Error, ReportableError {
             return "TLSConfigurationError.unknownAPRNDomain"
         }
     }
-}
-
-enum TLSVerificationFailure: String {
-    case aprnComputationFailure = "APRN Computation Failure"
-    case aprnExtractionFailure = "APRN Extraction Failure"
-    case evaluationCallbackNotInvoked = "Evaluation Callback Not Invoked"
-    case invalidCertChain = "Invalid Cert Chain"
-    case notAnX509Cert = "Not an X509 Cert"
-    case unexpectedCertEvaluationFailure = "Unexpected Cert Evaluation Failure"
-    case unexpectedNoCertChain = "Unexpected No Cert Chain"
-    case unexpectedCertChainLength = "Unexpected Cert Chain Length"
-    case untrustedRootCA = "Untrusted Root CA"
-    case untrustedAPRN = "Untrusted APRN"
-    case unexpectedIntermediateOIDExtensionValue = "Unexpected Intermediate OID Extension Value"
 }

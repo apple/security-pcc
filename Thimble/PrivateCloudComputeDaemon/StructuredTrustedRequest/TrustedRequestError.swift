@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -39,7 +39,6 @@ struct TrustedRequestError: Error {
         case privacyProxyTDMFailure
         case privacyProxyInvalidResponse
         case privacyProxyFailed
-        case failedToValidateAllAttestations
         case responseSummaryIndicatesFailure
         case responseSummaryIndicatesUnauthenticated
         case responseSummaryIndicatesInternalError
@@ -48,6 +47,8 @@ struct TrustedRequestError: Error {
         case responseSummaryIndicatesProxyFindWorkerError
         case responseSummaryIndicatesProxyWorkerValidationError
         case missingAttestationBundle
+        case missingAttestationUDID
+        case failedToExtractAttestationUDID
         case invalidAttestationBundle
         case routingHintMismatch
         /// When response bypass is on, but we do not receive a REL with a response bypass context
@@ -63,6 +64,12 @@ struct TrustedRequestError: Error {
         case attestationKindMismatch
         /// The initial network send, InvokeRequest, failed probably due to a timeout cancellation.
         case invokeRequestPayloadSendFailedAndCancelled
+        /// Duplicate UDID detected in inline attestations - same physical device appeared multiple times.
+        case duplicateUDIDInBatch
+        /// Insufficient inline attestations received for anti-targetability protection.
+        case insufficientInlineAttestations
+        case failedToValidateInlineAttestations
+        case failedToDecompressRequestExecutionLogEntry
     }
 
     var code: Code
@@ -107,8 +114,6 @@ struct TrustedRequestError: Error {
             return "PrivacyProxyInvalidResponse"
         case .privacyProxyFailed:
             return "PrivacyProxyFailed"
-        case .failedToValidateAllAttestations:
-            return "FailedToValidateAllAttestations"
         case .responseSummaryIndicatesFailure:
             return "ResponseSummaryIndicatesFailure"
         case .responseSummaryIndicatesUnauthenticated:
@@ -125,6 +130,10 @@ struct TrustedRequestError: Error {
             return "ResponseSummaryIndicatesProxyWorkerValidationError"
         case .missingAttestationBundle:
             return "MissingAttestationBundle"
+        case .missingAttestationUDID:
+            return "MissingAttestationUDID"
+        case .failedToExtractAttestationUDID:
+            return "FailedToExtractAttestationUDID"
         case .invalidAttestationBundle:
             return "InvalidAttestationBundle"
         case .routingHintMismatch:
@@ -141,6 +150,14 @@ struct TrustedRequestError: Error {
             return "AttestationKindMismatch"
         case .invokeRequestPayloadSendFailedAndCancelled:
             return "InvokeRequestPayloadSendFailedAndCancelled"
+        case .duplicateUDIDInBatch:
+            return "DuplicateUDIDInBatch"
+        case .insufficientInlineAttestations:
+            return "InsufficientInlineAttestations"
+        case .failedToValidateInlineAttestations:
+            return "FailedToValidateInlineAttestations"
+        case .failedToDecompressRequestExecutionLogEntry:
+            return "FailedToDecompressRequestExecutionLogEntry"
         }
     }
 

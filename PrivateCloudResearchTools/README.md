@@ -1,4 +1,4 @@
-Copyright © 2025 Apple Inc. All Rights Reserved.
+Copyright © 2026 Apple Inc. All Rights Reserved.
 
 APPLE INC.
 PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,7 +18,7 @@ Host tools for PCC VRE built from the Lining trains to match corresponding guest
 
 ciomesh submodule submits to Lining trains as project PrivateCloudResearchTools_VirtMeshHost.
 
-To manually test `pccvre-helper` use macOS host with rdar://144415031 (root attached), and do the following:
+To manually test `pccvre-helper` do the following:
 ```
 pccvre instance invoke -N vre --pccvre-helper <pccvre-helper-path> ...
 ``` 

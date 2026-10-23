@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,6 +23,8 @@ import PrivateCloudCompute
 import Synchronization
 import os.log
 
+private let logger = Logger(for: .prefetchRequest)
+
 protocol PrefetchTrackerProtocol: Sendable {
     func ensuringOnlyASinglePrefetchIsRunningForParameters<R>(_ parameters: Workload, body: () async throws -> R) async throws -> R
 }
@@ -33,7 +35,6 @@ final class PrefetchTracker: PrefetchTrackerProtocol {
         var runningSet: Set<Workload>
     }
     private let stateLock: Mutex<State>
-    private let logger = tc2Logger(forCategory: .prefetchRequest)
 
     init() {
         self.stateLock = Mutex(.init(runningSet: Set<Workload>(minimumCapacity: 10)))
@@ -42,7 +43,7 @@ final class PrefetchTracker: PrefetchTrackerProtocol {
     func ensuringOnlyASinglePrefetchIsRunningForParameters<R>(_ parameters: Workload, body: () async throws -> R) async throws -> R {
         guard let prefetchParameters = parameters.forPrefetching() else {
             let errorMessage = "invalid parameter set for prefetching"
-            self.logger.error("\(errorMessage) parameters=\(String(describing: parameters))")
+            logger.error("\(errorMessage) parameters=\(String(describing: parameters))")
             throw PrivateCloudComputeError(message: errorMessage)
         }
 
@@ -57,7 +58,7 @@ final class PrefetchTracker: PrefetchTrackerProtocol {
 
         guard start else {
             let errorMessage = "prefetch/prewarm already running for the given parameter set"
-            self.logger.log("\(errorMessage) parameters=\(String(describing: prefetchParameters))")
+            logger.log("\(errorMessage) parameters=\(String(describing: prefetchParameters))")
             throw PrivateCloudComputeError(message: errorMessage)
         }
 

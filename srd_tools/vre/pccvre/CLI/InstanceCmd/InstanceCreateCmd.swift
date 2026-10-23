@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -103,9 +103,20 @@ extension CLI.InstanceCmd {
                 transform: { try CLI.validateFilePath($0) })
         var txmPath: String?
 
+        @Option(name: [.customLong("prkit")],
+                help: ArgumentHelp("Path to PRKit plist for restore options.",
+                                   visibility: .customerHidden),
+                completion: .file(),
+                transform: { try CLI.validateFilePath($0) })
+        var prkitPath: String?
+
         @Flag(help: ArgumentHelp("Skip the release requirements check.",
                                  visibility: .customerHidden))
         var skipReleaseRequirementsCheck: Bool = false
+
+        @Option(name: [.customLong("disk-size")],
+                help: "Primary VM disk size in GiB (default: 64). Increase for larger releases such as TTS.")
+        var diskSizeGB: UInt?
 
         func validate() throws {
             if osVariant != nil && osVariantName != nil {
@@ -156,6 +167,7 @@ extension CLI.InstanceCmd {
                 osVariantName: createOptions.osVariantName,
                 fusing: createOptions.fusing,
                 name: vreName,
+                diskSizeGB: createOptions.diskSizeGB,
                 networks: [
                     VRE.VMConfig.Network(mode: .nat, macAddr: macAddr),
                     VRE.VMConfig.Network(mode: .hostOnly)
@@ -166,7 +178,8 @@ extension CLI.InstanceCmd {
                 vsepImage: createOptions.vsepImage,
                 kernelCache: createOptions.kernelCache,
                 sptmPath: createOptions.sptmPath,
-                txmPath: createOptions.txmPath
+                txmPath: createOptions.txmPath,
+                prkitPath: createOptions.prkitPath
             )
 
             try CLI.validateRequiredMemoryToCreate(instanceOptions: [instanceOptions])
@@ -210,6 +223,10 @@ extension CLI {
         httpService: HTTPServer.Configuration?,
         force: Bool = false
     ) throws -> VRE.Instance {
+        if instanceOptions.diskSizeGB == 0 {
+            throw CLIError("disk size must be greater than 0 GiB")
+        }
+
         if VRE.Instance.exists(instanceOptions.name) {
             if force {
                 let vre = try VRE.Instance(name: instanceOptions.name)
@@ -314,8 +331,9 @@ extension CLI {
             throw createErr
         }
 
-        var darwinInitHelper = try vre.darwinInitHelper()
-        if try darwinInitHelper.localHostname() == nil {
+        // Hostname is needed for ensembles. Don't try to modify darwin-init if there are no HOST_TOOLS.
+        if var darwinInitHelper = try? vre.darwinInitHelper(),
+           try darwinInitHelper.localHostname() == nil {
             try darwinInitHelper.setLocalHostname(randomHostname())
             try darwinInitHelper.save()
         }
@@ -386,6 +404,9 @@ struct InstanceOptions: SharedVREInstanceOptions {
 
     var nramGB: UInt?
 
+    /// Primary VM disk size in GiB; nil uses the vrevm default (64).
+    var diskSizeGB: UInt?
+
     var networks: [VRE.VMConfig.Network]? = [
         VRE.VMConfig.Network(mode: .nat, macAddr: nil),
         VRE.VMConfig.Network(mode: .hostOnly)
@@ -404,6 +425,8 @@ struct InstanceOptions: SharedVREInstanceOptions {
     var sptmPath: String?
 
     var txmPath: String?
+
+    var prkitPath: String?
 
     /// Overrides for bits of darwin-init otherwise specified in release metadata
     var darwinInitOverrides: InstanceOptions.UnstructuredJSON?
@@ -429,6 +452,7 @@ struct InstanceOptions: SharedVREInstanceOptions {
         _ = try kernelCache.map { try CLI.validateFilePath($0) }
         _ = try sptmPath.map { try CLI.validateFilePath($0) }
         _ = try txmPath.map { try CLI.validateFilePath($0) }
+        _ = try prkitPath.map { try CLI.validateFilePath($0) }
         if osVariant != nil && osVariantName != nil {
             throw ValidationError("Only one of --variant or --variant-name can be specified.")
         }
@@ -470,13 +494,15 @@ extension InstanceOptions {
             networks: networks ?? [],
             ncpu: ncpu,
             nramGB: resolveNramGB(),
+            diskSizeGB: diskSizeGB,
             bootArgs: bootArgs,
             nvramArgs: nvramArgs,
             romImagePath: romImage,
             vsepImagePath: vsepImage,
             kernelCachePath: kernelCache,
             sptmPath: sptmPath,
-            txmPath: txmPath
+            txmPath: txmPath,
+            prkitPath: prkitPath
         )
     }
 }

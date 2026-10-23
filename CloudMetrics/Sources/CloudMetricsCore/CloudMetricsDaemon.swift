@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -48,6 +48,8 @@ public final class CloudMetricsDaemon: Sendable {
     /// We have a separate store/reader per process. So this will yield whenever a new process starts.
     /// When it yields we need to create and run a new reader.
     private let newReaderStream: AsyncStream<OpenTelemetryPeriodicMetricReader>
+    /// Non-nil only when the allow list contains at least one `aggregateOnNode = true` entry.
+    private let aggregateReader: AggregateReader?
 
     private let logger = Logger(subsystem: kCloudMetricsLoggingSubsystem, category: "Daemon")
     private let osMetricService: OSMetricService
@@ -91,9 +93,28 @@ public final class CloudMetricsDaemon: Sendable {
             metricDataContinuation: metricDataContinuation
         )
 
+        let hasAggregateMetrics = configuration.auditLists?.allowedMetrics.contains { $0.aggregateOnNode } ?? false
+        let aggregateStoreProvider: AggregateStoreProvider? = hasAggregateMetrics
+            ? AggregateStoreProvider(configuration: configuration)
+            : nil
+        // metricDataContinuation is intentionally shared between MetricsStoreProvider (per-process
+        // periodic readers) and AggregateReader (node-aggregate readers). This is safe because
+        // OTLPGRPCClient consumes each CollectedMetricsData independently — it sends one gRPC
+        // export request per update with no batching or ordering assumptions across updates,
+        // so interleaving from two concurrent producers causes no semantic issues.
+        self.aggregateReader = aggregateStoreProvider.map { storeProvider in
+            AggregateReader(
+                storeProvider: storeProvider,
+                metricsFilter: metricsFilter,
+                metricDataContinuation: metricDataContinuation,
+                destination: configuration.defaultDestination
+            )
+        }
+
         self.cloudMetricsService = CloudMetricsService(
             metricsStoreProvider: metricStoreProvider,
-            metricsFilter: metricsFilter
+            metricsFilter: metricsFilter,
+            aggregateStoreProvider: aggregateStoreProvider
         )
         self.cloudMetricsServer = CloudMetricsXPCServer.localListener(
             delegate: self.cloudMetricsService,
@@ -168,6 +189,14 @@ public final class CloudMetricsDaemon: Sendable {
                         }
                     }
                     try await group.waitForAll()
+                }
+            }
+
+            if let aggregateReader = self.aggregateReader {
+                group.addTask {
+                    self.logger.log("Aggregate reader starting")
+                    defer { self.logger.log("Aggregate reader stopped") }
+                    try await aggregateReader.run()
                 }
             }
 

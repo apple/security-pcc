@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,20 +17,23 @@ import CloudBoardJobHelperAPI
 import CloudBoardLogging
 import Foundation
 import InternalGRPC
+import PersistentHelperInstance
 
 enum GRPCTransformableError: GRPCStatusTransformable {
     case drainingRequests
     case maxConcurrentRequestsExceeded
+    case maxConcurrentRequestsExceededNotEnoughPrewarmed
     case maxCumulativeRequestBytesExceeded
     case workloadUnhealthy
     case workloadBusy(String?)
+    case persistentServiceNotReady(serviceID: String)
     case invalidAEAD
     case ohttpDecapsulationFailure
     case ohttpEncapsulationFailure
     case unknownKeyID
     case expiredKey
     case initiateNegotiationViolation
-    case idleTimeoutExceeded
+    case idleTimeoutExceeded(requestStatus: ReportableRequestStatus)
     case protocolError(Error)
     case abortedCleanly
     case connectionCancelled
@@ -47,12 +50,19 @@ enum GRPCTransformableError: GRPCStatusTransformable {
             return .init(code: .unavailable, message: "CloudBoard is temporarily draining traffic")
         case .maxConcurrentRequestsExceeded:
             return .init(code: .resourceExhausted, message: "Max concurrent requests exceeded")
+        case .maxConcurrentRequestsExceededNotEnoughPrewarmed:
+            return .init(code: .resourceExhausted, message: "Max concurrent requests exceeded (not enough prewarmed)")
         case .maxCumulativeRequestBytesExceeded:
             return .init(code: .resourceExhausted, message: "Max cumulative request size exceeded")
         case .workloadUnhealthy:
             return .init(code: .unavailable, message: "Workload is unhealthy")
         case .workloadBusy(let reason):
             return .init(code: .unavailable, message: "Workload is busy\(reason.map { ": \($0)" } ?? "")")
+        case .persistentServiceNotReady(let serviceID):
+            return .init(
+                code: .unavailable,
+                message: "Persistent service '\(serviceID)' is initializing: backing controller has not registered yet. Retry shortly."
+            )
         case .invalidAEAD:
             return .init(code: .internalError, message: "CloudBoard error: Invalid AEAD")
         case .ohttpDecapsulationFailure:
@@ -63,8 +73,11 @@ enum GRPCTransformableError: GRPCStatusTransformable {
             return .init(code: .internalError, message: "CloudBoard error: unknown key ID")
         case .expiredKey:
             return .init(code: .internalError, message: "CloudBoard error: expired key")
-        case .idleTimeoutExceeded:
-            return .init(code: .deadlineExceeded, message: "Idle timeout exceeded")
+        case .idleTimeoutExceeded(let requestStatus):
+            return .init(
+                code: .deadlineExceeded,
+                message: "Idle timeout exceeded, request status=\(requestStatus.description)"
+            )
         case .protocolError:
             return .init(code: .failedPrecondition, message: "GRPC protocol misused")
         case .abortedCleanly:
@@ -96,12 +109,16 @@ extension GRPCTransformableError: ReportableError {
             "GRPCTransformableError.drainingRequests"
         case .maxConcurrentRequestsExceeded:
             "GRPCTransformableError.maxConcurrentRequestsExceeded"
+        case .maxConcurrentRequestsExceededNotEnoughPrewarmed:
+            "GRPCTransformableError.maxConcurrentRequestsExceededNotEnoughPrewarmed"
         case .maxCumulativeRequestBytesExceeded:
             "GRPCTransformableError.maxCumulativeRequestBytesExceeded"
         case .workloadUnhealthy:
             "GRPCTransformableError.workloadUnhealthy"
         case .workloadBusy(let reason):
             "GRPCTransformableError.workloadBusy\(reason.map { "(\($0))" } ?? "")"
+        case .persistentServiceNotReady(let serviceID):
+            "GRPCTransformableError.persistentServiceNotReady(\(serviceID))"
         case .invalidAEAD:
             "GRPCTransformableError.invalidAEAD"
         case .ohttpDecapsulationFailure:
@@ -112,8 +129,8 @@ extension GRPCTransformableError: ReportableError {
             "GRPCTransformableError.unknownKeyID"
         case .expiredKey:
             "GRPCTransformableError.expiredKey"
-        case .idleTimeoutExceeded:
-            "GRPCTransformableError.idleTimeoutExceeded"
+        case .idleTimeoutExceeded(let requestStatus):
+            "GRPCTransformableError.idleTimeoutExceeded(\(requestStatus.description))"
         case .protocolError(let error):
             "GRPCTransformableError.protocolError(\(String(reportable: error)))"
         case .abortedCleanly:
@@ -154,10 +171,10 @@ extension GRPCTransformableError {
 }
 
 extension GRPCTransformableError {
-    init(idleTimeoutError: IdleTimeoutError) {
+    init(idleTimeoutError: IdleTimeoutError, requestStatus: ReportableRequestStatus) {
         switch idleTimeoutError {
         case .idleTimeoutExceeded:
-            self = .idleTimeoutExceeded
+            self = .idleTimeoutExceeded(requestStatus: requestStatus)
         }
     }
 }
@@ -179,7 +196,9 @@ extension GRPCTransformableError {
              .receivedFinalChunkAfterTermination,
              .receivedDuplicateTermination,
              .receivedTerminationBeforeSetup,
-             .receivedRequestBypassNotification:
+             .receivedRequestBypassNotification,
+             .receivedChunkForNackRequest,
+             .receivedNackRequestOnNonProxy:
             self = .protocolError(invokeWorkloadError)
         case .rpcAborted:
             self = .abortedCleanly
@@ -228,6 +247,37 @@ extension AttestationError: GRPCStatusTransformable {
                 code: .unavailable,
                 message: "CloudBoard error: Key \(keyID.base64EncodedString()) is unknown or expired"
             )
+        }
+    }
+}
+
+extension PersistentHelperInstanceError: GRPCStatusTransformable {
+    public func makeGRPCStatus() -> GRPCStatus {
+        switch self {
+        case .helperUnavailable(let state):
+            return .init(code: .unavailable, message: "Helper unavailable: \(state)")
+        case .tornDownBeforeRunning:
+            return .init(code: .unavailable, message: "Helper torn down before running")
+        case .helperExitedUnexpectedly:
+            return .init(code: .unavailable, message: "Helper exited unexpectedly")
+        case .jobNeverRan:
+            return .init(code: .unavailable, message: "Helper job never ran")
+        case .monitoringCompletedEarly:
+            return .init(code: .unavailable, message: "Helper monitoring ended early")
+        case .monitoringCompletedFromConnected:
+            return .init(code: .unavailable, message: "Helper monitoring ended while connected")
+        case .unexpectedTerminationError(let underlying):
+            return .init(code: .unavailable, message: "Helper terminated unexpectedly: \(underlying)")
+        case .illegalStateAfterClientIsRunning(let state):
+            return .init(code: .failedPrecondition, message: "Illegal state after client running: \(state)")
+        case .illegalStateAfterClientIsConnected(let state):
+            return .init(code: .failedPrecondition, message: "Illegal state after client connected: \(state)")
+        case .setDelegateCalledOnTerminatingInstance:
+            return .init(code: .failedPrecondition, message: "Delegate set on terminating helper")
+        case .sendMessageBeforeClientConnected:
+            return .init(code: .failedPrecondition, message: "Message send before helper connected")
+        case .monitoringCompletedMoreThanOnce:
+            return .init(code: .internalError, message: "Helper monitoring completed multiple times")
         }
     }
 }

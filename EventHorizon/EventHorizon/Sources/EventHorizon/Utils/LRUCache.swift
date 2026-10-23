@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -67,14 +67,26 @@ final class LRUCache<Key: Hashable, Value>: CustomDebugStringConvertible {
         }
     }
 
+    func withValue<T>(forKey key: Key, default defaultValue: @autoclosure () -> Value, _ body: (inout Value) -> T) -> T {
+        if let node = nodes[key] {
+            update(node: node)
+            return body(&node.value)
+        }
+        let val = defaultValue()
+        add(key: key, value: val)
+        return body(&lastNode.unsafelyUnwrapped.value)
+    }
+
     func removeAll() {
         nodes.removeAll()
 
         var maybeNilNode = firstNode
 
         while let node = maybeNilNode {
+            let nextNode = node.next
             node.previous = nil
-            maybeNilNode = node.next
+            node.next = nil
+            maybeNilNode = nextNode
         }
 
         firstNode = nil

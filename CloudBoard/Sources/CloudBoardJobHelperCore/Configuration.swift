@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -27,10 +27,10 @@ extension CFPreferences {
 public struct CBJobHelperConfiguration: Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case _cloudAppName = "CloudAppName"
-        case _enforceTGTValidation = "EnforceTGTValidation"
         case _proxyConfiguration = "ProxyConfiguration"
         case _enablePIR = "EnablePIR"
         case _effortPrivacy = "EffortPrivacy"
+        case _diagnosticsSharingOverride = "DiagnosticsSharingOverride"
         // deliberately *not* serialising _secureConfig
     }
 
@@ -40,14 +40,6 @@ public struct CBJobHelperConfiguration: Codable, Hashable, Sendable {
     var cloudAppName: String {
         get { self._cloudAppName ?? "TIECloudApp" }
         set { self._cloudAppName = newValue }
-    }
-
-    var _enforceTGTValidation: Bool?
-    /// If true, cb_jobhelper fails requests that fail Token Granting Token (TGT) validation. Otherwise, requests with
-    /// invalid TGT are still processed.
-    var enforceTGTValidation: Bool {
-        get { self._enforceTGTValidation ?? false }
-        set { self._enforceTGTValidation = newValue }
     }
 
     var _proxyConfiguration: ProxyConfiguration?
@@ -67,6 +59,14 @@ public struct CBJobHelperConfiguration: Codable, Hashable, Sendable {
     var effortPrivacy: EffortPrivacyConfiguration {
         get { self._effortPrivacy ?? EffortPrivacyConfiguration() }
         set { self._effortPrivacy = newValue }
+    }
+
+    var _diagnosticsSharingOverride: DiagnosticsSharingOverride?
+    /// Controls the client "share Diagnostics & Usage with Apple" opt-in value in non-`customer` security postures.
+    /// Has no effect under the `customer` policy, where the client's signalled value is always used.
+    var diagnosticsSharingOverride: DiagnosticsSharingOverride {
+        get { self._diagnosticsSharingOverride ?? .forceTrue }
+        set { self._diagnosticsSharingOverride = newValue }
     }
 
     private var _secureConfig: SecureConfig? = nil
@@ -92,12 +92,10 @@ public struct CBJobHelperConfiguration: Codable, Hashable, Sendable {
     /// It *does not validate* `secureconfig`
     internal init(
         secureConfig: SecureConfig,
-        cloudAppName: String? = nil,
-        enforceTGTValidation: Bool? = nil
+        cloudAppName: String? = nil
     ) {
         self._secureConfig = secureConfig
         self._cloudAppName = cloudAppName
-        self._enforceTGTValidation = enforceTGTValidation
     }
 
     public static func fromPreferences(secureConfigLoader: SecureConfigLoader = .real) throws
@@ -158,6 +156,19 @@ public struct CBJobHelperConfiguration: Codable, Hashable, Sendable {
 /// We retain the ProxyConfiguration object for a while in case some other proxy specific config comes up
 extension CBJobHelperConfiguration {
     struct ProxyConfiguration: Codable, Hashable, Sendable {}
+
+    /// How the client diagnostics-sharing opt-in is determined in non-`customer` security postures.
+    /// Under `customer` this is ignored and the client's signalled value is used directly.
+    public enum DiagnosticsSharingOverride: String, Codable, Hashable, Sendable, CaseIterable {
+        /// Always report the user as opted in.
+        case forceTrue = "ForceTrue"
+        /// Always report the user as opted out.
+        case forceFalse = "ForceFalse"
+        /// Report opt-in with 50/50 probability, decided once per request.
+        case random = "Random"
+        /// Use the client's signalled value, as under the `customer` policy.
+        case respectFlag = "RespectFlag"
+    }
 
     /// Configuration for privacy-preserving effort degradation
     /// These values control how ideal effort calculations are converted into noisier,

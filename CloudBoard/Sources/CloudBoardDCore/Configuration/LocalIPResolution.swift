@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -253,7 +253,9 @@ private struct CancellationStateMachine: Sendable {
 }
 
 extension CloudBoardDConfiguration {
-    func resolveLocalServiceAddress(cloudAppPort: Int?) async throws -> SocketAddress {
+    /// Returns the address for the local GRPC service.
+    /// - Parameter forcedPort: The port to use, if different from the default.
+    func resolveLocalServiceAddress(forcedPort: Int?) async throws -> SocketAddress {
         if self.grpc?.forceIPv6Resolution != nil {
             // os_log doesn't support warnings so let's make this an error to make it more visible.
             LocalIPResolution.logger.error(
@@ -262,7 +264,7 @@ extension CloudBoardDConfiguration {
         }
         return try await LocalIPResolution.preferredLocalGRPCServiceAddress(
             ipAddress: self.grpc?.listeningIP,
-            port: cloudAppPort ?? self.grpc?.listeningPort,
+            port: forcedPort ?? self.grpc?.listeningPort,
             serviceDiscoveryHostname: self.serviceDiscovery?.targetHost,
             forceIPv6Resolution: self.secureConfig.grpcForceIPv6Resolution ?? self.grpc?.forceIPv6Resolution ?? false
         )

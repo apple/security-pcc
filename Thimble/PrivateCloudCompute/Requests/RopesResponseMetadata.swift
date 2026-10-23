@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -55,6 +55,8 @@ package struct RopesResponseMetadata: Sendable, Codable {
     // This is for computing retryAfterDate--we need to know when we got the
     // error, it is like creationDate.
     private var now: Date
+
+    package var missingTrailingMetadata = false
 
     package init(now: Date = Date.now, code: Int) {
         self.code = Code(rawValue: code)
@@ -185,7 +187,9 @@ package struct RopesResponseMetadata: Sendable, Codable {
                 .nodeAttestationChanged,
                 .missingOneTimeToken,
                 .cloudboardOttPermissionDenied,
-                .invalidOneTimeToken:
+                .invalidOneTimeToken,
+                .cloudboardConnectionClosed,
+                .cloudboardUnexpectedStatusCode:
                 return true
             default:
                 break
@@ -266,6 +270,7 @@ package struct RopesResponseMetadata: Sendable, Codable {
         case maxRequestLifetimeReached = 2002
         case requestChunkTimeout = 2003
         case trustedProxyPickTimeout = 2004
+        case ottValidationTimeout = 2005
 
         // Errors 3XXX: throttling
         case rateLimitReached = 3000
@@ -273,6 +278,7 @@ package struct RopesResponseMetadata: Sendable, Codable {
         case softwareBlocked = 3002
         case workloadBlocked = 3003
         case featureIdBlocked = 3004
+        case maxTurnsLimitReached = 3005
 
         // Errors 4XXX: load balancing errors
         case unknownWorkload = 4000
@@ -285,6 +291,13 @@ package struct RopesResponseMetadata: Sendable, Codable {
         case trustedProxyIncompatibleTrains = 4007
         case resourceExhaustedDiscardable = 4008
         case notEnoughNodes = 4009
+        case noMatchingPolicy = 4010
+        case missingVersionMapping = 4011
+        case pccAgentNotFound = 4012
+        case pccAgentDependencyNotFound = 4013
+        case noCompatiblePccAgent = 4014
+        case pccAgentRoutingGroupAliasNotFound = 4015
+        case insufficientAttestations = 4016
 
         // Errors 5XXX: CloudBoard errors
         case cloudboardUnknownError = 5002
@@ -292,6 +305,8 @@ package struct RopesResponseMetadata: Sendable, Codable {
         case cloudboardDeadlineExceeded = 5004
         case cloudboardResourceExhausted = 5008
         case cloudboardInternalError = 5013
+        case cloudboardConnectionClosed = 5100
+        case cloudboardUnexpectedStatusCode = 5101
 
         // Errors 6XXX: other
         case internalServerError = 6000
@@ -307,6 +322,7 @@ package struct RopesResponseMetadata: Sendable, Codable {
 
         // Errors 8XXX: Trusted Proxy
         case proxyInternalError = 8000
+        case proxyRequestAborted = 8001
     }
 
     package enum Code: Int, Sendable, Codable {

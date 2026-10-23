@@ -19,8 +19,6 @@
 				13C5BC9B2C6D02070043288D /* PBXTargetDependency */,
 			);
 			name = "vre-all";
-			packageProductDependencies = (
-			);
 			productName = all;
 		};
 /* End PBXAggregateTarget section */
@@ -227,10 +225,12 @@
 		13DB48222C6BEC4D008A2C87 /* Unsupported-x86.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB48112C6BEC4D008A2C87 /* Unsupported-x86.swift */; };
 		13DB48232C6BEC4D008A2C87 /* PCCVRELicenseAgreementManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB480F2C6BEC4D008A2C87 /* PCCVRELicenseAgreementManager.swift */; };
 		13DB48242C6BEC4D008A2C87 /* PCCVRELicenseAgreementConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB480E2C6BEC4D008A2C87 /* PCCVRELicenseAgreementConstants.swift */; };
+		35FF65BAB6CFE1FC4533E186 /* ProtoSniff.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF897533EA9FCEDF13FEDA96 /* ProtoSniff.swift */; };
 		3E7A991E2D4838E500A1C5F4 /* libMachO_Swift.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 3E7A991D2D4838E500A1C5F4 /* libMachO_Swift.a */; };
 		3E7A99212D48399F00A1C5F4 /* MachO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E7A991C2D48389B00A1C5F4 /* MachO.swift */; };
 		3EA2F75E2D484AD200958325 /* libMachO_Swift.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 3E7A991D2D4838E500A1C5F4 /* libMachO_Swift.a */; };
 		3EA2F75F2D484AFB00958325 /* MachO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E7A991C2D48389B00A1C5F4 /* MachO.swift */; };
+		468B6CD935727137B72D242D /* ProtoSniff.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF897533EA9FCEDF13FEDA96 /* ProtoSniff.swift */; };
 		472F61222C73C52500E8A79F /* MerkleTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F61202C73C52500E8A79F /* MerkleTree.swift */; };
 		472F61302C73C55D00E8A79F /* MerkleTreePerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F612E2C73C55D00E8A79F /* MerkleTreePerformanceTests.swift */; };
 		472F61312C73C55D00E8A79F /* MerkleTreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F612F2C73C55D00E8A79F /* MerkleTreeTests.swift */; };
@@ -243,11 +243,14 @@
 		472F61412C73C64A00E8A79F /* TransparencyLog+PATLeaf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F613F2C73C64A00E8A79F /* TransparencyLog+PATLeaf.swift */; };
 		472F61422C73C64A00E8A79F /* TransparencyLog+TLTLeaf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F61402C73C64A00E8A79F /* TransparencyLog+TLTLeaf.swift */; };
 		476E901C2C922BE100E19E47 /* TransparencyLogVerifyInclusionCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 476E901B2C922BDA00E19E47 /* TransparencyLogVerifyInclusionCmd.swift */; };
+		52E012074EB8A571254314C3 /* PCCVREAttestationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D7005536F3C3B8E76DD16D /* PCCVREAttestationHelper.swift */; };
+		53DCAB7150C8B4F7E1A06974 /* PCCVREAttestationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D7005536F3C3B8E76DD16D /* PCCVREAttestationHelper.swift */; };
 		70643A312F31349C006D8CA9 /* AttestationParseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70643A302F313487006D8CA9 /* AttestationParseTests.swift */; };
 		70643A362F3147FD006D8CA9 /* CloudAttestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DB9D782C8932C40029A1D7 /* CloudAttestation.swift */; };
 		70643A372F31484E006D8CA9 /* Digest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B90901E02CA357B200BFC48A /* Digest.swift */; };
 		70643C142F31680D006D8CA9 /* Apple_Intelligence_Report_Luckier.json in Resources */ = {isa = PBXBuildFile; fileRef = 70643C132F31680D006D8CA9 /* Apple_Intelligence_Report_Luckier.json */; };
 		70643C162F317D4F006D8CA9 /* Apple_Intelligence_Report_Luckier_E.json in Resources */ = {isa = PBXBuildFile; fileRef = 70643C152F317D4F006D8CA9 /* Apple_Intelligence_Report_Luckier_E.json */; };
+		70643C182F318000006D8CA9 /* Apple_Intelligence_Report_Luckier_F.json in Resources */ = {isa = PBXBuildFile; fileRef = 70643C172F318000006D8CA9 /* Apple_Intelligence_Report_Luckier_F.json */; };
 		70D6DACF2C94EB55001DD40F /* TransparencyLogVerifyInclusionCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 476E901B2C922BDA00E19E47 /* TransparencyLogVerifyInclusionCmd.swift */; };
 		991C05D32D66EA4B00C16E9C /* VRE+Instance+Config+Assets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991C05D22D66EA4B00C16E9C /* VRE+Instance+Config+Assets.swift */; };
 		991C05D42D66EA4B00C16E9C /* VRE+Instance+Config+Assets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991C05D22D66EA4B00C16E9C /* VRE+Instance+Config+Assets.swift */; };
@@ -263,6 +266,11 @@
 		991C05E12D66ED3500C16E9C /* AppName.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991C05DF2D66ED1A00C16E9C /* AppName.swift */; };
 		991C05E22D66ED4100C16E9C /* AppName.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991C05DF2D66ED1A00C16E9C /* AppName.swift */; };
 		996CBD9C2D5EB2140004C11F /* HTTPServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996CBD9B2D5EB2140004C11F /* HTTPServerTests.swift */; };
+		9FE2C054A4A22B7F61A6B2BD /* TransparencyLogLeavesCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FE2C054A4A22B7F61A6B2BC /* TransparencyLogLeavesCmd.swift */; };
+		9FE2C054A4A22B7F61A6B2BE /* TransparencyLogLeavesCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FE2C054A4A22B7F61A6B2BC /* TransparencyLogLeavesCmd.swift */; };
+		A1C0DE519E1F4A2B8C3D0011 /* HelperCodeSign.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0DE519E1F4A2B8C3D0001 /* HelperCodeSign.swift */; };
+		A1C0DE519E1F4A2B8C3D0012 /* HelperCodeSign.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0DE519E1F4A2B8C3D0001 /* HelperCodeSign.swift */; };
+		A1C0DE519E1F4A2B8C3D0013 /* HelperCodeSign.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0DE519E1F4A2B8C3D0001 /* HelperCodeSign.swift */; };
 		B90901E12CA357B800BFC48A /* Digest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B90901E02CA357B200BFC48A /* Digest.swift */; };
 		B90901E22CA357B800BFC48A /* Digest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B90901E02CA357B200BFC48A /* Digest.swift */; };
 		B941B42F2CAB117E007CE078 /* IdentityProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B941B42E2CAB1178007CE078 /* IdentityProvider.swift */; };
@@ -276,8 +284,6 @@
 		B941B4412CAB5113007CE078 /* CloudAttestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DB9D782C8932C40029A1D7 /* CloudAttestation.swift */; };
 		B95F6C502CA23B8300C63B32 /* BuildManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B95F6C4F2CA23B7C00C63B32 /* BuildManifest.swift */; };
 		B95F6C512CA23B8300C63B32 /* BuildManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B95F6C4F2CA23B7C00C63B32 /* BuildManifest.swift */; };
-		B9A186AF2CFFA5820019BCEB /* ExecCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9A186AE2CFFA57E0019BCEB /* ExecCommand.swift */; };
-		B9A186B02CFFA5820019BCEB /* ExecCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9A186AE2CFFA57E0019BCEB /* ExecCommand.swift */; };
 		B9AA35032CE54D98002C6D9D /* VRE+Instance.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9AA35022CE54D91002C6D9D /* VRE+Instance.swift */; };
 		B9AA35042CE54D98002C6D9D /* VRE+Instance.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9AA35022CE54D91002C6D9D /* VRE+Instance.swift */; };
 		B9BB75582C94BFD300539D2C /* AttestationCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DB9D712C8930A30029A1D7 /* AttestationCmd.swift */; };
@@ -305,16 +311,151 @@
 		B9E502152D07B5F90031AB0E /* VRE+Ensemble.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E5020D2D07B5F90031AB0E /* VRE+Ensemble.swift */; };
 		B9E502162D07B5F90031AB0E /* VRE+Ensemble+Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E5020E2D07B5F90031AB0E /* VRE+Ensemble+Config.swift */; };
 		B9ECC04B2C741490000F969D /* Utils.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9ECC04A2C74148D000F969D /* Utils.swift */; };
+		C018E155A813025FF833F6D4 /* ReleaseMetadataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C018E155A813025FF833F6D3 /* ReleaseMetadataTests.swift */; };
 		C02CDA602CCC4E8800B8074E /* ReleaseDumpCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C02CDA5F2CCC4E8800B8074E /* ReleaseDumpCmd.swift */; };
 		C02CDA612CCC59FF00B8074E /* ReleaseDumpCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C02CDA5F2CCC4E8800B8074E /* ReleaseDumpCmd.swift */; };
 		C02CDA632CCC656000B8074E /* AttestationCanonicalizeCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C02CDA622CCC656000B8074E /* AttestationCanonicalizeCmd.swift */; };
 		C02CDA642CCC6D0B00B8074E /* AttestationCanonicalizeCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C02CDA622CCC656000B8074E /* AttestationCanonicalizeCmd.swift */; };
+		C04A1F222F8EEB050054F92C /* InstanceCreateCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB471D2C6BEC06008A2C87 /* InstanceCreateCmd.swift */; };
+		C04A1F232F8EEB0F0054F92C /* PCCVREHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0AED5E62D976942000AA191 /* PCCVREHelper.swift */; };
+		C04A1F242F8EEB170054F92C /* DarwinInitHelper+Cryptex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47372C6BEC06008A2C87 /* DarwinInitHelper+Cryptex.swift */; };
+		C04A1F252F8EEBE90054F92C /* DarwinInitHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47362C6BEC06008A2C87 /* DarwinInitHelper.swift */; };
+		C09ED42C2F8EE23D00654631 /* MainStub.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED4282F8EE23D00654631 /* MainStub.swift */; };
+		C09ED42D2F8EE23D00654631 /* DarwinInitHelperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED4272F8EE23D00654631 /* DarwinInitHelperTests.swift */; };
+		C09ED42E2F8EE23D00654631 /* TestFileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED42A2F8EE23D00654631 /* TestFileSystem.swift */; };
+		C09ED42F2F8EE23D00654631 /* TestComputer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED4292F8EE23D00654631 /* TestComputer.swift */; };
+		C09ED4332F8EE28300654631 /* FileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED4312F8EE28300654631 /* FileSystem.swift */; };
+		C09ED4342F8EE28300654631 /* Computer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED4302F8EE28300654631 /* Computer.swift */; };
+		C09ED4352F8EE28300654631 /* FileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED4312F8EE28300654631 /* FileSystem.swift */; };
+		C09ED4362F8EE28300654631 /* Computer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED4302F8EE28300654631 /* Computer.swift */; };
+		C09ED4372F8EE28300654631 /* FileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED4312F8EE28300654631 /* FileSystem.swift */; };
+		C09ED4382F8EE28300654631 /* Computer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED4302F8EE28300654631 /* Computer.swift */; };
+		C09ED4392F8EE28300654631 /* FileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED4312F8EE28300654631 /* FileSystem.swift */; };
+		C09ED43A2F8EE28300654631 /* Computer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C09ED4302F8EE28300654631 /* Computer.swift */; };
 		C0A261B02DD8021400F580F8 /* DarwinInitConfigV1.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A261AF2DD8020D00F580F8 /* DarwinInitConfigV1.swift */; };
 		C0A261B12DD8021400F580F8 /* DarwinInitConfigV1.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A261AF2DD8020D00F580F8 /* DarwinInitConfigV1.swift */; };
 		C0AED5CB2D975360000AA191 /* InstanceInvokeCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0AED5CA2D975360000AA191 /* InstanceInvokeCmd.swift */; };
 		C0AED5E72D976944000AA191 /* PCCVREHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0AED5E62D976942000AA191 /* PCCVREHelper.swift */; };
 		C0AED5E82D976944000AA191 /* PCCVREHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0AED5E62D976942000AA191 /* PCCVREHelper.swift */; };
 		C0AED5E92D976D58000AA191 /* InstanceInvokeCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0AED5CA2D975360000AA191 /* InstanceInvokeCmd.swift */; };
+		C0B8FABE2F93DFFE009BD0B2 /* HTTPServerCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B8FABD2F93DFFE009BD0B2 /* HTTPServerCmd.swift */; };
+		C0B8FABF2F93DFFE009BD0B2 /* HTTPServerCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B8FABD2F93DFFE009BD0B2 /* HTTPServerCmd.swift */; };
+		C0B8FAC02F93DFFE009BD0B2 /* HTTPServerCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B8FABD2F93DFFE009BD0B2 /* HTTPServerCmd.swift */; };
+		C0F0BB282F93C61500ACB926 /* ExecCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0BB272F93C61500ACB926 /* ExecCommand.swift */; };
+		C0F0BB292F93C61500ACB926 /* ExecCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0BB272F93C61500ACB926 /* ExecCommand.swift */; };
+		C0F0BB2A2F93C61500ACB926 /* ExecCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0BB272F93C61500ACB926 /* ExecCommand.swift */; };
+		C0F0BB2B2F93C61500ACB926 /* ExecCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0BB272F93C61500ACB926 /* ExecCommand.swift */; };
+		C0F0BB2D2F93C63B00ACB926 /* ProcessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0BB2C2F93C63B00ACB926 /* ProcessRunner.swift */; };
+		C0F0BB2E2F93C63B00ACB926 /* ProcessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0BB2C2F93C63B00ACB926 /* ProcessRunner.swift */; };
+		C0F0BB2F2F93C63B00ACB926 /* ProcessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0BB2C2F93C63B00ACB926 /* ProcessRunner.swift */; };
+		C0F0BB302F93C63B00ACB926 /* ProcessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0BB2C2F93C63B00ACB926 /* ProcessRunner.swift */; };
+		C0F0BB322F93C66E00ACB926 /* TestProcessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0BB312F93C66E00ACB926 /* TestProcessRunner.swift */; };
+		C0F0BB342F93CAA000ACB926 /* InstanceStartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F0BB332F93CAA000ACB926 /* InstanceStartTests.swift */; };
+		E253F5BB3FFB3E5CD86FCC1B /* ProtoSniff.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF897533EA9FCEDF13FEDA96 /* ProtoSniff.swift */; };
+		F1AA00012F8F000100AA0001 /* CryptexHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47412C6BEC06008A2C87 /* CryptexHelper.swift */; };
+		F1AA00032F8F000300AA0003 /* CLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB472C2C6BEC06008A2C87 /* CLI.swift */; };
+		F1AA00042F8F000400AA0004 /* DarwinInitConfigV1.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A261AF2DD8020D00F580F8 /* DarwinInitConfigV1.swift */; };
+		F1AA00052F8F000500AA0005 /* CryptexSpec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB476B2C6BEC06008A2C87 /* CryptexSpec.swift */; };
+		F1AA00062F8F000600AA0006 /* AssetHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47402C6BEC06008A2C87 /* AssetHelper.swift */; };
+		F1AA00072F8F000700AA0007 /* SWReleases+Release+Metadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB474A2C6BEC06008A2C87 /* SWReleases+Release+Metadata.swift */; };
+		F1AA00082F8F000800AA0008 /* DarwinInitHelper+ensemble.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E5020A2D07B5380031AB0E /* DarwinInitHelper+ensemble.swift */; };
+		F1AA00092F8F000900AA0009 /* VRE+Utilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991C05D72D66EB8100C16E9C /* VRE+Utilities.swift */; };
+		F1AA000A2F8F000A00AA000A /* FileManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47302C6BEC06008A2C87 /* FileManager.swift */; };
+		F1AA000B2F8F000B00AA000B /* VRE+Instance.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9AA35022CE54D91002C6D9D /* VRE+Instance.swift */; };
+		F1AA000C2F8F000C00AA000C /* VRE+Ensemble.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E5020D2D07B5F90031AB0E /* VRE+Ensemble.swift */; };
+		F1AA000D2F8F000D00AA000D /* VRE+Ensemble+Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E5020E2D07B5F90031AB0E /* VRE+Ensemble+Config.swift */; };
+		F1AA000E2F8F000E00AA000E /* VRE+Ensemble+Status.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E5020F2D07B5F90031AB0E /* VRE+Ensemble+Status.swift */; };
+		F1AA000F2F8F000F00AA000F /* VRE+VM.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB476C2C6BEC06008A2C87 /* VRE+VM.swift */; };
+		F1AA00102F8F001000AA0010 /* String.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47312C6BEC06008A2C87 /* String.swift */; };
+		F1AA00112F8F001100AA0011 /* Data.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB472F2C6BEC06008A2C87 /* Data.swift */; };
+		F1AA00122F8F001200AA0012 /* URL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47322C6BEC06008A2C87 /* URL.swift */; };
+		F1AA00132F8F001300AA0013 /* SWReleases.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47482C6BEC06008A2C87 /* SWReleases.swift */; };
+		F1AA00142F8F001400AA0014 /* SWReleases+Release.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47492C6BEC06008A2C87 /* SWReleases+Release.swift */; };
+		F1AA00152F8F001500AA0015 /* DarwinInitHelper+SSH.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47382C6BEC06008A2C87 /* DarwinInitHelper+SSH.swift */; };
+		F1AA00162F8F001600AA0016 /* BuildManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B95F6C4F2CA23B7C00C63B32 /* BuildManifest.swift */; };
+		F1AA00172F8F001700AA0017 /* VRE+Instance+Config+Assets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991C05D22D66EA4B00C16E9C /* VRE+Instance+Config+Assets.swift */; };
+		F1AA00182F8F001800AA0018 /* Sequence.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C2D6E82CB8A0F300CC4285 /* Sequence.swift */; };
+		F1AA00192F8F001900AA0019 /* AttestationCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DB9D712C8930A30029A1D7 /* AttestationCmd.swift */; };
+		F1AA001A2F8F001A00AA001A /* AttestationParseCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DB9D742C89317A0029A1D7 /* AttestationParseCmd.swift */; };
+		F1AA001B2F8F001B00AA001B /* AttestationVerifyCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DB9D762C8931DA0029A1D7 /* AttestationVerifyCmd.swift */; };
+		F1AA001C2F8F001C00AA001C /* AttestationCanonicalizeCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C02CDA622CCC656000B8074E /* AttestationCanonicalizeCmd.swift */; };
+		F1AA001D2F8F001D00AA001D /* CryptexCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB470F2C6BEC06008A2C87 /* CryptexCmd.swift */; };
+		F1AA001E2F8F001E00AA001E /* CryptexAddCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47102C6BEC06008A2C87 /* CryptexAddCmd.swift */; };
+		F1AA001F2F8F001F00AA001F /* CryptexListCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47112C6BEC06008A2C87 /* CryptexListCmd.swift */; };
+		F1AA00202F8F002000AA0020 /* CryptexRemoveCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47122C6BEC06008A2C87 /* CryptexRemoveCmd.swift */; };
+		F1AA00212F8F002100AA0021 /* CryptexCreateCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47092C6BEC06008A2C87 /* CryptexCreateCmd.swift */; };
+		F1AA00222F8F002200AA0022 /* DarwinInitCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47142C6BEC06008A2C87 /* DarwinInitCmd.swift */; };
+		F1AA00232F8F002300AA0023 /* DarwinInitSetCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47162C6BEC06008A2C87 /* DarwinInitSetCmd.swift */; };
+		F1AA00242F8F002400AA0024 /* DarwinInitDumpCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47152C6BEC06008A2C87 /* DarwinInitDumpCmd.swift */; };
+		F1AA00252F8F002500AA0025 /* InstanceCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB471C2C6BEC06008A2C87 /* InstanceCmd.swift */; };
+		F1AA00262F8F002600AA0026 /* InstanceConfigureCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB471A2C6BEC06008A2C87 /* InstanceConfigureCmd.swift */; };
+		F1AA00272F8F002700AA0027 /* InstanceStartCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47222C6BEC06008A2C87 /* InstanceStartCmd.swift */; };
+		F1AA00282F8F002800AA0028 /* InstanceListCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47202C6BEC06008A2C87 /* InstanceListCmd.swift */; };
+		F1AA00292F8F002900AA0029 /* InstanceRemoveCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47212C6BEC06008A2C87 /* InstanceRemoveCmd.swift */; };
+		F1AA002A2F8F002A00AA002A /* InstanceDiagnosticCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB471E2C6BEC06008A2C87 /* InstanceDiagnosticCmd.swift */; };
+		F1AA002B2F8F002B00AA002B /* InstanceInferenceRequestCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB471F2C6BEC06008A2C87 /* InstanceInferenceRequestCmd.swift */; };
+		F1AA002C2F8F002C00AA002C /* InstanceInvokeCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0AED5CA2D975360000AA191 /* InstanceInvokeCmd.swift */; };
+		F1AA002D2F8F002D00AA002D /* Image4Cmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB470B2C6BEC06008A2C87 /* Image4Cmd.swift */; };
+		F1AA002E2F8F002E00AA002E /* Image4ExtractCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB470C2C6BEC06008A2C87 /* Image4ExtractCmd.swift */; };
+		F1AA002F2F8F002F00AA002F /* Image4PackageCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB470D2C6BEC06008A2C87 /* Image4PackageCmd.swift */; };
+		F1AA00302F8F003000AA0030 /* Image4Manifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E09DCC2C936FD100FC3EEF /* Image4Manifest.swift */; };
+		F1AA00312F8F003100AA0031 /* ReleaseCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47262C6BEC06008A2C87 /* ReleaseCmd.swift */; };
+		F1AA00322F8F003200AA0032 /* ReleaseDownloadCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47272C6BEC06008A2C87 /* ReleaseDownloadCmd.swift */; };
+		F1AA00332F8F003300AA0033 /* ReleaseListCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47282C6BEC06008A2C87 /* ReleaseListCmd.swift */; };
+		F1AA00342F8F003400AA0034 /* ReleaseDumpCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = C02CDA5F2CCC4E8800B8074E /* ReleaseDumpCmd.swift */; };
+		F1AA00352F8F003500AA0035 /* ReleaseVerifyCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9BB757A2C9918BC00539D2C /* ReleaseVerifyCmd.swift */; };
+		F1AA00362F8F003600AA0036 /* LicenseCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47242C6BEC06008A2C87 /* LicenseCmd.swift */; };
+		F1AA00372F8F003700AA0037 /* SshCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47182C6BEC06008A2C87 /* SshCmd.swift */; };
+		F1AA00382F8F003800AA0038 /* EnsembleCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D7553332D0C9CCE00278FB8 /* EnsembleCmd.swift */; };
+		F1AA00392F8F003900AA0039 /* EnsembleCreateCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D7553362D0C9CD800278FB8 /* EnsembleCreateCmd.swift */; };
+		F1AA003A2F8F003A00AA003A /* EnsembleListCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D7553392D0C9CF500278FB8 /* EnsembleListCmd.swift */; };
+		F1AA003B2F8F003B00AA003B /* EnsembleRemoveCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D75533C2D0C9D0400278FB8 /* EnsembleRemoveCmd.swift */; };
+		F1AA003C2F8F003C00AA003C /* EnsembleStartCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D75533F2D0C9D0E00278FB8 /* EnsembleStartCmd.swift */; };
+		F1AA003D2F8F003D00AA003D /* EnsembleInferenceRequestCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DC497102D557B03006C2070 /* EnsembleInferenceRequestCmd.swift */; };
+		F1AA003E2F8F003E00AA003E /* TransparencyLogCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F61332C73C5BB00E8A79F /* TransparencyLogCmd.swift */; };
+		F1AA003F2F8F003F00AA003F /* TransparencyLogAuditCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F61342C73C5BB00E8A79F /* TransparencyLogAuditCmd.swift */; };
+		F1AA00402F8F004000AA0040 /* TransparencyLogVerifyInclusionCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 476E901B2C922BDA00E19E47 /* TransparencyLogVerifyInclusionCmd.swift */; };
+		F1AA00412F8F004100AA0041 /* TransparencyLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB475F2C6BEC06008A2C87 /* TransparencyLog.swift */; };
+		F1AA00422F8F004200AA0042 /* TransparencyLog+Head.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47612C6BEC06008A2C87 /* TransparencyLog+Head.swift */; };
+		F1AA00432F8F004300AA0043 /* TransparencyLog+Trees.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47662C6BEC06008A2C87 /* TransparencyLog+Trees.swift */; };
+		F1AA00442F8F004400AA0044 /* TransparencyLog+Leaves.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47632C6BEC06008A2C87 /* TransparencyLog+Leaves.swift */; };
+		F1AA00452F8F004500AA0045 /* TransparencyLog+Leaf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F613D2C73C64300E8A79F /* TransparencyLog+Leaf.swift */; };
+		F1AA00462F8F004600AA0046 /* TransparencyLog+PATLeaf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F613F2C73C64A00E8A79F /* TransparencyLog+PATLeaf.swift */; };
+		F1AA00472F8F004700AA0047 /* TransparencyLog+TLTLeaf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F61402C73C64A00E8A79F /* TransparencyLog+TLTLeaf.swift */; };
+		F1AA00482F8F004800AA0048 /* TransparencyLog+ATLeaf.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47602C6BEC06008A2C87 /* TransparencyLog+ATLeaf.swift */; };
+		F1AA00492F8F004900AA0049 /* TransparencyLog+KTInitBag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47622C6BEC06008A2C87 /* TransparencyLog+KTInitBag.swift */; };
+		F1AA004A2F8F004A00AA004A /* TransparencyLog+PublicKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47642C6BEC06008A2C87 /* TransparencyLog+PublicKeys.swift */; };
+		F1AA004B2F8F004B00AA004B /* TransparencyLog+SignedObject.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47652C6BEC06008A2C87 /* TransparencyLog+SignedObject.swift */; };
+		F1AA004C2F8F004C00AA004C /* TransparencyByteBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB475D2C6BEC06008A2C87 /* TransparencyByteBuffer.swift */; };
+		F1AA004D2F8F004D00AA004D /* Auditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F61382C73C63900E8A79F /* Auditor.swift */; };
+		F1AA004E2F8F004E00AA004E /* Auditor+Delegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472F61392C73C63900E8A79F /* Auditor+Delegate.swift */; };
+		F1AA004F2F8F004F00AA004F /* Transparency.pb.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47572C6BEC06008A2C87 /* Transparency.pb.swift */; };
+		F1AA00502F8F005000AA0050 /* ATServiceApi.pb.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB474F2C6BEC06008A2C87 /* ATServiceApi.pb.swift */; };
+		F1AA00512F8F005100AA0051 /* ATResearcherApi.pb.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB474D2C6BEC06008A2C87 /* ATResearcherApi.pb.swift */; };
+		F1AA00522F8F005200AA0052 /* AuditorApi.pb.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47512C6BEC06008A2C87 /* AuditorApi.pb.swift */; };
+		F1AA00532F8F005300AA0053 /* KtClientApi.pb.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB47542C6BEC06008A2C87 /* KtClientApi.pb.swift */; };
+		F1AA00542F8F005400AA0054 /* AT.tls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB475B2C6BEC06008A2C87 /* AT.tls.swift */; };
+		F1AA00552F8F005500AA0055 /* MachO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E7A991C2D48389B00A1C5F4 /* MachO.swift */; };
+		F1AA00562F8F005600AA0056 /* FileHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9BB75752C95075000539D2C /* FileHandle.swift */; };
+		F1AA00572F8F005700AA0057 /* SecCertificate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B941B43E2CAB144A007CE078 /* SecCertificate.swift */; };
+		F1AA00582F8F005800AA0058 /* SecIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B941B4372CAB1328007CE078 /* SecIdentity.swift */; };
+		F1AA00592F8F005900AA0059 /* SecTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = B941B43B2CAB13F3007CE078 /* SecTrust.swift */; };
+		F1AA005A2F8F005A00AA005A /* IdentityProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B941B42E2CAB1178007CE078 /* IdentityProvider.swift */; };
+		F1AA005B2F8F005B00AA005B /* PCCVREUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB48102C6BEC4D008A2C87 /* PCCVREUtils.swift */; };
+		F1AA005C2F8F005C00AA005C /* ArgumentVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB48132C6BEC4D008A2C87 /* ArgumentVisibility.swift */; };
+		F1AA005D2F8F005D00AA005D /* PCCVRELicenseAgreementManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB480F2C6BEC4D008A2C87 /* PCCVRELicenseAgreementManager.swift */; };
+		F1AA005E2F8F005E00AA005E /* PCCVRELicenseAgreementConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13DB480E2C6BEC4D008A2C87 /* PCCVRELicenseAgreementConstants.swift */; };
+		F1AA005F2F8F005F00AA005F /* WorkloadCreateCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0915A1B82DAFB404006EF275 /* WorkloadCreateCmd.swift */; };
+		F1AA00602F8F006000AA0060 /* WorkloadCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0915A1BB2DAFB422006EF275 /* WorkloadCmd.swift */; };
+		F1AA00622F8F006200AA0062 /* License.rtf in Sources */ = {isa = PBXBuildFile; fileRef = 13DB480C2C6BEC4D008A2C87 /* License.rtf */; };
+		F1AA00632F8F006300AA0063 /* libMachO_Swift.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 3E7A991D2D4838E500A1C5F4 /* libMachO_Swift.a */; };
+		F1AA00642F8F006400AA0064 /* libauthinstall.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 13C5BC852C6CFEBF0043288D /* libauthinstall.a */; };
+		F1AA00652F8F006500AA0065 /* libbootpolicy.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 13C5BC832C6CFE490043288D /* libbootpolicy.tbd */; };
+		F1AA00662F8F006600AA0066 /* libImg4Encode.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 13C5BC7F2C6CFE410043288D /* libImg4Encode.a */; };
+		F1AA00672F8F006700AA0067 /* libImg4Decode.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 13C5BC802C6CFE410043288D /* libImg4Decode.a */; };
+		F1AA00682F8F006800AA0068 /* TransparencyLogLeavesCmd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FE2C054A4A22B7F61A6B2BC /* TransparencyLogLeavesCmd.swift */; };
+		F2AA00012FA1000100AA0001 /* InstanceCreateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2AA00022FA1000200AA0002 /* InstanceCreateTests.swift */; };
+		F65283B90E32E0410051046A /* PCCVREAttestationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D7005536F3C3B8E76DD16D /* PCCVREAttestationHelper.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXBuildRule section */
@@ -355,6 +496,22 @@
 			fileType = pattern.proxy;
 			inputFiles = (
 				"$(PROJECT_DIR)/Shared/PCC/License.rtf",
+			);
+			isEditable = 1;
+			outputFiles = (
+				"$(DERIVED_FILE_DIR)/PCRLicenseAgreementConstants_Generated.swift",
+			);
+			runOncePerArchitecture = 0;
+			script = "$PROJECT_DIR/xcsh/generate_license_hash.sh \"$SCRIPT_INPUT_FILE\" \"$DERIVED_FILE_DIR\"/PCRLicenseAgreementConstants_Generated.swift\n";
+		};
+		F1AA00612F8F006100AA0061 /* PBXBuildRule */ = {
+			isa = PBXBuildRule;
+			compilerSpec = com.apple.compilers.proxy.script;
+			filePatterns = "*License.rtf";
+			fileType = pattern.proxy;
+			inputFiles = (
+				"$(PROJECT_DIR)/Shared/PCC/License.rtf",
+				"$(PROJECT_DIR)/xcsh/generate_license_hash.sh",
 			);
 			isEditable = 1;
 			outputFiles = (
@@ -575,18 +732,20 @@
 		70643A302F313487006D8CA9 /* AttestationParseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttestationParseTests.swift; sourceTree = "<group>"; };
 		70643C132F31680D006D8CA9 /* Apple_Intelligence_Report_Luckier.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Apple_Intelligence_Report_Luckier.json; sourceTree = "<group>"; };
 		70643C152F317D4F006D8CA9 /* Apple_Intelligence_Report_Luckier_E.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Apple_Intelligence_Report_Luckier_E.json; sourceTree = "<group>"; };
+		70643C172F318000006D8CA9 /* Apple_Intelligence_Report_Luckier_F.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Apple_Intelligence_Report_Luckier_F.json; sourceTree = "<group>"; };
 		991C05D22D66EA4B00C16E9C /* VRE+Instance+Config+Assets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VRE+Instance+Config+Assets.swift"; sourceTree = "<group>"; };
 		991C05D72D66EB8100C16E9C /* VRE+Utilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VRE+Utilities.swift"; sourceTree = "<group>"; };
 		991C05DB2D66EC4D00C16E9C /* Host.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Host.swift; sourceTree = "<group>"; };
 		991C05DF2D66ED1A00C16E9C /* AppName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppName.swift; sourceTree = "<group>"; };
 		996CBD9B2D5EB2140004C11F /* HTTPServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPServerTests.swift; sourceTree = "<group>"; };
+		9FE2C054A4A22B7F61A6B2BC /* TransparencyLogLeavesCmd.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransparencyLogLeavesCmd.swift; sourceTree = "<group>"; };
+		A1C0DE519E1F4A2B8C3D0001 /* HelperCodeSign.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HelperCodeSign.swift; sourceTree = "<group>"; };
 		B90901E02CA357B200BFC48A /* Digest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Digest.swift; sourceTree = "<group>"; };
 		B941B42E2CAB1178007CE078 /* IdentityProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityProvider.swift; sourceTree = "<group>"; };
 		B941B4372CAB1328007CE078 /* SecIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecIdentity.swift; sourceTree = "<group>"; };
 		B941B43B2CAB13F3007CE078 /* SecTrust.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecTrust.swift; sourceTree = "<group>"; };
 		B941B43E2CAB144A007CE078 /* SecCertificate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecCertificate.swift; sourceTree = "<group>"; };
 		B95F6C4F2CA23B7C00C63B32 /* BuildManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildManifest.swift; sourceTree = "<group>"; };
-		B9A186AE2CFFA57E0019BCEB /* ExecCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecCommand.swift; sourceTree = "<group>"; };
 		B9AA35022CE54D91002C6D9D /* VRE+Instance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VRE+Instance.swift"; sourceTree = "<group>"; };
 		B9BB75752C95075000539D2C /* FileHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileHandle.swift; sourceTree = "<group>"; };
 		B9BB757A2C9918BC00539D2C /* ReleaseVerifyCmd.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseVerifyCmd.swift; sourceTree = "<group>"; };
@@ -602,11 +761,27 @@
 		B9E5020E2D07B5F90031AB0E /* VRE+Ensemble+Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VRE+Ensemble+Config.swift"; sourceTree = "<group>"; };
 		B9E5020F2D07B5F90031AB0E /* VRE+Ensemble+Status.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VRE+Ensemble+Status.swift"; sourceTree = "<group>"; };
 		B9ECC04A2C74148D000F969D /* Utils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Utils.swift; sourceTree = "<group>"; };
+		BF897533EA9FCEDF13FEDA96 /* ProtoSniff.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProtoSniff.swift; sourceTree = "<group>"; };
+		C018E155A813025FF833F6D3 /* ReleaseMetadataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseMetadataTests.swift; sourceTree = "<group>"; };
 		C02CDA5F2CCC4E8800B8074E /* ReleaseDumpCmd.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ReleaseDumpCmd.swift; sourceTree = "<group>"; };
 		C02CDA622CCC656000B8074E /* AttestationCanonicalizeCmd.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AttestationCanonicalizeCmd.swift; sourceTree = "<group>"; };
+		C09ED4272F8EE23D00654631 /* DarwinInitHelperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DarwinInitHelperTests.swift; sourceTree = "<group>"; };
+		C09ED4282F8EE23D00654631 /* MainStub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainStub.swift; sourceTree = "<group>"; };
+		C09ED4292F8EE23D00654631 /* TestComputer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestComputer.swift; sourceTree = "<group>"; };
+		C09ED42A2F8EE23D00654631 /* TestFileSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestFileSystem.swift; sourceTree = "<group>"; };
+		C09ED4302F8EE28300654631 /* Computer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Computer.swift; sourceTree = "<group>"; };
+		C09ED4312F8EE28300654631 /* FileSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSystem.swift; sourceTree = "<group>"; };
 		C0A261AF2DD8020D00F580F8 /* DarwinInitConfigV1.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DarwinInitConfigV1.swift; sourceTree = "<group>"; };
 		C0AED5CA2D975360000AA191 /* InstanceInvokeCmd.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = InstanceInvokeCmd.swift; sourceTree = "<group>"; };
 		C0AED5E62D976942000AA191 /* PCCVREHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PCCVREHelper.swift; sourceTree = "<group>"; };
+		C0B8FABD2F93DFFE009BD0B2 /* HTTPServerCmd.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPServerCmd.swift; sourceTree = "<group>"; };
+		C0D231022F8F053D00333E83 /* CLAUDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = CLAUDE.md; sourceTree = "<group>"; };
+		C0F0BB272F93C61500ACB926 /* ExecCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecCommand.swift; sourceTree = "<group>"; };
+		C0F0BB2C2F93C63B00ACB926 /* ProcessRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessRunner.swift; sourceTree = "<group>"; };
+		C0F0BB312F93C66E00ACB926 /* TestProcessRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestProcessRunner.swift; sourceTree = "<group>"; };
+		C0F0BB332F93CAA000ACB926 /* InstanceStartTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstanceStartTests.swift; sourceTree = "<group>"; };
+		E8D7005536F3C3B8E76DD16D /* PCCVREAttestationHelper.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PCCVREAttestationHelper.swift; sourceTree = "<group>"; };
+		F2AA00022FA1000200AA0002 /* InstanceCreateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstanceCreateTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -654,6 +829,11 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F1AA00632F8F006300AA0063 /* libMachO_Swift.a in Frameworks */,
+				F1AA00642F8F006400AA0064 /* libauthinstall.a in Frameworks */,
+				F1AA00652F8F006500AA0065 /* libbootpolicy.tbd in Frameworks */,
+				F1AA00662F8F006600AA0066 /* libImg4Encode.a in Frameworks */,
+				F1AA00672F8F006700AA0067 /* libImg4Decode.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -692,6 +872,7 @@
 				13DB47EA2C6BEC40008A2C87 /* vrevm */,
 				472F61282C73C53900E8A79F /* Tests */,
 				1390201F2C6BF859005F6059 /* Frameworks */,
+				C0D231022F8F053D00333E83 /* CLAUDE.md */,
 				135A99882C6BEBC6006F3F3E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -814,8 +995,11 @@
 				472F61352C73C5BB00E8A79F /* TransparencyLogCmd */,
 				13DB472C2C6BEC06008A2C87 /* CLI.swift */,
 				13DB47092C6BEC06008A2C87 /* CryptexCreateCmd.swift */,
+				C0B8FABD2F93DFFE009BD0B2 /* HTTPServerCmd.swift */,
 				13DB47242C6BEC06008A2C87 /* LicenseCmd.swift */,
 				C0AED5E62D976942000AA191 /* PCCVREHelper.swift */,
+				E8D7005536F3C3B8E76DD16D /* PCCVREAttestationHelper.swift */,
+				A1C0DE519E1F4A2B8C3D0001 /* HelperCodeSign.swift */,
 			);
 			path = CLI;
 			sourceTree = "<group>";
@@ -869,9 +1053,9 @@
 				B95F6C4F2CA23B7C00C63B32 /* BuildManifest.swift */,
 				13DB47412C6BEC06008A2C87 /* CryptexHelper.swift */,
 				13DB476B2C6BEC06008A2C87 /* CryptexSpec.swift */,
-				B9A186AE2CFFA57E0019BCEB /* ExecCommand.swift */,
 				B941B42E2CAB1178007CE078 /* IdentityProvider.swift */,
 				13DB47422C6BEC06008A2C87 /* Utils.swift */,
+				BF897533EA9FCEDF13FEDA96 /* ProtoSniff.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -1075,6 +1259,7 @@
 		13DB48142C6BEC4D008A2C87 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				C09ED4322F8EE28300654631 /* Computer */,
 				13DB48122C6BEC4D008A2C87 /* PCC */,
 				13DB48132C6BEC4D008A2C87 /* ArgumentVisibility.swift */,
 				3E7A991C2D48389B00A1C5F4 /* MachO.swift */,
@@ -1094,10 +1279,15 @@
 			isa = PBXGroup;
 			children = (
 				70643A322F3134E8006D8CA9 /* Fixtures */,
+				C09ED42B2F8EE23D00654631 /* Mocks */,
 				70643A302F313487006D8CA9 /* AttestationParseTests.swift */,
+				C09ED4272F8EE23D00654631 /* DarwinInitHelperTests.swift */,
+				C018E155A813025FF833F6D3 /* ReleaseMetadataTests.swift */,
+				996CBD9B2D5EB2140004C11F /* HTTPServerTests.swift */,
+				F2AA00022FA1000200AA0002 /* InstanceCreateTests.swift */,
+				C0F0BB332F93CAA000ACB926 /* InstanceStartTests.swift */,
 				472F612E2C73C55D00E8A79F /* MerkleTreePerformanceTests.swift */,
 				472F612F2C73C55D00E8A79F /* MerkleTreeTests.swift */,
-				996CBD9B2D5EB2140004C11F /* HTTPServerTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -1107,6 +1297,7 @@
 			children = (
 				472F61332C73C5BB00E8A79F /* TransparencyLogCmd.swift */,
 				472F61342C73C5BB00E8A79F /* TransparencyLogAuditCmd.swift */,
+				9FE2C054A4A22B7F61A6B2BC /* TransparencyLogLeavesCmd.swift */,
 				476E901B2C922BDA00E19E47 /* TransparencyLogVerifyInclusionCmd.swift */,
 			);
 			path = TransparencyLogCmd;
@@ -1126,6 +1317,7 @@
 			children = (
 				70643C132F31680D006D8CA9 /* Apple_Intelligence_Report_Luckier.json */,
 				70643C152F317D4F006D8CA9 /* Apple_Intelligence_Report_Luckier_E.json */,
+				70643C172F318000006D8CA9 /* Apple_Intelligence_Report_Luckier_F.json */,
 			);
 			path = Fixtures;
 			sourceTree = "<group>";
@@ -1159,6 +1351,28 @@
 				B9E5020F2D07B5F90031AB0E /* VRE+Ensemble+Status.swift */,
 			);
 			path = "VRE+Ensemble";
+			sourceTree = "<group>";
+		};
+		C09ED42B2F8EE23D00654631 /* Mocks */ = {
+			isa = PBXGroup;
+			children = (
+				C09ED4282F8EE23D00654631 /* MainStub.swift */,
+				C09ED4292F8EE23D00654631 /* TestComputer.swift */,
+				C09ED42A2F8EE23D00654631 /* TestFileSystem.swift */,
+				C0F0BB312F93C66E00ACB926 /* TestProcessRunner.swift */,
+			);
+			path = Mocks;
+			sourceTree = "<group>";
+		};
+		C09ED4322F8EE28300654631 /* Computer */ = {
+			isa = PBXGroup;
+			children = (
+				C09ED4302F8EE28300654631 /* Computer.swift */,
+				C0F0BB272F93C61500ACB926 /* ExecCommand.swift */,
+				C09ED4312F8EE28300654631 /* FileSystem.swift */,
+				C0F0BB2C2F93C63B00ACB926 /* ProcessRunner.swift */,
+			);
+			path = Computer;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -1232,6 +1446,7 @@
 				472F61252C73C53900E8A79F /* Resources */,
 			);
 			buildRules = (
+				F1AA00612F8F006100AA0061 /* PBXBuildRule */,
 			);
 			dependencies = (
 			);
@@ -1277,8 +1492,6 @@
 				Base,
 			);
 			mainGroup = 135A99712C6BEB43006F3F3E;
-			packageReferences = (
-			);
 			productRefGroup = 135A99882C6BEBC6006F3F3E /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -1298,6 +1511,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				70643C162F317D4F006D8CA9 /* Apple_Intelligence_Report_Luckier_E.json in Resources */,
+				70643C182F318000006D8CA9 /* Apple_Intelligence_Report_Luckier_F.json in Resources */,
 				70643C142F31680D006D8CA9 /* Apple_Intelligence_Report_Luckier.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1343,7 +1557,10 @@
 				B95F6C502CA23B8300C63B32 /* BuildManifest.swift in Sources */,
 				472F61362C73C5BB00E8A79F /* TransparencyLogCmd.swift in Sources */,
 				B9E5020B2D07B5380031AB0E /* DarwinInitHelper+ensemble.swift in Sources */,
+				C09ED4372F8EE28300654631 /* FileSystem.swift in Sources */,
+				C09ED4382F8EE28300654631 /* Computer.swift in Sources */,
 				472F61372C73C5BB00E8A79F /* TransparencyLogAuditCmd.swift in Sources */,
+				9FE2C054A4A22B7F61A6B2BD /* TransparencyLogLeavesCmd.swift in Sources */,
 				13DB47872C6BEC06008A2C87 /* TransparencyLog+Head.swift in Sources */,
 				B9DB9D772C8931DF0029A1D7 /* AttestationVerifyCmd.swift in Sources */,
 				B9AA35032CE54D98002C6D9D /* VRE+Instance.swift in Sources */,
@@ -1369,11 +1586,13 @@
 				C0A261B02DD8021400F580F8 /* DarwinInitConfigV1.swift in Sources */,
 				13DB478F2C6BEC06008A2C87 /* Image4PackageCmd.swift in Sources */,
 				991C05D92D66EB8100C16E9C /* VRE+Utilities.swift in Sources */,
+				C0F0BB2A2F93C61500ACB926 /* ExecCommand.swift in Sources */,
 				13DB47902C6BEC06008A2C87 /* ReleaseDownloadCmd.swift in Sources */,
 				B941B42F2CAB117E007CE078 /* IdentityProvider.swift in Sources */,
 				13DB47912C6BEC06008A2C87 /* ReleaseCmd.swift in Sources */,
 				13DB47922C6BEC06008A2C87 /* DarwinInitSetCmd.swift in Sources */,
 				13DB47942C6BEC06008A2C87 /* InstanceStartCmd.swift in Sources */,
+				C0F0BB2E2F93C63B00ACB926 /* ProcessRunner.swift in Sources */,
 				13DB47962C6BEC06008A2C87 /* DarwinInitHelper.swift in Sources */,
 				B9E09DCD2C936FD800FC3EEF /* Image4Manifest.swift in Sources */,
 				13DB47972C6BEC06008A2C87 /* DarwinInitHelper+SSH.swift in Sources */,
@@ -1381,6 +1600,7 @@
 				13DB47992C6BEC06008A2C87 /* InstanceCreateCmd.swift in Sources */,
 				13DB479B2C6BEC06008A2C87 /* AssetHelper.swift in Sources */,
 				13DB479C2C6BEC06008A2C87 /* InstanceDiagnosticCmd.swift in Sources */,
+				C0B8FABE2F93DFFE009BD0B2 /* HTTPServerCmd.swift in Sources */,
 				0D7553402D0C9D1200278FB8 /* EnsembleStartCmd.swift in Sources */,
 				13DB479D2C6BEC06008A2C87 /* CryptexRemoveCmd.swift in Sources */,
 				13DB479E2C6BEC06008A2C87 /* InstanceRemoveCmd.swift in Sources */,
@@ -1410,7 +1630,6 @@
 				B9DB9D792C8932C80029A1D7 /* CloudAttestation.swift in Sources */,
 				13DB47AF2C6BEC06008A2C87 /* DarwinInitCmd.swift in Sources */,
 				13DB47B02C6BEC06008A2C87 /* TransparencyByteBuffer.swift in Sources */,
-				B9A186B02CFFA5820019BCEB /* ExecCommand.swift in Sources */,
 				0D75533E2D0C9D0800278FB8 /* EnsembleRemoveCmd.swift in Sources */,
 				13DB47B12C6BEC06008A2C87 /* CryptexCmd.swift in Sources */,
 				13DB47B22C6BEC06008A2C87 /* DarwinInitHelper+Cryptex.swift in Sources */,
@@ -1420,6 +1639,9 @@
 				13DB47B82C6BEC06008A2C87 /* AT.tls.swift in Sources */,
 				13DB47B92C6BEC06008A2C87 /* SshCmd.swift in Sources */,
 				13DB47BA2C6BEC06008A2C87 /* ATResearcherApi.pb.swift in Sources */,
+				F65283B90E32E0410051046A /* PCCVREAttestationHelper.swift in Sources */,
+				A1C0DE519E1F4A2B8C3D0011 /* HelperCodeSign.swift in Sources */,
+				468B6CD935727137B72D242D /* ProtoSniff.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1457,10 +1679,13 @@
 				13CF3A112C90B3E2003B7C83 /* TransparencyLogCmd.swift in Sources */,
 				C02CDA612CCC59FF00B8074E /* ReleaseDumpCmd.swift in Sources */,
 				13CF3A122C90B3E2003B7C83 /* TransparencyLogAuditCmd.swift in Sources */,
+				9FE2C054A4A22B7F61A6B2BE /* TransparencyLogLeavesCmd.swift in Sources */,
 				B9E5020C2D07B5380031AB0E /* DarwinInitHelper+ensemble.swift in Sources */,
 				13CF3A132C90B3E2003B7C83 /* TransparencyLog+Head.swift in Sources */,
 				13CF3A152C90B3E2003B7C83 /* TransparencyLog.swift in Sources */,
 				B9AA35042CE54D98002C6D9D /* VRE+Instance.swift in Sources */,
+				C09ED4352F8EE28300654631 /* FileSystem.swift in Sources */,
+				C09ED4362F8EE28300654631 /* Computer.swift in Sources */,
 				13CF3A162C90B3E2003B7C83 /* InstanceConfigureCmd.swift in Sources */,
 				B9BB755A2C94C00000539D2C /* AttestationVerifyCmd.swift in Sources */,
 				13CF3A172C90B3E2003B7C83 /* TransparencyLog+Trees.swift in Sources */,
@@ -1487,11 +1712,13 @@
 				C0A261B12DD8021400F580F8 /* DarwinInitConfigV1.swift in Sources */,
 				991C05D82D66EB8100C16E9C /* VRE+Utilities.swift in Sources */,
 				13CF3A282C90B3E2003B7C83 /* DarwinInitHelper.swift in Sources */,
+				C0F0BB282F93C61500ACB926 /* ExecCommand.swift in Sources */,
 				13CF3A292C90B3E2003B7C83 /* DarwinInitHelper+SSH.swift in Sources */,
 				13CF3A2A2C90B3E2003B7C83 /* DarwinInitDumpCmd.swift in Sources */,
 				13CF3A2B2C90B3E2003B7C83 /* InstanceCreateCmd.swift in Sources */,
 				13CF3A2C2C90B3E2003B7C83 /* AssetHelper.swift in Sources */,
 				13CF3A2D2C90B3E2003B7C83 /* InstanceDiagnosticCmd.swift in Sources */,
+				C0F0BB2F2F93C63B00ACB926 /* ProcessRunner.swift in Sources */,
 				13CF3A2E2C90B3E2003B7C83 /* CryptexRemoveCmd.swift in Sources */,
 				13CF3A2F2C90B3E2003B7C83 /* InstanceRemoveCmd.swift in Sources */,
 				B90901E12CA357B800BFC48A /* Digest.swift in Sources */,
@@ -1499,6 +1726,7 @@
 				0D7553412D0C9D1200278FB8 /* EnsembleStartCmd.swift in Sources */,
 				B9BB75772C95075300539D2C /* FileHandle.swift in Sources */,
 				B9BB75582C94BFD300539D2C /* AttestationCmd.swift in Sources */,
+				C0B8FABF2F93DFFE009BD0B2 /* HTTPServerCmd.swift in Sources */,
 				B941B43F2CAB1453007CE078 /* SecCertificate.swift in Sources */,
 				13CF3A342C90B3E2003B7C83 /* String.swift in Sources */,
 				13CF3A352C90B3E2003B7C83 /* CryptexAddCmd.swift in Sources */,
@@ -1526,7 +1754,6 @@
 				13CF3A412C90B3E2003B7C83 /* TransparencyByteBuffer.swift in Sources */,
 				13CF3A422C90B3E2003B7C83 /* CryptexCmd.swift in Sources */,
 				13CF3A432C90B3E2003B7C83 /* DarwinInitHelper+Cryptex.swift in Sources */,
-				B9A186AF2CFFA5820019BCEB /* ExecCommand.swift in Sources */,
 				0D75533D2D0C9D0800278FB8 /* EnsembleRemoveCmd.swift in Sources */,
 				13CF3A442C90B3E2003B7C83 /* AuditorApi.pb.swift in Sources */,
 				C0AED5E92D976D58000AA191 /* InstanceInvokeCmd.swift in Sources */,
@@ -1538,6 +1765,9 @@
 				13CF3A492C90B3E2003B7C83 /* SshCmd.swift in Sources */,
 				13CF3A4A2C90B3E2003B7C83 /* ATResearcherApi.pb.swift in Sources */,
 				3EA2F75F2D484AFB00958325 /* MachO.swift in Sources */,
+				52E012074EB8A571254314C3 /* PCCVREAttestationHelper.swift in Sources */,
+				A1C0DE519E1F4A2B8C3D0012 /* HelperCodeSign.swift in Sources */,
+				E253F5BB3FFB3E5CD86FCC1B /* ProtoSniff.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1562,10 +1792,14 @@
 				13DB481B2C6BEC4D008A2C87 /* PCCVRELicenseAgreementConstants.swift in Sources */,
 				13DB47F22C6BEC40008A2C87 /* VM-modify.swift in Sources */,
 				13DB47F32C6BEC40008A2C87 /* CLI.swift in Sources */,
+				C0F0BB302F93C63B00ACB926 /* ProcessRunner.swift in Sources */,
 				13DB47F42C6BEC40008A2C87 /* VM+NVRAM.swift in Sources */,
 				13DB47F52C6BEC40008A2C87 /* CLI+CreateCmd.swift in Sources */,
 				13DB47F62C6BEC40008A2C87 /* VM.swift in Sources */,
+				C09ED4332F8EE28300654631 /* FileSystem.swift in Sources */,
+				C09ED4342F8EE28300654631 /* Computer.swift in Sources */,
 				13DB47F72C6BEC40008A2C87 /* DHCPLeases.swift in Sources */,
+				C0F0BB292F93C61500ACB926 /* ExecCommand.swift in Sources */,
 				13DB47F82C6BEC40008A2C87 /* VM-run.swift in Sources */,
 				13DB47F92C6BEC40008A2C87 /* VMBundle-create.swift in Sources */,
 				13DB47FA2C6BEC40008A2C87 /* String.swift in Sources */,
@@ -1591,6 +1825,9 @@
 				996CBD9C2D5EB2140004C11F /* HTTPServerTests.swift in Sources */,
 				991C05DA2D66EBAB00C16E9C /* VRE.swift in Sources */,
 				472F61322C73C57300E8A79F /* MerkleTree.swift in Sources */,
+				C04A1F252F8EEBE90054F92C /* DarwinInitHelper.swift in Sources */,
+				C09ED4392F8EE28300654631 /* FileSystem.swift in Sources */,
+				C09ED43A2F8EE28300654631 /* Computer.swift in Sources */,
 				70643A362F3147FD006D8CA9 /* CloudAttestation.swift in Sources */,
 				991C05D62D66EB5D00C16E9C /* Utils.swift in Sources */,
 				991C05DE2D66EC8800C16E9C /* Host.swift in Sources */,
@@ -1598,8 +1835,122 @@
 				70643A372F31484E006D8CA9 /* Digest.swift in Sources */,
 				472F61302C73C55D00E8A79F /* MerkleTreePerformanceTests.swift in Sources */,
 				991C05E22D66ED4100C16E9C /* AppName.swift in Sources */,
+				C04A1F242F8EEB170054F92C /* DarwinInitHelper+Cryptex.swift in Sources */,
 				70643A312F31349C006D8CA9 /* AttestationParseTests.swift in Sources */,
+				C09ED42C2F8EE23D00654631 /* MainStub.swift in Sources */,
+				C04A1F232F8EEB0F0054F92C /* PCCVREHelper.swift in Sources */,
+				C09ED42D2F8EE23D00654631 /* DarwinInitHelperTests.swift in Sources */,
+				C018E155A813025FF833F6D4 /* ReleaseMetadataTests.swift in Sources */,
+				F2AA00012FA1000100AA0001 /* InstanceCreateTests.swift in Sources */,
+				C09ED42E2F8EE23D00654631 /* TestFileSystem.swift in Sources */,
+				C04A1F222F8EEB050054F92C /* InstanceCreateCmd.swift in Sources */,
+				C09ED42F2F8EE23D00654631 /* TestComputer.swift in Sources */,
 				472F61312C73C55D00E8A79F /* MerkleTreeTests.swift in Sources */,
+				F1AA00012F8F000100AA0001 /* CryptexHelper.swift in Sources */,
+				F1AA00032F8F000300AA0003 /* CLI.swift in Sources */,
+				F1AA00042F8F000400AA0004 /* DarwinInitConfigV1.swift in Sources */,
+				F1AA00052F8F000500AA0005 /* CryptexSpec.swift in Sources */,
+				F1AA00062F8F000600AA0006 /* AssetHelper.swift in Sources */,
+				F1AA00072F8F000700AA0007 /* SWReleases+Release+Metadata.swift in Sources */,
+				F1AA00082F8F000800AA0008 /* DarwinInitHelper+ensemble.swift in Sources */,
+				F1AA00092F8F000900AA0009 /* VRE+Utilities.swift in Sources */,
+				F1AA000A2F8F000A00AA000A /* FileManager.swift in Sources */,
+				F1AA000B2F8F000B00AA000B /* VRE+Instance.swift in Sources */,
+				F1AA000C2F8F000C00AA000C /* VRE+Ensemble.swift in Sources */,
+				F1AA000D2F8F000D00AA000D /* VRE+Ensemble+Config.swift in Sources */,
+				F1AA000E2F8F000E00AA000E /* VRE+Ensemble+Status.swift in Sources */,
+				F1AA000F2F8F000F00AA000F /* VRE+VM.swift in Sources */,
+				F1AA00102F8F001000AA0010 /* String.swift in Sources */,
+				F1AA00112F8F001100AA0011 /* Data.swift in Sources */,
+				F1AA00122F8F001200AA0012 /* URL.swift in Sources */,
+				F1AA00132F8F001300AA0013 /* SWReleases.swift in Sources */,
+				F1AA00142F8F001400AA0014 /* SWReleases+Release.swift in Sources */,
+				F1AA00152F8F001500AA0015 /* DarwinInitHelper+SSH.swift in Sources */,
+				F1AA00162F8F001600AA0016 /* BuildManifest.swift in Sources */,
+				F1AA00172F8F001700AA0017 /* VRE+Instance+Config+Assets.swift in Sources */,
+				F1AA00182F8F001800AA0018 /* Sequence.swift in Sources */,
+				F1AA00192F8F001900AA0019 /* AttestationCmd.swift in Sources */,
+				F1AA001A2F8F001A00AA001A /* AttestationParseCmd.swift in Sources */,
+				C0B8FAC02F93DFFE009BD0B2 /* HTTPServerCmd.swift in Sources */,
+				F1AA001B2F8F001B00AA001B /* AttestationVerifyCmd.swift in Sources */,
+				F1AA001C2F8F001C00AA001C /* AttestationCanonicalizeCmd.swift in Sources */,
+				F1AA001D2F8F001D00AA001D /* CryptexCmd.swift in Sources */,
+				F1AA001E2F8F001E00AA001E /* CryptexAddCmd.swift in Sources */,
+				F1AA001F2F8F001F00AA001F /* CryptexListCmd.swift in Sources */,
+				F1AA00202F8F002000AA0020 /* CryptexRemoveCmd.swift in Sources */,
+				F1AA00212F8F002100AA0021 /* CryptexCreateCmd.swift in Sources */,
+				F1AA00222F8F002200AA0022 /* DarwinInitCmd.swift in Sources */,
+				F1AA00232F8F002300AA0023 /* DarwinInitSetCmd.swift in Sources */,
+				F1AA00242F8F002400AA0024 /* DarwinInitDumpCmd.swift in Sources */,
+				F1AA00252F8F002500AA0025 /* InstanceCmd.swift in Sources */,
+				F1AA00262F8F002600AA0026 /* InstanceConfigureCmd.swift in Sources */,
+				F1AA00272F8F002700AA0027 /* InstanceStartCmd.swift in Sources */,
+				F1AA00282F8F002800AA0028 /* InstanceListCmd.swift in Sources */,
+				F1AA00292F8F002900AA0029 /* InstanceRemoveCmd.swift in Sources */,
+				F1AA002A2F8F002A00AA002A /* InstanceDiagnosticCmd.swift in Sources */,
+				F1AA002B2F8F002B00AA002B /* InstanceInferenceRequestCmd.swift in Sources */,
+				F1AA002C2F8F002C00AA002C /* InstanceInvokeCmd.swift in Sources */,
+				F1AA002D2F8F002D00AA002D /* Image4Cmd.swift in Sources */,
+				F1AA002E2F8F002E00AA002E /* Image4ExtractCmd.swift in Sources */,
+				F1AA002F2F8F002F00AA002F /* Image4PackageCmd.swift in Sources */,
+				C0F0BB322F93C66E00ACB926 /* TestProcessRunner.swift in Sources */,
+				F1AA00302F8F003000AA0030 /* Image4Manifest.swift in Sources */,
+				F1AA00312F8F003100AA0031 /* ReleaseCmd.swift in Sources */,
+				F1AA00322F8F003200AA0032 /* ReleaseDownloadCmd.swift in Sources */,
+				F1AA00332F8F003300AA0033 /* ReleaseListCmd.swift in Sources */,
+				F1AA00342F8F003400AA0034 /* ReleaseDumpCmd.swift in Sources */,
+				F1AA00352F8F003500AA0035 /* ReleaseVerifyCmd.swift in Sources */,
+				F1AA00362F8F003600AA0036 /* LicenseCmd.swift in Sources */,
+				F1AA00372F8F003700AA0037 /* SshCmd.swift in Sources */,
+				F1AA00382F8F003800AA0038 /* EnsembleCmd.swift in Sources */,
+				F1AA00392F8F003900AA0039 /* EnsembleCreateCmd.swift in Sources */,
+				F1AA003A2F8F003A00AA003A /* EnsembleListCmd.swift in Sources */,
+				F1AA003B2F8F003B00AA003B /* EnsembleRemoveCmd.swift in Sources */,
+				F1AA003C2F8F003C00AA003C /* EnsembleStartCmd.swift in Sources */,
+				F1AA003D2F8F003D00AA003D /* EnsembleInferenceRequestCmd.swift in Sources */,
+				C0F0BB342F93CAA000ACB926 /* InstanceStartTests.swift in Sources */,
+				F1AA003E2F8F003E00AA003E /* TransparencyLogCmd.swift in Sources */,
+				F1AA003F2F8F003F00AA003F /* TransparencyLogAuditCmd.swift in Sources */,
+				F1AA00682F8F006800AA0068 /* TransparencyLogLeavesCmd.swift in Sources */,
+				F1AA00402F8F004000AA0040 /* TransparencyLogVerifyInclusionCmd.swift in Sources */,
+				F1AA00412F8F004100AA0041 /* TransparencyLog.swift in Sources */,
+				F1AA00422F8F004200AA0042 /* TransparencyLog+Head.swift in Sources */,
+				F1AA00432F8F004300AA0043 /* TransparencyLog+Trees.swift in Sources */,
+				F1AA00442F8F004400AA0044 /* TransparencyLog+Leaves.swift in Sources */,
+				C0F0BB2D2F93C63B00ACB926 /* ProcessRunner.swift in Sources */,
+				F1AA00452F8F004500AA0045 /* TransparencyLog+Leaf.swift in Sources */,
+				F1AA00462F8F004600AA0046 /* TransparencyLog+PATLeaf.swift in Sources */,
+				F1AA00472F8F004700AA0047 /* TransparencyLog+TLTLeaf.swift in Sources */,
+				F1AA00482F8F004800AA0048 /* TransparencyLog+ATLeaf.swift in Sources */,
+				F1AA00492F8F004900AA0049 /* TransparencyLog+KTInitBag.swift in Sources */,
+				F1AA004A2F8F004A00AA004A /* TransparencyLog+PublicKeys.swift in Sources */,
+				F1AA004B2F8F004B00AA004B /* TransparencyLog+SignedObject.swift in Sources */,
+				F1AA004C2F8F004C00AA004C /* TransparencyByteBuffer.swift in Sources */,
+				F1AA004D2F8F004D00AA004D /* Auditor.swift in Sources */,
+				F1AA004E2F8F004E00AA004E /* Auditor+Delegate.swift in Sources */,
+				F1AA004F2F8F004F00AA004F /* Transparency.pb.swift in Sources */,
+				F1AA00502F8F005000AA0050 /* ATServiceApi.pb.swift in Sources */,
+				F1AA00512F8F005100AA0051 /* ATResearcherApi.pb.swift in Sources */,
+				F1AA00522F8F005200AA0052 /* AuditorApi.pb.swift in Sources */,
+				F1AA00532F8F005300AA0053 /* KtClientApi.pb.swift in Sources */,
+				F1AA00542F8F005400AA0054 /* AT.tls.swift in Sources */,
+				F1AA00552F8F005500AA0055 /* MachO.swift in Sources */,
+				F1AA00562F8F005600AA0056 /* FileHandle.swift in Sources */,
+				F1AA00572F8F005700AA0057 /* SecCertificate.swift in Sources */,
+				F1AA00582F8F005800AA0058 /* SecIdentity.swift in Sources */,
+				F1AA00592F8F005900AA0059 /* SecTrust.swift in Sources */,
+				F1AA005A2F8F005A00AA005A /* IdentityProvider.swift in Sources */,
+				C0F0BB2B2F93C61500ACB926 /* ExecCommand.swift in Sources */,
+				F1AA005B2F8F005B00AA005B /* PCCVREUtils.swift in Sources */,
+				F1AA005C2F8F005C00AA005C /* ArgumentVisibility.swift in Sources */,
+				F1AA005D2F8F005D00AA005D /* PCCVRELicenseAgreementManager.swift in Sources */,
+				F1AA005E2F8F005E00AA005E /* PCCVRELicenseAgreementConstants.swift in Sources */,
+				F1AA005F2F8F005F00AA005F /* WorkloadCreateCmd.swift in Sources */,
+				F1AA00602F8F006000AA0060 /* WorkloadCmd.swift in Sources */,
+				F1AA00622F8F006200AA0062 /* License.rtf in Sources */,
+				53DCAB7150C8B4F7E1A06974 /* PCCVREAttestationHelper.swift in Sources */,
+				A1C0DE519E1F4A2B8C3D0013 /* HelperCodeSign.swift in Sources */,
+				35FF65BAB6CFE1FC4533E186 /* ProtoSniff.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1757,8 +2108,9 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = $PROJECT_DIR/Shared/;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -1768,8 +2120,14 @@
 				SDKROOT = macosx.internal;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_INCLUDE_PATHS = "$(SDKROOT)/usr/local/lib/swift";
+				SWIFT_OBJC_BRIDGING_HEADER = $PROJECT_DIR/pccvre/BridgingHeader.h;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SDKROOT)$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks",
+				);
 			};
 			name = Debug;
 		};
@@ -1822,8 +2180,9 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = $PROJECT_DIR/Shared/;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -1832,7 +2191,13 @@
 				SDKROOT = macosx.internal;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_INCLUDE_PATHS = "$(SDKROOT)/usr/local/lib/swift";
+				SWIFT_OBJC_BRIDGING_HEADER = $PROJECT_DIR/pccvre/BridgingHeader.h;
 				SWIFT_VERSION = 5.0;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SDKROOT)$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks",
+				);
 			};
 			name = Release;
 		};

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -49,16 +49,39 @@ extension URL {
             let session = URLSession.shared
             var request = URLRequest(url: self)
             request.httpMethod = "HEAD"
+            // Authenticated GCS buckets 401/403 anonymous HEADs; attach the same bearer
+            //  token AssetHelper.downloadHTTP uses so `release list` reports these
+            //  assets as downloadable (rdar://184003623).
+            let isGCS = host?.hasSuffix("googleapis.com") == true
+            if isGCS, let token = CLIDefaults.gcsAccessToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
 
             guard let (_, response) = try? await session.data(for: request) else {
                 return false
             }
 
             if let response = response as? HTTPURLResponse {
+                // One-shot stderr hint when GCS actually rejects an unauthenticated
+                //  probe, so `release list` explains why GCS-hosted releases show as
+                //  unavailable instead of failing silently.
+                if isGCS, [401, 403].contains(response.statusCode),
+                   CLIDefaults.gcsAccessToken == nil, !Self.gcsAuthHintPrinted
+                {
+                    Self.gcsAuthHintPrinted = true
+                    fputs("""
+                        Note: Google Cloud Storage returned \(response.statusCode) for \
+                        an availability check; set a token to authenticate: \
+                        export CLOUDSDK_AUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)
+
+                        """, stderr)
+                }
                 return response.statusCode == 200
             }
 
             return false
         }
     }
+
+    private static var gcsAuthHintPrinted = false
 }

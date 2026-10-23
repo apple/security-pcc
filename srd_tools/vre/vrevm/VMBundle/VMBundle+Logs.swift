@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -51,14 +51,14 @@ extension VMBundle {
                 return
             }
 
-            try FileManager.default.createDirectory(at: self.folder, withIntermediateDirectories: true)
+            try Globals.computer.fileSystem.createDirectory(at: self.folder, withIntermediateDirectories: true)
         }
 
         // file creates a new file as name under VMBundle.Logs.folder/ and returns the pathname;
         //   the pathname would typically passed into a logging mechanism to receive content
         func file(name: String) throws -> URL {
             let logFile = self.folder.appendingPathComponent(name)
-            guard FileManager.default.createFile(atPath: logFile.path, contents: nil) else {
+            guard Globals.computer.fileSystem.createFile(atPath: logFile.path, contents: nil) else {
                 throw VMBundleError("create log file (\(logFile))")
             }
 

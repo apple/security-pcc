@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -38,6 +38,7 @@ package struct TrustedRequestLogEntry: Sendable, Codable {
     package let featureIdentifier: String?
     package let sessionIdentifier: UUID?
     package let qos: String
+    package let serviceClass: String?
     package let workloadName: String
     package let workloadParameters: [String: String]
     package let state: String
@@ -46,6 +47,7 @@ package struct TrustedRequestLogEntry: Sendable, Codable {
     package let responseState: String
     package let responseCode: Int?
     package let ropesVersion: String?
+    package let cancellationReason: String?
     package let endpoints: [TrustedRequestEndpointMetadata]
 
     package init(
@@ -58,6 +60,7 @@ package struct TrustedRequestLogEntry: Sendable, Codable {
         featureIdentifier: String?,
         sessionIdentifier: UUID?,
         qos: String,
+        serviceClass: String?,
         workloadName: String,
         workloadParameters: [String: String],
         state: String,
@@ -66,6 +69,7 @@ package struct TrustedRequestLogEntry: Sendable, Codable {
         responseState: String,
         responseCode: Int?,
         ropesVersion: String?,
+        cancellationReason: String?,
         endpoints: [TrustedRequestEndpointMetadata],
     ) {
         self.type = type
@@ -77,6 +81,7 @@ package struct TrustedRequestLogEntry: Sendable, Codable {
         self.featureIdentifier = featureIdentifier
         self.sessionIdentifier = sessionIdentifier
         self.qos = qos
+        self.serviceClass = serviceClass
         self.workloadName = workloadName
         self.workloadParameters = workloadParameters
         self.state = state
@@ -85,6 +90,7 @@ package struct TrustedRequestLogEntry: Sendable, Codable {
         self.responseState = responseState
         self.responseCode = responseCode
         self.ropesVersion = ropesVersion
+        self.cancellationReason = cancellationReason
         self.endpoints = endpoints
     }
 }

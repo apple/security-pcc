@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -93,6 +93,8 @@ public struct DarwinInitPolicy: AttestationPolicy {
             throw error
         }
 
+        context[Self.appIdentifiersKey] = parsed.appIdentifiers
+
         if self.restrictedSecurityPolicies.contains(parsed.securityPolicy) {
             Self.logger.error("Darwin-Init security policy \(parsed.securityPolicy.rawValue, privacy: .public) is restricted")
             throw Error.restricted(securityPolicy: parsed.securityPolicy, restricted: self.restrictedSecurityPolicies)
@@ -123,12 +125,22 @@ extension DarwinInitPolicy {
     static var validatedDarwinInitKey: AttestationPolicyContext.Key {
         .init(domain: Self.self, key: "validatedDarwinInit")
     }
+
+    @usableFromInline
+    static var appIdentifiersKey: AttestationPolicyContext.Key {
+        .init(domain: Self.self, key: "appIdentifiers")
+    }
 }
 
 extension AttestationPolicyContext {
     @usableFromInline
     var validatedDarwinInit: DarwinInit? {
         self[DarwinInitPolicy.validatedDarwinInitKey] as? DarwinInit
+    }
+
+    @usableFromInline
+    var appIdentifiers: [String]? {
+        self[DarwinInitPolicy.appIdentifiersKey] as? [String]
     }
 }
 

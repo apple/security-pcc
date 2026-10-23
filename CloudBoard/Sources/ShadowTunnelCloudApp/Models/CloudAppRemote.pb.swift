@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,11 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import InternalSwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -63,11 +67,11 @@ struct Com_Apple_Cloudboard_Shadowtunnel_V1_WarmupResponse: Sendable {
 
   /// Optional error message if warmup failed
   var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  var hasErrorMessage: Bool {return self._errorMessage != nil}
+  var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -202,11 +206,11 @@ struct Com_Apple_Cloudboard_Shadowtunnel_V1_TeardownResponse: Sendable {
 
   /// Optional error message if teardown failed
   var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  var hasErrorMessage: Bool {return self._errorMessage != nil}
+  var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -226,11 +230,11 @@ struct Com_Apple_Cloudboard_Shadowtunnel_V1_CloudAppEnvironmentMetadata: Sendabl
 
   /// Client metadata (bundle ID, version, etc.)
   var plaintextMetadata: Com_Apple_Cloudboard_Shadowtunnel_V1_PlaintextMetadata {
-    get {return _plaintextMetadata ?? Com_Apple_Cloudboard_Shadowtunnel_V1_PlaintextMetadata()}
+    get {_plaintextMetadata ?? Com_Apple_Cloudboard_Shadowtunnel_V1_PlaintextMetadata()}
     set {_plaintextMetadata = newValue}
   }
   /// Returns true if `plaintextMetadata` has been explicitly set.
-  var hasPlaintextMetadata: Bool {return self._plaintextMetadata != nil}
+  var hasPlaintextMetadata: Bool {self._plaintextMetadata != nil}
   /// Clears the value of `plaintextMetadata`. Subsequent reads from it will return its default value.
   mutating func clearPlaintextMetadata() {self._plaintextMetadata = nil}
 
@@ -239,21 +243,21 @@ struct Com_Apple_Cloudboard_Shadowtunnel_V1_CloudAppEnvironmentMetadata: Sendabl
 
   /// Trace context with UInt64 spanID
   var traceContext: Com_Apple_Cloudboard_Shadowtunnel_V1_TraceContext {
-    get {return _traceContext ?? Com_Apple_Cloudboard_Shadowtunnel_V1_TraceContext()}
+    get {_traceContext ?? Com_Apple_Cloudboard_Shadowtunnel_V1_TraceContext()}
     set {_traceContext = newValue}
   }
   /// Returns true if `traceContext` has been explicitly set.
-  var hasTraceContext: Bool {return self._traceContext != nil}
+  var hasTraceContext: Bool {self._traceContext != nil}
   /// Clears the value of `traceContext`. Subsequent reads from it will return its default value.
   mutating func clearTraceContext() {self._traceContext = nil}
 
   /// Ensemble instance identifier
   var ensembleInstanceID: Com_Apple_Cloudboard_Shadowtunnel_V1_EnsembleInstanceId {
-    get {return _ensembleInstanceID ?? Com_Apple_Cloudboard_Shadowtunnel_V1_EnsembleInstanceId()}
+    get {_ensembleInstanceID ?? Com_Apple_Cloudboard_Shadowtunnel_V1_EnsembleInstanceId()}
     set {_ensembleInstanceID = newValue}
   }
   /// Returns true if `ensembleInstanceID` has been explicitly set.
-  var hasEnsembleInstanceID: Bool {return self._ensembleInstanceID != nil}
+  var hasEnsembleInstanceID: Bool {self._ensembleInstanceID != nil}
   /// Clears the value of `ensembleInstanceID`. Subsequent reads from it will return its default value.
   mutating func clearEnsembleInstanceID() {self._ensembleInstanceID = nil}
 
@@ -323,7 +327,8 @@ struct Com_Apple_Cloudboard_Shadowtunnel_V1_WorkloadParameterValues: Sendable {
   init() {}
 }
 
-/// TraceContext with UInt64 representation of spanID
+/// This is mapped from UpdatedTraceContext with UInt64 representation of spanID
+/// it doesn't need to be called UpdatedTraceContext as no backward compatibility issue exists here
 struct Com_Apple_Cloudboard_Shadowtunnel_V1_TraceContext: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -433,11 +438,7 @@ fileprivate let _protobuf_package = "com.apple.cloudboard.shadowtunnel.v1"
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_WarmupRequest: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".WarmupRequest"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "cloud_app_name"),
-    2: .standard(proto: "launchd_job_instance_uuid")
-  ]
-
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}cloud_app_name\0\u{3}launchd_job_instance_uuid\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -472,11 +473,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_WarmupRequest: InternalSwiftProto
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_WarmupResponse: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".WarmupResponse"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "success"),
-    2: .standard(proto: "error_message")
-  ]
-
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}success\0\u{3}error_message\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -515,11 +512,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_WarmupResponse: InternalSwiftProt
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_RunRequest: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".RunRequest"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "environment"),
-    2: .standard(proto: "input_chunk"),
-    3: .standard(proto: "input_end")
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}environment\0\u{3}input_chunk\0\u{3}input_end\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -603,11 +596,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_RunRequest: InternalSwiftProtobuf
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_RunResponse: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".RunResponse"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "output_chunk"),
-    2: .standard(proto: "output_end"),
-    3: .standard(proto: "error")
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}output_chunk\0\u{3}output_end\0\u{1}error\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -710,10 +699,8 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_TeardownRequest: InternalSwiftPro
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_TeardownResponse: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".TeardownResponse"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "success"),
-    2: .standard(proto: "error_message"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}success\0\u{3}error_message\0")
+
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
@@ -751,16 +738,8 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_TeardownResponse: InternalSwiftPr
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_CloudAppEnvironmentMetadata: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CloudAppEnvironmentMetadata"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "plaintext_metadata"),
-    2: .standard(proto: "request_bypassed"),
-    3: .standard(proto: "updated_trace_context"),
-    4: .standard(proto: "ensemble_instance_id"),
-    5: .standard(proto: "rack_id"),
-    6: .standard(proto: "launchd_job_instance_uuid"),
-    7: .standard(proto: "support_apps")
-  ]
-    
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}plaintext_metadata\0\u{3}request_bypassed\0\u{3}trace_context\0\u{3}ensemble_instance_id\0\u{3}rack_id\0\u{3}launchd_job_instance_uuid\0\u{3}support_apps\0")
+
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
@@ -823,16 +802,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_CloudAppEnvironmentMetadata: Inte
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_PlaintextMetadata: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlaintextMetadata"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "bundle_id"),
-    2: .standard(proto: "bundle_version"),
-    3: .standard(proto: "feature_id"),
-    4: .standard(proto: "client_info"),
-    5: .standard(proto: "workload_type"),
-    6: .standard(proto: "workload_parameters"),
-    7: .standard(proto: "request_id"),
-    8: .standard(proto: "automated_device_group"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}bundle_id\0\u{3}bundle_version\0\u{3}feature_id\0\u{3}client_info\0\u{3}workload_type\0\u{3}workload_parameters\0\u{3}request_id\0\u{3}automated_device_group\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -897,9 +867,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_PlaintextMetadata: InternalSwiftP
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_WorkloadParameterValues: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".WorkloadParameterValues"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "values")
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}values\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -929,12 +897,8 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_WorkloadParameterValues: Internal
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_TraceContext: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".TraceContext"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "trace_id"),
-    2: .standard(proto: "span_id")
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}trace_id\0\u{3}span_id\0")
 
-    
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
@@ -968,11 +932,8 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_TraceContext: InternalSwiftProtob
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_EnsembleInstanceId: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".EnsembleInstanceId"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "ensemble_id"),
-    2: .standard(proto: "boot_id")
-  ]
-    
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}ensemble_id\0\u{3}boot_id\0")
+
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
@@ -1006,9 +967,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_EnsembleInstanceId: InternalSwift
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_InputDataChunk: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".InputDataChunk"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "data")
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}data\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1057,9 +1016,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_InputStreamEnd: InternalSwiftProt
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_OutputDataChunk: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".OutputDataChunk"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "data")
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}data\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1108,11 +1065,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_V1_OutputStreamEnd: InternalSwiftPro
 
 extension Com_Apple_Cloudboard_Shadowtunnel_V1_CloudAppError: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CloudAppError"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "error_code"),
-    2: .standard(proto: "error_message"),
-    3: .standard(proto: "retryable")
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}error_code\0\u{3}error_message\0\u{1}retryable\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {

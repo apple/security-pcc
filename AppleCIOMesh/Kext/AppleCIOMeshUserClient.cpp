@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,6 +24,7 @@
 #include <IOKit/IOKitKeys.h>
 
 #include <AssertMacros.h>
+#include <IOKit/IOReturn.h>
 #define LOG_PREFIX "AppleCIOMeshUserClient"
 #include "Util/Log.h"
 
@@ -1374,6 +1375,7 @@ AppleCIOMeshUserClient::trapReceiveNext(uintptr_t bufferId_, uintptr_t outReceiv
 				return kIOReturnVMError;
 			}
 
+			sm->release();
 			return kIOReturnSuccess;
 		}
 
@@ -1609,6 +1611,12 @@ AppleCIOMeshUserClient::trapReceiveBatchForNode(uintptr_t bufferId_,
                                                 uintptr_t outReceivedTagsPtr_)
 {
 	IOReturn ret = kIOReturnSuccess;
+
+    if (nodeId_ >= kMaxCIOMeshNodes) {
+		LOG("Invalid nodeId_: %u\n", nodeId_);
+        return kIOReturnBadArgument;
+    }
+
 	auto sm      = _provider->getRetainSharedMemory((MUCI::BufferId)bufferId_);
 	if (!sm) {
 		LOG("Invalid bufferId_: %lld\n", (MUCI::BufferId)bufferId_);
@@ -1653,12 +1661,14 @@ AppleCIOMeshUserClient::trapReceiveBatchForNode(uintptr_t bufferId_,
 
 		if (_provider->isShuttingDown()) {
 			LOG("system is shutting down.  go away");
-			return kIOReturnError;
+			ret = kIOReturnError;
+			goto exit;
 		}
 
 		if (sm->hasBeenInterrupted()) {
 			LOG("shared memory %lld has been interrupted.\n", sm->getId());
-			return kIOReturnError;
+			ret = kIOReturnError;
+			goto exit;
 		}
 
 		idx = nodeMap->assignedIdx[nodeMapIdx];

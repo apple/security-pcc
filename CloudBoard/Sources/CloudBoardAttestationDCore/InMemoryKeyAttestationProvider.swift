@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -14,6 +14,7 @@
 
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardMetrics
 
 // just for the fake attestation support
@@ -26,24 +27,32 @@ import os
 /// Provides in-memory (non-SEP backed) key with a fake attestation bundle (an OHTTP key configuration containing the
 /// node's public key)
 struct InMemoryKeyAttestationProvider: AttestationProviderProtocol {
-    // In _theory_ this could change (as it's calculated for each attestation produced) but in
-    // reality it should be tied to the OS version, config  and installed cryptexes, which should not change
-    // after startup so just make it fixed
+    /// In _theory_ this could change (as it's calculated for each attestation produced) but in
+    /// reality it should be tied to the OS version, config and installed cryptexes, which should not change
+    /// after startup so just make it fixed
     let releaseDigest: String
-
-    let ensembleID: String?
-    let bootID: String?
-    let rackID: String?
+    /// This may not actually be tied to the real hardware, but it will be treated as such
+    let hardwareID: String
+    let ensembleID: String
+    let bootID: String
+    let rackID: RackId
 
     let attestationBundleCache: AttestationBundleCache = NoopAttestationBundleCache()
 
     /// Make a provider that knows the releaseSet of itself, and optionaly
     /// will create attestations which indicate it transitively trusts itself
-    init(releaseDigest: String, ensembleID: String? = nil, bootID: String? = nil, rackID: String? = nil) {
+    init(
+        releaseDigest: String,
+        ensembleID: String,
+        bootID: String,
+        rackID: RackId,
+        hardwareID: String = UUID().uuidString
+    ) {
         self.releaseDigest = releaseDigest
         self.ensembleID = ensembleID
         self.bootID = bootID
         self.rackID = rackID
+        self.hardwareID = hardwareID
     }
 
     func restoreKeysFromDisk(
@@ -66,35 +75,27 @@ struct InMemoryKeyAttestationProvider: AttestationProviderProtocol {
         expiration: Date,
         releaseDigest: String,
         proxiedReleaseDigests: [String]?,
-        computeNodeAppData: [String: Data]
-    ) throws -> Data {
+        computeNodeAppData: [String: Data],
+        hardwareID: String
+    ) throws -> RawAttestationBundle {
         // For development it's simpler to just define this by fiat
         let kem = HPKE.KEM.Curve25519_HKDF_SHA256
-        // If there is some requirement to talk to older clients that only accept the NameKeyConfigurationEncoding
-        // the simply use this instead
-        #if USE_LEGACY_FAKE_ATTESTATION_FORMAT
-        // Note that this format does not encode the key's expiry, or allow releaseSets.
-        let rawBundle = try TestOnlyAttestationBundle.encodeAsNameKeyConfigurationEncoding(
-            for: privateKey.publicKey, kem: kem
-        )
-        #else
         let appData: TestOnlyAttestationInfo.AppData = if let proxiedReleaseDigests, proxiedReleaseDigests.count > 0 {
             .proxy(.init(transitivelyTrustedReleaseDigests: proxiedReleaseDigests))
         } else {
             .compute(.init(metadata: computeNodeAppData))
         }
-        let rawBundle = try TestOnlyAttestationBundle.encodeAsNewFormat(
+        return try TestOnlyAttestationBundle.encodeAsVersion1(
             for: publicKey,
             kem: kem,
             info: TestOnlyAttestationInfo(
                 expiration: expiration,
                 releaseDigest: releaseDigest,
                 appData: appData,
-                computeNodeMetadata: computeNodeAppData
+                computeNodeMetadata: computeNodeAppData,
+                hardwareID: hardwareID
             )
         )
-        #endif
-        return rawBundle
     }
 
     func createAttestedKey(
@@ -111,9 +112,9 @@ struct InMemoryKeyAttestationProvider: AttestationProviderProtocol {
         )
 
         var appData: [String: Data] = [:]
-        appData[ComputeNodeAppDataKeys.rackID] = self.rackID?.data ?? "dummyRackID".data
-        appData[ComputeNodeAppDataKeys.ensembleID] = self.ensembleID?.data ?? "dummyEnsembleID".data
-        appData[ComputeNodeAppDataKeys.bootID] = self.bootID?.data ?? "dummyBootID".data
+        appData[ComputeNodeAppDataKeys.rackID] = self.rackID.rackId.data
+        appData[ComputeNodeAppDataKeys.ensembleID] = self.ensembleID.data
+        appData[ComputeNodeAppDataKeys.bootID] = self.bootID.data
 
         let attestationExpiry = clock.dateNow.advanced(by: attestationLifetime.seconds)
         // We cannot create real attestation bundles for non-SEP keys.
@@ -123,7 +124,8 @@ struct InMemoryKeyAttestationProvider: AttestationProviderProtocol {
             expiration: attestationExpiry,
             releaseDigest: self.releaseDigest,
             proxiedReleaseDigests: proxiedReleaseDigests.map { $0.releaseDigestHexString },
-            computeNodeAppData: appData
+            computeNodeAppData: appData,
+            hardwareID: self.hardwareID
         )
         return InternalAttestedKey(
             key: .direct(privateKey: privateKey.rawRepresentation),

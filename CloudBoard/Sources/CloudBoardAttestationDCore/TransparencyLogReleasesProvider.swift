@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -14,8 +14,12 @@
 
 import CloudBoardCommon
 import CloudBoardLogging
-#if canImport(CloudConfigurationPreferences)
+#if RC_IS_CLOUDOS_ENABLED
+import CloudConfigurationPreferences
+#elseif canImport(CloudConfigurationPreferences)
 @_weakLinked import CloudConfigurationPreferences
+#else
+#warning("CloudConfigurationPreferences not available at compile time")
 #endif
 import os
 

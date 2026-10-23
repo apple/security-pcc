@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -34,7 +34,6 @@ struct AttestationVerificationErrorMetric: CloudTelemetryReportable {
         case clientInfo = "appleclientinfo"
         case featureID = "applefeatureid"
         case bundleID = "applebundleid"
-        case locale = "applelocale"
         case clientRequestId = "clientrequestid"
 
         case isPrefetchedAttestation = "isprefetchedattestation"
@@ -53,7 +52,6 @@ struct AttestationVerificationErrorMetric: CloudTelemetryReportable {
         bundleID: String?,
         environment: String,
         systemInfo: SystemInfo,
-        locale: Locale,
         isPrefetchedAttestation: Bool,
         nodeID: String,
         error: Failure,
@@ -66,7 +64,6 @@ struct AttestationVerificationErrorMetric: CloudTelemetryReportable {
             .eventTime: .int(Int64(eventTime.timeIntervalSince1970)),
             .environment: .string(environment),
             .clientInfo: .string(systemInfo.osInfoWithDeviceModel),
-            .locale: .string(locale.identifier),
             .isPrefetchedAttestation: .bool(isPrefetchedAttestation),
             .attestationVerificationNodeIdentifier: .string(nodeID),
             .attestationVerificationError: .string(error.telemetryString),

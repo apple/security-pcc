@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,6 +13,7 @@
 // 10/02/2024
 
 package import CloudBoardAsyncXPC
+import CloudBoardCommon
 import CloudBoardHealth
 import CloudBoardLogging
 import os
@@ -23,6 +24,7 @@ public actor HealthServer {
     private var healthState: CloudBoardHealthState = .initializing
     private var publisherStates: [String: ServiceHealthMonitor.Status] = [:]
     private let healthReporter: (any HealthReporter)?
+    private let monitoringBridgeService: SecureConfig.BridgeServiceMonitoringConfig
 
     private static let log: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
@@ -33,16 +35,20 @@ public actor HealthServer {
 
     package init(
         apiServer: CloudBoardHealthAPIServerProtocol = CloudBoardHealthAPIXPCServer.localListener(),
-        healthReporter: (any HealthReporter)?
+        healthReporter: (any HealthReporter)?,
+        monitoringBridgeService: SecureConfig.BridgeServiceMonitoringConfig = .disabled
     ) {
         self.apiServer = apiServer
         self.healthReporter = healthReporter
+        self.monitoringBridgeService = monitoringBridgeService
     }
 
-    public func run(healthPublishers: [ServiceHealthMonitor]) async {
+    public func run(healthPublishers: [ServiceHealthMonitor]) async throws {
         Self.log.info("Starting HealthServer")
         await self.apiServer.connect(listenerDelegate: self, serverDelegate: self)
         Self.log.info("HealthServer started")
+
+        try await waitForBridgeService(setting: self.monitoringBridgeService, logger: Self.log)
 
         guard !healthPublishers.isEmpty else {
             fatalError("No health publishers provided, Exiting!!!")
@@ -70,7 +76,7 @@ public actor HealthServer {
         let healthStream = publisher.watch()
         for await status in healthStream {
             Self.log.log(
-                "Received new status from healthServer::\(publisher.cloudApp): \(status, privacy: .public)"
+                "Received new status from healthServer::\(publisher.cloudApp, privacy: .public): \(status, privacy: .public)"
             )
 
             await self.updateHealthState(for: publisher.cloudApp, status: status)
@@ -110,6 +116,9 @@ public actor HealthServer {
     /// Aggregates multiple service health states into a single CloudBoard health state.
     ///
     /// This method implements a conservative aggregation strategy that prioritizes system reliability:
+    /// - If any service is terminally unhealthy, the overall state is unhealthy — even if other services are
+    ///   still initializing. A terminal failure (e.g. a persistent service that could not download its assets)
+    ///   cannot recover without external re-convergence, so there is no point waiting on the others.
     /// - If any service is still initializing, the overall state is considered initializing
     /// - If all services are unhealthy, the overall state is unhealthy
     /// - Otherwise (at least one service is healthy and none are initializing), the overall state is healthy
@@ -118,8 +127,18 @@ public actor HealthServer {
     /// - Returns: The aggregated `CloudBoardHealthState` representing the overall system health
     ///
     /// - Note: This aggregation strategy ensures that CloudBoard doesn't report as healthy until all
-    ///   services have completed initialization, and only reports as unhealthy when all services have failed.
+    ///   services have completed initialization, and only reports as unhealthy when all services have failed
+    ///   or any one service has failed terminally.
     private func aggregateHealthStates(_ states: [String: ServiceHealthMonitor.Status]) -> CloudBoardHealthState {
+        // A terminal failure of any single service makes the whole node unhealthy, overriding any service that is
+        // still initializing. This lets convergence fail fast rather than waiting out the convergence timeout.
+        if states.values.contains(where: {
+            if case .terminal = $0 { return true }
+            return false
+        }) {
+            return .unhealthy
+        }
+
         // If any is initializing, return initializing
         if states.values.contains(where: {
             if case .initializing = $0 { return true }
@@ -164,7 +183,7 @@ extension CloudBoardHealthState {
         switch serviceHealthMonitorStatus {
         case .initializing:
             self = .initializing
-        case .unhealthy:
+        case .unhealthy, .terminal:
             self = .unhealthy
         case .healthy:
             self = .healthy

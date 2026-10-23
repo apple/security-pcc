@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -44,7 +44,7 @@ extension CLI.InstanceCmd.InstanceConfigureCmd.CryptexCmd {
             }
 
             if try darwinInit.removeCryptex(variant: cryptex.variant) {
-                try? FileManager.default.removeItem(at: vre.cryptexFile(cryptex.url))
+                try? Globals.computer.fileSystem.removeItem(at: vre.cryptexFile(cryptex.url))
 
                 do {
                     try darwinInit.save()

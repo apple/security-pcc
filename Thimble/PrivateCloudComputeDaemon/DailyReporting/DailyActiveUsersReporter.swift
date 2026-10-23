@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -68,8 +68,7 @@ actor DailyActiveUsersReporter<
             eventTime: .now,
             environment: environment,
             clientRequestId: requestID,
-            clientInfo: self.clientInfo,
-            locale: .current
+            clientInfo: self.clientInfo
         )
     }
 
@@ -94,7 +93,6 @@ actor DailyActiveUsersReporter<
             environment: environment,
             clientRequestId: requestID,
             clientInfo: self.clientInfo,
-            locale: .current,
             numberOfCachedWorkloads: stats.count,
             ageOfOldestCachedWorkloadInDays: stats.oldestAgeInDays
         )

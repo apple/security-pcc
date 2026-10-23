@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -31,5 +31,14 @@ package struct Workload: Codable, Sendable, Equatable, Hashable, TC2JSON {
     package init(type: WorkloadType, parameters: WorkloadParameters) {
         self.type = type
         self.parameters = parameters
+    }
+
+    private static let appleIntelligenceWorkloadTypes: Set<String> = [
+        "tie-cloudboard-apple-com",
+        "pcc-agent",
+    ]
+
+    package var isAppleIntelligence: Bool {
+        Self.appleIntelligenceWorkloadTypes.contains(type)
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -100,10 +100,19 @@ package struct GatewayEnsembleSelectionStateMachine {
         package struct PickParameters: Sendable {
             let numProvidedChoices: UInt32
             let numSelectedChoices: UInt32
+            /// The maximum factor the proxy will accept the ratio scaled by (announced in the
+            /// InvokeProxyInitiate). Normalised to >= 1; an unset/zero wire value is treated as 1
+            /// (no scaling).
+            let ratioCanScaleTo: UInt32
 
-            package init(numProvidedChoices: UInt32, numSelectedChoices: UInt32) {
+            package init(
+                numProvidedChoices: UInt32,
+                numSelectedChoices: UInt32,
+                ratioCanScaleTo: UInt32 = 1
+            ) {
                 self.numProvidedChoices = numProvidedChoices
                 self.numSelectedChoices = numSelectedChoices
+                self.ratioCanScaleTo = GatewayEnsembleSelectionStateMachine.normalisedScale(ratioCanScaleTo)
             }
         }
 
@@ -196,7 +205,20 @@ package struct GatewayEnsembleSelectionStateMachine {
 
     private var state: State = .idle
 
-    package init() {}
+    /// A pick scale factor below 1 is meaningless; a zero/unset value means "no scaling" (1).
+    /// Centralised so the announced-ratio and desired-scale normalisation stay in sync.
+    fileprivate static func normalisedScale(_ raw: UInt32) -> UInt32 {
+        max(1, raw)
+    }
+
+    /// The factor by which this simulated ROPES tries to scale the announced pick ratio. It is
+    /// clamped to the proxy-announced `ratioCanScaleTo` and to the number of available candidates.
+    /// Defaults to 1 (offer exactly `numProvidedChoices`), preserving historical behaviour.
+    private let desiredPickScale: UInt32
+
+    package init(desiredPickScale: UInt32 = 1) {
+        self.desiredPickScale = Self.normalisedScale(desiredPickScale)
+    }
 
     /// Begin selection process with constraints and available candidates
     package mutating func start(
@@ -231,7 +253,11 @@ package struct GatewayEnsembleSelectionStateMachine {
                 !directCandidates.contains(where: { $0.ensembleId == candidate.ensembleId })
             }
 
-            let numToOffer = Int(pick.numProvidedChoices)
+            // ROPES may scale the announced ratio: offer numProvidedChoices * s ensembles, where s
+            // is bounded by both the proxy-announced ratioCanScaleTo and this simulated ROPES'
+            // configured desiredPickScale. The proxy then accepts numSelectedChoices * s of them.
+            let scale = min(self.desiredPickScale, pick.ratioCanScaleTo)
+            let numToOffer = Int(pick.numProvidedChoices) * Int(scale)
             if nonDirectCandidates.count >= numToOffer {
                 // We have enough non-direct candidates, prefer those
                 pickCandidates = Array(nonDirectCandidates.prefix(numToOffer))
@@ -485,7 +511,8 @@ extension GatewayEnsembleSelectionStateMachine.NegotiateConstraints {
         let pick: PickParameters? = if negotiate.hasPick {
             PickParameters(
                 numProvidedChoices: negotiate.pick.numProvidedChoices,
-                numSelectedChoices: negotiate.pick.numSelectedChoices
+                numSelectedChoices: negotiate.pick.numSelectedChoices,
+                ratioCanScaleTo: negotiate.pick.ratioCanScaleTo
             )
         } else {
             nil

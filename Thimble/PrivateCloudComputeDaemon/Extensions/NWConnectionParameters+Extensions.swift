@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,13 +24,17 @@ import Network_Private
 import PrivateCloudCompute
 import os.log
 
+private let logger = Logger(for: .network)
+
 extension NWParameters {
     /// A set of default parameters for a connection that listens on tcp using tls and http.
     static func makeTLSAndHTTPParameters(
         ignoreCertificateErrors: Bool,
         forceOHTTP: Bool,
         useCompression: Bool,
-        bundleIdentifier: String? = nil
+        featureFlagChecker: any FeatureFlagCheckerProtocol,
+        bundleIdentifier: BundleIdentifier? = nil,
+        serviceClass: NWParameters.ServiceClass? = nil
     ) -> NWParameters {
         let parameters = NWParameters.tcp
         let tls = NWProtocolTLS.Options()
@@ -41,28 +45,35 @@ extension NWParameters {
         }
 
         if let bundleIdentifier {
-            parameters.sourceApplicationBundleID = bundleIdentifier
+            parameters.sourceApplicationBundleID = bundleIdentifier.rawValue
+        }
+
+        if let serviceClass {
+            parameters.serviceClass = serviceClass
         }
 
         if ignoreCertificateErrors {
             sec_protocol_options_set_verify_block(
                 tls.securityProtocolOptions,
                 { metadata, trust, complete in
-                    let logger = tc2Logger(forCategory: .network)
                     logger.error("not verifying certificate \(String(describing: metadata))")
                     complete(true)
                 }, .main)
         }
 
-        parameters.defaultProtocolStack.applicationProtocols = [
-            http,
-            tls,
-        ]
-
+        var applicationProtocols: [NWProtocolOptions] = []
         if useCompression {
-            let compression = NWProtocolHTTPEncoding.Options()
-            parameters.defaultProtocolStack.applicationProtocols.insert(compression, at: 0)
+            // TODO: Once the boundedNetworkReads2 feature flag is enabled and the new
+            // behavior is validated in production, drop this gate and always append
+            // HTTPClient alongside HTTPEncoding.
+            if featureFlagChecker.isEnabled(.boundedNetworkReads2) {
+                applicationProtocols.append(NWProtocolHTTPClient.Options())
+            }
+            applicationProtocols.append(NWProtocolHTTPEncoding.Options())
         }
+        applicationProtocols.append(http)
+        applicationProtocols.append(tls)
+        parameters.defaultProtocolStack.applicationProtocols = applicationProtocols
 
         return parameters
     }

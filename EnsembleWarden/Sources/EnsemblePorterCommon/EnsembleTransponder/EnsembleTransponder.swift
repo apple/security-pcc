@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -45,8 +45,8 @@ package struct EnsemblePeerInfo: Sendable {
 
 /// Abstraction layer to hide ensembled
 package protocol EnsembleTransponder: Sendable {
-    /// Subscribe to incoming ensemble messages
-    func registerMessageHandler(appID: String, handler: @escaping @Sendable (Int, Data) -> Data) throws
+    /// Subscribe to incoming ensemble messages with an async handler.
+    func registerMessageHandler(appID: String, handler: @escaping @Sendable (Int, Data) async throws -> Data) async throws
 
     /// Get information about this ensemble node
     func nodeInfo() async throws -> EnsembleNodeInfo
@@ -54,8 +54,25 @@ package protocol EnsembleTransponder: Sendable {
     /// Get information about peer nodes in the ensemble
     func peerInfo() async throws -> [EnsemblePeerInfo]?
 
-    /// Send data to a specific destination and wait for response
-    func sendData(appID: String, data: Data, destination: Int, timeout: TimeInterval) async throws -> Data
+    /// Send data to a specific destination and wait for response.
+    ///
+    /// - Parameter includeTracingContext: When `true`, the current Prism `requestID`/`spanID` are
+    ///   propagated to ensembled so the send joins the active distributed trace. Background sends
+    ///   that are not part of any request — e.g. heartbeats — pass `false`. Those run in a detached
+    ///   heartbeat `Task` with no active span, so resolving the ambient trace would manufacture a
+    ///   spurious `requestID`/span for ensembled to record on every ping.
+    func sendData(appID: String, data: Data, destination: Int, timeout: TimeInterval, includeTracingContext: Bool) async throws -> Data
+}
+
+extension EnsembleTransponder {
+    /// Convenience for request-driven sends that propagate the current trace.
+    package func sendData(appID: String, data: Data, destination: Int, timeout: TimeInterval) async throws -> Data {
+        try await self.sendData(appID: appID,
+                                data: data,
+                                destination: destination,
+                                timeout: timeout,
+                                includeTracingContext: true)
+    }
 }
 
 package let ensemblerSessionQueue = DispatchQueue(

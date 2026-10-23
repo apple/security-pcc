@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,6 +25,14 @@ struct DefaultLocalAuthContextProvider: LocalAuthContextProvider {
             return try LAContext(nonDisposableWithError: ())
         }
         #endif
+        return LAContext()
+    }
+}
+
+/// LAContext provider for short-lived helpers that use the context immediately.
+/// Does not require the NonDisposableContextPool entitlement.
+struct ImmediateLocalAuthContextProvider: LocalAuthContextProvider {
+    func getContext() throws -> LAContext {
         return LAContext()
     }
 }

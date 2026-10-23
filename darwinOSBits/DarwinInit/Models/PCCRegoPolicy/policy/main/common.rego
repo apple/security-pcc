@@ -1,4 +1,4 @@
-# Copyright © 2025 Apple Inc. All Rights Reserved.
+# Copyright © 2026 Apple Inc. All Rights Reserved.
 
 # APPLE INC.
 # PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,3 +22,97 @@ has_key(data_object, key_name) if {
     is_object(data_object)
     key_name in object.keys(data_object)
 }
+
+# paths enumerates every key path in a nested object/array as arrays of
+# string segments.  Array indices are converted to their decimal string
+# representation so that allowlist patterns can match them with "*".
+# Returning arrays (instead of slash-joined strings) avoids ambiguity when a
+# key itself contains a "/" (e.g. a URL used as a cryptex identifier).
+# Example: {"a": [{"b": 1}]} produces {["a"], ["a","0"], ["a","0","b"]}.
+paths(x) := result if {
+    result := {path |
+        walk(x, [path_array, _])
+        count(path_array) > 0
+        path := [s |
+            some idx in numbers.range(0, count(path_array) - 1)
+            k := path_array[idx]
+            s := _key_to_string(k)
+        ]
+    }
+}
+
+_key_to_string(k) := k if is_string(k)
+_key_to_string(k) := sprintf("%d", [k]) if not is_string(k)
+
+# path_in_allowed checks whether a config path is permitted by an allowlist.
+# It returns true when the path matches at least one pattern in allowed_paths.
+#
+# Supported pattern syntax:
+#   "a/b/c"   — exact literal match
+#   "a/*/c"   — single-segment wildcard: * matches exactly one path segment
+#   "a/**"    — trailing multi-segment wildcard: matches a/ and everything below
+#
+# IMPORTANT: ** is ONLY valid as a trailing "/**" suffix.  Patterns with **
+# in any other position (e.g. "a/**/b") are invalid and must be caught by
+# invalid_patterns() — see below.
+#
+# Implicit parent matching: if a child path is listed (e.g. "a/b/c"), then
+# its parent paths ("a" and "a/b") are also considered allowed.  This avoids
+# false positives from walk() emitting intermediate container paths.
+path_in_allowed(path, allowed_paths) if {
+    some pattern in allowed_paths
+    _path_matches(path, pattern)
+}
+
+# invalid_patterns returns the subset of patterns that misuse **.
+# ** is only supported as a trailing "/**" suffix.  Any pattern that contains
+# ** elsewhere (e.g. "a/**/b") is a bug in the policy definition.
+# Policy files should import this and add a deny rule to surface the error.
+invalid_patterns(patterns) := {pattern |
+    some pattern in patterns
+    contains(pattern, "**")
+    not endswith(pattern, "/**")
+}
+
+# Exact or single-wildcard match: the path and pattern have the same number
+# of segments and each segment either matches literally or via *.
+_path_matches(path, pattern) if {
+    not endswith(pattern, "/**")
+    pattern_parts := split(pattern, "/")
+    count(path) == count(pattern_parts)
+    every i in numbers.range(0, count(path) - 1) {
+        _segment_matches(path[i], pattern_parts[i])
+    }
+}
+
+# Trailing /** match: all prefix segments must match and the path must be at
+# or beyond the prefix depth (i.e. "a/**" matches "a", "a/b", "a/b/c", ...).
+_path_matches(path, pattern) if {
+    endswith(pattern, "/**")
+    prefix := trim_suffix(pattern, "/**")
+    prefix_parts := split(prefix, "/")
+    count(path) >= count(prefix_parts)
+    every i in numbers.range(0, count(prefix_parts) - 1) {
+        _segment_matches(path[i], prefix_parts[i])
+    }
+}
+
+# Parent match: the path has fewer segments than the pattern, meaning it is a
+# parent container.  We allow it when every segment of the path matches the
+# corresponding segment of the pattern (so listing "a/b/c" implicitly allows
+# "a" and "a/b").
+_path_matches(path, pattern) if {
+    pattern_parts := _effective_parts(pattern)
+    count(path) < count(pattern_parts)
+    every i in numbers.range(0, count(path) - 1) {
+        _segment_matches(path[i], pattern_parts[i])
+    }
+}
+
+# For ** patterns, effective parts are just the prefix; otherwise all parts.
+_effective_parts(pattern) := split(trim_suffix(pattern, "/**"), "/") if endswith(pattern, "/**")
+_effective_parts(pattern) := split(pattern, "/") if not endswith(pattern, "/**")
+
+# _segment_matches succeeds when a single path segment matches a pattern segment.
+_segment_matches(actual, pattern_seg) if pattern_seg == "*"
+_segment_matches(actual, pattern_seg) if actual == pattern_seg

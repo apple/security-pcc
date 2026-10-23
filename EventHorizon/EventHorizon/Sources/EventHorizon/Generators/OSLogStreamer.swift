@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -58,8 +58,7 @@ public class OSLogStreamer: EHGenerator, AllEventsIterable {
             sender: String = "",
             composedMessage: String = "",
             timestamp: Date = Date()) {
-            self.tags = tags
-            self.fields = fields
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
             self.label = label
             self.uid = uid
             self.process = process
@@ -71,9 +70,7 @@ public class OSLogStreamer: EHGenerator, AllEventsIterable {
             self.timestamp = timestamp
         }
 
-        public var tags = Set<String>()
-
-        public var fields: [String: EHValueType] = [:]
+        public var metadata = EHEventMetadata()
         public var event_category: EHUEFCategory = .system
         public var event_type: String = OSLogStreamer.EventTypes.log_entry.rawValue
 
@@ -211,37 +208,111 @@ public class OSLogStreamer: EHGenerator, AllEventsIterable {
             repeat {
                 let start = Date()
                 let instantiatedPredicates = predicates.map { $0.init() }
-                let unionPredicate = NSCompoundPredicate(orPredicateWithSubpredicates: instantiatedPredicates.map { NSPredicate(format: $0.getPredicate()) })
                 do {
-                    try await OSLogStreamer.streamStore(
-                        from: start,
-                        eventHandler: { (event: OSLogEvent) in
-                            instantiatedPredicates.compactMap { predicateFilter in
-                                if predicateFilter.logMessageMatch(event) {
-                                    return (predicateFilter, event)
-                                }
-                                return nil
-                            }.forEach { (predicateFilter: PredicatePlugin, matchedEvent: OSLogEvent) in
-                                if let parsed = predicateFilter.parse(matchedEvent) {
-                                    Task.detached {
-                                        await pipeline.process(parsed)
+                    try await withThrowingTaskGroup(of: Void.self) { group in
+                        for predicateFilter in instantiatedPredicates {
+                            group.addTask {
+                                let nsPredicate = NSPredicate(format: predicateFilter.getPredicate())
+                                let filterLabel = String(describing: predicateFilter)
+                                let (eventStream, eventContinuation) = AsyncStream<any EHUEFEvent>.makeStream()
+                                async let consuming: Void = {
+                                    for await event in eventStream {
+                                        await pipeline.process(event)
                                     }
-                                } else {
-                                    var labeledEvent = matchedEvent
-                                    labeledEvent.label = String(describing: predicateFilter.self)
-                                    Task.detached {
-                                        await pipeline.process(labeledEvent)
-                                    }
-                                }
+                                }()
+                                try await OSLogStreamer.streamStore(
+                                    from: start,
+                                    eventHandler: { (event: OSLogEvent) in
+                                        guard predicateFilter.logMessageMatch(event) else {
+                                            return
+                                        }
+                                        if let parsed = predicateFilter.parse(event) {
+                                            eventContinuation.yield(parsed)
+                                        } else {
+                                            var labeledEvent = event
+                                            labeledEvent.label = filterLabel
+                                            eventContinuation.yield(labeledEvent)
+                                        }
+                                    },
+                                    predicate: nsPredicate
+                                )
+                                eventContinuation.finish()
+                                await consuming
                             }
-                        },
-                        predicate: unionPredicate
-                    )
+                        }
+                        try await group.waitForAll()
+                    }
                 } catch {
                     os_log(.error, log: OSLogStreamer.log, "OSLogStreamer: Error while streaming logs: \(error, privacy: .public)")
                 }
             } while !Task.isCancelled
         }
         #endif
+    }
+}
+
+
+extension OSLogStreamer.OSLogEvent: EHFieldExtractable {
+    public func fieldValue(for field: String) -> Any? {
+        switch field {
+        case "tags": return tags
+        case "fields": return fields
+        case "event_category": return event_category
+        case "event_type": return event_type
+        case "label": return label
+        case "uid": return uid
+        case "process": return process
+        case "processID": return processID
+        case "category": return category
+        case "subsystem": return subsystem
+        case "sender": return sender
+        case "composedMessage": return composedMessage
+        case "timestamp": return timestamp
+        case "formatString": return formatString
+        default: return nil
+        }
+    }
+}
+
+
+import AST
+
+private enum RK {
+    static let event_type: AST.RegoValue = .string("event_type")
+    static let event_category: AST.RegoValue = .string("event_category")
+    static let tags: AST.RegoValue = .string("tags")
+    static let fields: AST.RegoValue = .string("fields")
+    static let label: AST.RegoValue = .string("label")
+    static let uid: AST.RegoValue = .string("uid")
+    static let process: AST.RegoValue = .string("process")
+    static let processID: AST.RegoValue = .string("processID")
+    static let category: AST.RegoValue = .string("category")
+    static let subsystem: AST.RegoValue = .string("subsystem")
+    static let sender: AST.RegoValue = .string("sender")
+    static let composedMessage: AST.RegoValue = .string("composedMessage")
+    static let timestamp: AST.RegoValue = .string("timestamp")
+    static let formatString: AST.RegoValue = .string("formatString")
+}
+
+extension OSLogStreamer.OSLogEvent: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = [:]
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.label] = .string(label)
+        obj[RK.uid] = .number(RegoNumber(int: Int64(uid)))
+        obj[RK.process] = .string(process)
+        obj[RK.processID] = .number(RegoNumber(int: Int64(processID)))
+        obj[RK.category] = .string(category)
+        obj[RK.subsystem] = .string(subsystem)
+        obj[RK.sender] = .string(sender)
+        obj[RK.composedMessage] = .string(composedMessage)
+        obj[RK.timestamp] = .number(RegoNumber(decimal: Decimal(timestamp.timeIntervalSince1970)))
+        if let formatString {
+            obj[RK.formatString] = .string(formatString)
+        }
+        return .object(obj)
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,6 +20,7 @@
 //
 
 import os.log
+import CryptoKit
 
 public struct SEPImagePolicy: AttestationPolicy {
     static let logger: Logger = Logger(subsystem: "com.apple.CloudAttestation", category: "SEPImagePolicy")
@@ -49,20 +50,58 @@ public struct SEPImagePolicy: AttestationPolicy {
 
         // parse APTicket, and verify that the sep image matches attestation.sealedData
         let manifest = Image4Manifest(data: apTicket, kind: .ap)
-
         guard let manifestSEPIDigest = manifest.sepiDigest else {
             throw Error.missingImage4SEPImageDigest
         }
 
-        guard let attestationSEPIDigest = attestation.sealData?.digest else {
+        guard let attestationSealData = attestation.sealData else {
             throw Error.missingAttestationSealedData
         }
 
-        guard manifestSEPIDigest.elementsEqual(attestationSEPIDigest) else {
+        let valid: Bool
+        if checkTBMV1(attestationSEPIDigest: attestationSealData.digest, manifestSEPIDigest: manifestSEPIDigest) {
+            Self.logger.log("matched SEPI TBM V1 policy")
+            valid = true
+        } else if checkTBMV2(attestationSealData: attestationSealData.digest, manifestSEPIDigest: manifestSEPIDigest, manifestSTG1Digest: manifest.stg1Digest) {
+            Self.logger.log("matched SEPI TBM V2 policy")
+            valid = true
+        } else {
+            Self.logger.error("no SEPI TBM policy was matched")
+            valid = false
+        }
+
+        guard valid else {
             throw Error.untrusted
         }
 
         Self.logger.log("AttestationBundle passed SEPImagePolicy: reported SEP Image from AP Ticket matches SEP attestation")
+    }
+
+    func checkTBMV1(attestationSEPIDigest: Data, manifestSEPIDigest: Data) -> Bool {
+        Self.logger.log("Checking SEPI TBM V1 Policy")
+        guard manifestSEPIDigest.elementsEqual(attestationSEPIDigest) else {
+            Self.logger.error("SEPI.DGST does not match PKA.SEALED_DATA")
+            return false
+        }
+        return true
+    }
+
+    func checkTBMV2(attestationSealData: Data, manifestSEPIDigest: Data, manifestSTG1Digest: Data?) -> Bool {
+        Self.logger.log("Checking SEPI TBM V2 Policy")
+
+        guard let manifestSTG1Digest else {
+            Self.logger.error("Missing STG1.DGST from manifest")
+            return false
+        }
+
+        let expectedValue = SHA384.hash(data: (manifestSEPIDigest + manifestSTG1Digest))
+
+        guard attestationSealData.elementsEqual(expectedValue) else {
+            Self.logger.error("SHA384(SEPI.DGST || STG1.DGST) does not match PKA.SEALED_DATA")
+            return false
+        }
+
+        return true
     }
 }
 

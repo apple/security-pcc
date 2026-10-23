@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,6 +19,7 @@
 //  Copyright © 2025 Apple Inc. All rights reserved.
 //
 
+import Compression
 import CryptoKit
 import Foundation
 
@@ -40,5 +41,37 @@ extension Data {
     var base64EncodedSHA256: String {
         let digest = CryptoKit.SHA256.hash(data: self)
         return Data(digest).base64EncodedString()
+    }
+
+    private func filtered(for operation: FilterOperation, using compressionAlgorithm: Algorithm, pageSize: Int, accumulatedSize: ((Int) throws -> Void)? = nil) throws -> Data {
+        var inputConsumed = false
+        let inputFilter = try InputFilter<Data>(
+            operation,
+            using: compressionAlgorithm,
+            bufferCapacity: self.endIndex - self.startIndex
+        ) { length in
+            guard !inputConsumed else { return nil }
+            inputConsumed = true
+            return self
+        }
+
+        var resultData = Data()
+        while let page = try inputFilter.readData(ofLength: pageSize) {
+            resultData.append(page)
+            if let accumulatedSize {
+                try accumulatedSize(resultData.count)
+            }
+        }
+
+        return resultData
+
+    }
+
+    package func compressed(using compressionAlgorithm: Algorithm, pageSize: Int = 64 * 1024) throws -> Data {
+        return try filtered(for: .compress, using: compressionAlgorithm, pageSize: pageSize)
+    }
+
+    package func decompressed(using compressionAlgorithm: Algorithm, pageSize: Int = 64 * 1024, accumulatedDecompressedSize: ((Int) throws -> Void)? = nil) throws -> Data {
+        return try filtered(for: .decompress, using: compressionAlgorithm, pageSize: pageSize, accumulatedSize: accumulatedDecompressedSize)
     }
 }

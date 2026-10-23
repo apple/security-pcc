@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,10 +12,15 @@
 // EA1937
 // 10/02/2024
 
+// File copy-pasted from
 
 private import os
 
 private let logger = Logger(subsystem: EnsemblePorterConstants.loggerSubsystem, category: "CodableResult")
+
+// MARK: - Workaround
+
+/// (Re-)implementation of `Result` as a workaround for rdar://136467591
 ///
 /// This is a `Codable` + `Sendable` version of `Result` — with some other convenience.
 ///
@@ -24,6 +29,7 @@ private let logger = Logger(subsystem: EnsemblePorterConstants.loggerSubsystem, 
 /// func distributed foo() async -> CodableResult<Success, Failure>
 /// ```
 ///
+/// See also: rdar://136467591 (Typed throws support in for distributed actors; Add DistributedActorSystem.Failure associatedtype)
 package enum CodableResult<Success, Failure>: Sendable, Codable where Failure: Sendable & Codable & Error, Success: Sendable & Codable {
     /// A success, storing a `Success` value.
     case success(Success)

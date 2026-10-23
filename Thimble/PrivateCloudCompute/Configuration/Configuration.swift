@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,7 +24,7 @@ import FeatureFlags
 import Foundation
 import os.log
 
-private let logger = tc2Logger(forCategory: .configuration)
+private let logger = Logger(for: .configuration)
 package let privateCloudComputeOsVariantSubsystem = "com.apple.privateCloudCompute"
 
 // Configuration is a protocol for testability--you can define anything with the

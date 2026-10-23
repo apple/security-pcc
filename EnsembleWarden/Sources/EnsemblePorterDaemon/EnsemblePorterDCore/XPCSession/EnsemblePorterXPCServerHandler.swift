@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -60,6 +60,7 @@ package final class EnsemblePorterXPCServerHandler<IntraEnsembleTransponder: Ens
 
     private func validate(entitlement: String, auditToken: audit_token_t) throws {
         guard let secTask = SecTaskCreateWithAuditToken(nil, auditToken) else {
+            self.logic.metrics.incrementEntitlementValidation(entitlement: entitlement, success: false, failureType: .secTask)
             logger.error("Unable to create secTask from auditToken")
             throw EnsemblePorterError.entitlementCheckFailed
         }
@@ -68,24 +69,55 @@ package final class EnsemblePorterXPCServerHandler<IntraEnsembleTransponder: Ens
         let entitlementValue = SecTaskCopyValueForEntitlement(secTask, entitlement as CFString, &error)
 
         if let error {
+            self.logic.metrics.incrementEntitlementValidation(entitlement: entitlement, success: false, failureType: .secTaskCopyError)
             logger.error("Error checking entitlement. error=\(error.takeRetainedValue(), privacy: .public)")
             throw EnsemblePorterError.entitlementCheckFailed
-        } else if entitlementValue == nil {
+        }
+
+        // All entitlements gated by this validator are boolean: a value of `<false/>` or any
+        // non-boolean type must be rejected, not silently accepted as "present".
+        guard let entitlementValue, CFEqual(entitlementValue, kCFBooleanTrue) else {
+            self.logic.metrics.incrementEntitlementValidation(entitlement: entitlement, success: false, failureType: .missingOrWrongValue)
             logger.error("Missing entitlement. missing_entitlement=\(entitlement, privacy: .public)")
             throw EnsemblePorterError.missingEntitlement(entitlement)
         }
+
+        self.logic.metrics.incrementEntitlementValidation(entitlement: entitlement, success: true, failureType: .none)
+    }
+
+    /// Records the duration + outcome of an XPC handler. Call from a `defer` so it fires on every
+    /// path (including ones that map errors to Response cases).
+    private func recordXPC(operation: EnsemblePorterMetrics.XPCOperation, start: ContinuousClock.Instant, response: EnsemblePorterXPCAPI.Response) {
+        let elapsed = ContinuousClock.now - start
+        let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+        let success: Bool
+        let errorCategory: String?
+        switch response.metricsOutcome {
+        case .success:
+            success = true
+            errorCategory = nil
+        case .failure(let error):
+            success = false
+            errorCategory = error?.metricsLabel ?? "other"
+        }
+        self.logic.metrics.recordXPCRequest(operation: operation, success: success, errorCategory: errorCategory, durationSeconds: seconds)
     }
 
     private func handleProvide(_ request: EnsemblePorterXPCAPI.Provide, auditToken: audit_token_t) async -> EnsemblePorterXPCAPI.Response {
+        let start = ContinuousClock.now
+        var response: EnsemblePorterXPCAPI.Response = .provide(.failure(.unexpectedError))
+        defer { self.recordXPC(operation: EnsemblePorterMetrics.XPCOperation.provide, start: start, response: response) }
         do {
             try self.validate(entitlement: EnsemblePorterConstants.provideKeysEntitlement, auditToken: auditToken)
         } catch let error as EnsemblePorterError {
-            return .provide(.failure(error))
+            response = .provide(.failure(error))
+            return response
         } catch {
-            return .provide(.failure(.unexpectedError))
+            response = .provide(.failure(.unexpectedError))
+            return response
         }
 
-        return await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
+        response = await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
             do {
                 _ = try await logic.provide(additionalCryptoPayload: request.additionalCryptoPayload)
                 return .provide(.success(.init()))
@@ -107,20 +139,26 @@ package final class EnsemblePorterXPCServerHandler<IntraEnsembleTransponder: Ens
                 return .provide(.failure(.unexpectedError))
             }
         }
+        return response
     }
 
     private func handleFetch(_ request: EnsemblePorterXPCAPI.Fetch, auditToken: audit_token_t) async -> EnsemblePorterXPCAPI.Response {
+        let start = ContinuousClock.now
+        var response: EnsemblePorterXPCAPI.Response = .fetch(.failure(.unexpectedError))
+        defer { self.recordXPC(operation: EnsemblePorterMetrics.XPCOperation.fetch, start: start, response: response) }
         do {
             try self.validate(entitlement: EnsemblePorterConstants.fetchKeysEntitlement, auditToken: auditToken)
         } catch let error as EnsemblePorterError {
-            return .fetch(.failure(error))
+            response = .fetch(.failure(error))
+            return response
         } catch {
-            return .fetch(.failure(.unexpectedError))
+            response = .fetch(.failure(.unexpectedError))
+            return response
         }
 
-        return await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
+        response = await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
             do {
-                PrismTracing.logCheckpoint(name: "FetchTurnKey")
+                PrismTracing.logCheckpoint(name: "FetchTurnKey", level: .debug)
                 let data = try logic.fetch(turnNumber: request.turnNumber)
                 return .fetch(.success(.init(data: data)))
             } catch let error as EnsemblePorterError {
@@ -129,20 +167,26 @@ package final class EnsemblePorterXPCServerHandler<IntraEnsembleTransponder: Ens
                 return .fetch(.failure(.unexpectedError))
             }
         }
+        return response
     }
 
     private func handleGetNumberOfTurnKeys(_ request: EnsemblePorterXPCAPI.GetNumberOfTurnKeys, auditToken: audit_token_t) async -> EnsemblePorterXPCAPI.Response {
+        let start = ContinuousClock.now
+        var response: EnsemblePorterXPCAPI.Response = .getNumberOfTurnKeys(.failure(.unexpectedError))
+        defer { self.recordXPC(operation: EnsemblePorterMetrics.XPCOperation.getNumberOfTurnKeys, start: start, response: response) }
         do {
             try self.validate(entitlement: EnsemblePorterConstants.fetchKeysEntitlement, auditToken: auditToken)
         } catch let error as EnsemblePorterError {
-            return .getNumberOfTurnKeys(.failure(error))
+            response = .getNumberOfTurnKeys(.failure(error))
+            return response
         } catch {
-            return .getNumberOfTurnKeys(.failure(.unexpectedError))
+            response = .getNumberOfTurnKeys(.failure(.unexpectedError))
+            return response
         }
 
-        return await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
+        response = await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
             do {
-                PrismTracing.logCheckpoint(name: "getNumberOfTurnKeys")
+                PrismTracing.logCheckpoint(name: "getNumberOfTurnKeys", level: .debug)
                 let count = try logic.getNumberOfTurnKeys()
                 return .getNumberOfTurnKeys(.success(.init(count: count)))
             } catch let error as EnsemblePorterError {
@@ -151,19 +195,25 @@ package final class EnsemblePorterXPCServerHandler<IntraEnsembleTransponder: Ens
                 return .getNumberOfTurnKeys(.failure(.unexpectedError))
             }
         }
+        return response
     }
 
     private func handleFetchFollowerTokens(_ request: EnsemblePorterXPCAPI.FetchFollowerTokens,
                                            auditToken: audit_token_t) async -> EnsemblePorterXPCAPI.Response {
+        let start = ContinuousClock.now
+        var response: EnsemblePorterXPCAPI.Response = .fetchFollowerTokens(.failure(.unexpectedError))
+        defer { self.recordXPC(operation: EnsemblePorterMetrics.XPCOperation.fetchFollowerTokens, start: start, response: response) }
         do {
             try self.validate(entitlement: EnsemblePorterConstants.fetchKeysEntitlement, auditToken: auditToken)
         } catch let error as EnsemblePorterError {
-            return .fetchFollowerTokens(.failure(error))
+            response = .fetchFollowerTokens(.failure(error))
+            return response
         } catch {
-            return .fetchFollowerTokens(.failure(.unexpectedError))
+            response = .fetchFollowerTokens(.failure(.unexpectedError))
+            return response
         }
 
-        return await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
+        response = await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
             do {
                 PrismTracing.logCheckpoint(name: "Fetching ensemblefollowerporter instance UUID")
                 let tokens = try await logic.fetchEnsembleFollowerPorterInstanceUUIDs()
@@ -174,19 +224,25 @@ package final class EnsemblePorterXPCServerHandler<IntraEnsembleTransponder: Ens
                 return .fetchFollowerTokens(.failure(.unexpectedError))
             }
         }
+        return response
     }
 
     private func handleFetchFTETKey(_ request: EnsemblePorterXPCAPI.FetchFTETKey,
                                     auditToken: audit_token_t) async -> EnsemblePorterXPCAPI.Response {
+        let start = ContinuousClock.now
+        var response: EnsemblePorterXPCAPI.Response = .fetchFTETKey(.failure(.unexpectedError))
+        defer { self.recordXPC(operation: EnsemblePorterMetrics.XPCOperation.fetchFTETKey, start: start, response: response) }
         do {
             try self.validate(entitlement: EnsemblePorterConstants.fetchKeysEntitlement, auditToken: auditToken)
         } catch let error as EnsemblePorterError {
-            return .fetchFTETKey(.failure(error))
+            response = .fetchFTETKey(.failure(error))
+            return response
         } catch {
-            return .fetchFTETKey(.failure(.unexpectedError))
+            response = .fetchFTETKey(.failure(.unexpectedError))
+            return response
         }
 
-        return await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
+        response = await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
             do {
                 PrismTracing.logCheckpoint(name: "FetchFTETKey")
                 let key = try self.logic.keySafe.retrieveKey(turnNumber: Int.max)
@@ -210,33 +266,45 @@ package final class EnsemblePorterXPCServerHandler<IntraEnsembleTransponder: Ens
                 return .fetchFTETKey(.failure(.unexpectedError))
             }
         }
+        return response
     }
 
     private func handleGetIntraEnsemblePublicKey(_ request: EnsemblePorterXPCAPI.GetIntraEnsemblePublicKey,
                                                   auditToken: audit_token_t) async -> EnsemblePorterXPCAPI.Response {
+        let start = ContinuousClock.now
+        var response: EnsemblePorterXPCAPI.Response = .getIntraEnsemblePublicKey(.failure(.unexpectedError))
+        defer { self.recordXPC(operation: EnsemblePorterMetrics.XPCOperation.getIntraEnsemblePublicKey, start: start, response: response) }
         do {
             try self.validate(entitlement: EnsemblePorterConstants.getPublicKeyEntitlement, auditToken: auditToken)
         } catch let error as EnsemblePorterError {
-            return .getIntraEnsemblePublicKey(.failure(error))
+            response = .getIntraEnsemblePublicKey(.failure(error))
+            return response
         } catch {
-            return .getIntraEnsemblePublicKey(.failure(.unexpectedError))
+            response = .getIntraEnsemblePublicKey(.failure(.unexpectedError))
+            return response
         }
 
         let publicKey = logic.getFollowerIntraEnsemblePublicKey()
-        return .getIntraEnsemblePublicKey(.success(.init(data: publicKey.rawRepresentation)))
+        response = .getIntraEnsemblePublicKey(.success(.init(data: publicKey.rawRepresentation)))
+        return response
     }
 
     private func handleProvideEncryptedCryptoMaterial(_ request: EnsemblePorterXPCAPI.ProvideEncryptedCryptoMaterial,
                                                        auditToken: audit_token_t) async -> EnsemblePorterXPCAPI.Response {
+        let start = ContinuousClock.now
+        var response: EnsemblePorterXPCAPI.Response = .provideEncryptedCryptoMaterial(.failure(.unexpectedError))
+        defer { self.recordXPC(operation: EnsemblePorterMetrics.XPCOperation.provideEncryptedCryptoMaterial, start: start, response: response) }
         do {
             try self.validate(entitlement: EnsemblePorterConstants.provideEncryptedCryptoMaterialEntitlement, auditToken: auditToken)
         } catch let error as EnsemblePorterError {
-            return .provideEncryptedCryptoMaterial(.failure(error))
+            response = .provideEncryptedCryptoMaterial(.failure(error))
+            return response
         } catch {
-            return .provideEncryptedCryptoMaterial(.failure(.unexpectedError))
+            response = .provideEncryptedCryptoMaterial(.failure(.unexpectedError))
+            return response
         }
 
-        return await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
+        response = await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
             do {
                 _ = try await logic.provide(encryptedCryptoMaterial: request.encryptedPayload,
                                             leaderPublicKey: request.leaderPublicKey)
@@ -249,22 +317,59 @@ package final class EnsemblePorterXPCServerHandler<IntraEnsembleTransponder: Ens
                 return .provideEncryptedCryptoMaterial(.failure(.unexpectedError))
             }
         }
+        return response
     }
 
     private func handleFTETOnlyTurn(_ request: EnsemblePorterXPCAPI.FTETOnlyTurn,
                                     auditToken: audit_token_t) async -> EnsemblePorterXPCAPI.Response {
+        let start = ContinuousClock.now
+        var response: EnsemblePorterXPCAPI.Response = .ftETOnlyTurn(.failure(.unexpectedError))
+        defer { self.recordXPC(operation: EnsemblePorterMetrics.XPCOperation.ftETOnlyTurn, start: start, response: response) }
         do {
             try self.validate(entitlement: EnsemblePorterConstants.fetchKeysEntitlement, auditToken: auditToken)
         } catch let error as EnsemblePorterError {
-            return .ftETOnlyTurn(.failure(error))
+            response = .ftETOnlyTurn(.failure(error))
+            return response
         } catch {
-            return .ftETOnlyTurn(.failure(.unexpectedError))
+            response = .ftETOnlyTurn(.failure(.unexpectedError))
+            return response
         }
 
-        return await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
+        response = await PrismTracing.withResumed(requestID: request.requestID, spanID: request.spanID) {
             PrismTracing.logCheckpoint(name: "FTETOnlyTurn")
             await self.logic.ftETOnlyTurn()
             return .ftETOnlyTurn(.success(.init()))
+        }
+        return response
+    }
+}
+
+extension EnsemblePorterXPCAPI.Response {
+    fileprivate enum MetricsOutcome {
+        case success
+        case failure(EnsemblePorterError?)
+    }
+
+    /// Maps each Response variant to a coarse success/failure outcome with optional typed error
+    /// so the metrics layer can emit a stable `error_category`.
+    fileprivate var metricsOutcome: MetricsOutcome {
+        switch self {
+        case .provide(let r): return Self.outcome(r)
+        case .fetch(let r): return Self.outcome(r)
+        case .getNumberOfTurnKeys(let r): return Self.outcome(r)
+        case .fetchFollowerTokens(let r): return Self.outcome(r)
+        case .fetchFTETKey(let r): return Self.outcome(r)
+        case .getIntraEnsemblePublicKey(let r): return Self.outcome(r)
+        case .provideEncryptedCryptoMaterial(let r): return Self.outcome(r)
+        case .ftETOnlyTurn(let r): return Self.outcome(r)
+        case .decodingError: return .failure(nil)
+        }
+    }
+
+    private static func outcome<S>(_ r: CodableResult<S, EnsemblePorterError>) -> MetricsOutcome {
+        switch r {
+        case .success: return .success
+        case .failure(let error): return .failure(error)
         }
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -95,6 +95,40 @@ public enum EnsemblePorterError: Sendable, Error, Equatable {
 
     /// An unexpected error occurred.
     case unexpectedError
+
+    /// Heartbeat to a follower failed too many consecutive times
+    case heartbeatFailure
+
+    /// Heartbeat received for an instance that is not tracked by the controller
+    case instanceNotFound
+
+    /// ECDH key-attestation step failed: the follower's public key could not be parsed,
+    /// or the shared-secret derivation failed. Distinct from `transportFailed` /
+    /// `ensembledError`, which cover the transport leg of the prewarm exchange.
+    case keyAttestationFailed
+
+    // MARK: AppleComputeEnsembler data-messaging errors
+    //
+    // Mirror the cases of `AppleComputeEnsembler.DataMessageError` so heartbeat-failure
+    // logs carry the actual failure mode (case + appID + reason) instead of the bare
+    // type name "DataMessageError" that `String(reportable:)` would otherwise emit.
+
+    /// Follower has no registered handler for this appID.
+    case dataMessageNoRegisteredHandler(appID: String)
+
+    /// Follower app callback did not return within the allotted time.
+    case dataMessageTimeoutOnPeer(appID: String)
+
+    /// Leader did not receive any response from the follower within the timeout.
+    case dataMessageNoResponseReceived(appID: String)
+
+    /// Internal implementation error on the follower (e.g. broken XPC session,
+    /// deallocated service instance).
+    case dataMessageInternalError(appID: String, reason: String)
+
+    /// Send API was called while the ensembler (or TLS connection) is not in the ready
+    /// state. `currentStatus` carries the actual state.
+    case dataMessageNotReady(appID: String, currentStatus: String)
 }
 
 extension EnsemblePorterError: Codable {}
@@ -146,30 +180,60 @@ extension EnsemblePorterError: ReportableError {
             return "Invalid data length. expected=\(expected) actual=\(actual)"
         case .unexpectedError:
             return "Unexpected error"
+        case .heartbeatFailure:
+            return "Heartbeat failed too many consecutive times"
+        case .instanceNotFound:
+            return "Instance not found in controller"
+        case .keyAttestationFailed:
+            return "ECDH key-attestation failed"
+        case .dataMessageNoRegisteredHandler(let appID):
+            return "DataMessage.noRegisteredHandler(appID=\(appID))"
+        case .dataMessageTimeoutOnPeer(let appID):
+            return "DataMessage.timeoutOnPeerHandler(appID=\(appID))"
+        case .dataMessageNoResponseReceived(let appID):
+            return "DataMessage.noResponseReceived(appID=\(appID))"
+        case .dataMessageInternalError(let appID, let reason):
+            return "DataMessage.internalError(appID=\(appID), reason=\(reason))"
+        case .dataMessageNotReady(let appID, let currentStatus):
+            return "DataMessage.notReady(appID=\(appID), currentStatus=\(currentStatus))"
         }
     }
 
-    /// Provides metrics-friendly label strings for error tracking.
+    /// Provides metrics-friendly label strings for error tracking. Exhaustive on purpose so
+    /// adding a new case to `EnsemblePorterError` becomes a compile error here, forcing the
+    /// author to pick a stable bucket rather than silently defaulting to `OTHER_ERROR`.
     package var metricsLabel: String {
         switch self {
-        case .invalidKeysSupplied:
-            return "INVALID_KEYS_SUPPLIED"
-        case .keysAlreadySupplied:
-            return "KEYS_ALREADY_SUPPLIED"
-        case .noKeyForTurn:
-            return "NO_KEYS_SUPPLIED"
-        case .keysNotYetSupplied:
-            return "NO_KEYS_SUPPLIED"
-        case .followerTokensAlreadyFetched:
-            return "TOKENS_ALREADY_FETCHED"
-        case .ensembledError:
-            return "ENSEMBLED_ERROR"
-        case .transportFailed:
-            return "TRANSPORT_FAILED"
-        case .unexpectedError:
-            return "UNEXPECTED_ERROR"
-        default:
-            return "OTHER_ERROR"
+        case .notRunning: return "NOT_RUNNING"
+        case .invalidStateTransition: return "INVALID_STATE_TRANSITION"
+        case .keysNotYetSupplied: return "NO_KEYS_SUPPLIED"
+        case .alreadyRunning: return "ALREADY_RUNNING"
+        case .alreadyClosed: return "ALREADY_CLOSED"
+        case .invalidKeysSupplied: return "INVALID_KEYS_SUPPLIED"
+        case .keysAlreadySupplied: return "KEYS_ALREADY_SUPPLIED"
+        case .noKeyForTurn: return "NO_KEY_FOR_TURN"
+        case .followerTokensAlreadyFetched: return "TOKENS_ALREADY_FETCHED"
+        case .followerTokensDistributionFailed: return "TOKENS_DISTRIBUTION_FAILED"
+        case .notLeader: return "NOT_LEADER"
+        case .transportFailed: return "TRANSPORT_FAILED"
+        case .invalidMessageReceived: return "INVALID_MESSAGE_RECEIVED"
+        case .entitlementCheckFailed: return "ENTITLEMENT_CHECK_FAILED"
+        case .missingEntitlement: return "MISSING_ENTITLEMENT"
+        case .ensemblerSessionUnavailable: return "ENSEMBLER_SESSION_UNAVAILABLE"
+        case .missingRequestID: return "MISSING_REQUEST_ID"
+        case .ensembledError: return "ENSEMBLED_ERROR"
+        case .unsupportedXPCRequestType: return "UNSUPPORTED_XPC_REQUEST_TYPE"
+        case .launchdManagedJobMismatch: return "LAUNCHD_MANAGED_JOB_MISMATCH"
+        case .invalidDataLength: return "INVALID_DATA_LENGTH"
+        case .unexpectedError: return "UNEXPECTED_ERROR"
+        case .heartbeatFailure: return "HEARTBEAT_FAILURE"
+        case .instanceNotFound: return "INSTANCE_NOT_FOUND"
+        case .keyAttestationFailed: return "KEY_ATTESTATION_FAILED"
+        case .dataMessageNoRegisteredHandler: return "DATA_MESSAGE_NO_REGISTERED_HANDLER"
+        case .dataMessageTimeoutOnPeer: return "DATA_MESSAGE_TIMEOUT_ON_PEER"
+        case .dataMessageNoResponseReceived: return "DATA_MESSAGE_NO_RESPONSE_RECEIVED"
+        case .dataMessageInternalError: return "DATA_MESSAGE_INTERNAL_ERROR"
+        case .dataMessageNotReady: return "DATA_MESSAGE_NOT_READY"
         }
     }
 }

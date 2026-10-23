@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -44,12 +44,12 @@ package final class EnsemblePorterLogic<IntraEnsembleTransponder: EnsembleTransp
     private let storedDerivedKey: Mutex<SymmetricKey?> = .init(nil)
 
     /// Tracks whether multi-turn mode is active (true) or FT/ET-only mode (false).
-    /// Used by waitForMode() to unblock when mode is determined.
-    private enum ModeState: Sendable {
+    /// Used by waitForMultiTurnMode() to unblock when mode is determined.
+    private enum MultiTurnModeState: Sendable {
         case undetermined(CheckedContinuation<Bool, Never>?)
         case determined(Bool)
     }
-    private let modeState: Mutex<ModeState> = .init(.undetermined(nil))
+    private let multiTurnModeState: Mutex<MultiTurnModeState> = .init(.undetermined(nil))
 
     internal let logger = Logger(subsystem: EnsemblePorterConstants.loggerSubsystem, category: "EnsemblePorterLogic")
 
@@ -87,7 +87,7 @@ package final class EnsemblePorterLogic<IntraEnsembleTransponder: EnsembleTransp
 
     package func getNumberOfTurnKeys() throws -> Int {
         let count = try self.keySafe.getNumberOfTurnKeys()
-        PrismTracing.logCheckpoint(name: "EnsemblePorterGotNumberOfTurnKeys")
+        PrismTracing.logCheckpoint(name: "EnsemblePorterGotNumberOfTurnKeys", level: .debug)
         return count
     }
 
@@ -105,7 +105,7 @@ package final class EnsemblePorterLogic<IntraEnsembleTransponder: EnsembleTransp
             """)
 
         // Signal that multi-turn mode is false (FT/ET-only)
-        self.modeState.withLock { state in
+        self.multiTurnModeState.withLock { state in
             switch state {
             case .undetermined(let continuation):
                 state = .determined(false)
@@ -156,16 +156,16 @@ package final class EnsemblePorterLogic<IntraEnsembleTransponder: EnsembleTransp
     ///
     /// Returns true if crypto materials are provided (multi-turn mode).
     /// Returns false if ftETOnlyTurn() is called (FT/ET-only mode).
-    package func waitForMode() async -> Bool {
+    package func waitForMultiTurnMode() async -> Bool {
         return await withCheckedContinuation { continuation in
-            self.modeState.withLock { state in
+            self.multiTurnModeState.withLock { state in
                 switch state {
                 case .undetermined(nil):
                     state = .undetermined(continuation)
                 case .undetermined(.some):
-                    fatalError("Multiple waiters for mode state")
-                case .determined(let value):
-                    continuation.resume(returning: value)
+                    fatalError("Multiple waiters for multi-turn mode state")
+                case .determined(let isMultiTurn):
+                    continuation.resume(returning: isMultiTurn)
                 }
             }
         }
@@ -265,7 +265,7 @@ package final class EnsemblePorterLogic<IntraEnsembleTransponder: EnsembleTransp
                         """)
 
                     // Signal multi-turn mode on first material
-                    self.modeState.withLock { state in
+                    self.multiTurnModeState.withLock { state in
                         switch state {
                         case .undetermined(let continuation):
                             state = .determined(true)

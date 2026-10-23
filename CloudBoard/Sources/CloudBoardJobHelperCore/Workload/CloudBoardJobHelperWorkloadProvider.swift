@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,8 +18,8 @@ protocol CloudBoardJobHelperWorkloadProvider: Sendable {
     func getCloudApp(
         cloudAppName: String,
         requestSecrets: RequestSecrets,
-        ensembleKeyDistributor: EnsembleKeyDistributorProtocol,
         pirHelper: PIRHelperProtocol,
+        toolInvocationHelper: ToolInvocationHelperProtocol,
         jobUUID: UUID,
         cbJobHelperLogMetadata: CloudBoardJobHelperLogMetadata
     ) throws -> ManagedCloudAppProtocol

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -66,7 +66,7 @@ public struct TransparencyPolicy: AttestationPolicy {
             Self.logger.log("Attested device is running \(release, privacy: .public):\n\(release.jsonString, privacy: .public)")
 
             Self.logger.log("Verifying inclusion of \(release, privacy: .public) in transparency log")
-            guard let proofs = TransparencyLogProofs(bundle: bundle) else {
+            guard let proofs = bundle.softwareTransparencyProofs else {
                 Self.logger.error("Attestation bundle is missing transparency proofs")
                 throw Error.missingProofs
             }
@@ -84,6 +84,9 @@ public struct TransparencyPolicy: AttestationPolicy {
                 // Unwrap the unknown error
                 Self.logger.error("SWTransparency threw unknown error for \(release, privacy: .public): \(error, privacy: .public)")
                 throw Error.unknown(error: error)
+            } catch let error as TransitiveTransparencyVerifier.Error {
+                Self.logger.error("Transitive transparency verifier threw error \(error, privacy: .public)")
+                throw error
             } catch {
                 Self.logger.error("SWTransparency threw unknown error for \(release, privacy: .public): \(error, privacy: .public)")
                 throw Error.unknown(error: error)

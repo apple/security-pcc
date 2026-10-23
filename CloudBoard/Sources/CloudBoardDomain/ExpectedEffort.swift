@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -35,7 +35,7 @@ package enum ExpectedEffortError: Error {
 /// it allows *policy* to be defined in ROPES (where it is easy to change).
 ///
 /// In doing so in a rigid way so that CloudBoard can ensure that the form of this that is presented to ROPES
-/// has been transformed in a way that private information that could be used for fingerprinting is lnot
+/// has been transformed in a way that private information that could be used for fingerprinting is not
 /// leaked.
 ///
 /// The identifiers for the efforts are strings because they are all application specific and thus

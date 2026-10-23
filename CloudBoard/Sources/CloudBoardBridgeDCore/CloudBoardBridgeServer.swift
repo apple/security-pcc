@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,10 +12,12 @@
 // EA1937
 // 10/02/2024
 
-import CloudBoardBridgeDAPI
+internal import CloudBoardBridgeDAPI
+import CloudBoardCommon
 internal import CloudBoardDomain
 import Foundation
 import os
+import Tracing
 
 actor CloudBoardBridgeServer {
     private static let logger: Logger = .init(
@@ -25,13 +27,24 @@ actor CloudBoardBridgeServer {
 
     private let apiServer: CloudBoardBridgeAPIServerProtocol
     private let pirServiceClient: PIRServiceClientProtocol?
+    private let pccToolGatewayClient: PCCToolGatewayClientProtocol?
+    private let tracer = BridgeRequestSummaryTracer()
+
+    private let appleSigningServiceClient: BridgeAppleSigningServiceClientProtocol?
+    private let cipCompanionServiceClient: BridgeCIPCompanionServiceClientProtocol?
 
     init(
         apiServer: CloudBoardBridgeAPIServerProtocol,
-        pirServiceClient: PIRServiceClientProtocol?
+        pirServiceClient: PIRServiceClientProtocol?,
+        pccToolGatewayClient: PCCToolGatewayClientProtocol?,
+        appleSigningServiceClient: BridgeAppleSigningServiceClientProtocol?,
+        cipCompanionServiceClient: BridgeCIPCompanionServiceClientProtocol?
     ) {
         self.apiServer = apiServer
         self.pirServiceClient = pirServiceClient
+        self.pccToolGatewayClient = pccToolGatewayClient
+        self.appleSigningServiceClient = appleSigningServiceClient
+        self.cipCompanionServiceClient = cipCompanionServiceClient
     }
 
     func run() async throws {
@@ -61,5 +74,84 @@ extension CloudBoardBridgeServer: CloudBoardBridgeAPIServerDelegateProtocol {
             encryptedRequest,
             traceContext: traceContext
         )
+    }
+
+    func makeToolInvocationRequest(
+        _ request: PCCToolInvocationRequest,
+    ) async throws -> PCCToolInvocationResponse {
+        guard let pccToolGatewayClient = self.pccToolGatewayClient else {
+            Self.logger.error("Tool Gateway client not available")
+            throw PCCToolInvocationError.clientUnavailable
+        }
+        return try await self.tracer.withSpan("invoke_tool_call_request", traceContext: request.traceContext) { span in
+            return try await pccToolGatewayClient.invokeTool(
+                request: request,
+                span: span
+            )
+        }
+    }
+
+    func makeAppleSigningServiceSignRequest(
+        _ request: AppleSigningServiceSignRequest,
+        traceContext: AppleSigningServiceTraceContext
+    ) async throws -> InternalAppleSigningServiceSignResponse {
+        guard let appleSigningServiceClient = self.appleSigningServiceClient else {
+            Self.logger.error("AppleSigningService client not available")
+            throw InternalAppleSigningServiceErrorResponse(
+                error: AppleSigningServiceError.clientUnavailable
+            )
+        }
+        return try await self.tracer.withSpan(
+            "invoke_apple_signing_service_sign_request",
+            traceContext: traceContext
+        ) { span in
+            return try await appleSigningServiceClient.sign(
+                request: request,
+                traceContext: traceContext,
+                span: span
+            )
+        }
+    }
+
+    func makeAppleSigningServiceGetKeyVersionsRequest(
+        traceContext: AppleSigningServiceTraceContext
+    ) async throws -> InternalAppleSigningServiceGetKeyVersionsResponse {
+        guard let appleSigningServiceClient = self.appleSigningServiceClient else {
+            Self.logger.error("AppleSigningService client not available")
+            throw InternalAppleSigningServiceErrorResponse(
+                error: AppleSigningServiceError.clientUnavailable
+            )
+        }
+        return try await self.tracer.withSpan(
+            "invoke_apple_signing_service_get_key_versions_request",
+            traceContext: traceContext
+        ) { span in
+            return try await appleSigningServiceClient.getKeyVersions(
+                traceContext: traceContext,
+                span: span
+            )
+        }
+    }
+
+    func makeCIPCompanionServiceVerifyImageRequest(
+        _ request: CIPCompanionServiceVerifyImageRequest,
+        traceContext: CIPCompanionServiceTraceContext
+    ) async throws -> InternalCIPCompanionServiceImageVerificationResponse {
+        guard let cipCompanionServiceClient = self.cipCompanionServiceClient else {
+            Self.logger.error("CIPCompanionService client not available")
+            throw InternalCIPCompanionServiceErrorResponse(
+                error: CIPCompanionServiceError.clientUnavailable
+            )
+        }
+        return try await self.tracer.withSpan(
+            "invoke_cip_companion_service_verify_image_request",
+            traceContext: traceContext
+        ) { span in
+            return try await cipCompanionServiceClient.verifyImage(
+                request: request,
+                traceContext: traceContext,
+                span: span
+            )
+        }
     }
 }

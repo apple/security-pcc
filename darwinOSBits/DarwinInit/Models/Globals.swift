@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,6 +18,9 @@
 //
 //
 
+import DarwinInitConfig
+import os
+
 /// Contains the config values that is common to the application of all configurations.
 struct Globals {
     var rebootAfterSetup = false
@@ -27,6 +30,7 @@ struct Globals {
     var cryptexCacheInvalidationId: String?
     var configSecurityPolicy: String?
     var secureConfigParameters: [String: JSON] = [:]
+    var builtinCryptexOverride: [String: Config.Cryptex.Cryptex] = [:]
 }
 
 extension Globals {
@@ -63,6 +67,7 @@ extension Globals: CustomStringConvertible {
         }
         res += "\n  cryptexCacheInvalidationId: \(cryptexCacheInvalidationId ?? "Not Set")"
         res += "\n  configSecurityPolicy: \(String(describing: configSecurityPolicy))"
+        res += "\n  builtinCryptexOverride: [\(builtinCryptexOverride.keys.joined(separator: ", "))]"
 
         res += "\n}"
 
@@ -79,6 +84,13 @@ struct GlobalsBuilder {
     struct ValueRef<Value: Equatable>: Equatable {
         let value: Value
         let index: Int
+        let path: JSONPointer
+
+        init(value: Value, index: Int, path: JSONPointer = JSONPointer(components: [])) {
+            self.value = value
+            self.index = index
+            self.path = path
+        }
     }
 
     /// The policy to apply when combining values from multiple configurations.
@@ -175,7 +187,7 @@ struct GlobalsBuilder {
             guard let (val, loc) = self.source.value(for: config) else { return }
             guard let val else { return }
             do {
-                try policy.check(.init(value: val, index: index))
+                try policy.check(.init(value: val, index: index, path: loc))
             } catch {
                 throw GlobalsError(config: index, location: loc, reason: error)
             }
@@ -234,12 +246,21 @@ struct GlobalsBuilder {
 // MARK: - Policies
 extension GlobalsBuilder {
 
-    /// First occurrence will set the value, subsequent ones will be ignored
+    /// First occurrence will set the value, subsequent ones will be ignored.
+    ///
+    /// When constructed with `init(forced:)`, the value is pre-determined and
+    /// all config values are ignored.
     struct FirstValuePolicy<Value: Equatable>: Policy {
         var value: Value?
 
+        init() { self.value = nil }
+        init(forced: Value) { self.value = forced }
+
         mutating func check(_ newValue: ValueRef<Value>) throws {
-            guard value == nil else { return }
+            guard value == nil else {
+                logger.info("Ignoring \(newValue.path, privacy: .public): value already determined")
+                return
+            }
             self.value = newValue.value
         }
     }
@@ -314,6 +335,21 @@ extension GlobalsBuilder {
         }
     }
 
+    struct BuiltinCryptexPolicy: Policy {
+        var dict: [String: Config.Cryptex.Cryptex] = [:]
+        var value: [String: Config.Cryptex.Cryptex]? {
+            dict
+        }
+
+        mutating func check(_ newValue: ValueRef<[String: Config.Cryptex.Cryptex]>) throws {
+            for (key, val) in newValue.value {
+                if kBuiltinCryptexIdentifiers.contains(key) {
+                    dict[key] = val
+                }
+            }
+        }
+    }
+
 }
 
 // MARK: - Globals : GlobalBuilder integration
@@ -329,22 +365,22 @@ extension Globals {
             dest: \Globals.rebootAfterSetup
         )
 
-        builder.register(
-            source: .init(\Config.cryptex?.cache?.$retainPreviouslyCachedCryptexesUnsafely),
-            dest: \Globals.retainCachedCryptexes
-        )
-
-        // For non-internal users lock cryptexes is just ignored.
-        let lockPolicy: any GlobalsBuilder.Policy<Bool> = if !computer.allowsInternalSecurityPolicies {
-            GlobalsBuilder.FirstValuePolicy(value: false)
+        // Retaining cached cryptexes is unsafe and only allowed on internal devices.
+        let retainPolicy: any GlobalsBuilder.Policy<Bool> = if !computer.allowsInternalSecurityPolicies {
+            GlobalsBuilder.FirstValuePolicy(forced: false)
         } else {
             GlobalsBuilder.SameValuePolicy()
         }
 
         builder.register(
+            source: .init(\Config.cryptex?.cache?.$retainPreviouslyCachedCryptexesUnsafely),
+            dest: \Globals.retainCachedCryptexes,
+            policy: retainPolicy
+        )
+
+        builder.register(
             source: .init(\Config.cryptex?.$lock),
-            dest: \Globals.lockCryptexes,
-            policy: lockPolicy
+            dest: \Globals.lockCryptexes
         )
 
         builder.register(
@@ -366,6 +402,12 @@ extension Globals {
             source: .init(\Config.$secureConfig),
             dest: \Globals.secureConfigParameters,
             policy: GlobalsBuilder.JSDictCombinePolicy()
+        )
+
+        builder.register(
+            source: .init(\Config.cryptex?.$cryptexes),
+            dest: \Globals.builtinCryptexOverride,
+            policy: GlobalsBuilder.BuiltinCryptexPolicy()
         )
     }
 

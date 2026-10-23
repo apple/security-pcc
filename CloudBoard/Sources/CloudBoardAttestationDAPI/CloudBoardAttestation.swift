@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,6 +12,9 @@
 // EA1937
 // 10/02/2024
 
+import CryptoKit
+import Foundation
+
 /// Defines shared constants that are relevant for users of the CloudBoardAttestationDAPI
 public enum CloudBoardAttestation: Sendable {
     public static let keychainAccessGroup = "com.apple.cloudos.cloudboard"
@@ -22,4 +25,17 @@ public enum CloudBoardAttestation: Sendable {
     /// Therefore this magic value is passed around in all cases where it would have been simply nil
     /// *only* when in the test mode (which is only allowed to happen outside of customer operating modes)
     package static let neverKnownReleaseDigest: String = "0x50FFC001"
+}
+
+/// This is used for clarity in code as Data is used in many places
+package typealias RawAttestationBundle = Data
+
+/// When operation on unparsed raw attestation bundles (which are simply a blob of bytes)
+/// we often need to use secure keys for them when caching things to avoid expensive reparses
+/// This provides that standard form
+package extension RawAttestationBundle {
+    /// This is also used by ROPES as "node identifier" for each attestation.
+    package var keyID: SHA256Digest {
+        SHA256.hash(data: self)
+    }
 }

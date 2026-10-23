@@ -1,0 +1,27 @@
+ARG swiftVersion=6.3
+
+# Same base layers as Dockerfile, but the `swift package resolve` step is
+# omitted. Use this Dockerfile when network access for new dependencies is
+# unavailable inside the build container; the host's `.build/checkouts/`
+# (already populated via macOS swiftpm) will be reused via the bind mount
+# at `docker run` time.
+FROM docker.apple.com/coreosvn/apple-archive-ubi9mw:1 as aea
+FROM docker.apple.com/base-images/ubi9/swift$swiftVersion-builder as base
+
+RUN yum install -y libacl-devel bzip2-devel openssl-devel
+
+WORKDIR /build
+
+# AEA static archives
+COPY --from=aea /AppleArchiveRoots/usr/lib/*.a /usr/lib64/
+COPY --from=aea /AppleArchiveRoots/usr/lib/*.a /usr/lib/
+COPY --from=aea /AppleArchiveRoots/usr/include/ /usr/include/
+RUN mv /usr/lib64/libAppleArchive_static.a /usr/lib64/libAppleArchive.a \
+    && mv /usr/lib64/libcompression_static.a /usr/lib64/libcompression.a \
+    && mv /usr/lib/libAppleArchive_static.a /usr/lib/libAppleArchive.a \
+    && mv /usr/lib/libcompression_static.a /usr/lib/libcompression.a
+
+# Run as a non-root user for development and testing.
+RUN useradd -m -s /bin/bash builder && chown -R builder:builder /build \
+    && rm -f /tmp/*.lock
+USER builder

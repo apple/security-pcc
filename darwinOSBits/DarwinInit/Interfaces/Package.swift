@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -112,11 +112,6 @@ struct PackageInstaller {
 
     func install() -> Bool {
         let logger = PackageInstaller.sharedLogger
-
-        guard support_package_install() else {
-            logger.error("Package installation is not supported on this platform")
-            return false
-        }
 
         logger.log("Installing package \(url) to \(destination)")
 

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -31,7 +31,12 @@ extension CloudAttestation.AttestationBundle {
         } else {
             fileData = try Data(contentsOf: URL(filePath: file))
         }
+        try self.init(fileData: fileData, format: format, requestIndex: requestIndex, attestationIndex: attestationIndex)
+    }
 
+    /// Variant taking already-read file bytes so callers that have read the
+    /// input themselves (e.g. for v2 auto-detection) don't re-read stdin.
+    init(fileData: Data, format: AttestationFormat, requestIndex: Int?, attestationIndex: Int?) throws {
         switch format {
         case .attestationBundle(.json):
             self = try .init(jsonString: String(decoding: fileData, as: UTF8.self))
@@ -64,11 +69,12 @@ extension CloudAttestation.AttestationBundle {
             }
             let request = report.privateCloudComputeRequests[requestIndex]
 
-            guard request.nodes.indices.contains(attestationIndex) else {
+            let nodes = request.nodes ?? []
+            guard nodes.indices.contains(attestationIndex) else {
                 throw Self.Error.attestationNotFound(index: attestationIndex)
             }
 
-            let attestationString = request.nodes[attestationIndex].attestationBundle
+            let attestationString = nodes[attestationIndex].attestationBundle
             guard attestationString.count > 0 else {
                 throw Self.Error.invalidArguments(error: "Empty attestation bundle")
             }
@@ -120,33 +126,15 @@ extension CloudAttestation.AttestationBundle {
 // MARK: - Apple Intelligence Report
 
 struct AppleIntelligenceReport: Codable {
-    var modelRequests: [ModelRequest]
     var privateCloudComputeRequests: [PrivateCloudComputeRequest]
 }
 
 extension AppleIntelligenceReport {
-    struct ModelRequest: Codable {
-        var timestamp: Double
-        var identifier: String
-        var prompt: String
-        var response: String
-        var model: String
-        var modelVersion: String
-        var clientIdentifier: String
-        var executionEnvironment: String
-    }
-
     struct PrivateCloudComputeRequest: Codable {
-        var timestamp: Double
-        var requestId: String
-        var pipelineKind: String
-        var pipelineParameters: String
-        var nodes: [Node]
+        var nodes: [Node]?
     }
 
     struct Node: Codable {
-        var node: String
-        var nodeState: String?
         var attestationBundle: String
     }
 }

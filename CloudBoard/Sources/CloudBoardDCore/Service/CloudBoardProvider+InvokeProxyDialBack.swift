@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -46,6 +46,8 @@ enum InvokeProxyDialBackError: Swift.Error, GRPCStatusTransformable {
     case negotiationMissingInformation(missingFields: [String])
     /// A message from ROPES was not one we support anymore
     case unsupportedProtocol
+    /// The InvokeWorkload handler terminated before this dialback completed
+    case invokeWorkloadTerminated
 
     func makeGRPCStatus() -> InternalGRPC.GRPCStatus {
         switch self {
@@ -79,6 +81,8 @@ enum InvokeProxyDialBackError: Swift.Error, GRPCStatusTransformable {
             )
         case .unsupportedProtocol:
             .init(code: .invalidArgument, message: "Unsupported protocol")
+        case .invokeWorkloadTerminated:
+            .init(code: .cancelled, message: "Parent InvokeWorkload terminated before dialback completed")
         }
     }
 }
@@ -117,7 +121,10 @@ extension CloudBoardProvider {
         guard self.isProxy else {
             throw InvokeProxyDialBackError.notProxy
         }
-        let (jobHelperResponseStream, jobHelperResponseContinuation) = AsyncStream<JobHelperInvokeProxyDialBackResponse>
+        let (jobHelperResponseStream, jobHelperResponseContinuation) = AsyncThrowingStream<
+            JobHelperInvokeProxyDialBackResponse,
+            Swift.Error
+        >
             .makeStream()
         do {
             try await withThrowingTaskGroup(of: Void.self) { group in
@@ -282,6 +289,7 @@ extension CloudBoardProvider {
 
                 // Outgoing messages
                 group.addTask {
+                    var workerRequestMessagesSent = 0
                     for try await response in jobHelperResponseStream {
                         let workerID = serviceContext.withLock { $0.workerID }
                         switch response {
@@ -330,14 +338,23 @@ extension CloudBoardProvider {
                                 }
                             })
                         case .workerRequestMessage(let payload, let isFinal):
-                            CloudBoardProviderCheckpoint(
-                                logMetadata: CloudBoardDaemonLogMetadata(
-                                    serviceContext: serviceContext.withLock { $0 },
-                                    spanID: serviceContext.withLock { $0.parentSpanID }
-                                ),
-                                operationName: "sending_invoke_proxy_dial_back_worker_request_message",
-                                message: "Sending InvokeProxyDialBack worker request message"
-                            ).log(workerID: workerID, to: Self.tracingLogger, level: .default)
+                            workerRequestMessagesSent += 1
+                            if Self.chunkLogSampler.shouldLog(index: workerRequestMessagesSent, isFinal: isFinal) {
+                                CloudBoardProviderCheckpoint(
+                                    logMetadata: CloudBoardDaemonLogMetadata(
+                                        serviceContext: serviceContext.withLock { $0 },
+                                        spanID: serviceContext.withLock { $0.parentSpanID }
+                                    ),
+                                    operationName: "sending_invoke_proxy_dial_back_worker_request_message",
+                                    message: "Sending InvokeProxyDialBack worker request message"
+                                ).log(
+                                    workerID: workerID,
+                                    chunkIndex: workerRequestMessagesSent,
+                                    isFinal: isFinal,
+                                    to: Self.tracingLogger,
+                                    level: .default
+                                )
+                            }
 
                             try await responseStream.send(.with {
                                 $0.proxyToComputeMessage = .with {
@@ -440,7 +457,9 @@ extension CloudBoardProvider {
                 keyID: keyID,
                 attestationBundle: rawAttestationBundle,
                 bypassContextID: attestation.hasOhttpContext ? attestation.ohttpContext : nil,
-                spanID: spanID
+                spanID: spanID,
+                workerBuildVersion: attestation.nodeBuildVersion,
+                workerReleaseType: attestation.nodeReleaseType
             ),
             workloadParameters: Dictionary(parameters: workload.param)
         ))

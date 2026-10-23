@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,13 +19,31 @@
 //  Created by ORAC on 15/09/2025.
 //
 
+private import EnsemblePorterCommon
 private import EnsemblePorterControllerDCore
+private import OSLog
 
 #if canImport(AppleComputeEnsembler)
 @_weakLinked private import AppleComputeEnsembler
 
 if #_hasSymbol(AppleComputeEnsembler.DerivedKeyType.self) {
-    try await EnsemblePorterController(mode: .production()).run()
+    let logger = Logger(
+        subsystem: EnsemblePorterConstants.controllerLoggerSubsystem,
+        category: "main"
+    )
+    let config = try EnsemblePorterSecureConfigLoader.real.load()
+    logger.log("""
+        Loaded SecureConfig. \
+        security_policy=\(String(describing: config.securityPolicy), privacy: .public) \
+        heartbeat_timeout_duration=\(config.heartbeatTimeoutDuration, privacy: .public) \
+        heartbeat_check_interval=\(config.heartbeatSendInterval, privacy: .public) \
+        max_porter_instances=\(config.maxPorterInstances, privacy: .public)
+        """)
+    try await EnsemblePorterController(
+        mode: .production(maxPorterInstances: config.maxPorterInstances),
+        heartbeatTimeoutDuration: config.heartbeatTimeoutDuration,
+        heartbeatCheckInterval: config.heartbeatSendInterval
+    ).run()
 } else {
     try await EnsemblePorterController(mode: .test()).run()
 }

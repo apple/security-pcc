@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,17 +19,32 @@
 
 import RemoteServiceDiscovery_Private
 internal import DarwinInitBridging
+import CoreTime.plugin
 
 enum Time {
-	internal static var isSynchronized: Bool = {
-		// If there's BMC connected over RSD, use that as a fast path and sync time with it
-		if let remoteDevice = remote_device_copy_unique_of_type(REMOTE_DEVICE_TYPE_COMPUTE_CONTROLLER),
-				remote_device_get_state(remoteDevice) == REMOTE_DEVICE_STATE_CONNECTED {
-			logger.log("Syncing time with remote device")
-			return remote_device_timesync(remoteDevice)
-		}
+    internal static var isSynchronized: Bool = {
+        // If there's BMC connected over RSD, use that as a fast path and sync time with it
+        if let remoteDevice = remote_device_copy_unique_of_type(REMOTE_DEVICE_TYPE_COMPUTE_CONTROLLER),
+           remote_device_get_state(remoteDevice) == REMOTE_DEVICE_STATE_CONNECTED {
+            logger.log("Syncing time with remote device")
+            return remote_device_timesync(remoteDevice)
+        }
 
-		logger.log("Syncing time with timed")
-		return shim_TMSetupTime()
-	}()
+        logger.log("Syncing time with timed")
+        var time_ready: Bool = false
+        let timeout: CFTimeInterval = 60
+        let q: dispatch_queue_t = DispatchQueue(__label: "com.apple.darwinit-time-sync", attr: nil)
+        let dg: dispatch_group_t = DispatchGroup()
+        dg.enter()
+        TMSetupTime(q, timeout, { error in
+            if let error {
+                logger.error("Syncing time error: \(error)")
+            } else {
+                logger.info("Syncing time complete")
+                time_ready = true
+            }
+            dg.leave();
+        })
+        return time_ready
+    }()
 }

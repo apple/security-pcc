@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,65 +20,76 @@
 //
 
 import CloudAttestation
-internal import CollectionsInternal
 private import DarwinPrivate.os.variant
 import Foundation
+import Network
 import PrivateCloudCompute
 import os.log
 
+private let logger = Logger(for: .daemon)
+
 typealias ThimbledTrustedRequestFactory = TrustedRequestFactory<
+    DefaultConfiguration,
     NWAsyncConnection,
-    AttestationStore,
+    LegacyAttestationStore,
+    DeferredAttestationStore,
     AttestationVerifier<FeatureFlagChecker, CloudAttestation.MuxValidator>,
-    RateLimiter,
+    DeferredRateLimiter,
     ServerDrivenConfiguration,
     SystemInfo,
-    NSPTokenProvider,
+    OSEligibility,
+    DeviceState,
+    TokenProviderFactory<DefaultConfiguration, FeatureFlagChecker, ServerDrivenConfiguration, SystemInfo>,
     FeatureFlagChecker,
     ContinuousClock
 >
 
 final class TrustedRequestFactory<
+    Configuration: PrivateCloudCompute.Configuration,
     ConnectionFactory: NWAsyncConnectionFactoryProtocol,
+    LegacyAttestationStore: LegacyAttestationStoreProtocol,
     AttestationStore: AttestationStoreProtocol,
     AttestationVerifier: AttestationVerifierProtocol,
     RateLimiter: RateLimiterProtocol,
     ServerDrivenConfiguration: ServerDrivenConfigurationProtocol,
     SystemInfo: SystemInfoProtocol,
-    TokenProvider: TokenProviderProtocol,
+    OSEligibility: OSEligibilityProtocol,
+    DeviceState: DeviceStateProtocol,
+    TokenProviderFactory: TokenProviderFactoryProtocol,
     FeatureFlagChecker: FeatureFlagCheckerProtocol,
     Clock: _Concurrency.Clock
 >: Sendable where Clock.Duration == Duration {
 
-    let logger = tc2Logger(forCategory: .daemon)
-    let config: any Configuration
+    let config: Configuration
     let serverDrivenConfig: ServerDrivenConfiguration
     let systemInfo: SystemInfo
+    let osEligibility: OSEligibility
+    let deviceState: DeviceState
 
     let connectionFactory: ConnectionFactory
-    let attestationStore: AttestationStore?
+    let attestationStoreOrLegacyStore: AttestationStoreOrLegacyStore<LegacyAttestationStore, AttestationStore>
     let attestationVerifier: AttestationVerifier
     let rateLimiter: RateLimiter
-    let tokenProvider: TokenProvider
+    let tokenProviderFactory: TokenProviderFactory
     let clock: Clock
     let clientBundleIdentifier: String
-    let allowBundleIdentifierOverride: Bool
     let parametersCache: WorkloadLRUCache
     let eventStreamContinuation: AsyncStream<ThimbledEvent>.Continuation
     let featureFlagChecker: FeatureFlagChecker
 
     init(
-        config: any Configuration,
+        config: Configuration,
         serverDrivenConfig: ServerDrivenConfiguration,
         systemInfo: SystemInfo,
+        osEligibility: OSEligibility,
+        deviceState: DeviceState,
         connectionFactory: ConnectionFactory,
-        attestationStore: AttestationStore?,
+        attestationStoreOrLegacyStore: AttestationStoreOrLegacyStore<LegacyAttestationStore, AttestationStore>,
         attestationVerifier: AttestationVerifier,
         rateLimiter: RateLimiter,
-        tokenProvider: TokenProvider,
+        tokenProviderFactory: TokenProviderFactory,
         clock: Clock,
         clientBundleIdentifier: String,
-        allowBundleIdentifierOverride: Bool,
         parametersCache: WorkloadLRUCache,
         eventStreamContinuation: AsyncStream<ThimbledEvent>.Continuation,
         featureFlagChecker: FeatureFlagChecker
@@ -86,98 +97,142 @@ final class TrustedRequestFactory<
         self.config = config
         self.serverDrivenConfig = serverDrivenConfig
         self.systemInfo = systemInfo
+        self.osEligibility = osEligibility
+        self.deviceState = deviceState
         self.connectionFactory = connectionFactory
-        self.attestationStore = attestationStore
+        self.attestationStoreOrLegacyStore = attestationStoreOrLegacyStore
         self.attestationVerifier = attestationVerifier
         self.rateLimiter = rateLimiter
-        self.tokenProvider = tokenProvider
+        self.tokenProviderFactory = tokenProviderFactory
         self.clock = clock
         self.clientBundleIdentifier = clientBundleIdentifier
-        self.allowBundleIdentifierOverride = allowBundleIdentifierOverride
         self.parametersCache = parametersCache
         self.eventStreamContinuation = eventStreamContinuation
         self.featureFlagChecker = featureFlagChecker
     }
 
     func startTrustedRequest(
-        clientRequestID: UUID,
-        parameters: Workload,
-        multiTurn: Bool,
-        bundleID requestedBundleID: String?,
-        originatingBundleIdentifier: String?,
-        featureID: String?,
-        sessionID: UUID?,
+        requestParameters: RequestParameters,
+        bundleIdentifier: BundleIdentifier,
+        originatingBundleIdentifier: BundleIdentifier?,
         effectiveUserIdentifier: uid_t?
-    ) -> TrustedRequestXPCProxy? {
-        // Figure out which bundle identifier to use
-        var bundleIdentifier = self.clientBundleIdentifier
-        if let requestedBundleID {
-            // if we aren't allowed to use the requested one, error out
-            if !allowBundleIdentifierOverride {
-                self.logger.error("client not allowed to override \(self.clientBundleIdentifier) with \(requestedBundleID). Need entitlement \(PrivateCloudComputeEntitlement.bundleIdentifierOverride.rawValue)")
-                return nil
-            }
-            bundleIdentifier = requestedBundleID
-        }
-
+    ) throws -> TrustedRequestXPCProxy {
         // Here, we'll block a call on the basis of the config bag's list of blocked
         // bundle ids. We will block a request on the basis of both its bundleIdentifier
         // (which is actual or overridden) AND its originatingBundleIdentifier, which might
         // be a third party. Assuming the call proceeds, the only remaining use for
         // originatingBundleId will be to pass it in telemetry.
-
         let blockedBundleIds = self.serverDrivenConfig.blockedBundleIds
         guard
             !blockedBundleIds.contains(where: {
-                $0 == bundleIdentifier || $0 == originatingBundleIdentifier || $0 == self.clientBundleIdentifier
+                $0 == bundleIdentifier.rawValue || $0 == originatingBundleIdentifier?.rawValue || $0 == self.clientBundleIdentifier
             })
         else {
-            self.logger.error(
-                "bundleId blocked by server, exiting trusted request with blockedBundleIds=\(blockedBundleIds), bundleId=\(bundleIdentifier), originatingBundleId=\(originatingBundleIdentifier ?? "nil")), clientBundleIdentifier=\(self.clientBundleIdentifier)"
+            logger.error(
+                "bundleID blocked by server, exiting trusted request with blockedBundleIDs=\(blockedBundleIds), bundleID=\(bundleIdentifier.rawValue), originatingBundleID=\(originatingBundleIdentifier?.rawValue ?? "nil"), clientBundleIdentifier=\(self.clientBundleIdentifier)"
             )
-            return nil
+            throw PrivateCloudComputeError(code: .bundleIdBlocked)
         }
 
-        guard
-            let configuration = try? TrustedRequestConfiguration(
-                clientBundleID: self.clientBundleIdentifier,
-                bundleID: bundleIdentifier,
-                originatingBundleID: originatingBundleIdentifier,
-                featureID: featureID,
-                sessionID: sessionID,
-                configuration: config,
-                parameters: parameters,
-                multiTurn: multiTurn,
-                serverConfiguration: self.serverDrivenConfig,
-                userID: effectiveUserIdentifier,
-                systemInfo: self.systemInfo,
-                featureFlagChecker: self.featureFlagChecker
-            )
-        else {
-            return nil
-        }
+        let configuration = try TrustedRequestConfiguration(
+            clientBundleID: self.clientBundleIdentifier,
+            bundleID: bundleIdentifier,
+            originatingBundleID: originatingBundleIdentifier,
+            featureID: requestParameters.featureIdentifier,
+            sessionID: requestParameters.sessionIdentifier,
+            configuration: config,
+            parameters: requestParameters.workload,
+            multiTurn: requestParameters.isMultiTurn,
+            qos: requestParameters.qos,
+            serviceClass: requestParameters.serviceClass?.unwrap(),
+            serverConfiguration: self.serverDrivenConfig,
+            userID: effectiveUserIdentifier,
+            systemInfo: self.systemInfo,
+            deviceState: self.deviceState,
+            featureFlagChecker: self.featureFlagChecker
+        )
 
         let serverRequestID = UUID()
-        logger.log("server id=\(serverRequestID) set for request against client id=\(clientRequestID)")
+        logger.log("server id=\(serverRequestID) set for request against client id=\(requestParameters.clientRequestId)")
+
+        let requestMetrics = RequestMetrics(
+            clientRequestID: requestParameters.clientRequestId,
+            serverRequestID: serverRequestID,
+            bundleID: configuration.bundleID,
+            originatingBundleID: configuration.originatingBundleID,
+            featureID: configuration.featureID,
+            sessionID: configuration.sessionID,
+            environment: configuration.environment.name,
+            qos: configuration.serverQoS,
+            serviceClass: configuration.serviceClass,
+            parameters: requestParameters.workload,
+            eventStreamContinuation: self.eventStreamContinuation,
+            clock: self.clock,
+            attestationStoreOrLegacyStore: self.attestationStoreOrLegacyStore,
+            systemInfo: self.systemInfo,
+            biomeReporter: BiomeReporter()
+        )
+
+        guard self.deviceState.isUnlockedSinceBoot else {
+            logger.info("request blocked because the device has not been unlocked since boot")
+            let error = PrivateCloudComputeError(code: .unavailableBeforeFirstUnlock)
+            requestMetrics.requestFinished(error: error)
+            throw error
+        }
+
+        guard self.osEligibility.deviceEligibleForPCC else {
+            logger.info("request blocked due to eligibility failure")
+            let error = PrivateCloudComputeError(code: .eligibilityCheckFailed)
+            requestMetrics.requestFinished(error: error)
+            throw error
+        }
 
         let outgoingUserDataWriter = OutgoingUserDataWriter()
         let incomingUserDataReader = IncomingUserDataReader()
         let progressReader = TrustedRequestProgressReader()
+        let oneTimeTokenProvider = try self.tokenProviderFactory.oneTimeTokenProvider(
+            workloadType: requestParameters.workload.type,
+            featureIdentifier: requestParameters.featureIdentifier ?? "",
+            logPrefix: "\(serverRequestID): [ott]"
+        )
+
+        var reputationTokenProvider: TokenProviderFactory.ReputationTokenProvider? = nil
+        if self.featureFlagChecker.isEnabled(.reputationTokens) {
+            do {
+                reputationTokenProvider = try self.tokenProviderFactory.reputationTokenProvider(
+                    workload: requestParameters.workload,
+                    featureIdentifier: requestParameters.featureIdentifier ?? "",
+                    logPrefix: "\(serverRequestID): [reputation]"
+                )
+            } catch {
+                logger.error("\(serverRequestID): failed to create reputation token provider, continuing without it, error=\(error)")
+            }
+        }
+
+        var waitlistTokenProvider: TokenProviderFactory.WaitlistTokenProvider? = nil
+        if self.featureFlagChecker.isEnabled(.waitlistTokens) {
+            waitlistTokenProvider = self.tokenProviderFactory.waitlistTokenProvider(logPrefix: "\(serverRequestID): [waitlist]")
+            logger.info("\(serverRequestID): waitlist token provider, created=\(waitlistTokenProvider != nil)")
+        }
 
         let request = TrustedRequest(
-            clientRequestID: clientRequestID,
+            clientRequestID: requestParameters.clientRequestId,
             serverRequestID: serverRequestID,
             configuration: configuration,
-            parameters: parameters,
+            parameters: requestParameters.workload,
+            stepReporter: AppleIntelligenceStepReporter(forWorkload: requestParameters.workload),
             outgoingUserDataWriter: outgoingUserDataWriter,
             incomingUserDataReader: incomingUserDataReader,
             progressReader: progressReader,
             connectionFactory: self.connectionFactory,
-            attestationStore: self.attestationStore,
+            attestationStoreOrLegacyStore: self.attestationStoreOrLegacyStore,
             attestationVerifier: self.attestationVerifier,
             rateLimiter: self.rateLimiter,
             systemInfo: self.systemInfo,
-            tokenProvider: self.tokenProvider,
+            tokenProvider: oneTimeTokenProvider,
+            reputationTokenProvider: reputationTokenProvider,
+            waitlistTokenProvider: waitlistTokenProvider,
+            requestMetrics: requestMetrics,
             clock: self.clock,
             eventStreamContinuation: self.eventStreamContinuation,
             featureFlagChecker: self.featureFlagChecker
@@ -192,11 +247,16 @@ final class TrustedRequestFactory<
                 // while performing disk writes. However the trusted request path will acquire power assertions. We should be able to
                 // perform all the clean up in parallel while the trusted request runs
                 self.eventStreamContinuation.yield(.attestationStoreCleanup)
-                self.eventStreamContinuation.yield(.reportDailyActiveUserIfNecessary(requestID: request.requestMetrics.requestIDForEventReporting, environment: configuration.environment))
+                self.eventStreamContinuation.yield(
+                    .reportDailyActiveUserIfNecessary(
+                        requestID: request.requestMetrics.requestIDForEventReporting,
+                        environment: configuration.environment.name
+                    )
+                )
 
                 // add the parameters to the cache for prefetching attestations for such requests in the future
                 var prefetchNeeded: Bool = false
-                if let prefetchParameters = parameters.forPrefetching() {
+                if let prefetchParameters = requestParameters.workload.forPrefetching() {
                     if !self.parametersCache.addToCache(value: prefetchParameters) {
                         prefetchNeeded = true
                     }
@@ -214,26 +274,49 @@ final class TrustedRequestFactory<
                 // If we are seeing this workload for the first time, kick off a prefetch so that we have cached attestations for this
                 // workload if another request happens before the scheduled prefetches runs
                 if prefetchNeeded {
-                    self.logger.log("need to prefetch attestations for this workload")
-                    self.eventStreamContinuation.yield(.prefetchAttestationsForNewWorkload(parameters: parameters))
+                    logger.log("need to prefetch attestations for this workload")
+                    self.eventStreamContinuation.yield(.prefetchAttestationsForNewWorkload(workload: requestParameters.workload))
                 }
 
-                // Discard prefetched attestations used for this request and prefetch just a single batch
-                // This is to ensure that attestations never repeat between requests for targetability concerns and
-                // to make sure that the attestation cache is always topped up for future trusted requests which may happen before
-                // the scheduled prefetching runs
-                self.eventStreamContinuation.yield(.discardUsedAttestationsAndPrefetchBatch(serverRequestID: serverRequestID, parameters: parameters))
+                if self.attestationStoreOrLegacyStore.isLegacy {
+                    // Discard prefetched attestations used for this request and prefetch just a single batch
+                    // This is to ensure that attestations never repeat between requests for targetability concerns and
+                    // to make sure that the attestation cache is always topped up for future trusted requests which may happen before
+                    // the scheduled prefetching runs
+                    self.eventStreamContinuation.yield(.discardUsedAttestationsAndPrefetchBatch(serverRequestID: serverRequestID, workload: requestParameters.workload))
+                }
             }
         }
 
         return TrustedRequestXPCProxy(
             requestID: serverRequestID,
+            // Chunk size is computed once at task-creation time (snapshot semantics) from
+            // daemon-side config and feature flags, so the framework receives a stable value
+            // for the lifetime of this request rather than re-evaluating lazily.
+            chunkSize: Self.computeChunkSize(env: configuration.environment, config: self.config, featureFlagChecker: self.featureFlagChecker),
             outgoingUserDataWriter: outgoingUserDataWriter,
             incomingUserDataReader: incomingUserDataReader,
             progressReader: progressReader,
             task: task,
-            xpcEventsObserver: request.requestMetrics
+            xpcEventsObserver: request,
+            featureFlagChecker: self.featureFlagChecker
         )
+    }
+
+    /// Computes the effective chunk size from daemon-side configuration and feature flags
+    ///
+    /// - Returns: The maximum bytes per chunk, or `nil` if chunking is disabled.
+    private static func computeChunkSize(
+        env: TC2Environment,
+        config: Configuration,
+        featureFlagChecker: some FeatureFlagCheckerProtocol
+    ) -> Int? {
+        let flag: PrivateCloudComputeFeatureFlags = env == .production ? .applicationDataChunking : .applicationDataChunkingPreProduction
+        guard featureFlagChecker.isEnabled(flag) else {
+            return nil
+        }
+        let rawSize = config[.applicationDataChunkingSize]
+        return rawSize > 0 ? rawSize : nil
     }
 
     private func logRequest(_ logEntry: TrustedRequestLogEntry) {
@@ -249,10 +332,10 @@ final class TrustedRequestFactory<
         jsonEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
         if let data = try? jsonEncoder.encode(logEntry), let string = String(data: data, encoding: .utf8) {
-            let logger = tc2Logger(forCategory: .requestLog)
+            let logger = Logger(subsystem: logSubsystem, category: LogCategory.requestLogCategoryName)
             logger.log("\(string)")
         } else {
-            self.logger.error("unable to encode and log request")
+            logger.error("unable to encode and log request")
         }
     }
 }

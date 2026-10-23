@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,6 +21,7 @@
 
 public import CryptoKit
 internal import EnsembleWardenCommon
+public import EnsembleWardenXPC
 public import Foundation
 public import IOSurface
 private import OSLog
@@ -77,7 +78,7 @@ public protocol EnsembleWardenServerHandler {
         range: ClosedRange<Int>?,
         host: String,
         requestID: UUID,
-        spanID: UInt64) async throws -> IOSurface
+        spanID: UInt64) async throws -> EnsembleWardenFetchedData
 
     /// Called whenever ioSurfaces metadata are being fetched.
     /// This is only supported with EnsembleTransport backend.
@@ -106,26 +107,32 @@ extension EnsembleWardenServerHandler {
 
     @available(*, deprecated)
     public func start(keyID: UUID, requestID: UUID, spanID: UUID)  {
+        // TODO: Delete this function - we need to co-ordinate a build with TIE to delete this though.
         fatalError("Function should be dead. Pls file a radar")
     }
 
     @available(*, deprecated)
     public func start(keyEncryptionKey: SymmetricKey?, keyID: UUID, requestID: UUID, spanID: UInt64)  {
+        // TODO: Delete this function - we need to co-ordinate a build with TIE to delete this though.
         fatalError("Function should be dead. Pls file a radar")
     }
 
     public func onPublish(serializedXPCRequest: Data, privateData: [IOSurface], requestID: UUID, spanID: UUID) async throws {
-        // Defualt implementation of the old API.
-        // No-op function so adopters can adopt the new API and not have their build break.
+        Logger(subsystem: "com.apple.cloudos.ensemblewarden", category: "EnsembleWardenServerHandler")
+            .warning("onPublish(serializedXPCRequest:privateData:requestID:spanID:) is no longer supported")
     }
 
     /// Called whenever new ioSurfaces are published.
     public func onPublish(serializedXPCRequest: Data, privateData: [IOSurface], purpose: KVCacheTransferPurpose,
                           requestID: UUID, spanID: UInt64) async throws {
-        // Forwarding implementation of the new API.
-        // If this is called users haven't adopted the new API. So call the old one.
-        Logger(subsystem: "com.apple.cloudos.ensemblewarden", category: "EnsembleWardenServerHandler").warning("PLEASE ADOPT NEW ENSEMBLEWARDEN API - onPublish(serializedXPCRequest:privateData:purpose:requestID:spanID:)")
-        try await self.onPublish(serializedXPCRequest: serializedXPCRequest, privateData: privateData, requestID: requestID, spanID: UUID(uint: spanID))
+        Logger(subsystem: "com.apple.cloudos.ensemblewarden", category: "EnsembleWardenServerHandler")
+            .warning("onPublish(serializedXPCRequest:privateData:purpose:requestID:spanID:) is no longer supported")
+    }
+
+    public func onFetch(serializedXPCRequest: Data, requestID: UUID, spanID: UUID) async throws -> [IOSurface] {
+        Logger(subsystem: "com.apple.cloudos.ensemblewarden", category: "EnsembleWardenServerHandler")
+            .warning("onFetch(serializedXPCRequest:requestID:spanID:) is no longer supported")
+        return []
     }
 
     // MARK: New publish/fetch API
@@ -148,7 +155,7 @@ extension EnsembleWardenServerHandler {
         host: String,
         requestID: UUID,
         spanID: UInt64
-    ) async throws -> IOSurface {
+    ) async throws -> EnsembleWardenFetchedData {
         fatalError("\(#function) not implemented")
     }
 

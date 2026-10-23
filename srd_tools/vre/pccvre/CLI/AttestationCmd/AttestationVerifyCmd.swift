@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -66,13 +66,30 @@ extension CLI.AttestationCmd {
         var file: String
 
         func run() async throws {
-            let attestationBundle: AttestationBundle
-            do {
-                attestationBundle = try .init(from: file, format: attestOptions.format, requestIndex: attestOptions.requestIndex, attestationIndex: attestOptions.attestationIndex)
-            } catch {
-                throw CLIError("read attestation bundle: \(error)")
-            }
+            switch try attestOptions.loadAndDispatch(file: file) {
+            case .v2(let nodeBytes):
+                // Route to pccvre-attestation-helper. The helper has its own
+                // policy/validator stack so the v1 NodeValidator flags below are ignored.
+                let resolver = PCCVREAttestationHelperResolver(environment: environment)
+                let envelope = try await attestOptions.runV2Helper(
+                    nodeBytes: nodeBytes,
+                    via: resolver,
+                    subcommand: ["attestation", "verify", "--environment", environment.rawValue]
+                )
+                print(envelope.summary)
+                print()
+                print(envelope.detail)
+                if !envelope.ok {
+                    throw ExitCode(1)
+                }
 
+            case .v1(let nodeBytes, let fileData):
+                let bundle = try attestOptions.decodeV1Bundle(nodeBytes: nodeBytes, fileData: fileData)
+                try await verifyV1(bundle: bundle)
+            }
+        }
+
+        private func verifyV1(bundle attestationBundle: AttestationBundle) async throws {
             let keyData: PublicKeyData
             let keyExpiry: Date
             let validated: Validated.AttestationBundle

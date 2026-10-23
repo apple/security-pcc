@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -36,7 +36,7 @@ message PrivateCloudComputeRequest {
     // OpenRequestPayload
     ProxyInvokeOpen proxy_invoke_open = 8;
       
-    // Sent by the clientX to cancel a subrequest, either due to an error or user action.
+    // Sent by the client to cancel a subrequest, either due to an error or user action.
     // Cancellation can occur at any point in the subrequest's processing. For example, it
     // can happen before any payload_chunk is sent, during sending, or after successful
     // sending while receiving response. Due to the asynchronous nature of the process,
@@ -49,31 +49,57 @@ message PrivateCloudComputeRequest {
 }
 
 message OpenRequestPayload {
-  // Long-term token used for abuse prevention
-  bytes token_granting_token = 1;
-  // Used to verify that the one-time token is derived from the TGT
-  bytes ott_salt = 2;
+  reserved 1, 2;
+  reserved "token_granting_token", "ott_salt";
   // Protocol version. Used to distinguish between the non-subrequest (v0) and
   // subrequest (v1) protocols. I.e. if version is set to 1, CloudBoard expects
   // client to send sub_open/payload_chunk/sub_close messages rather than the
   // application_payload message.
   uint32 version = 3;
+
   // Supported capabilities on the client
   Capabilities capabilities = 4;
+  // Workload type, same identifier as provided to ROPES
+  string workload_type = 5;
+
+  ReputationTokenRequest reputation_token_request = 6;
+
+  // Means user has opted-in to share Diagnostics & Usage information with Apple.
+  bool opted_in_to_share_diagnostics_and_usage_with_apple = 7;
+}
+
+enum CompressionAlgorithm {
+  UNKNOWN = 0;
+  NONE = 1;
+  ZLIB = 2;
+  LZFSE = 3;
+}
+
+message CompressedPayload {
+  CompressionAlgorithm compression_algorithm = 1;
+  bytes compressed_data = 2;
 }
 
 message Capabilities {
   // Supports prefix based chunking at the application data level
   ApplicationDataChunking application_data_chunking = 1;
 
+  // Supports compression for REL entry
+  RequestExecutionLogEntryCompression request_execution_log_entry_compression = 2;
+
   message ApplicationDataChunking {
     uint32 size = 1;
+  }
+
+  message RequestExecutionLogEntryCompression {
+    // One or more algorithms supported by client application 
+    repeated CompressionAlgorithm supported_algorithms = 1;
   }
 }
 
 message PayloadChunk {
   // id in case we ever want to support simultaneous requests per connection
-  uint32 subrequest_id = 1;
+  uint64 subrequest_id = 1;
   bytes chunk_data = 2;
 }
 
@@ -92,11 +118,12 @@ message OpaqueCryptoMaterial {
 
 message OpenSubrequestPayload {
   // id in case we ever want to support simultaneous requests per connection
-  uint32 subrequest_id = 1;
+  uint64 subrequest_id = 1;
   // Priority of the subrequest, e.g. whether it is discardable under high utilization
   SubrequestExecutionPriority priority = 2;
-  // Key material sent alongside application layer requests. The key material is not directly exposed to cloud apps but
-  // is made available to support apps if entitled appropriately.
+  // Key material sent alongside application layer requests. The key material is not
+  // directly exposed to cloud apps but is made available to support apps if entitled
+  // appropriately.
   repeated OpaqueCryptoMaterial opaque_crypto_material = 3;
   // The OTT for this inference;
   // in the first payload, this is the same as what ROPES saw
@@ -105,18 +132,42 @@ message OpenSubrequestPayload {
 
 message CloseSubrequestPayload {
   // id in case we ever want to support simultaneous requests per connection
-  uint32 subrequest_id = 1;
+  uint64 subrequest_id = 1;
   // currently empty
 }
 
 message CancelSubrequestPayload {
   // id of the subrequest that is being canceled
-  uint32 subrequest_id = 1;
+  uint64 subrequest_id = 1;
 }
 
 message FinalMessage {
   // Message that does not carry any payload that signifies that this is the final message.
   // This message is not forwarded to the cloud app.
+}
+
+message ReputationTokenRequest {
+  // ATHM token request
+  bytes token_request = 1;
+}
+
+// Represents a single component time measurement for end-to-end performance tracking.
+// Each measurement captures timing for one operation at one hop in the PCC workflow.
+// These server-side timing measurements are only sent in Carry and other internal
+// environments. The client persists them to the local biome stream for diagnostics.
+message ComponentTimeMeasurement {
+  // The hop identifier (e.g., "iCloudEdge", "ROPES", "TIE", "PCC Agent", "cloudboard")
+  string component_name = 1;
+  // The operation performed at this hop (e.g., "agent", "pegasus_call", "inference")
+  string operation = 2;
+  // Optional identifier for correlating metrics across hops
+  optional string identifier = 3;
+  // Optional sub-identifier for multi-turn execution flows
+  optional string sub_identifier = 4;
+  // Operation start time in milliseconds since epoch
+  int64 start_time = 5;
+  // Operation end time in milliseconds since epoch
+  int64 end_time = 6;
 }
 
 message PrivateCloudComputeResponse {
@@ -138,15 +189,38 @@ message PrivateCloudComputeResponse {
     PayloadChunk payload_chunk = 5;
     OpenSubresponsePayload sub_open = 6;
     CloseSubresponsePayload sub_close = 7;
+    // Server-side component time measurement streamed throughout the request for diagnostics.
+    ComponentTimeMeasurement component_time_measurement = 8;
+    // Cost token for this inference (contains signed JWT with bucketized cost)
+    CostToken cost_token = 9;
+
+    // Reputation token response provided in response to client sending the reputation ATHM
+    // token request in the `OpenRequestPayload`.
+    ReputationTokenResponse reputation_token = 10;
+
+    // Container for compressed RequestExecutionLogEntry.
+    CompressedRequestExecutionLogEntry compressed_execution_log_entry = 11;
   }
 
+  message CostToken {
+    // Signed JWT containing bucketized cost
+    bytes jwt = 1;
+  }
 
+  message ReputationTokenResponse {
+    // ATHM token response
+    bytes token_response = 1;
+  }
+    
   message CloseResponsePayload {
     reserved 1;
     // Metadata not passed on to the client-side application but handled by
     // privatecloudcomputed
     PostResponseActions post_response_actions = 2;
     ResponseStatus response_status = 3;
+    // Human-readable description of the error, intended for client-side logging.
+    // Only populated when response_status indicates an error.
+    optional string error_description = 4;
   }
 
   message PostResponseActions {
@@ -156,7 +230,7 @@ message PrivateCloudComputeResponse {
 
   message OpenSubresponsePayload {
     // id in case we ever want to support simultaneous requests per connection
-    uint32 subrequest_id = 1;
+    uint64 subrequest_id = 1;
   }
 
   message CloseSubresponsePayload {
@@ -168,8 +242,11 @@ message PrivateCloudComputeResponse {
     }
 
     // id in case we ever want to support simultaneous requests per connection
-    uint32 subrequest_id = 1;
+    uint64 subrequest_id = 1;
     SubresponseStatus status = 2;
+    // Human-readable description of the error, intended for client-side logging.
+    // Only populated when status indicates an error.
+    optional string error_description = 3;
   }
 
   // Since we use length-prefixed protobuf rather than gRPC we include a response
@@ -184,23 +261,47 @@ message PrivateCloudComputeResponse {
   }
 }
 
-// Contains information about a security or privacy-relevant event that occured in
-// the context of the current request
+// Represents a notable event during the request execution, in particular for
+// outbound calls to either other PCC nodes or to endpoints outside of the PCC
+// trust boundary.
+//
+// For requests to other PCC nodes, this contains the attestation bundle of the
+// compute node the proxy node has transitively attested and re-wrapped the
+// client-provided DEK to.
+//
+// For requests to untrusted endpoints, this provides transparency about the request
+// purpose and/or content.
 message RequestExecutionLogEntry {
   // Attestation bundle of a trusted compute node, for which the proxy has re-wrapped
   // the DEK. Optional as the decision whether to attest to additional
   // nodes might be made after the final time the proxy re-wraps the DEK.
   optional bytes attestation = 1;
-  // Used when the response payload may not be streamed back by the proxy node itself. This provides the necessary
-  // context for the client to establish a receive-only AEAD context to receive and decrypt the response payload stream.
-  // from any node.
+
+  // Used in case the response payload is not streamed back by the proxy node
+  // itself. This provides the necessary
+  // context for the client to establish a receive-only AEAD context to receive
+  // and decrypt the response payload stream.
   optional ResponseContext response_context = 2;
+
   // Indicates whether this is the final entry of the request execution log,
   // indicating that the proxy will not make any further outbound requests/re-wrap
-  // the DEK for any other nodes
+  // the DEK for any other PCC nodes.
   bool final = 3;
+
   // Indicates the potential use of one or more assets in the context of the request
   repeated AssetMetadata asset_metadata = 4;
+
+  // Used in case outbound requests are made by cloudboard during a request execution
+  // This will contain JSON serialized human readable string data for researchers to validate the outbound call.
+  // Eg: For tool calling, metadata will hold keys like service_name, tool_name, arguments.
+  // Json serialized data can change anytime based on requirement.
+  optional OutboundCallContext outbound_call_context = 5;
+}
+
+// Container for compressed RequestExecutionLogEntry
+message CompressedRequestExecutionLogEntry {
+  // decodes to RequestExecutionLogEntry
+  CompressedPayload compressed_execution_log_entry_data = 1;
 }
 
 // Metadata about an asset downloaded at runtime by cloudassetdownloader,
@@ -214,6 +315,11 @@ message AssetMetadata {
   string version = 3;
   // Base64-encoded SHA-256 hash of the asset contents
   string hash = 4;
+}
+
+message OutboundCallContext {
+  string service_name = 1;
+  string metadata = 2;
 }
 
 message ResponseContext {
@@ -230,12 +336,16 @@ message ResponseContext {
 // This is internal to cloudboard for communication between proxy and compute nodes and is sent in place of
 // OpenRequestPayload
 message ProxyInvokeOpen {
-  // Long-term token used for abuse prevention
-  bytes token_granting_token = 1;
-  // Used to verify that the one-time token is derived from the TGT
-  bytes ott_salt = 2;
+  reserved 1, 2;
+  reserved "token_granting_token", "ott_salt";
   // Key material sent alongside application layer requests. The key material is not directly exposed to cloud apps but
   // is made available to support apps if entitled appropriately.
   repeated OpaqueCryptoMaterial opaque_crypto_material = 3;
   Capabilities capabilities = 4;
+  // Workload type, same identifier as provided to ROPES
+  string workload_type = 5;
+  // Means user has opted-in to share Diagnostics & Usage information with Apple.
+  // Copied across from OpenRequestPayload by the proxy node so it reaches cloud
+  // apps running on compute nodes behind a proxy.
+  bool opted_in_to_share_diagnostics_and_usage_with_apple = 6;
 }

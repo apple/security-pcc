@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -47,6 +47,7 @@ struct TransparencyLog: Sendable {
 
     static let atLogType: TxPB_LogType = .atLog
     static let requestUUIDHeader = "X-Apple-Request-UUID"
+    static let serverHintHeader = "x-apple-server-hint"
 
     static let logger = os.Logger(subsystem: applicationName, category: "TransparencyLog")
     static var traceLog: Bool = false // include (excessive) debugging messages of Transparency Log calls
@@ -154,14 +155,15 @@ struct TransparencyLog: Sendable {
         rateLimitStart: Duration = .milliseconds(100),
         rateLimitMax: Duration = .milliseconds(1000)
     ) async throws -> (Data, URLResponse) {
-        let session: URLSession
-        if useIdentity {
-            session = URLSession(configuration: .default,
-                                 delegate: TransparencyLog.MutualTLSDelegate(identityProvider: AnyIdentityProvider()),
+        // Always install a delegate to handle TLS authentication challenges. Even when we are not
+        // performing mTLS, we must explicitly decline client-certificate requests; otherwise the
+        // default handling causes the system to auto-select a matching identity from the keychain,
+        // which production KT servers reject.
+        let session = URLSession(configuration: .default,
+                                 delegate: TransparencyLog.MutualTLSDelegate(
+                                     identityProvider: useIdentity ? AnyIdentityProvider() : nil),
                                  delegateQueue: nil)
-        } else {
-            session = URLSession.shared
-        }
+        defer { session.finishTasksAndInvalidate() }
 
         var retryWait = rateLimitStart // x2 upto rateLimitMax
         var retryLogDeadline = Date(timeIntervalSinceNow: 0) // emit log when expire
@@ -173,6 +175,11 @@ struct TransparencyLog: Sendable {
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw URLError(.badServerResponse, userInfo: ["reason": "failed to get response"])
+            }
+
+            if let hint = httpResponse.value(forHTTPHeaderField: TransparencyLog.serverHintHeader) {
+                let reqURL = request.url?.absoluteString ?? "[url unknown]"
+                TransparencyLog.logger.log("\(reqURL, privacy: .public) responded with HTTP \(httpResponse.statusCode): server hint: \(hint, privacy: .public)")
             }
 
             // server reported rate limit exceeded
@@ -234,11 +241,13 @@ struct TransparencyLog: Sendable {
         }
     }
 
-    // MutualTLSDelegate is a URLSessionDelegate to provide mutual TLS backed by Apple Narrative identity certs
+    // MutualTLSDelegate is a URLSessionDelegate to provide mutual TLS backed by Apple Narrative identity certs.
+    // When identityProvider is nil (or yields no identity), client-certificate challenges are explicitly
+    // declined so the system does not auto-select an unrelated identity from the keychain.
     private class MutualTLSDelegate: NSObject, URLSessionDelegate {
-        let identityProvider: IdentityProvider
+        let identityProvider: IdentityProvider?
 
-        init(identityProvider: IdentityProvider) {
+        init(identityProvider: IdentityProvider?) {
             self.identityProvider = identityProvider
         }
 
@@ -247,15 +256,25 @@ struct TransparencyLog: Sendable {
             didReceive challenge: URLAuthenticationChallenge,
             completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
         ) {
-            if let identity = identityProvider.identity {
+            guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate else {
+                completionHandler(.performDefaultHandling, nil)
+                return
+            }
+
+            if let identity = identityProvider?.identity {
                 TransparencyLog.logger.debug("using identity certificate for mTLS request")
                 completionHandler(.useCredential,
                                   URLCredential(identity: identity,
                                                 certificates: identity.intermediateCertificateAuthorities,
                                                 persistence: .forSession))
             } else {
-                TransparencyLog.logger.error("mTLS requested but no identity available")
-                completionHandler(.performDefaultHandling, nil)
+                if identityProvider != nil {
+                    TransparencyLog.logger.error("mTLS requested but no identity available")
+                }
+                // Send no client certificate. Using .useCredential with a nil credential continues the
+                // handshake without offering a cert and, crucially, prevents the system from picking one
+                // out of the keychain (which .performDefaultHandling would do).
+                completionHandler(.useCredential, nil)
             }
         }
     }
@@ -361,13 +380,15 @@ extension TransparencyLog {
     func fetchLogLeaves<L: Leaf>(type: L.Type,
                                  tree: Tree,
                                  start: UInt64? = nil,
-                                 end: UInt64? = nil) async throws -> [L]
+                                 end: UInt64? = nil,
+                                 dataType: TxPB_ATLogDataType? = nil) async throws -> [L]
     {
         try await self.fetchLogLeaves(type: type,
                                       tree: tree,
                                       head: self.fetchLogHead(logTree: tree),
                                       start: start,
-                                      end: end)
+                                      end: end,
+                                      dataType: dataType)
     }
 
     func fetchLogLeaves<L: Leaf>(type: L.Type,
@@ -376,6 +397,7 @@ extension TransparencyLog {
                                  start: UInt64? = nil,
                                  end: UInt64? = nil,
                                  batchSize: UInt64 = 3000,
+                                 dataType: TxPB_ATLogDataType? = nil,
                                  altEndpoint: URL? = nil) async throws -> [L]
     {
         guard let endpoint = altEndpoint ?? ktInitBag?.url(.atResearcherLogLeaves) else {
@@ -406,6 +428,7 @@ extension TransparencyLog {
             do {
                 let leaves = try await logLeaves.fetch(startIndex: currentStart,
                                                        endIndex: currentEnd,
+                                                       dataType: dataType,
                                                        requestUUID: self.instanceUUID,
                                                        nodeDecoder: {
                                                            guard let leaf = L($0) else {
@@ -417,7 +440,7 @@ extension TransparencyLog {
                 currentStart += batchSize
                 currentEnd = min(currentEnd + batchSize, endIndex)
             } catch {
-                throw TransparencyLogError("fetch log entries [\(startIndex)..<\(endIndex)] for PCC: \(error)")
+                throw TransparencyLogError("fetch log entries [\(startIndex)..<\(endIndex) (current_end: \(currentEnd))] for PCC: \(error)")
             }
         } while currentStart < currentEnd
 

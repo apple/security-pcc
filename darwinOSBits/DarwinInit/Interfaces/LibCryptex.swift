@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,113 +20,12 @@
 import Foundation
 import os
 import System
-import CryptoKit
 
-// FIXME: Replace with libcryptex api calls instead of subprocesses
+@_spi(Internal) import CryptexKit
 
 enum LibCryptex {
     static let logger = Logger.libcryptex
     private static let cryptexctl = URL(fileURLWithPath: "/usr/bin/cryptexctl")
-
-    // e.g.: cryptexctl personalize -H -V "Release" --copy-personalized-manifest <path>/ticket com.apple.cryptex-nginx.cxbd
-    // Returns FilePath to personaliztion ticket for the given cryptex
-    static func personalizeCryptex(at cryptex: FilePath, ticketPath: FilePath?, withVariant variant: String?, usingAuthorizationService authorizationService: DInitAuthorizationService?, locatedAt serverURL: String?, usingAppleConnect: Bool, ginfPath: String?) -> FilePath? {
-        let outputPath: FilePath
-        if let ticketPath {
-            outputPath = ticketPath
-        } else {
-            outputPath = cryptex.appending(extension: "ticket")
-        }
-        logger.log("Writing personalization ticket to output Directory: \(outputPath) using cryptex: \(cryptex)")
-
-        do {
-            var arguments = [CustomStringConvertible]()
-            if let serverURL = serverURL {
-                arguments += ["--signing-url", serverURL]
-            }
-            if let authorizationService = authorizationService {
-                arguments += ["--signing-environment", authorizationService.rawValue]
-            }
-            if usingAppleConnect {
-                arguments += ["--signing-sso"]
-            }
-            arguments += ["personalize"]
-
-            if let variant = variant {
-                arguments += ["--variant", variant]
-            }
-
-            if let ginfPath {
-                arguments += ["--write-ginf", ginfPath]
-            }
-
-            arguments += [
-                "--host-identity",
-                "--copy-personalized-manifest", outputPath,
-                cryptex
-            ]
-            _ = try Subprocess.run(
-                executable: cryptexctl,
-                arguments: arguments)
-        } catch {
-            logger.error("Unable to personalize cryptex, \(error.localizedDescription)")
-            return nil
-        }
-
-        guard (try? outputPath.fileExists()) ?? false else {
-            logger.error("Personalization didn't produce personalization ticket at \(outputPath)")
-            return nil
-        }
-
-        logger.log("Successfully wrote personalization ticket to \(outputPath)")
-        return outputPath
-    }
-
-    // e.g.: cryptexctl install -p -V "Release" com.apple.cryptex-nginx.cxbd.signed
-    static func installCryptex(at cryptexPath: FilePath, ticketAt ticketURL: FilePath, withVariant variant: String?, usingAuthorizationService authorizationService: DInitAuthorizationService?, locatedAt serverURL: String?, limitLoadToREM rem: Bool?, readWrite: Bool?, jetsamPropertiesVariant: String?) -> Bool {
-        do {
-            var arguments = [CustomStringConvertible]()
-            if let serverURL = serverURL {
-                arguments += ["--signing-url", serverURL]
-            }
-            if let authorizationService = authorizationService {
-                arguments += ["--signing-environment", authorizationService.rawValue]
-            }
-            arguments += ["install"]
-
-            if let variant = variant {
-                arguments += ["--variant", variant]
-            }
-
-            if let rem = rem {
-                if (rem) {
-                    arguments += ["--limit-load-to-rem"]
-                }
-            }
-
-            if let readWrite = readWrite {
-                if (readWrite) {
-                    arguments += ["--readwrite"]
-                }
-            }
-
-            if let jetsamPropertiesVariant = jetsamPropertiesVariant {
-                arguments += ["--jetsam-properties-variant", jetsamPropertiesVariant]
-            }
-
-            arguments += [
-                "--ticket-path", ticketURL.string,
-                cryptexPath
-            ]
-            _ = try Subprocess.run(
-                executable: cryptexctl,
-                arguments: arguments)
-        } catch {
-            logger.error("Unable to install cryptex, \(error.localizedDescription)")
-            return false
-        }
-        return true
-    }
 
     static func trust(rootCertificate: Data, usingAppleConnect: Bool, signingURL: String) -> Bool {
         let temporaryPath = FilePath.newTemporaryPath()
@@ -139,6 +38,10 @@ enum LibCryptex {
         defer { try? temporaryPath.remove() }
         do {
             var arguments = [CustomStringConvertible]()
+
+            // Verbose output, such as un-truncated errors
+            arguments += ["-v", "9"]
+
             if usingAppleConnect {
                 arguments.append("--signing-sso")
             }
@@ -158,5 +61,20 @@ enum LibCryptex {
             return false
         }
         return true
+    }
+}
+
+extension LibCryptex {
+    static func installBuiltinCryptex(id: String, ephemeral: Bool) async throws {
+        if #available(macOS 26.4, iOS 26.4, tvOS 26.4, watchOS 26.4, *) {
+            let device = CryptexLocalDevice()
+
+            // Fixup the relative path here. The builtin cryptex identifier has "com.apple." as prefix,
+            // but not in the path
+            let relativePath = FilePath(id.dropPrefix("com.apple."))
+            try await device.installBuiltinCryptex(at: relativePath, options: .init(ephemeral: ephemeral))
+        } else {
+            logger.error("Installing builtin cryptex is not supported on this version of the OS yet")
+        }
     }
 }

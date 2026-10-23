@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,23 +18,19 @@
 //
 
 import ArgumentParserInternal
-import System
+import DarwinInitConfig
 import reboot2
+import System
+
+/// Backward compatibility typealias for the generated UserspaceReboot enum.
+typealias DInitUSR = Config.Finish.UserspaceReboot
 
 enum DInitUSRError: Error {
     case invalidPurpose
     case invalidRebootType
 }
 
-enum DInitUSR: String {
-    case rem = "rem"
-    case remDev = "rem-dev"
-    case none = "none"
-    case empty = ""
-    case userReboot = "default"
-}
-
-extension DInitUSR {
+extension Config.Finish.UserspaceReboot {
 	var rebootPurpose: rb3_userreboot_purpose_t_t? {
 		get throws {
 			let purpose: rb3_userreboot_purpose_t_t?
@@ -90,10 +86,4 @@ extension DInitUSR {
 	}
 }
 
-extension DInitUSR: ExpressibleByArgument { }
-
-extension DInitUSR: CaseIterable { }
-
-extension DInitUSR: Decodable { }
-
-extension DInitUSR: Encodable { }
+extension Config.Finish.UserspaceReboot: ExpressibleByArgument {}

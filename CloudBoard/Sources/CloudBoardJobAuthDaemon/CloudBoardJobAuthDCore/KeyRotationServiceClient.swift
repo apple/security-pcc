@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -27,6 +27,7 @@ import NIOHTTP2
 import NIOTransportServices
 import os
 import SwiftASN1
+import Synchronization
 
 enum KeyRotationServiceClientError: ReportableError {
     enum AssetType: String, RawRepresentable {
@@ -37,10 +38,11 @@ enum KeyRotationServiceClientError: ReportableError {
 
     case grpc(GRPCStatus)
     case unexpectedAssetType(AssetType)
-    case applicationError(Error)
+    case applicationError(AssetError)
     case unexpectedResponse
     case spkiParsingFailedBadFormat
     case spkiExpiredKey
+    case noValidKeysFound
 
     public var publicDescription: String {
         let errorType = switch self {
@@ -50,46 +52,9 @@ enum KeyRotationServiceClientError: ReportableError {
         case .unexpectedResponse: "unexpectedResponse"
         case .spkiParsingFailedBadFormat: "spkiParsingFailedBadFormat"
         case .spkiExpiredKey: "spkiExpiredKey"
+        case .noValidKeysFound: "noValidKeysFound"
         }
         return "keyRotationService.\(errorType)"
-    }
-}
-
-extension SigningKey {
-    public init(derEncodedSPKI: Data, validStart: Date, validEnd: Date) throws {
-        let derPublicKey: ASN1Node
-        do {
-            derPublicKey = try DER.parse([UInt8](derEncodedSPKI))
-        } catch {
-            KeyRotationServiceClient.logger.error("Failed to parse DER of the provided key: \(error, privacy: .public)")
-            throw error
-        }
-        let spki: SubjectPublicKeyInfo
-        do {
-            spki = try SubjectPublicKeyInfo(derEncoded: derPublicKey)
-            guard spki.algorithmIdentifier.algorithm == ASN1ObjectIdentifier.AlgorithmIdentifier.rsassaPSS else {
-                throw KeyRotationServiceClientError.spkiParsingFailedBadFormat
-            }
-        } catch {
-            KeyRotationServiceClient.logger
-                .error("Failed to parse SPKI of the provided key: \(error, privacy: .public)")
-            throw error
-        }
-        // validates that we can construct SecKey from this representation
-        let rsaPublicKeyData = Data(spki.key.bytes)
-        do {
-            _ = try SecKey.fromDEREncodedRSAPublicKey(rsaPublicKeyData)
-        } catch {
-            KeyRotationServiceClient.logger
-                .error("Cannot create SecKey from decoded RSA public key: \(error, privacy: .public)")
-            throw error
-        }
-        self.init(
-            keyId: Data(SHA256.hash(data: derEncodedSPKI)),
-            rsaPublicKey: rsaPublicKeyData,
-            validStart: validStart,
-            validEnd: validEnd
-        )
     }
 }
 
@@ -111,22 +76,18 @@ extension SecKey {
     }
 }
 
-final class KeyRotationServiceClient: AuthTokenSigningKeyProvider {
+final class KeyRotationServiceClient: SigningKeyProvider {
     public static let logger: os.Logger = .init(
         subsystem: "com.apple.cloudos.cb_jobauthd",
         category: "KeyRotationServiceClient"
     )
 
-    private static let metricsRecordingInterval: Duration = .seconds(60)
-
     enum SigningKeyUseCase: String, RawRepresentable {
-        case ott = "thimble_ott"
-        case tgt = "thimble_tgt"
+        case costToken = "pcc_cost_token"
 
         var metricValue: String {
             switch self {
-            case .ott: "ott"
-            case .tgt: "tgt"
+            case .costToken: "cost_token"
             }
         }
     }
@@ -134,8 +95,9 @@ final class KeyRotationServiceClient: AuthTokenSigningKeyProvider {
     private let client: AssetDeliveryAsyncClientProtocol
     private let config: CloudBoardJobAuthDConfiguration.KeyRotationService
     private let metrics: any MetricsSystem
-    private let watchers: OSAllocatedUnfairLock<[AuthTokenSigningKeyUpdateWatcher]> = .init(initialState: [])
-    private let stateMachine: OSAllocatedUnfairLock<KeyRotationServiceStateMachine> = .init(initialState: .init())
+    private let costTokenKeyWatchers: Mutex<[CostTokenSigningKeyUpdateWatcher]> = .init([])
+    private let costTokenKeyStateMachine: Mutex<KeyRotationServiceStateMachine<CostTokenSigningKeyPair>> =
+        .init(.init())
 
     init(
         eventLoopGroup: NIOTSEventLoopGroup,
@@ -175,11 +137,7 @@ final class KeyRotationServiceClient: AuthTokenSigningKeyProvider {
     }
 
     func run() async throws {
-        try await withThrowingTaskGroup(of: Void.self) { taskGroup in
-            taskGroup.addTask { try await self.runSigningKeysRefreshLoop() }
-            taskGroup.addTask { await self.runMetricsRecordingLoop() }
-            try await taskGroup.next()
-        }
+        try await self.runSigningKeysRefreshLoop()
     }
 
     private func runSigningKeysRefreshLoop() async throws {
@@ -206,87 +164,53 @@ final class KeyRotationServiceClient: AuthTokenSigningKeyProvider {
         }
     }
 
-    private func runMetricsRecordingLoop() async {
-        while true {
-            do {
-                try await Task.sleep(for: Self.metricsRecordingInterval)
-            } catch {
-                Self.logger.log("Metrics recording task cancelled")
-                return
-            }
-            let signingKeys: AuthTokenKeySet
-            do {
-                signingKeys = try await self.obtainSigningKeys()
-            } catch {
-                Self.logger.error("""
-                message=\("Obtaining signing keys failed", privacy: .public)
-                error=\(error, privacy: .public))
-                """)
-                continue
-            }
-            self.emitSigningKeysTimeToExpiry(signingKeys: signingKeys)
-            Self.logger.debug("Emitted signing keys time to expiry metrics")
-        }
-    }
-
     deinit {
-        self.stateMachine.withLock { stateMachine in
+        self.costTokenKeyStateMachine.withLock { stateMachine in
             stateMachine.cancel()
         }
     }
 
     func fetchAllSigningKeys() async throws {
-        Self.logger.log("Fetching OTT signing keys")
-        let ottSigningKeys = try await fetchSigningKeys(.ott)
-        if ottSigningKeys.isEmpty {
-            Self.logger.error("No OTT signing keys fetched")
-        }
-        Self.logger.log("Fetching TGT signing keys")
-        let tgtSigningKeys = try await fetchSigningKeys(.tgt)
-        if tgtSigningKeys.isEmpty {
-            Self.logger.error("No TGT signing keys fetched")
-        }
+        Self.logger.log("Fetching cost token signing key")
+        try await self.fetchCostTokenSigningKey()
+    }
 
-        let newSigningKeySet = AuthTokenKeySet(
-            ottPublicSigningKeys: ottSigningKeys,
-            tgtPublicSigningKeys: tgtSigningKeys
-        )
-        let updateAction = self.stateMachine.withLock { stateMachine in
-            stateMachine.updateSigningKeys(keySet: newSigningKeySet)
-        }
-        switch updateAction {
-        case .noAction:
-            Self.logger.log("Signing keys unchanged, not broadcasting update")
-        case .updateWatchers:
-            Self.logger.log("Broadcasting changed set of signing keys")
-            let watchers = self.watchers.withLock { $0 }
-            for watcher in watchers {
-                do {
-                    try await watcher.authTokenKeysUpdated(newKeySet: newSigningKeySet)
-                } catch {
-                    Self.logger
-                        .error("Failed to update signing key watcher: \(String(reportable: error), privacy: .public)")
-                }
-            }
+    /// Public API, invoked by CloudBoardJobAuthServer
+    public func requestCostTokenSigningKey() async throws -> CostTokenSigningKeyPair {
+        try await self.obtainCostTokenSigningKey()
+    }
+
+    func registerForCostTokenKeyUpdates(watcher: CostTokenSigningKeyUpdateWatcher) {
+        self.costTokenKeyWatchers.withLock {
+            $0.append(watcher)
         }
     }
 
-    internal func fetchSigningKeys(_ useCase: SigningKeyUseCase) async throws -> [SigningKey] {
+    private func obtainCostTokenSigningKey() async throws -> CostTokenSigningKeyPair {
+        let action = try self.costTokenKeyStateMachine.withLock { try $0.obtainSigningKeys() }
+        switch action {
+        case .continueWithSigningKeys(let key): return key
+        case .waitForSigningKeys(let future):
+            return try await future.valueWithCancellation
+        }
+    }
+
+    internal func fetchCostTokenSigningKey() async throws {
         return try await self.metrics.withStatusMetrics(
             total: Metrics.KeyRotationService.KeyRotationServiceFetchCounter(
                 action: .increment(by: 1),
-                dimensions: [.keyType: useCase.metricValue]
+                dimensions: [.keyType: SigningKeyUseCase.costToken.metricValue]
             ),
             error: Metrics.KeyRotationService.KeyRotationServiceFetchErrorCounter.Factory(
-                dimensions: [.keyType: useCase.metricValue]
+                dimensions: [.keyType: SigningKeyUseCase.costToken.metricValue]
             ),
             timer: Metrics.KeyRotationService.KeyRotationServiceFetchDurationHistogram.Factory(
-                dimensions: [.keyType: useCase.metricValue]
+                dimensions: [.keyType: SigningKeyUseCase.costToken.metricValue]
             )
         ) {
             let request: AssetRequest = .with {
-                $0.assetType = .publicKey
-                $0.useCase = useCase.rawValue
+                $0.assetType = .keyPair
+                $0.useCase = SigningKeyUseCase.costToken.rawValue
             }
             var callOptions = CallOptions()
             callOptions.requestIDHeader = "X-Apple-Request-UUID"
@@ -304,15 +228,35 @@ final class KeyRotationServiceClient: AuthTokenSigningKeyProvider {
                 case .error(let error):
                     throw KeyRotationServiceClientError.applicationError(error)
                 case .assets(let assets):
-                    return try self.parseSigningKeys(useCase: useCase, assets: assets, requestId: requestId)
+                    let costTokenKey = try self.parseCostTokenSigningKey(assets: assets, requestId: requestId)
+                    let updateAction = self.costTokenKeyStateMachine.withLock { stateMachine in
+                        stateMachine.updateSigningKeys(keySet: costTokenKey)
+                    }
+                    switch updateAction {
+                    case .noAction:
+                        Self.logger.log("Cost token signing key unchanged, not broadcasting update")
+                    case .updateWatchers:
+                        Self.logger.log("Broadcasting changed cost token signing key")
+                        let watchers = self.costTokenKeyWatchers.withLock { $0 }
+                        for watcher in watchers {
+                            do {
+                                try await watcher.costTokenKeyUpdated(newKey: costTokenKey)
+                            } catch {
+                                Self.logger
+                                    .error(
+                                        "Failed to update cost token key watcher: \(String(reportable: error), privacy: .public)"
+                                    )
+                            }
+                        }
+                    }
                 case .none:
                     throw KeyRotationServiceClientError.unexpectedResponse
                 }
             } catch {
                 Self.logger.error("""
-                message=\("Failed to fetch public keys from KRS", privacy: .public)
+                message=\("Failed to fetch cost token private key from KRS", privacy: .public)
                 request_id=\(requestId, privacy: .public)
-                useCase=\(useCase.metricValue, privacy: .public)
+                useCase=\(SigningKeyUseCase.costToken.metricValue, privacy: .public)
                 error=\(error, privacy: .public)
                 """)
                 throw error
@@ -320,119 +264,65 @@ final class KeyRotationServiceClient: AuthTokenSigningKeyProvider {
         }
     }
 
-    private func parseSigningKeys(
-        useCase: SigningKeyUseCase,
+    private func parseCostTokenSigningKey(
         assets: Assets,
         requestId: String
-    ) throws -> [SigningKey] {
-        var keys = [SigningKey]()
-        for assetBundle in assets.assetBundle {
-            do {
-                if let asset = assetBundle.asset {
-                    let spkiData: Data = switch asset {
-                    case .keyPair(let keypair): keypair.publicKey
-                    case .publicKey(let publicKey): publicKey.publicKey
-                    }
-                    // validate the asset bundle is not expired (cb_jobhelper instances can be prewarmed, so it is too
-                    // soon to check for future valid start dates here)
-                    guard Date.now < assetBundle.assetValidEndTimestamp.date + self.config
-                        .signingKeysGracePeriodSeconds else {
-                        throw KeyRotationServiceClientError.spkiExpiredKey
-                    }
-                    let signingKey = try SigningKey(
-                        derEncodedSPKI: spkiData,
-                        validStart: assetBundle.assetValidStartTimestamp.date,
-                        validEnd: assetBundle.assetValidEndTimestamp
-                            .date + self.config.signingKeysGracePeriodSeconds
-                    )
-                    keys.append(signingKey)
-                    Self.logger.log("""
-                    message=\("Successfully fetched public key from KRS", privacy: .public)
-                    request_id=\(requestId, privacy: .public)
-                    useCase=\(useCase.metricValue, privacy: .public)
-                    keyId=\(signingKey.keyId.base64EncodedString(), privacy: .public)
-                    truncatedKeyId=\(Int8(bitPattern: signingKey.keyId.last!), privacy: .public)
-                    publicKey=\(signingKey.rsaPublicKey.base64EncodedString(), privacy: .public)
-                    validStart=\(signingKey.validStart, privacy: .public)
-                    validEnd=\(signingKey.validEnd, privacy: .public)
-                    """)
-                } else {
-                    Self.logger.error("""
-                    message=\("Could not decode asset bundle asset", privacy: .public)
-                    request_id=\(requestId, privacy: .public)
-                    useCase=\(useCase.metricValue, privacy: .public)
-                    assetbundle=\(assetBundle.debugDescription, privacy: .public)
-                    """)
+    ) throws -> CostTokenSigningKeyPair {
+        // KRS returns multiple keys including future keys (based on hoursInAdvance config)
+        // Select the key with the most recent validStart that is currently active (validStart <= now <= validEnd)
+        let selectedKey = assets.assetBundle
+            .compactMap { bundle -> (bundle: AssetBundle, keyPair: KeyPairAsset, validStart: Date, validEnd: Date)? in
+                guard let asset = bundle.asset,
+                      case .keyPair(let keyPair) = asset else {
+                    return nil
                 }
-            } catch KeyRotationServiceClientError.spkiExpiredKey {
-                Self.logger.error("""
-                message=\("Expired asset key, skipping", privacy: .public)
-                request_id=\(requestId, privacy: .public)
-                useCase=\(useCase.metricValue, privacy: .public)
-                assetbundle=\(assetBundle.debugDescription, privacy: .public)
-                assetValidStart=\(assetBundle.assetValidStartTimestamp.date, privacy: .public)
-                assetValidEnd=\(assetBundle.assetValidEndTimestamp.date, privacy: .public)
-                """)
-            } catch {
-                Self.logger.error("""
-                message=\("Failed to parse asset key, skipping", privacy: .public)
-                request_id=\(requestId, privacy: .public)
-                useCase=\(useCase.metricValue, privacy: .public)
-                assetbundle=\(assetBundle.debugDescription, privacy: .public)
-                error=\(error, privacy: .public)
-                """)
+                return (
+                    bundle,
+                    keyPair,
+                    bundle.assetValidStartTimestamp.date,
+                    bundle.assetValidEndTimestamp.date
+                )
             }
+            .filter { $0.validStart <= Date.now && Date.now <= $0.validEnd } // Active and not expired
+            .max(by: { $0.validStart < $1.validStart }) // Select most recent
+
+        guard let selectedKey else {
+            Self.logger.error("""
+            message=\("No valid cost token keys found in KRS response", privacy: .public)
+            request_id=\(requestId, privacy: .public)
+            totalKeysInResponse=\(assets.assetBundle.count, privacy: .public)
+            """)
+            throw KeyRotationServiceClientError.noValidKeysFound
         }
-        return keys
-    }
 
-    /// Public API, invvoked by CloudBoardJobAuthServer
-    public func requestTGTSigningKeys() async throws -> [SigningKey] {
-        try await self.obtainSigningKeys().tgtPublicSigningKeys
-    }
-
-    /// Public API, invvoked by CloudBoardJobAuthServer
-    public func requestOTTSigningKeys() async throws -> [SigningKey] {
-        try await self.obtainSigningKeys().ottPublicSigningKeys
-    }
-
-    func registerForUpdates(watcher: AuthTokenSigningKeyUpdateWatcher) {
-        self.watchers.withLock {
-            $0.append(watcher)
-        }
-    }
-
-    private func obtainSigningKeys() async throws -> AuthTokenKeySet {
-        let action = try self.stateMachine.withLock { try $0.obtainSigningKeys() }
-        switch action {
-        case .continueWithSigningKeys(let keySet): return keySet
-        case .waitForSigningKeys(let future):
-            return try await future.valueWithCancellation
-        }
-    }
-
-    private func emitSigningKeysTimeToExpiry(signingKeys: AuthTokenKeySet) {
-        self.emitLatestSigningKeyTimeToExpiry(signingKeys: signingKeys.ottPublicSigningKeys, useCase: .ott)
-        self.emitLatestSigningKeyTimeToExpiry(signingKeys: signingKeys.tgtPublicSigningKeys, useCase: .tgt)
-    }
-
-    private func emitLatestSigningKeyTimeToExpiry(signingKeys: [SigningKey], useCase: SigningKeyUseCase) {
-        guard let latestSigningKey = signingKeys.max(by: { $0.validEnd < $1.validEnd }) else {
-            return
-        }
-        let timeToExpiryGauge = Metrics.KeyRotationService.SigningKeyTimeToExpiryGauge(
-            keyType: useCase,
-            expireAt: latestSigningKey.validEnd
+        let costTokenKey = CostTokenSigningKeyPair(
+            keyId: Data(SHA256.hash(data: selectedKey.keyPair.publicKey)),
+            privateKey: selectedKey.keyPair.privateKey,
+            publicKey: selectedKey.keyPair.publicKey,
+            validStart: selectedKey.validStart,
+            validEnd: selectedKey.validEnd
         )
-        self.metrics.emit(timeToExpiryGauge)
+
+        Self.logger.notice("""
+        message=\("Successfully fetched and selected cost token signing key", privacy: .public)
+        request_id=\(requestId, privacy: .public)
+        useCase=\(SigningKeyUseCase.costToken.metricValue, privacy: .public)
+        selectedKeyValidStart=\(selectedKey.validStart, privacy: .public)
+        selectedKeyValidEnd=\(selectedKey.validEnd, privacy: .public)
+        totalKeysInResponse=\(assets.assetBundle.count, privacy: .public)
+        keyId=\(costTokenKey.keyId.base64EncodedString(), privacy: .public)
+        truncatedKeyId=\(Int8(bitPattern: costTokenKey.keyId.last!), privacy: .public)
+        """)
+
+        return costTokenKey
     }
 }
 
-private struct KeyRotationServiceStateMachine {
+private struct KeyRotationServiceStateMachine<T: Equatable & Sendable> {
     enum State: CustomStringConvertible {
         case initialized
-        case awaitingSigningKeys(Promise<AuthTokenKeySet, Swift.Error>)
-        case signingKeysAvailable(keySet: AuthTokenKeySet)
+        case awaitingSigningKeys(Promise<T, Error>)
+        case signingKeysAvailable(keySet: T)
 
         var description: String {
             switch self {
@@ -452,15 +342,15 @@ private struct KeyRotationServiceStateMachine {
         self.state = .initialized
     }
 
-    enum ObtainSigningKeyAction {
-        case waitForSigningKeys(Future<AuthTokenKeySet, Swift.Error>)
-        case continueWithSigningKeys(AuthTokenKeySet)
+    enum ObtainSigningKeysAction {
+        case waitForSigningKeys(Future<T, Error>)
+        case continueWithSigningKeys(T)
     }
 
-    mutating func obtainSigningKeys() throws -> ObtainSigningKeyAction {
+    mutating func obtainSigningKeys() throws -> ObtainSigningKeysAction {
         switch self.state {
         case .initialized:
-            let promise = Promise<AuthTokenKeySet, Swift.Error>()
+            let promise = Promise<T, Error>()
             self.state = .awaitingSigningKeys(promise)
             return .waitForSigningKeys(Future(promise))
         case .awaitingSigningKeys(let promise):
@@ -475,7 +365,7 @@ private struct KeyRotationServiceStateMachine {
         case updateWatchers
     }
 
-    mutating func updateSigningKeys(keySet: AuthTokenKeySet) -> UpdateSigningKeysAction {
+    mutating func updateSigningKeys(keySet: T) -> UpdateSigningKeysAction {
         switch self.state {
         case .awaitingSigningKeys(let promise):
             promise.succeed(with: keySet)

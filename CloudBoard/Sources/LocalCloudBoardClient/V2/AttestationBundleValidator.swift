@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,7 +20,7 @@ import os
 
 extension PCCHarness {
     /// Validates and parses attestation bundles for PCC nodes
-    struct AttestationBundleValidator: Sendable {
+    public struct AttestationBundleValidator: Sendable {
         static let logger: os.Logger = .init(
             subsystem: "com.apple.cloudos.cloudboard",
             category: "LocalCloudBoardClient.AttestationBundleValidator"
@@ -30,11 +30,36 @@ extension PCCHarness {
         private let relAttestationContinuation: AsyncStream<AttestationBundle>.Continuation
         let relAttestationStream: AsyncStream<AttestationBundle>
 
+        /// For testing, without exposing the CloudAttestation dependency
+        /// The parameter is to make those call sites highly visible
+        package init(useOnlyInUnitTests: Bool) {
+            guard useOnlyInUnitTests else {
+                fatalError("This constructor is only meant for use in unit tests!")
+            }
+            self.init(attestationEnvironment: .ephemeral)
+        }
+
         init(attestationEnvironment: CloudAttestation.Environment) {
             self.attestationEnvironment = attestationEnvironment
             let (stream, continuation) = AsyncStream<AttestationBundle>.makeStream()
             self.relAttestationStream = stream
             self.relAttestationContinuation = continuation
+        }
+
+        /// Create a validator from a string environment name (e.g. "dev", "prod", "carry").
+        /// Throws if the string does not match a known environment.
+        public init(parseAttestationEnvironment: String) throws {
+            guard let env = CloudAttestation.Environment(rawValue: parseAttestationEnvironment) else {
+                throw InvalidAttestationEnvironment(value: parseAttestationEnvironment)
+            }
+            self.init(attestationEnvironment: env)
+        }
+
+        public struct InvalidAttestationEnvironment: Error, CustomStringConvertible {
+            public let value: String
+            public var description: String {
+                "Invalid attestation environment: '\(self.value)'"
+            }
         }
 
         /// Parse and validate an attestation bundle, returning the public key and validated bundle

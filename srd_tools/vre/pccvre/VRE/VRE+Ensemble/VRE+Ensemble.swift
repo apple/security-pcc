@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -154,7 +154,7 @@ extension VRE {
             }
 
             do {
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try Globals.computer.fileSystem.createDirectory(at: directory, withIntermediateDirectories: true)
             } catch {
                 throw VREError("cannot create ensemble folder: \(error)")
             }
@@ -162,7 +162,7 @@ extension VRE {
             do {
                 try config.write(to: configFile)
             } catch {
-                try? FileManager.default.removeItem(at: directory)
+                try? Globals.computer.fileSystem.removeItem(at: directory)
                 throw error
             }
         }
@@ -174,7 +174,7 @@ extension VRE {
             }
 
             do {
-                try FileManager.default.removeItem(at: directory)
+                try Globals.computer.fileSystem.removeItem(at: directory)
             } catch {
                 throw VREError("remove VRE instance folder: \(error)")
             }

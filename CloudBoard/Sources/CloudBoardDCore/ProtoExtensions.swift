@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -66,16 +66,27 @@ extension Com_Apple_Cloudboard_Api_V1_InvokeProxyInitiate.NegotiateEnsembleChoic
     internal init(_ pick: PickOptions) {
         self.numProvidedChoices = UInt32(pick.requiredEnsemblesFromROPES)
         self.numSelectedChoices = UInt32(pick.allowedEnsemblesFromProxy)
+        self.ratioCanScaleTo = UInt32(pick.ratioCanScaleTo)
     }
 }
 
 extension Com_Apple_Cloudboard_Api_V1_LoadResponse {
-    init(_ status: ServiceHealthMonitor.Status.Healthy) {
+    init(
+        _ loadLevel: ServiceHealthMonitor.Status.LoadLevel,
+        affinityKeysInProgress: [Com_Apple_Cloudboard_Api_V1_AffinityKey] = []
+    ) {
         self = .with {
-            $0.currentBatchSize = UInt32(status.currentBatchSize)
-            $0.maxBatchSize = UInt32(status.maxBatchSize)
-            $0.optimalBatchSize = UInt32(status.optimalBatchSize)
+            $0.currentBatchSize = UInt32(loadLevel.currentBatchSize)
+            $0.maxBatchSize = UInt32(loadLevel.maxBatchSize)
+            $0.optimalBatchSize = UInt32(loadLevel.optimalBatchSize)
+            $0.affinityKeysInProgress = affinityKeysInProgress
         }
+    }
+}
+
+extension Com_Apple_Cloudboard_Api_V1_AffinityKey: CustomStringConvertible {
+    var description: String {
+        "\(self.category)/\(self.data)"
     }
 }
 
@@ -118,7 +129,8 @@ extension CloudBoardDaemonToJobHelperMessage {
                             forKeyWithID: parameters.requestID,
                             forKeyWithSpanIdentifier: SpanIdentifier.invokeWorkload
                         ) ?? UInt64.random(in: 0 ..< UInt64.max)
-                )
+                ),
+                patIssuer: parameters.hasPatIssuer ? parameters.patIssuer : nil
             ))
         case .requestChunk(let requestChunk):
             self = .requestChunk(requestChunk.encryptedPayload, isFinal: requestChunk.isFinal)
@@ -165,6 +177,9 @@ extension Proto_Ropes_Common_RequestExecutionError.Source {
             self = .jobHelper
         case .cloudAppFramework:
             self = .cloudAppFramework
+        case .bridged:
+            // We do not need to report bridged errors to Client currently, so marking it undefined
+            self = .undefined
         case .undefined:
             self = .undefined
         }

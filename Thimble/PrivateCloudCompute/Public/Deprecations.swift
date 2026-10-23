@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,6 +21,9 @@
 
 import AppleIntelligenceReporting
 import Foundation
+import OSLog
+
+private let logger = Logger(for: .client)
 
 extension TrustedRequest {
     /// Creates a new ``TrustedRequest``.
@@ -41,6 +44,203 @@ extension TrustedRequest {
         bundleIdentifierOverride: String? = nil
     ) {
         self.init(id: id, workloadType: workloadType, workloadParameters: workloadParameters, featureIdentifier: featureIdentifier, sessionIdentifier: sessionIdentifier, bundleIdentifierOverride: bundleIdentifierOverride, originatingBundleIdentifier: nil)
+    }
+
+    /// Creates a new ``TrustedRequest``.
+    /// - Parameters:
+    ///   - id: The request's ID. Defaults to a newly generated one.
+    ///   - workloadType: The request's workload type.
+    ///   - workloadParameters: The request's workload parameters.
+    ///   - featureIdentifier: The request's feature ID.
+    ///   - sessionIdentifier: The request's session ID.
+    ///   - bundleIdentifierOverride: An override for the originating bundle ID.
+    ///   - originatingBundleIdentifier: The bundleID that hosted the root interaction.
+    @available(*, deprecated, message: "Use `RequestConfiguration` and `TrustedCloudComputeClient.withRequest(configuration:)` instead.")
+    public init(
+        id: UUID = .init(),
+        workloadType: String,
+        workloadParameters: [String: String],
+        featureIdentifier: String,
+        sessionIdentifier: UUID,
+        bundleIdentifierOverride: String? = nil,
+        originatingBundleIdentifier: String? = nil
+    ) {
+        self.id = id
+        self.workloadType = workloadType
+        self.workloadParameters = workloadParameters
+        self.bundleIdentifier = bundleIdentifierOverride
+        self.featureIdentifier = featureIdentifier
+        self.sessionIdentifier = sessionIdentifier
+        self.originatingBundleIdentifier = originatingBundleIdentifier
+    }
+}
+
+extension RequestConfiguration {
+    @available(*, deprecated, message: "Not used and has no effect.")
+    public var resourcePool: ResourcePool {
+        get { .inference }
+        set {}
+    }
+
+    @available(*, deprecated, message: "Use init that doesn't require `resourcePool`.")
+    public init(
+        resourcePool: ResourcePool,
+        workloadType: String,
+        workloadParameters: [String: String],
+        featureIdentifier: String,
+    ) {
+        self.init(
+            workloadType: workloadType,
+            workloadParameters: workloadParameters,
+            featureIdentifier: featureIdentifier
+        )
+    }
+}
+
+extension PrivateCloudComputeConnection.Configuration {
+    @available(*, deprecated, message: "Not used and has no effect.")
+    public var resourcePool: ResourcePool {
+        get { .inference }
+        set {}
+    }
+
+    @available(*, deprecated, message: "Use init that doesn't require `resourcePool`.")
+    public init(
+        resourcePool: ResourcePool,
+        workloadType: String,
+        workloadParameters: [String: String],
+        featureIdentifier: String,
+    ) {
+        self.init(
+            workloadType: workloadType,
+            workloadParameters: workloadParameters,
+            featureIdentifier: featureIdentifier
+        )
+    }
+
+    @available(*, deprecated, message: "Use a non-deprecated `init` instead.")
+    public init(
+        id: UUID,
+        workloadType: String,
+        workloadParameters: [String: String]? = nil,
+        bundleIdentifier: String? = nil,
+        originatingBundleIdentifier: String? = nil,
+        featureIdentifier: String? = nil,
+        sessionIdentifier: UUID? = nil
+    ) {
+        self.init(
+            workloadType: workloadType,
+            workloadParameters: workloadParameters ?? [:],
+            featureIdentifier: featureIdentifier ?? "nil"
+        )
+        self.id = id
+        self.bundleIdentifier = bundleIdentifier
+        self.originatingBundleIdentifier = originatingBundleIdentifier
+        self.featureIdentifier = featureIdentifier
+        self.sessionIdentifier = sessionIdentifier
+    }
+}
+
+extension PrewarmConfiguration {
+    @available(*, deprecated, message: "Not used and has no effect.")
+    public var resourcePool: ResourcePool {
+        get { .inference }
+        set {}
+    }
+
+    @available(*, deprecated, message: "Use init that doesn't require `resourcePool`.")
+    public init(
+        resourcePool: ResourcePool,
+        workloadType: String,
+        workloadParameters: [String: String],
+        featureIdentifier: String,
+    ) {
+        self.init(
+            workloadType: workloadType,
+            workloadParameters: workloadParameters,
+            featureIdentifier: featureIdentifier
+        )
+    }
+}
+
+extension TrustedCloudComputeClient {
+    /// Executes a trusted request.
+    ///
+    /// This method opens a trusted connection to the cloud compute environment and provides access to writing the request and consuming
+    /// the response data in the `body` closure. Once the `body` closure returns the connection will be torn down and all resources
+    /// associated with it will be freed.
+    ///
+    /// - Parameters:
+    ///   - request: The request to execute.
+    ///   - body: A closure during which request data can be written and the response data can be consumed.
+    /// - Returns: The type that the body closure produced.
+    @available(*, deprecated, message: "Use `withRequest(configuration:)` instead.")
+    @concurrent public func withTrustedRequest<Return>(
+        _ request: TrustedRequest,
+        _ body: @concurrent (_ writer: TrustedRequest.Writer, _ response: TrustedRequest.Response) async throws -> Return
+    ) async throws -> Return {
+        var configuration = RequestConfiguration(
+            resourcePool: .inference,
+            workloadType: request.workloadType,
+            workloadParameters: request.workloadParameters ?? [:],
+            featureIdentifier: request.featureIdentifier ?? "nil"
+        )
+        configuration.id = request.id
+        configuration.bundleIdentifier = request.bundleIdentifier
+        configuration.originatingBundleIdentifier = request.originatingBundleIdentifier
+        if let sessionIdentifier = request.sessionIdentifier {
+            configuration.sessionIdentifier = sessionIdentifier
+        }
+
+        return try await withRequest(configuration: configuration, body)
+    }
+
+    /// Runs a prefetch for attestations from the server, for the given workload specification.
+    ///
+    /// - Parameters:
+    ///   - workloadType: The workloadType associated with requests to prefetch attestations for
+    ///   - workloadParameters: The workloadParameters associated with requests to prefetch attestations for
+    /// - Returns: Returns `true` when a successful prefetch occurs, or `false` otherwise.
+    @available(*, deprecated, message: "Use `prewarm(configuration:)` instead.")
+    @concurrent public func prefetchRequest(workloadType: String, workloadParameters: [String: String]) async throws -> Bool {
+        logger.fault("prefetchRequest(workloadType:workloadParameters:) has been deprecated and does nothing now. Please switch to newer API.")
+        return false
+    }
+
+    /// Kicks off a prefetch for attestations from the server, for the given workload specification.
+    ///
+    /// - Parameters:
+    ///   - workloadType: The workloadType associated with requests to prefetch attestations for
+    ///   - workloadParameters: The workloadParameters associated with requests to prefetch attestations for
+    ///   - bundleIdentifierOverride: Optional bundle identifier to override the one automatically determined
+    ///   - featureIdentifier: Non optional feature identifier used for rate limiting and analytics
+    @available(*, deprecated, message: "Use `prewarm(configuration:)` instead.")
+    @concurrent public func prewarm(workloadType: String, workloadParameters: [String: String], bundleIdentifierOverride: String?, featureIdentifier: String) async {
+        logger.fault("prewarm(workloadType:workloadParameters:bundleIdentifierOverride:featureIdentifier:) has been deprecated and does nothing now. Please switch to newer API.")
+    }
+
+    /// Runs a prefetch for attestations from the server, for the given workload specification, as well
+    /// as any other work that might be required to speed up request that is likely to occur. This method,
+    /// `completePrewarm`, differs from `prewarm` in that it runs its work to completion before
+    /// it asynchronously returns. This is in contrast to `prewarm`'s behavior being fire-and-forget.
+    ///
+    /// - Parameters:
+    ///   - workloadType: The workloadType associated with requests to prefetch attestations for
+    ///   - workloadParameters: The workloadParameters associated with requests to prefetch attestations for
+    ///   - bundleIdentifierOverride: Optional bundle identifier to override the one automatically determined
+    ///   - featureIdentifier: Non optional feature identifier used for rate limiting and analytics
+    @available(*, deprecated, message: "Use `prewarm(configuration:)` instead.")
+    @concurrent public func completePrewarm(workloadType: String, workloadParameters: [String: String], bundleIdentifierOverride: String?, featureIdentifier: String) async {
+        var configuration = PrewarmConfiguration(
+            resourcePool: .inference,
+            workloadType: workloadType,
+            workloadParameters: workloadParameters,
+            featureIdentifier: featureIdentifier
+        )
+        configuration.bundleIdentifier = bundleIdentifierOverride
+
+        /// Errors are ignored here since `completePrewarm` has been implemented as a non-throwing function from the beginning.
+        try? await prewarm(configuration: configuration)
     }
 }
 
@@ -190,4 +390,12 @@ public enum TrustedCloudComputeError: Swift.Error, Sendable, Codable, AppleIntel
         }
         public var description: String { "" }
     }
+}
+
+@available(*, deprecated, message: "Not used.")
+public enum ResourcePool: Sendable {
+    case compute
+    case inference
+    case premiumInference
+    case creatorStudio
 }

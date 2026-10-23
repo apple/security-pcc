@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,6 +17,20 @@ public enum CloudBoardJobType: String, CaseIterable, Decodable, Sendable {
     case cloudBoardApp
     case cloudBoardSupportApp
     case cbJobHelper
+    // Raw values must match the CloudBoardJobType in launchd plist files — do not rename.
+    case cbPServerHelper
+    // Raw values must match the CloudBoardJobType in launchd plist files — do not rename.
+    case cbPClientHelper
+
+    /// The launchd manager name that owns jobs of this type.
+    package var launchdManagerName: String {
+        switch self {
+        case .cbPClientHelper:
+            return "com.apple.cloudos.cb_bridged"
+        case .cloudBoardApp, .cloudBoardSupportApp, .cbJobHelper, .cbPServerHelper:
+            return "com.apple.cloudos.cloudboardd"
+        }
+    }
 
     // Custom initialiser to allow case-insensitive decoding of the configured job type
     public init?(rawValue: String) {

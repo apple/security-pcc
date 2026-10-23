@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,4 +13,14 @@
 // 10/02/2024
 
 internal let kCloudBoardBridgeAPIXPCLocalServiceName = "com.apple.cloudos.cb_bridged"
-internal let kCloudBoardBridgeAPIXPCLocalServiceEntitlement = "com.apple.private.cloudos.cb_bridged"
+
+internal let kCloudBoardBridgeAPIXPCOutboundRequestEntitlement =
+    "com.apple.private.cloudos.cb_bridged.outbound_request"
+
+enum OutboundRequestEntitlement: String {
+    case toolInvocation = "ToolInvocation"
+    case cipCompanionService = "CipCompanionService"
+    case appleSigningService = "AppleSigningService"
+    case privateInformationRetrieval = "PrivateInformationRetrieval"
+    case bridgeStatus = "BridgeStatus"
+}

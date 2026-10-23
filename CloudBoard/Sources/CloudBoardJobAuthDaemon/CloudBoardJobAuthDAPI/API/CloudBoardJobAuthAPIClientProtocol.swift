@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,7 +13,6 @@
 // 10/02/2024
 
 import Foundation
-import Security
 
 public protocol CloudBoardJobAuthAPIClientProtocol: CloudBoardJobAuthAPIClientToServerProtocol {
     func set(delegate: CloudBoardJobAuthAPIClientDelegateProtocol) async
@@ -22,10 +21,8 @@ public protocol CloudBoardJobAuthAPIClientProtocol: CloudBoardJobAuthAPIClientTo
 }
 
 public protocol CloudBoardJobAuthAPIClientToServerProtocol: Actor {
-    /// Returns the DER-encoded public TGT RSA signing key in PKCS#1 format
-    func requestTGTSigningKeys() async throws -> [SigningKey]
-    /// Returns the DER-encoded public OTT RSA signing key in PKCS#1 format
-    func requestOTTSigningKeys() async throws -> [SigningKey]
+    /// Returns the ECDSA P-256 private key for cost token signing
+    func requestCostTokenSigningKey() async throws -> CostTokenSigningKeyPair
 }
 
 public protocol CloudBoardJobAuthAPIClientDelegateProtocol: AnyObject, Sendable,
@@ -33,19 +30,21 @@ CloudBoardJobAuthAPIServerToClientProtocol {
     func surpriseDisconnect() async
 }
 
-public struct SigningKey: Codable, Sendable, Equatable {
-    /// SHA256 hash of the key (the full SPKI)
+public struct CostTokenSigningKeyPair: Codable, Sendable, Equatable {
+    /// SHA256 hash of the public key (DER-encoded)
     public var keyId: Data
-    /// RSA public key extracted from the SPKI normally returned by the Key Rotation Service
-    public var rsaPublicKey: Data
-    /// Start and end date of the key's validity. Tokens signed with this key verified outside of the period should be
-    /// rejected.
+    /// ECDSA P-256 private key in DER format
+    public var privateKey: Data
+    /// ECDSA P-256 public key in DER format
+    public var publicKey: Data
+    /// Start and end date of the key's validity.
     public var validStart: Date
     public var validEnd: Date
 
-    public init(keyId: Data, rsaPublicKey: Data, validStart: Date, validEnd: Date) {
+    public init(keyId: Data, privateKey: Data, publicKey: Data, validStart: Date, validEnd: Date) {
         self.keyId = keyId
-        self.rsaPublicKey = rsaPublicKey
+        self.privateKey = privateKey
+        self.publicKey = publicKey
         self.validStart = validStart
         self.validEnd = validEnd
     }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,7 +21,7 @@ private import MobileGestaltPrivate
 #else
 struct MobileGestalt {
     struct Defaults {
-        let signingFuse: String = "unknown"
+        let signingFuse: String? = nil
         let buildVersion: String? = nil
         let releaseType: String? = nil
         let productName: String? = nil
@@ -41,6 +41,7 @@ public final class HostInfoEnricher: EHTransform {
         case eh_frontend
         case eh_variant
         case eh_version
+        case cos_version
         case product_name
         case hw_model
         case serial
@@ -51,21 +52,14 @@ public final class HostInfoEnricher: EHTransform {
         case projectID
     }
 
-    private let metadata = [
-        Keys.prod_fused: MobileGestalt.current.signingFuse,
-        Keys.build_version: MobileGestalt.current.buildVersion,
-        Keys.os_variant: MobileGestalt.current.releaseType,
-        Keys.eh_version: EnvironmentResolver.EHVersion,
-        Keys.product_name: MobileGestalt.current.productName,
-        Keys.hw_model: MobileGestalt.current.hwModelStr,
-        Keys.serial: MobileGestalt.current.serialNumber,
-        Keys.environment: EnvironmentResolver.environment,
-        Keys.boot_session: EnvironmentResolver.bootSession,
-        Keys.application_name: EnvironmentResolver.applicationName,
-        Keys.projectID: EnvironmentResolver.projectID
-    ] as [Keys: Sendable?]
+    private let staticFields: [String: EHValueType]
 
-    private let keys: [Keys]
+    private let hasDynamicFrontend: Bool
+    private let hasDynamicVariant: Bool
+    private let hasObservabilityLabels: Bool
+
+    private let frontendKeyString: String
+    private let variantKeyString: String
 
     private static let cached_prefixed_observability_labels: [String: EHValueType]? = {
         guard let ol = EnvironmentResolver.observabilityLabels else {
@@ -78,37 +72,129 @@ public final class HostInfoEnricher: EHTransform {
         return prefixed
     }()
 
-    public init(_ only: [Keys] = []) {
-        self.keys = !only.isEmpty ? only : Array(Keys.allCases)
-    }
+    public init(_ only: [Keys] = [], hostRootPath: String? = nil) {
+        let keys = !only.isEmpty ? only : Array(Keys.allCases)
 
-    public func process(_ event: any EHUEFEvent) async -> EHTransformReturn {
-        if keys.isEmpty {
-            return (.proceed, nil, nil, nil)
-        }
-        var e = event
+        let metadata: [Keys: Sendable?] = [
+            .prod_fused: MobileGestalt.current.signingFuse,
+            .build_version: MobileGestalt.current.buildVersion,
+            .os_variant: MobileGestalt.current.releaseType,
+            .eh_version: EnvironmentResolver.EHVersion,
+            .cos_version: EnvironmentResolver.COSBuildVersion,
+            .product_name: MobileGestalt.current.productName,
+            .hw_model: MobileGestalt.current.hwModelStr,
+            .serial: MobileGestalt.current.serialNumber ?? Self.linuxSerialNumber(hostRootPath: hostRootPath),
+            .environment: EnvironmentResolver.environment,
+            .boot_session: EnvironmentResolver.bootSession,
+            .application_name: EnvironmentResolver.applicationName,
+            .projectID: EnvironmentResolver.projectID
+        ]
+
+        var staticFields: [String: EHValueType] = [:]
+        staticFields.reserveCapacity(keys.count)
+
+        var hasDynamicFrontend = false
+        var hasDynamicVariant = false
+        var hasObservabilityLabels = false
 
         for key in keys {
             switch key {
             case .eh_frontend:
-                e.fields[key.rawValue] = .string(EHInfo.shared.currentFrontend)
+                hasDynamicFrontend = true
             case .eh_variant:
-                e.fields[key.rawValue] = .string(EHInfo.shared.currentVariant)
+                hasDynamicVariant = true
             case .observability_labels:
-                e.fields.merge(HostInfoEnricher.cached_prefixed_observability_labels ?? [:]) { _, new in new }
+                hasObservabilityLabels = true
             default:
                 if let boolValue = metadata[key] as? Bool?, let boolValue {
-                    e.fields[key.rawValue] = .boolean(boolValue)
+                    staticFields[key.rawValue] = .boolean(boolValue)
                 } else if let stringValue = metadata[key] as? String?, let stringValue {
-                    e.fields[key.rawValue] = .string(stringValue)
+                    staticFields[key.rawValue] = .string(stringValue)
                 } else if let intValue = metadata[key] as? Int?, let intValue {
-                    e.fields[key.rawValue] = .int(intValue)
+                    staticFields[key.rawValue] = .int(intValue)
                 }
             }
         }
+
+        self.staticFields = staticFields
+        self.hasDynamicFrontend = hasDynamicFrontend
+        self.hasDynamicVariant = hasDynamicVariant
+        self.hasObservabilityLabels = hasObservabilityLabels
+        self.frontendKeyString = Keys.eh_frontend.rawValue
+        self.variantKeyString = Keys.eh_variant.rawValue
+    }
+
+    public func process(_ event: any EHUEFEvent) async -> EHTransformReturn {
+        if staticFields.isEmpty && !hasDynamicFrontend && !hasDynamicVariant && !hasObservabilityLabels {
+            return (.proceed, nil, nil, nil)
+        }
+        var e = event
+
+        e.metadata.mutateFields { fields in
+            if !staticFields.isEmpty {
+                fields.merge(staticFields) { _, new in new }
+            }
+
+            if hasDynamicFrontend {
+                fields[frontendKeyString] = .string(EHInfo.shared.currentFrontend)
+            }
+            if hasDynamicVariant {
+                fields[variantKeyString] = .string(EHInfo.shared.currentVariant)
+            }
+            if hasObservabilityLabels {
+                fields.merge(
+                    HostInfoEnricher.cached_prefixed_observability_labels ?? [:]
+                ) { _, new in new }
+            }
+        }
+
         return (.proceed_mutated, [e], nil, nil)
     }
 
-    public func configure() throws {
+    public func configure() async throws {
+    }
+
+    static func linuxSerialNumber(hostRootPath: String? = nil) -> String? {
+        #if os(Linux)
+        let dmiPlaceholders: Set<String> = [
+            "Not Specified",
+            "To be filled by O.E.M.",
+            "System Serial Number",
+            "Default string",
+            "None",
+            "Not Applicable"
+        ]
+        var dmiPaths: [String] = []
+        if let root = hostRootPath {
+            dmiPaths.append("\(root)/sys/class/dmi/id/product_serial")
+            dmiPaths.append("\(root)/sys/class/dmi/id/board_serial")
+        }
+        dmiPaths.append("/sys/class/dmi/id/product_serial")
+        dmiPaths.append("/sys/class/dmi/id/board_serial")
+        for path in dmiPaths {
+            if let raw = try? String(contentsOfFile: path, encoding: .utf8) {
+                let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty && !dmiPlaceholders.contains(value) {
+                    return value
+                }
+            }
+        }
+        var machineIdPaths: [String] = []
+        if let root = hostRootPath {
+            machineIdPaths.append("\(root)/etc/machine-id")
+        }
+        machineIdPaths.append("/etc/machine-id")
+        for path in machineIdPaths {
+            if let raw = try? String(contentsOfFile: path, encoding: .utf8) {
+                let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    return value
+                }
+            }
+        }
+        return nil
+        #else
+        return nil
+        #endif
     }
 }

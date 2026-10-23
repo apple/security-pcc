@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -60,5 +60,6 @@ package struct EnsemblePorterXPCHandler<IntraEnsembleTransponder: EnsembleTransp
     package func handleCancellation(error: XPCRichError) {
         self.metrics.incrementXPC(error: .transportFailed)
         logger.log("XPC cancellation. error=\(error, privacy: .public)")
+        // TODO: Shutdown daemon
     }
 }

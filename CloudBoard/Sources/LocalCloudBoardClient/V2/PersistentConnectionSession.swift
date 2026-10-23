@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -26,13 +26,13 @@ extension PCCHarness {
     /// Session for PCC protocol layer subrequests
     public struct PCCSubrequestSession: Sendable {
         public typealias Response = Data
-        public let id: UInt32
+        public let id: UInt64
         public let responseStream: AsyncThrowingStream<Data, Error>
 
         private let requestContinuation: AsyncStream<SubrequestDataMessage>.Continuation
 
         internal init(
-            id: UInt32,
+            id: UInt64,
             responseStream: AsyncThrowingStream<Data, Error>,
             requestContinuation: AsyncStream<SubrequestDataMessage>.Continuation
         ) {
@@ -115,7 +115,7 @@ extension PCCHarness {
             }
         }
 
-        var subrequestID: UInt32 {
+        var subrequestID: UInt64 {
             return switch self {
             case .subresponseOpen(let open):
                 open.subrequestID
@@ -142,9 +142,9 @@ extension PCCHarness {
         ]
 
         private let requestContinuation: AsyncStream<SubrequestMessage>.Continuation
-        private let subrequestIDCounter = Mutex<UInt32>(0)
+        private let subrequestIDCounter = Mutex<UInt64>(0)
         private let subresponseContinuations =
-            Mutex<[UInt32: AsyncThrowingStream<SubresponseMessage, Error>.Continuation]>([:])
+            Mutex<[UInt64: AsyncThrowingStream<SubresponseMessage, Error>.Continuation]>([:])
 
         init(
             attestationBundle: LocalCloudBoardAttestationBundle,
@@ -251,7 +251,7 @@ extension PCCHarness {
 
         /// Processes request stream messages and forwards them to the main request continuation
         private func processRequestStream<ReturnType>(
-            subrequestID: UInt32,
+            subrequestID: UInt64,
             subrequestStream: AsyncStream<SubrequestDataMessage>,
             subresponseContinuation: AsyncThrowingStream<SubresponseMessage, Error>.Continuation
         ) async throws -> RequestTaskGroupResult<ReturnType> where ReturnType: Sendable {
@@ -277,7 +277,7 @@ extension PCCHarness {
 
         /// Processes response stream messages and yields data to the subresponse data continuation
         private func processResponseStream<ReturnType>(
-            subrequestID: UInt32,
+            subrequestID: UInt64,
             subresponseStream: AsyncThrowingStream<SubresponseMessage, Error>,
             subresponseDataContinuation: AsyncThrowingStream<Data, Error>.Continuation
         ) async throws -> RequestTaskGroupResult<ReturnType> where ReturnType: Sendable {

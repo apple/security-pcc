@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -98,6 +98,18 @@ extension EnsemblePorterXPCActor: EnsemblePorterClient {
         _ = try result.get()
     }
 
+    package func fetchKey(forTurnNumber turnNumber: Int, requestID: UUID, spanID: UInt64) async throws -> SymmetricKey {
+        let actor = try self.fetchActor
+        let result = try await actor.fetchKey(forTurnNumber: turnNumber)
+        let keyAsData = try result.get()
+        return SymmetricKey(data: keyAsData)
+    }
+
+    package func getNumberOfTurnKeys(requestID: UUID, spanID: UInt64) async throws -> Int {
+        let actor = try self.fetchActor
+        let result = try await actor.getNumberOfTurnKeys()
+        return try result.get()
+    }
 
     package func fetchFTETKey(requestID: UUID, spanID: UInt64) async throws -> SymmetricKey {
         let actor = try self.fetchActor

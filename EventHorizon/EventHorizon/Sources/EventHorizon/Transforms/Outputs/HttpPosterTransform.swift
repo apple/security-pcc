@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,321 +17,178 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
-
 #if canImport(os)
 import os
 #endif
 import Synchronization
 
-protocol HTTPPosterEventHandler {
-    func handle(incoming event: HTTPPosterEvent) -> Bool
-}
-
-enum HTTPPosterEvent: Sendable {
-    case jsonEvent(data: Data), immediateJsonEvent(data: Data)
-
-    func data() -> Data {
-        switch self {
-        case .jsonEvent(let data):
-            return data
-        case .immediateJsonEvent(let data):
-            return data
-        }
-    }
-}
-
-extension HTTPPosterEvent: CustomStringConvertible {
-    var description: String {
-        switch self {
-        case .immediateJsonEvent:
-            return "immediateJsonEvent"
-        case .jsonEvent:
-            return "jsonEvent"
-        }
-    }
-}
-
-protocol HTTPPosterEventBufferDelegate: AnyObject {
-    func timerDidExpire(data: Data)
-
-    func bufferWouldOverflow(data: Data)
-
-    func handleDirectly(event: HTTPPosterEvent)
-}
-
-class HTTPPosterEventBuffer {
-    static let serial: Mutex<Int> = .init(0)
-    let queue: DispatchQueue
-    let capacity: Int
-    var data: Data
-    var timer: DispatchSourceTimer
-    weak var delegate: HTTPPosterEventBufferDelegate?
-
-    init(capacity: Int, timeout: Double) {
-        self.queue = Self.serial.withLock { serial in
-            serial += 1
-            return DispatchQueue(label: "\(EventHorizonKit.framework_name).httpbuffer-\(serial)")
-        }
-
-        self.capacity = capacity
-        self.data = Data(capacity: capacity)
-
-        self.timer = DispatchSource.makeTimerSource(queue: self.queue)
-        timer.schedule(deadline: .now() + timeout, repeating: timeout)
-
-        timer.setEventHandler {
-            self.delegate?.timerDidExpire(data: self.data)
-            self.data.removeAll(keepingCapacity: true)
-        }
-        timer.activate()
-    }
-
-    deinit {
-        timer.setEventHandler {}
-        timer.cancel()
-    }
-
-    private func appendToBuffer(_ batch: Data) {
-        self.queue.sync {
-            self.data.append(batch)
-        }
-    }
-
-    private func clearBuffer() {
-        self.queue.sync {
-            self.data.removeAll(keepingCapacity: true)
-        }
-    }
-}
-
-extension HTTPPosterEventBuffer: HTTPPosterEventHandler {
-    func handle(incoming event: HTTPPosterEvent) -> Bool {
-        switch event {
-        case let .jsonEvent(batch):
-            if batch.count > capacity {
-                delegate?.handleDirectly(event: event)
-            } else if batch.count + data.count > capacity {
-                delegate?.bufferWouldOverflow(data: data)
-                self.clearBuffer()
-                return false
-            } else {
-                self.appendToBuffer(batch)
-            }
-        case .immediateJsonEvent:
-            delegate?.handleDirectly(event: event)
-        }
-        return true
-    }
-}
-
-enum HTTPPosterEventOffloaderError: Error {
-    case invalidHTTPPosterURL
-}
-
-typealias HttpPostMethodType = (_ request: URLRequest) async throws -> (Data, URLResponse)
-
-func urlReqToString(_ req: URLRequest) -> String {
-    guard let body = req.httpBody else {
-        return "<nil>"
-    }
-    return body.map { String(format: "%c", $0) }.joined()
-}
-
-actor HTTPPosterEventOffloader {
-    let jsonEndpoint: URL
-    private let log = EHLog.withCategory(HTTPPosterEventOffloader.self)
-    var refreshEventRecieved: Bool = true
-    var acdcActorURLSession: URLSession?
-
-    private func offload(event: HTTPPosterEvent) async {
-        let incoming = event.data()
-        guard !incoming.isEmpty else {
-            return
-        }
-
-        let requestEndpoint = jsonEndpoint
-        let maxRetries = 5
-        var attempts = 0
-
-        var request = URLRequest(url: requestEndpoint)
-        request.httpMethod = "POST"
-        request.httpBody = incoming
-        await withDiscardingTaskGroup {metrics in
-            metrics.addTask { await EHMetrics.Labels.Gauges.httpposter_size_bytes.set(Double(incoming.count)) }
-
-            os_log(.info, log: log, "sending HTTP POST: \(String(describing: request), privacy: .public)")
-            os_log(.debug, log: log, "forwarding pipeline event body contents: \(urlReqToString(request), privacy: .public)")
-
-            while attempts < maxRetries {
-                do { try await Task.sleep(for: .milliseconds(125 * attempts)) } catch { return }
-                do {
-                    var data: Data
-                    var response: URLResponse
-                    (data, response) = try await URLSession.shared.data(for: request)
-
-                    guard let httpResponse = response as? HTTPURLResponse else {
-                        throw NSError(domain: "HTTPPosterEventOffloader", code: 1, userInfo: ["error": "Unexpected URL Response type"])
-                    }
-
-                    let status = httpResponse.statusCode
-                    if 200 == status {
-                        metrics.addTask { await EHMetrics.Labels.Counters.httpposter_post_success_count.increment() }
-                        return
-                    } else {
-                        metrics.addTask { await EHMetrics.Labels.Counters.httpposter_post_failure_count.increment() }
-                        os_log(.error, log: log, """
-                        ERROR: Response: %d
-                        ERROR: %{public}s
-                        ERROR: Request body:\n
-                        """, status, (String(bytes: data, encoding: .utf8) ?? "error"), String(bytes: request.httpBody ?? Data(), encoding: .utf8) ?? "error"
-                        )
-                        attempts = maxRetries
-                    }
-                } catch {
-                    metrics.addTask { await EHMetrics.Labels.Counters.httpposter_post_failure_count.increment() }
-                    os_log(.error, log: log, "HTTPPoster HTTP POST failed:\n\(error.localizedDescription, privacy: .public)")
-                    attempts += 1
-                }
-            }
-            metrics.addTask { await EHMetrics.Labels.Counters.httpposter_post_drop_count.increment() }
-        }
-    }
-
-    public init(httpEndpoint: URL) throws {
-        guard let httpEndpoint = URLComponents(url: httpEndpoint, resolvingAgainstBaseURL: true) else {
-            throw HTTPPosterEventOffloaderError.invalidHTTPPosterURL
-        }
-
-        var jsonEndpoint = httpEndpoint
-        jsonEndpoint.path = "/services/collector"
-        guard let jsonURL = jsonEndpoint.url else {
-            throw HTTPPosterEventOffloaderError.invalidHTTPPosterURL
-        }
-        self.jsonEndpoint = jsonURL
-    }
-}
-
-extension HTTPPosterEventOffloader: HTTPPosterEventBufferDelegate {
-    nonisolated func timerDidExpire(data: Data) {
-        os_log(.debug, log: log, "Timer fired, uploading \(data.count) bytes")
-        if data.isEmpty {
-            return
-        }
-        Task {
-            await self.offload(event: .jsonEvent(data: data))
-        }
-    }
-
-    nonisolated func bufferWouldOverflow(data: Data) {
-        os_log(.debug, log: log, "Timer fired, uploading \(data.count) bytes")
-        Task {
-            await self.offload(event: .jsonEvent(data: data))
-        }
-    }
-
-    nonisolated func handleDirectly(event: HTTPPosterEvent) {
-        Task {
-            await self.offload(event: event)
-        }
-    }
-}
-
-class HTTPPosterEventRotatingBuffer {
-    var buffers: [HTTPPosterEventBuffer]
-    var activeIndex = 0
-
-    init(bufferCount: Int, bufferSize: Int, timeout: Double) {
-        let optionalBuffers = [HTTPPosterEventBuffer?](repeating: nil, count: bufferCount)
-
-        self.buffers = optionalBuffers.map { _ -> HTTPPosterEventBuffer in
-            return HTTPPosterEventBuffer(capacity: bufferSize, timeout: timeout)
-        }
-    }
-
-    func updateDelegate(to newDelegate: HTTPPosterEventBufferDelegate?) {
-        guard let newDelegate else {
-            return
-        }
-        self.buffers.forEach { $0.delegate = newDelegate }
-    }
-}
-
-extension HTTPPosterEventRotatingBuffer: HTTPPosterEventHandler {
-    func handle(incoming event: HTTPPosterEvent) -> Bool {
-        while true {
-            let buffer = self.buffers[activeIndex]
-            if buffer.handle(incoming: event) {
-                return true
-            }
-            activeIndex = (activeIndex + 1) % buffers.count
-        }
-    }
-}
-
 public protocol HTTPPosterTransformEncoder: Sendable {
     static func encode(event: any EHUEFEvent) -> Data?
 }
+
 public final class HTTPPosterTransform: EHTransform {
     public let name = "HTTPPosterTransform"
-    enum Tags: String, CaseIterable {
-        case log_println
-    }
+
+    public static let posterName = "events"
 
     static let ServerDefaultURL = "https://dzv2.apple.com"
-    static let ServerConfigParameterKey = "com.apple.securitymonitorlited.serverURL"
+    public static let ServerConfigParameterKey = "com.apple.eventhorizond.httpPoster.serverURL"
+    public static let SMLServerConfigParameterKey = "com.apple.securitymonitorlited.serverURL"
+    public static let LSMLServerConfigParameterKey = "com.apple.lsecuritymonitorlited.serverURL"
+    static let DisableTLSValidationConfigKey = "com.apple.eventhorizond.httpPoster.disableTLSValidation"
 
-    let buffer: Mutex<HTTPPosterEventRotatingBuffer>
-    let offloader: HTTPPosterEventOffloader
+    private static let _configuredServerURL: Mutex<(value: String?, set: Bool)> = Mutex((nil, false))
+    private static let _configuredDisableTLSValidation: Mutex<(value: Bool?, set: Bool)> = Mutex((nil, false))
+    private static let _configuredToken: Mutex<String?> = .init(nil)
+    private static let _configuredEncoderStyle: Mutex<ConfiguredEncoderStyle> = .init(.asep)
+    private static let _configuredBuffering: Mutex<BufferingConfig> = .init(.default)
+
+    public struct BufferingConfig: Sendable {
+        public let bufferCount: Int
+        public let bufferSize: Int
+        public let timeoutSeconds: Double
+
+        public init(bufferCount: Int, bufferSize: Int, timeoutSeconds: Double) {
+            self.bufferCount = bufferCount
+            self.bufferSize = bufferSize
+            self.timeoutSeconds = timeoutSeconds
+        }
+
+        public static let `default` = BufferingConfig(
+            bufferCount: 2,
+            bufferSize: 655_360,
+            timeoutSeconds: 30.0
+        )
+    }
+
+    public static func setConfiguredBuffering(_ value: BufferingConfig) {
+        _configuredBuffering.withLock { $0 = value }
+    }
+
+    public static func configuredBuffering() -> BufferingConfig {
+        _configuredBuffering.withLock { $0 }
+    }
+
+    public enum ConfiguredEncoderStyle: Sendable {
+        case asep
+        case splunkHEC
+    }
+
+    public static func setConfiguredEncoderStyle(_ style: ConfiguredEncoderStyle) {
+        _configuredEncoderStyle.withLock { $0 = style }
+    }
+
+    public static func configuredEncoderStyle() -> ConfiguredEncoderStyle {
+        _configuredEncoderStyle.withLock { $0 }
+    }
+
+    public static func configuredEncoderType() -> any HTTPPosterTransformEncoder.Type {
+        switch configuredEncoderStyle() {
+        case .asep: return UEFToASEP.self
+        case .splunkHEC: return UEFToSplunkHEC.self
+        }
+    }
+
+    public static func setConfiguredServerURL(_ value: String) {
+        _configuredServerURL.withLock { state in
+            if state.set {
+                os_log(.error, log: log, "configuredServerURL already set, ignoring subsequent call")
+                return
+            }
+            state.value = value
+            state.set = true
+        }
+    }
+
+    public static func setConfiguredDisableTLSValidation(_ value: Bool) {
+        _configuredDisableTLSValidation.withLock { state in
+            if state.set {
+                os_log(.error, log: log, "configuredDisableTLSValidation already set, ignoring subsequent call")
+                return
+            }
+            state.value = value
+            state.set = true
+        }
+    }
+
+    public static func setConfiguredToken(_ value: String?) {
+        _configuredToken.withLock { $0 = value }
+    }
+
+    let sender: HTTPSender
     let encoder: any HTTPPosterTransformEncoder.Type
     private static let log = EHLog.withCategory(HTTPPosterTransform.self)
 
-    static func getURL() -> URL {
-        let defaultUrl = URL(string: HTTPPosterTransform.ServerDefaultURL)!
-        let configServerURL: String? = EHConfigResolver(
-            SecureConfigProvider(),
-            DefaultConfigProvider(value: defaultUrl)
-        ).resolve(key: HTTPPosterTransform.ServerConfigParameterKey, domain: nil)
+    static func getURL(serverConfigKey: String = ServerConfigParameterKey) -> URL {
+        let configuredDefault = _configuredServerURL.withLock { $0.value }
+        let fallbackURL = configuredDefault ?? ServerDefaultURL
+        let defaultUrl = URL(string: fallbackURL)!
 
-        if let configServerURL {
-            guard let parsedUrl = URL(string: configServerURL) else {
-                os_log(.error, log: log, "SecureConfigParameters passed invalid URL: \(configServerURL, privacy: .public), using \(HTTPPosterTransform.ServerDefaultURL, privacy: .public)")
+        let resolvedURL: String? = EHConfigResolver(
+            SecureConfigProvider(),
+            EnvironmentConfigResolver()
+        ).resolve(key: serverConfigKey, domain: nil)
+
+        if let resolvedURL {
+            guard let parsedUrl = URL(string: resolvedURL) else {
+                os_log(.error, log: log, "Config provider passed invalid URL: \(resolvedURL, privacy: .public), using default: \(fallbackURL, privacy: .public)")
                 return defaultUrl
             }
-            os_log(.info, log: log, "Setting server URL to match SecureConfigParameters: \(configServerURL, privacy: .public)")
+            os_log(.info, log: log, "Setting server URL from config provider: \(resolvedURL, privacy: .public)")
             return parsedUrl
         }
+
+        os_log(.info, log: log, "Using server URL: \(fallbackURL, privacy: .public)")
         return defaultUrl
     }
 
-    public init? (bufferCount: Int, bufferSize: Int, timeout: Double, encodingStrategy: any HTTPPosterTransformEncoder.Type) {
-        if let offloader = try? HTTPPosterEventOffloader(httpEndpoint: Self.getURL()) {
-            self.offloader = offloader
-            let buf = HTTPPosterEventRotatingBuffer(bufferCount: bufferCount, bufferSize: bufferSize, timeout: timeout)
-            buf.updateDelegate(to: self.offloader)
-            self.buffer = .init(buf)
-            self.encoder = encodingStrategy
-        } else {
+    static func shouldDisableTLSValidation(override: Bool?) -> Bool {
+        if let override {
+            return override
+        }
+        let resolved: Bool? = EHConfigResolver(
+            SecureConfigProvider(),
+            EnvironmentConfigResolver()
+        ).resolve(key: HTTPPosterTransform.DisableTLSValidationConfigKey, domain: "com.apple.eventhorizond")
+        if let resolved {
+            return resolved
+        }
+        return _configuredDisableTLSValidation.withLock { $0.value } ?? false
+    }
+
+    public init?(
+        bufferCount: Int,
+        bufferSize: Int,
+        timeout: Double,
+        encodingStrategy: any HTTPPosterTransformEncoder.Type,
+        disableTLSValidation: Bool? = nil,
+        serverConfigKey: String = ServerConfigParameterKey
+    ) {
+        let shouldDisable = Self.shouldDisableTLSValidation(override: disableTLSValidation)
+        guard let sender = HTTPSender(
+            endpoint: Self.getURL(serverConfigKey: serverConfigKey),
+            token: Self._configuredToken.withLock { $0 },
+            disableTLSValidation: shouldDisable,
+            bufferCount: bufferCount,
+            bufferSize: bufferSize,
+            timeout: timeout,
+            posterName: Self.posterName
+        ) else {
             return nil
         }
+        self.sender = sender
+        self.encoder = encodingStrategy
     }
 
     public func process(_ event: any EHUEFEvent) async -> EHTransformReturn {
         if let adata = encoder.encode(event: event) {
-            let evt = {
-                if event.tags.contains(SharedTags.high_priority.rawValue) {
-                    return HTTPPosterEvent.immediateJsonEvent(data: adata)
-                }
-                return HTTPPosterEvent.jsonEvent(data: adata)
-            }()
-            self.buffer.withLock {
-                let result = $0.handle(incoming: evt)
-                os_log(.debug, log: Self.log, "HTTP Offloader Result: \(result)")
-            }
+            let isImmediate = event.tags.contains(SharedTags.high_priority.rawValue)
+            self.sender.send(adata, immediate: isImmediate)
         }
         return (.proceed, nil, nil, nil)
     }
 
-    public func configure() throws {
+    public func configure() async throws {
         _ = getHostName()
     }
 }

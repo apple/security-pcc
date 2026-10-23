@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -97,6 +97,35 @@ extension Configuration {
         package var clients: [String] = []
     }
 
+    package struct BucketPublishRule: Hashable, Equatable {
+        package var minPublishCount: Int
+        package var noiseSigmaThreshold: Double
+        // Per-window query noise scale for the AboveThreshold check (CHANGEDv3).
+        // Defaults to noiseSigmaThreshold when absent from config.
+        package var noiseSigmaCount: Double
+        package var noiseSigmaPublish: Double
+
+        package init(
+            minPublishCount: Int,
+            noiseSigmaThreshold: Double,
+            noiseSigmaCount: Double? = nil,
+            noiseSigmaPublish: Double
+        ) {
+            self.minPublishCount = minPublishCount
+            self.noiseSigmaThreshold = noiseSigmaThreshold
+            self.noiseSigmaCount = noiseSigmaCount ?? noiseSigmaThreshold
+            self.noiseSigmaPublish = noiseSigmaPublish
+        }
+    }
+
+    package struct LaplaceNoiseInjection: Hashable, Equatable, Decodable {
+        package var buckets: [BucketPublishRule]
+
+        private enum CodingKeys: String, CodingKey {
+            case buckets = "Buckets"
+        }
+    }
+
     package struct FilterRule: Hashable, Equatable {
         package var client: String
         package var label: String
@@ -105,6 +134,9 @@ extension Configuration {
         package var type: CloudMetricType
         package var destinations: [Destination] = []
         package var dimensions: [String: [String]] = [:]
+        package var aggregateOnNode: Bool = false
+        package var minPublishCount: Int = 0
+        package var laplaceNoiseInjection: LaplaceNoiseInjection? = nil
     }
 
     package struct AuditLists: Hashable, Equatable {
@@ -115,6 +147,23 @@ extension Configuration {
 }
 
 // MARK: Decodable conformations.
+
+extension Configuration.BucketPublishRule: Decodable {
+    private enum CodingKeys: String, CodingKey {
+        case minPublishCount     = "MinPublishCount"
+        case noiseSigmaThreshold = "NoiseSigmaThreshold"
+        case noiseSigmaCount     = "NoiseSigmaCount"
+        case noiseSigmaPublish   = "NoiseSigmaPublish"
+    }
+
+    package init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        minPublishCount     = try c.decode(Int.self,    forKey: .minPublishCount)
+        noiseSigmaThreshold = try c.decode(Double.self, forKey: .noiseSigmaThreshold)
+        noiseSigmaCount     = try c.decodeIfPresent(Double.self, forKey: .noiseSigmaCount) ?? noiseSigmaThreshold
+        noiseSigmaPublish   = try c.decode(Double.self, forKey: .noiseSigmaPublish)
+    }
+}
 
 extension Configuration: Decodable {
 
@@ -237,13 +286,17 @@ extension Configuration.FilterRule: Decodable {
         case type = "Type"
         case destinations = "Destinations"
         case dimensions = "Dimensions"
+        case aggregateOnNode = "AggregateOnNode"
+        case minPublishCount = "MinPublishCount"
+        case laplaceNoiseInjection  = "LaplaceNoiseInjection"
+        case gaussianNoiseInjection = "GaussianNoiseInjection"  // legacy key, still accepted
     }
 
     package init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.client = try container.decode(String.self, forKey: .client)
         self.label = try container.decode(String.self, forKey: .label)
-        self.minUpdateInterval = try .seconds(container.decode(Int.self, forKey: .minUpdateInterval))
+        self.minUpdateInterval = try .seconds(container.decodeIfPresent(Int.self, forKey: .minUpdateInterval) ?? 0)
         self.minPublishInterval = try .seconds(container.decode(Int.self, forKey: .minPublishInterval))
         let typeAsString = try container.decodeIfPresent(String.self, forKey: .type)
         if let typeAsString {
@@ -261,6 +314,10 @@ extension Configuration.FilterRule: Decodable {
             try .init(id: $0)
         }
         self.dimensions = try container.decode([String: [String]].self, forKey: .dimensions)
+        self.aggregateOnNode = try container.decodeIfPresent(Bool.self, forKey: .aggregateOnNode) ?? false
+        self.minPublishCount = try container.decodeIfPresent(Int.self, forKey: .minPublishCount) ?? 0
+        self.laplaceNoiseInjection = try container.decodeIfPresent(Configuration.LaplaceNoiseInjection.self, forKey: .laplaceNoiseInjection)
+            ?? container.decodeIfPresent(Configuration.LaplaceNoiseInjection.self, forKey: .gaussianNoiseInjection)
     }
 }
 
@@ -379,15 +436,11 @@ extension Configuration {
         }
 
     #if os(macOS)
-        #if canImport(MobileGestalt, _version: 1444)
-            if MobileGestalt.current.isComputePacketBridge {
-                labels["_type"] = "apb"
-            } else {
-                labels["_type"] = "node"
-            }
-        #else
+        if #available(macOS 15.6, *), MobileGestalt.current.isComputePacketBridge {
+            labels["_type"] = "apb"
+        } else {
             labels["_type"] = "node"
-        #endif
+        }
     #elseif os(iOS)
         if MobileGestalt.current.isComputeController {
             labels["_type"] = "bmc"

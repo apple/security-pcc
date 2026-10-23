@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,6 +12,7 @@
 // EA1937
 // 10/02/2024
 
+import CloudBoardCommon
 import CloudBoardLogging
 import CloudBoardMetrics
 import Foundation
@@ -52,75 +53,6 @@ extension HistogramBuckets {
         10,
     ]
 
-    fileprivate static let requestTime: Self = [
-        0.005524,
-        0.007812,
-        0.011049,
-        0.015625,
-        0.022097,
-        0.03125,
-        0.044194,
-        0.0625,
-        0.088388,
-        0.125,
-        0.176777,
-        0.25,
-        0.353553,
-        0.5,
-        0.707107,
-        1.0,
-        1.414214,
-        1.681793,
-        2.0,
-        2.181015,
-        2.378414,
-        2.593679,
-        2.828427,
-        2.953652,
-        3.084422,
-        3.220981,
-        3.363586,
-        3.512504,
-        3.668016,
-        3.830413,
-        4.0,
-        4.177095,
-        4.362031,
-        4.555155,
-        4.756828,
-        4.967431,
-        5.187358,
-        5.417022,
-        5.656854,
-        5.907305,
-        6.168843,
-        6.441961,
-        6.727171,
-        7.025009,
-        7.336032,
-        7.660826,
-        8.0,
-        8.35419,
-        8.724062,
-        9.110309,
-        9.513657,
-        9.934862,
-        10.374716,
-        11.313708,
-        12.337687,
-        13.454343,
-        14.672065,
-        16.0,
-        22.627417,
-        32.0,
-        45.254834,
-        64.0,
-        90.509668,
-        128.0,
-        181.019336,
-        256.0,
-        362.038672,
-    ]
     fileprivate static let drainCompletionTime: Self = [
         0,
         0.005,
@@ -421,6 +353,16 @@ enum Metrics {
                 ]
             }
         }
+
+        struct CBPServerHelperTerminateFailureCounter: Counter {
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_cb_pserver_helper_terminate_failure"
+            var action: CounterAction
+        }
+
+        struct CBPClientHelperTerminateFailureCounter: Counter {
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_cb_pclient_helper_terminate_failure"
+            var action: CounterAction
+        }
     }
 
     enum HotPropertiesController {
@@ -503,6 +445,28 @@ enum Metrics {
 
         struct PrewarmedPoolSizeGauge: Gauge {
             static let label: MetricLabel = "\(ProcessInfo.prefix)_prewarm_jobhelper_pool_size"
+
+            enum DimensionKey: String, RawRepresentable {
+                case cloudApp
+                case configuredSize
+            }
+
+            var dimensions: MetricDimensions<DimensionKey>
+            var value: Int
+
+            init(value: Int, cloudApp: String, configuredPoolSize: Int) {
+                self.value = value
+                self.dimensions = [
+                    .cloudApp: cloudApp,
+                    .configuredSize: "\(configuredPoolSize)",
+                ]
+            }
+        }
+
+        /// Number of instances currently warming up (created but not yet ready to serve). Complements
+        /// `PrewarmedPoolSizeGauge`, which reports the count ready to serve immediately.
+        struct PrewarmingPoolSizeGauge: Gauge {
+            static let label: MetricLabel = "\(ProcessInfo.prefix)_prewarming_jobhelper_pool_size"
 
             enum DimensionKey: String, RawRepresentable {
                 case cloudApp

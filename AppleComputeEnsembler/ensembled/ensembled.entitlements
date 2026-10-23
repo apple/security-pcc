@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Apple Inc. All Rights Reserved. -->
+<!-- Copyright © 2026 Apple Inc. All Rights Reserved. -->
 
 <!-- APPLE INC. -->
 <!-- PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT -->
@@ -52,9 +52,23 @@
 	<string>ensembled</string>
 	<key>com.apple.private.sandbox.profile:embedded</key>
 	<string>apple-cloud</string>
+    <key>com.apple.driver.AppleCIOFusion.UserClient.Config</key>
+    <true/>
+    <key>com.apple.driver.AppleCIOFusion.UserClient.Config.Set</key>
+    <true/>
+    <!-- Remove this after rdar://170153839 (Config framework should not require a 'Get' entitlement for ensemble activation) is fixed -->
+    <key>com.apple.driver.AppleCIOFusion.UserClient.Config.Get</key>
+    <true/>
+    <key>com.apple.security.exception.mach-lookup.global-name</key>
+         <true/>
+    <key>com.apple.security.iokit-user-client-class</key>
+       <array>
+           <string>AppleCIOFusionConfigClient</string>
+       </array>
 	<key>com.apple.security.exception.iokit-user-client-class</key>
 	<array>
 		<string>AppleCIOMeshConfigUserClient</string>
+        <string>AppleCIOFusionConfigClient</string>
 		<string>AppleCIOMeshUserClient</string>
 		<string>AppleVirtMeshConfigUserClient</string>
 		<string>AppleVirtMeshMainUserClient</string>
@@ -101,5 +115,9 @@
 	<array>
 		<string>/private/var/db/secureconfig/</string>
 	</array>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>com.apple.cloudos.ciofusion</string>
+    </array>
 </dict>
 </plist>

@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Apple Inc. All Rights Reserved. -->
+<!-- Copyright © 2026 Apple Inc. All Rights Reserved. -->
 
 <!-- APPLE INC. -->
 <!-- PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT -->
@@ -43,13 +43,21 @@
 	<true/>
 	<key>com.apple.private.img4.nonce.cryptex</key>
 	<true/>
-	<key>com.apple.private.img4.nonce.ephemeral-cryptex</key>
-	<true/>
 	<key>com.apple.private.img4.nonce.cryptex1.generic</key>
+	<true/>
+	<key>com.apple.private.img4.nonce.cryptex1.generic.erm</key>
+	<true/>
+	<key>com.apple.private.img4.nonce.cryptex1.simulator</key>
 	<true/>
 	<key>com.apple.private.img4.nonce.cryptex1.supplemental</key>
 	<true/>
-	<key>com.apple.private.img4.nonce.cryptex1.simulator</key>
+	<key>com.apple.private.img4.nonce.ddi</key>
+	<true/>
+	<key>com.apple.private.img4.nonce.ephemeral-cryptex</key>
+	<true/>
+	<key>com.apple.private.img4.nonce.pdi</key>
+	<true/>
+	<key>com.apple.private.img4.set-supplemental-root</key>
 	<true/>
 	<key>com.apple.private.security.AppleImage4.user-client</key>
 	<true/>
@@ -78,6 +86,12 @@
 	<true/>
 	<key>com.apple.private.security.cryptex.lockdown</key>
 	<true/>
+	<key>com.apple.private.security.cryptex.install</key>
+	<true/>
+	<key>com.apple.private.security.cryptex.open-mountable</key>
+	<true/>
+	<key>com.apple.private.security.cryptex.bootstrap-dir</key>
+	<true/>
 	<key>com.apple.tailspin.config-apply</key>
 	<true/>
 	<key>com.apple.apfs.wvek</key>
@@ -86,9 +100,16 @@
 	<true/>
 	<key>com.apple.apfs.private.skip-xart</key>
 	<true/>
+	<key>com.apple.private.AuthorizationServices</key>
+	<array>
+		<string>com.apple.trust-settings.admin</string>
+	</array>
 	<key>com.apple.private.apfs.volume-cache-key</key>
 	<true/>
 	<key>com.apple.security.iokit-user-client-class</key>
-	<string>AppleAPFSUserClient</string>
+	<array>
+		<string>AppleAPFSUserClient</string>
+		<string>AppleImage4UserClient</string>
+	</array>
 </dict>
 </plist>

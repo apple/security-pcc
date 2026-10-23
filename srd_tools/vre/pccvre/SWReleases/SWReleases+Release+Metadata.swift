@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -78,12 +78,6 @@ public extension SWReleases.Release {
                 throw TransparencyLogError("\(indexPrefix)failed to parse metadata payload")
             }
 
-            guard metadata.schemaVersion.rawValue >= SWReleases.Release.Metadata.minSchemaVer.rawValue,
-                  metadata.schemaVersion.rawValue <= SWReleases.Release.Metadata.maxSchemaVer.rawValue
-            else {
-                throw TransparencyLogError("\(indexPrefix)incompatible metadata payload schema \(metadata.schemaVersion)")
-            }
-
             if metadata.releaseDigest.isEmpty, let releaseHash {
                 metadata.releaseDigest = releaseHash
             }
@@ -155,21 +149,9 @@ public extension SWReleases.Release {
             return osAssets[0]
         }
 
-        // cryptexAssets returns a map of AssetType to an Asset struct
-        //   (excludes OS and host tools) -- at most, one of each type is supported
-        func cryptexAssets() -> [AssetType: Asset]? {
-            var assetsMap: [AssetType: Asset] = [:]
-            for at in AssetType.allCases {
-                if [AssetType.os, AssetType.hostTools].contains(at) {
-                    continue
-                }
-
-                if let assets = assetsByType(at) {
-                    assetsMap[at] = assets[0]
-                }
-            }
-
-            return assetsMap.count > 0 ? assetsMap : nil
+        // cryptexAssets returns all Assets that are not OS or host tools
+        func cryptexAssets() -> [Asset] {
+            self.assets.filter { ![AssetType.os, AssetType.hostTools].contains($0.type) }
         }
 
         // hostToolAssets returns -first- Asset of type AssetType.hostTools
@@ -225,10 +207,14 @@ public extension SWReleases.Release {
         }
 
         // assetVerifier returns a callback function to verify digest of retrieved asset
-        //  against the one published in the metadata record
+        //  against the one published in the metadata record. When the metadata omits the
+        //  digest field, returns a permissive verifier that only checks the file exists
+        //  so releases can reference assets (e.g. content-addressed exported container
+        //  images) without the publisher having to compute and attach a digest for every
+        //  build; the publisher populates the digest field when they have one.
         static func assetVerifier(_ asset: Asset) throws -> AssetVerifier {
             guard asset.hasDigest else {
-                throw TransparencyLogError("asset doesn't contain digest")
+                return { url in FileManager.isRegularFile(url) }
             }
 
             let assetDigest = asset.digest

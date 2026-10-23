@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,10 +22,14 @@
 import NetworkServiceProxy
 
 extension NSPPrivateAccessTokenFetcher {
-    convenience init(lttIssuer: String, ottIssuer: String) {
-        let lltChallenge = NSPPrivateAccessTokenChallenge(rsaBlindSignatureChallengeWithIssuerName: lttIssuer, redemptionNonce: nil, originNames: nil)
-        let ottChallenge = NSPPrivateAccessTokenChallenge(rsaBlindSignatureChallengeWithIssuerName: ottIssuer, redemptionNonce: nil, originNames: nil)
-        self.init(forKnownIssuerWithLongLivedTokenChallenge: lltChallenge.challengeData!, oneTimeTokenChallenge: ottChallenge.challengeData!)
+    convenience init(issuer: String, auxiliaryAuthenticationCacheKey: String?) {
+        let challenge = NSPPrivateAccessTokenChallenge(
+            rsaBlindSignatureChallengeWithIssuerName: issuer,
+            redemptionNonce: nil,
+            originNames: nil
+        )
+        self.init(forKnownIssuerWithChallenge: challenge.challengeData!)
         self.systemClient = true
+        self.auxiliaryAuthenticationCacheKey = auxiliaryAuthenticationCacheKey
     }
 }

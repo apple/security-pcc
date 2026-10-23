@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -53,14 +53,14 @@ struct ValidatedAttestation: Sendable, Hashable {
     /// Attestation's unique device id from CloudAttestation framework.
     ///
     /// Identifies node's hardware.
-    var udid: String?
+    var udid: String
 
     /// Cell ID from CloudAttestation framework
     var validatedCellID: String?
 }
 
 extension ValidatedAttestation {
-    init?(entry: AttestationStore.Node) {
+    init?(entry: LegacyAttestationStore.Node) {
         self.init(
             attestation: .init(
                 nodeID: entry.ropesNodeIdentifier,
@@ -82,11 +82,33 @@ extension ValidatedAttestation {
 }
 
 extension NodeKind {
-    init(_ kind: AttestationStore.Node.Kind) {
+    init(_ kind: LegacyAttestationStore.Node.Kind) {
         self =
             switch kind {
             case .direct: .direct
             case .proxy: .proxy
             }
+    }
+}
+
+extension ValidatedAttestation {
+    /// Creates a ValidatedAttestation from NodeMetadata.
+    /// Note: attestationBundle is not included (stored separately in NodeBundle).
+    init?(metadata: AttestationStore.SchemaV3.NodeMetadata, bundle: Data? = nil) {
+        self.init(
+            attestation: .init(
+                nodeID: metadata.nodeID,
+                attestationBundle: bundle,
+                cloudOSVersion: metadata.cloudOSVersion,
+                cloudOSReleaseType: metadata.cloudOSReleaseType,
+                unvalidatedCellID: nil,
+                ensembleID: metadata.ensembleID
+            ),
+            nodeKind: .proxy,  // V3 only uses proxy nodes
+            publicKey: metadata.publicKey,
+            attestationExpiry: metadata.attestationExpiry,
+            udid: metadata.udid,
+            validatedCellID: metadata.cellID
+        )
     }
 }

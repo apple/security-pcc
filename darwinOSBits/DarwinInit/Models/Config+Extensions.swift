@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,6 +18,7 @@
 //
 //
 
+import DarwinInitConfig
 import Foundation
 
 extension Config {
@@ -30,84 +31,6 @@ extension Config {
         return Duration(argument: str)
     }
 
-}
-
-extension Config.Cryptex {
-
-    enum DepsolvError: Error {
-        case dependencyMissing(String)
-        case cycleDetected(Set<String>)
-    }
-
-    /// Sort the cryptexes according to their dependencies.
-    ///
-    /// Tries to topological sort the dependency graph of cryptexes into a
-    /// list of cryptex identifiers so that all dependencies of each cryptex
-    /// appear before itself in the list.
-    ///
-    /// This can fail if 1) there is a depdendency totally missing or
-    /// 2) if the graph cannot be flattened because there is a cycle in it.
-    ///
-    /// - Throws: `DepsolvError.dependencyMissing` if any dependency is missing.
-    /// - Throws: `DepsolvError.cycleDetected` if there is a cycle in the dependency graph.
-    /// - Returns: List of sorted cryptex indentifiers.
-    func depsolvCryptexes() throws -> [String] {
-        guard let cryptexes else { return [] }
-
-        var result: [String] = []
-        var todo = Array(cryptexes.keys)
-
-        // Invariant: Either we make progress, i.e. the todo is shrinking
-        // or we have a cycle and throw.
-        while !todo.isEmpty {
-            let before = todo.count
-
-            for (i, identifier) in todo.enumerated() {
-                guard let single = cryptexes[identifier] else { continue }
-                if let deps = single.dependencies {
-                    // Check if any dependencies are missing
-                    let missing = try deps.first {
-                        if result.contains($0) {
-                            return false
-                        }
-                        // Not in result, _must_ be in todo, or we miss it
-                        guard todo.contains($0) else {
-                            throw DepsolvError.dependencyMissing($0)
-                        }
-                        return true
-                    }
-
-                    // Missing dependencies, need to try again
-                    guard missing == nil else {
-                        continue
-                    }
-                }
-
-                // no dependencies or all depenendcies in result
-                todo[i] = ""
-                result.append(identifier)
-            }
-
-            todo = todo.filter {  $0 != "" }
-            if todo.count == before {
-                throw DepsolvError.cycleDetected(Set(todo))
-            }
-        }
-        return result
-    }
-
-}
-
-extension Config.Cryptex.DepsolvError: CustomStringConvertible {
-    var description: String {
-        switch self {
-        case .cycleDetected(let ids):
-            "Cycle detected between \(ids)"
-
-        case .dependencyMissing(let missing):
-            "Dependencies missing: \(missing)"
-        }
-    }
 }
 
 extension Config.Cryptex.Cryptex {

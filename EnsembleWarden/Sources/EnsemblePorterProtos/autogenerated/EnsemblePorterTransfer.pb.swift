@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,7 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
-// Copyright (c) 2023, Apple Inc. All rights reserved.
+// Copyright (c) 2025, Apple Inc. All rights reserved.
 
 package import Foundation
 package import InternalSwiftProtobuf
@@ -90,8 +90,6 @@ package struct Com_Apple_Cloudos_Ensembleporter_StartNewProcessReply: @unchecked
 
   package var publicKey: Data = Data()
 
-  package var keyAttestation: Data = Data()
-
   package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
   package init() {}
@@ -103,6 +101,30 @@ package struct Com_Apple_Cloudos_Ensembleporter_ShutdownRequest: @unchecked Send
   // methods supported on all messages.
 
   package var instanceUuid: Data = Data()
+
+  package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  package init() {}
+}
+
+package struct Com_Apple_Cloudos_Ensembleporter_Heartbeat: @unchecked Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  package var instanceUuid: Data = Data()
+
+  package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
+
+  package init() {}
+}
+
+package struct Com_Apple_Cloudos_Ensembleporter_HeartbeatResponse: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  package var success: Bool = false
 
   package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
@@ -157,6 +179,14 @@ package struct Com_Apple_Cloudos_Ensembleporter_PorterMessage: @unchecked Sendab
     set {messageType = .shutdown(newValue)}
   }
 
+  package var heartbeat: Com_Apple_Cloudos_Ensembleporter_Heartbeat {
+    get {
+      if case .heartbeat(let v)? = messageType {return v}
+      return Com_Apple_Cloudos_Ensembleporter_Heartbeat()
+    }
+    set {messageType = .heartbeat(newValue)}
+  }
+
   package var requestID: Data = Data()
 
   package var spanID: UInt64 = 0
@@ -170,6 +200,7 @@ package struct Com_Apple_Cloudos_Ensembleporter_PorterMessage: @unchecked Sendab
     case startNewProcessReply(Com_Apple_Cloudos_Ensembleporter_StartNewProcessReply)
     case perProcessMessage(Com_Apple_Cloudos_Ensembleporter_PerProcessMessage)
     case shutdown(Com_Apple_Cloudos_Ensembleporter_ShutdownRequest)
+    case heartbeat(Com_Apple_Cloudos_Ensembleporter_Heartbeat)
 
   }
 
@@ -292,7 +323,6 @@ extension Com_Apple_Cloudos_Ensembleporter_StartNewProcessReply: InternalSwiftPr
   package static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
     1: .standard(proto: "instance_uuid"),
     2: .standard(proto: "public_key"),
-    3: .standard(proto: "key_attestation"),
   ]
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -303,7 +333,6 @@ extension Com_Apple_Cloudos_Ensembleporter_StartNewProcessReply: InternalSwiftPr
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularBytesField(value: &self.instanceUuid) }()
       case 2: try { try decoder.decodeSingularBytesField(value: &self.publicKey) }()
-      case 3: try { try decoder.decodeSingularBytesField(value: &self.keyAttestation) }()
       default: break
       }
     }
@@ -316,16 +345,12 @@ extension Com_Apple_Cloudos_Ensembleporter_StartNewProcessReply: InternalSwiftPr
     if !self.publicKey.isEmpty {
       try visitor.visitSingularBytesField(value: self.publicKey, fieldNumber: 2)
     }
-    if !self.keyAttestation.isEmpty {
-      try visitor.visitSingularBytesField(value: self.keyAttestation, fieldNumber: 3)
-    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   package static func ==(lhs: Com_Apple_Cloudos_Ensembleporter_StartNewProcessReply, rhs: Com_Apple_Cloudos_Ensembleporter_StartNewProcessReply) -> Bool {
     if lhs.instanceUuid != rhs.instanceUuid {return false}
     if lhs.publicKey != rhs.publicKey {return false}
-    if lhs.keyAttestation != rhs.keyAttestation {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -363,6 +388,70 @@ extension Com_Apple_Cloudos_Ensembleporter_ShutdownRequest: InternalSwiftProtobu
   }
 }
 
+extension Com_Apple_Cloudos_Ensembleporter_Heartbeat: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  package static let protoMessageName: String = _protobuf_package + ".Heartbeat"
+  package static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .standard(proto: "instance_uuid"),
+  ]
+
+  package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.instanceUuid) }()
+      default: break
+      }
+    }
+  }
+
+  package func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.instanceUuid.isEmpty {
+      try visitor.visitSingularBytesField(value: self.instanceUuid, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  package static func ==(lhs: Com_Apple_Cloudos_Ensembleporter_Heartbeat, rhs: Com_Apple_Cloudos_Ensembleporter_Heartbeat) -> Bool {
+    if lhs.instanceUuid != rhs.instanceUuid {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Com_Apple_Cloudos_Ensembleporter_HeartbeatResponse: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  package static let protoMessageName: String = _protobuf_package + ".HeartbeatResponse"
+  package static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
+    1: .same(proto: "success"),
+  ]
+
+  package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBoolField(value: &self.success) }()
+      default: break
+      }
+    }
+  }
+
+  package func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.success != false {
+      try visitor.visitSingularBoolField(value: self.success, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  package static func ==(lhs: Com_Apple_Cloudos_Ensembleporter_HeartbeatResponse, rhs: Com_Apple_Cloudos_Ensembleporter_HeartbeatResponse) -> Bool {
+    if lhs.success != rhs.success {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
 extension Com_Apple_Cloudos_Ensembleporter_PorterMessage: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = _protobuf_package + ".PorterMessage"
   package static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
@@ -371,6 +460,7 @@ extension Com_Apple_Cloudos_Ensembleporter_PorterMessage: InternalSwiftProtobuf.
     3: .standard(proto: "start_new_process_reply"),
     4: .standard(proto: "per_process_message"),
     5: .same(proto: "shutdown"),
+    6: .same(proto: "heartbeat"),
     20: .standard(proto: "request_id"),
     21: .standard(proto: "span_id"),
   ]
@@ -446,6 +536,19 @@ extension Com_Apple_Cloudos_Ensembleporter_PorterMessage: InternalSwiftProtobuf.
           self.messageType = .shutdown(v)
         }
       }()
+      case 6: try {
+        var v: Com_Apple_Cloudos_Ensembleporter_Heartbeat?
+        var hadOneofValue = false
+        if let current = self.messageType {
+          hadOneofValue = true
+          if case .heartbeat(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.messageType = .heartbeat(v)
+        }
+      }()
       case 20: try { try decoder.decodeSingularBytesField(value: &self.requestID) }()
       case 21: try { try decoder.decodeSingularUInt64Field(value: &self.spanID) }()
       default: break
@@ -478,6 +581,10 @@ extension Com_Apple_Cloudos_Ensembleporter_PorterMessage: InternalSwiftProtobuf.
     case .shutdown?: try {
       guard case .shutdown(let v)? = self.messageType else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    }()
+    case .heartbeat?: try {
+      guard case .heartbeat(let v)? = self.messageType else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
     }()
     case nil: break
     }

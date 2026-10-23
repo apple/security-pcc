@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,7 +24,7 @@ import Foundation
 import PrivateCloudCompute
 import os.log
 
-private let logger = tc2Logger(forCategory: .configuration)
+private let logger = Logger(for: .configuration)
 
 // Extends the Configuration protocol to add environment selection logic.
 extension Configuration {

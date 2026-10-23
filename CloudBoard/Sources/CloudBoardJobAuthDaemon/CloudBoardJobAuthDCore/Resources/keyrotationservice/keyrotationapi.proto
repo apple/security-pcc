@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -50,7 +50,7 @@ message AssetRequest {
 message AssetResponse {
   oneof result {
     Assets assets                 = 1;
-    Error error                   = 2;
+    AssetError error              = 2;
   }
 }
 
@@ -84,7 +84,7 @@ enum ErrorCode {
   ServiceUnavailable  = 503;  // Unexpected inconsistency. Key Rotation is shutting down. Go away.
 }
 
-message Error {
+message AssetError {
   ErrorCode error_code  = 1;      // [Required] Failure code
   string reason         = 2;      // [Optional] Failure reason for debug purpose
 }

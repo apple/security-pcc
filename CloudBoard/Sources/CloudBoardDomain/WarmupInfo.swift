@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,19 +22,25 @@ package struct WarmupInfo: Sendable, ByteBufferCodable, Hashable, Equatable {
     package var assignLAContext: Bool
     package var assetsMetadata: [AssetConsumer: [AssetMetadata]]
     package var maxApplicationLayerMessageSize: Int
+    package var maxToolInvocationsPerRequest: Int
+    package var isTrampolineProxy: Bool
 
     package init(
         cloudAppName: String,
         supportAppNames: [String],
         assignLAContext: Bool,
         assetsMetadata: [AssetConsumer: [AssetMetadata]],
-        maxApplicationLayerMessageSize: Int
+        maxApplicationLayerMessageSize: Int,
+        maxToolInvocationsPerRequest: Int,
+        isTrampolineProxy: Bool
     ) {
         self.cloudAppName = cloudAppName
         self.supportAppNames = supportAppNames
         self.assignLAContext = assignLAContext
         self.assetsMetadata = assetsMetadata
         self.maxApplicationLayerMessageSize = maxApplicationLayerMessageSize
+        self.maxToolInvocationsPerRequest = maxToolInvocationsPerRequest
+        self.isTrampolineProxy = isTrampolineProxy
     }
 
     package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
@@ -43,6 +49,8 @@ package struct WarmupInfo: Sendable, ByteBufferCodable, Hashable, Equatable {
         try self.assignLAContext.encode(to: &buffer)
         try self.assetsMetadata.encode(to: &buffer)
         buffer.writeHostInteger(self.maxApplicationLayerMessageSize)
+        buffer.writeHostInteger(self.maxToolInvocationsPerRequest)
+        try self.isTrampolineProxy.encode(to: &buffer)
     }
 
     package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
@@ -51,6 +59,8 @@ package struct WarmupInfo: Sendable, ByteBufferCodable, Hashable, Equatable {
         self.assignLAContext = try .init(from: &buffer)
         self.assetsMetadata = try .init(from: &buffer)
         self.maxApplicationLayerMessageSize = try buffer.readHostIntegerOrThrow(as: Int.self)
+        self.maxToolInvocationsPerRequest = try buffer.readHostIntegerOrThrow(as: Int.self)
+        self.isTrampolineProxy = try .init(from: &buffer)
     }
 }
 
@@ -60,17 +70,20 @@ package struct ManagedWarmupInfo: Sendable, ByteBufferCodable, Hashable, Equatab
     package var launchdJobInstanceUUID: UUID
     package var cloudAppAssetsMetadata: [AssetMetadata]
     package var maxApplicationLayerMessageSize: Int
+    package var maxToolInvocationsPerRequest: Int
 
     package init(
         cloudAppName: String,
         launchdJobInstanceUUID: UUID,
         cloudAppAssetsMetadata: [AssetMetadata],
-        maxApplicationLayerMessageSize: Int
+        maxApplicationLayerMessageSize: Int,
+        maxToolInvocationsPerRequest: Int
     ) {
         self.cloudAppName = cloudAppName
         self.launchdJobInstanceUUID = launchdJobInstanceUUID
         self.cloudAppAssetsMetadata = cloudAppAssetsMetadata
         self.maxApplicationLayerMessageSize = maxApplicationLayerMessageSize
+        self.maxToolInvocationsPerRequest = maxToolInvocationsPerRequest
     }
 
     package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
@@ -78,6 +91,7 @@ package struct ManagedWarmupInfo: Sendable, ByteBufferCodable, Hashable, Equatab
         try self.launchdJobInstanceUUID.encode(to: &buffer)
         try self.cloudAppAssetsMetadata.encode(to: &buffer)
         buffer.writeHostInteger(self.maxApplicationLayerMessageSize)
+        buffer.writeHostInteger(self.maxToolInvocationsPerRequest)
     }
 
     package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
@@ -85,5 +99,6 @@ package struct ManagedWarmupInfo: Sendable, ByteBufferCodable, Hashable, Equatab
         self.launchdJobInstanceUUID = try .init(from: &buffer)
         self.cloudAppAssetsMetadata = try .init(from: &buffer)
         self.maxApplicationLayerMessageSize = try buffer.readHostIntegerOrThrow(as: Int.self)
+        self.maxToolInvocationsPerRequest = try buffer.readHostIntegerOrThrow(as: Int.self)
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -73,7 +73,7 @@ enum Metrics {
                 ]
                 switch daemonStatus {
                 case .initializing, .waitingForFirstAttestationFetch, .waitingForFirstHotPropertyUpdate,
-                     .waitingForWorkloadRegistration, .waitingForFirstKeyFetch, .daemonDrained,
+                     .waitingForWorkloadRegistration, .daemonDrained,
                      .daemonExitingOnError, .uninitialized, .serviceDiscoveryPublisherDraining:
                     () // No associated state with these, so no extra dimension
                 case .serviceDiscoveryUpdateSuccess(let knownServiceCount),
@@ -94,12 +94,6 @@ enum Metrics {
         // Deprecated
         struct LegacyStatusWaitingForFirstAttestationFetch: Gauge {
             static let label: MetricLabel = "\(prefix)_status_waiting_for_first_attestation_fetch"
-            var value: Int
-        }
-
-        // Deprecated
-        struct LegacyStatusWaitingForFirstKeyFetch: Gauge {
-            static let label: MetricLabel = "\(prefix)_status_waiting_for_first_key_fetch"
             var value: Int
         }
 
@@ -207,6 +201,44 @@ enum Metrics {
                 self.dimensions = [
                     .healthStatus: "\(healthStatus)",
                 ]
+            }
+        }
+    }
+
+    enum ControlPlaneHealthDHealthChecker {
+        struct ControlPlaneHealthdStatus: Gauge {
+            static let label: MetricLabel = "\(prefix)_control_plane_healthd_status"
+            var value: Int
+
+            init(value: Int) {
+                self.value = value
+            }
+        }
+
+        struct CloudBoardWaitingForControlPlaneHealthDReadyStatus: Gauge {
+            static let label: MetricLabel = "\(prefix)_waiting_for_control_plane_healthd_ready_state"
+
+            var value: Int
+
+            init(value: Int) {
+                self.value = value
+            }
+        }
+    }
+
+    enum TLSConfiguration {
+        struct TLSVerificationErrorCounter: ErrorCounter {
+            static let label: MetricLabel = "\(prefix)_tls_verification_failure_total"
+            var dimensions: MetricDimensions<DefaultErrorDimensionKeys>
+            var action: CounterAction
+
+            init(action: CounterAction, failureReason: String) {
+                self.init(dimensions: [.errorDescription: failureReason], action: action)
+            }
+
+            init(dimensions: MetricDimensions<DimensionKey>, action: CounterAction) {
+                self.action = action
+                self.dimensions = dimensions
             }
         }
     }

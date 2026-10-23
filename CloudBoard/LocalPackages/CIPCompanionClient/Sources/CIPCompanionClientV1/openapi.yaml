@@ -1,0 +1,262 @@
+# Copyright © 2026 Apple Inc. All Rights Reserved.
+
+# APPLE INC.
+# PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
+# PLEASE READ THE FOLLOWING PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT (“AGREEMENT”) CAREFULLY BEFORE DOWNLOADING OR USING THE APPLE SOFTWARE ACCOMPANYING THIS AGREEMENT(AS DEFINED BELOW). BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT, DO NOT DOWNLOAD OR USE THE APPLE SOFTWARE. THESE TERMS AND CONDITIONS CONSTITUTE A LEGAL AGREEMENT BETWEEN YOU AND APPLE.
+# IMPORTANT NOTE: BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING ON YOUR OWN BEHALF AND/OR ON BEHALF OF YOUR COMPANY OR ORGANIZATION TO THE TERMS OF THIS AGREEMENT.
+# 1. As used in this Agreement, the term “Apple Software” collectively means and includes all of the Apple Private Cloud Compute materials provided by Apple here, including but not limited to the Apple Private Cloud Compute software, tools, data, files, frameworks, libraries, documentation, logs and other Apple-created materials. In consideration for your agreement to abide by the following terms, conditioned upon your compliance with these terms and subject to these terms, Apple grants you, for a period of ninety (90) days from the date you download the Apple Software, a limited, non-exclusive, non-sublicensable license under Apple’s copyrights in the Apple Software to download, install, compile and run the Apple Software internally within your organization only on a single Apple-branded computer you own or control, for the sole purpose of verifying the security and privacy characteristics of Apple Private Cloud Compute. This Agreement does not allow the Apple Software to exist on more than one Apple-branded computer at a time, and you may not distribute or make the Apple Software available over a network where it could be used by multiple devices at the same time. You may not, directly or indirectly, redistribute the Apple Software or any portions thereof. The Apple Software is only licensed and intended for use as expressly stated above and may not be used for other purposes or in other contexts without Apple's prior written permission. Except as expressly stated in this notice, no other rights or licenses, express or implied, are granted by Apple herein.
+# 2. The Apple Software is provided by Apple on an "AS IS" basis. APPLE MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS, SYSTEMS, OR SERVICES. APPLE DOES NOT WARRANT THAT THE APPLE SOFTWARE WILL MEET YOUR REQUIREMENTS, THAT THE OPERATION OF THE APPLE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, THAT DEFECTS IN THE APPLE SOFTWARE WILL BE CORRECTED, OR THAT THE APPLE SOFTWARE WILL BE COMPATIBLE WITH FUTURE APPLE PRODUCTS, SOFTWARE OR SERVICES. NO ORAL OR WRITTEN INFORMATION OR ADVICE GIVEN BY APPLE OR AN APPLE AUTHORIZED REPRESENTATIVE WILL CREATE A WARRANTY.
+# 3. IN NO EVENT SHALL APPLE BE LIABLE FOR ANY DIRECT, SPECIAL, INDIRECT, INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE, REPRODUCTION, COMPILATION OR OPERATION OF THE APPLE SOFTWARE, HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# 4. This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from Apple if you fail to comply with any term(s) of this Agreement. Upon termination, you agree to cease all use of the Apple Software and destroy all copies, full or partial, of the Apple Software. This Agreement constitutes the entire understanding of the parties with respect to the subject matter contained herein, and supersedes all prior negotiations, representations, or understandings, written or oral. This Agreement will be governed and construed in accordance with the laws of the State of California, without regard to its choice of law rules.
+# You may report security issues about Apple products to product-security@apple.com, as described here: https://www.apple.com/support/security/. Non-security bugs and enhancement requests can be made via https://bugreport.apple.com as described here: https://developer.apple.com/bug-reporting/
+# EA1937
+# 10/02/2024
+
+openapi: 3.1.0
+info:
+  title: CIPCompanion
+  version: 1.0.0
+servers:
+  - url: http://localhost:6677
+    description: CIPCompanion
+paths:
+  /images/v1/verify:
+    post:
+      tags:
+        - pccService
+      summary: Verifies an image's fraud score, its sensor's status, and its sensor's temporal score to determine if it can be developed.
+      description: "Assesses the image's fraud score, checks the sensor against a list of currently banned sensors, \nand evaluates the sensor's temporal fraud score to determine if the image is eligible for development.\n"
+      operationId: verifyImage
+      requestBody:
+        description: Data required to verify an image.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyImageRequest'
+        required: true
+      responses:
+        200:
+          description: Image verification successful.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationResult'
+        400:
+          description: Invalid verification parameters or malformed request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        500:
+          description: Internal server error during image verification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  schemas:
+    Timestamp:
+      type: string
+      format: date-time
+      description: An ISO 8601 UTC timestamp with milliseconds (YYYY-MM-DDTHH:mm:ss.SSSZ).
+      examples:
+        - '2023-10-27T10:00:00.123Z'
+    ImageID:
+      type: string
+      format: byte
+      description: The image identifier, expected to be base64 encoded.
+      examples:
+        - itFYiCaHNp8SYETXHTeFJySokaxntjVB2JkzIVSJQ3U=
+    SensorID:
+      type: string
+      format: byte
+      description: The sensor identifier, expected to be base64 encoded.
+      examples:
+        - sN2xK9wP3qR5tY7uI1oMhL0kFjGvBcCzEaXdQwYV0=
+    ImageHash:
+      type: string
+      format: byte
+      description: The hash of an image data, expected to be base64 encoded.
+      examples:
+        - hF8gJ2kL3nMpQ7rT1vWxY9z0aB1cD2eF3gH4iJ5kL6=
+    ImageFraudScore:
+      type: integer
+      description: 'A numerical score representing the likelihood of fraud for an image.
+
+        This value is typically coded on a few bits, where a score of 0 indicates
+
+        that the fraud score should be ignored.
+
+'
+      examples:
+        - 3
+      maximum: 3
+      minimum: 0
+    ImageConfidenceScore:
+      type: integer
+      description: A numerical score representing the confidence of a fraud score for a given image.
+      examples:
+        - 2
+      maximum: 3
+      minimum: 0
+    TracerFraudScore:
+      type: integer
+      description: A numerical score representing the likelihood of fraud for an image tracer.
+      examples:
+        - 1
+      maximum: 1
+      minimum: 0
+    TracerConfidenceScore:
+      type: integer
+      description: A numerical score representing the confidence of a fraud score for a given image tracer.
+      examples:
+        - 1
+      maximum: 1
+      minimum: 0
+    ImageMetadataV1:
+      type: object
+      properties:
+        unique_camera_model:
+          type: string
+        pcc_app_version:
+          type: string
+        fraud_model_version:
+          type: string
+        iso_speed_ratings:
+          type: integer
+        exposure_time:
+          type: number
+          format: float
+        as_shot_neutral:
+          type: array
+          items:
+            type: number
+            format: float
+          maxItems: 3
+          minItems: 3
+        capture_timestamp:
+          type: string
+        per_channel_avg_intensity_map:
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items:
+                type: number
+                format: float
+              maxItems: 3
+              minItems: 3
+            maxItems: 3
+            minItems: 3
+          maxItems: 3
+          minItems: 3
+        fraud_score:
+          $ref: '#/components/schemas/ImageFraudScore'
+        confidence_score:
+          $ref: '#/components/schemas/ImageConfidenceScore'
+        tracer1_fraud_score:
+          $ref: '#/components/schemas/TracerFraudScore'
+        tracer1_confidence_score:
+          $ref: '#/components/schemas/TracerConfidenceScore'
+        tracer2_fraud_score:
+          $ref: '#/components/schemas/TracerFraudScore'
+        tracer2_confidence_score:
+          $ref: '#/components/schemas/TracerConfidenceScore'
+      required:
+        - unique_camera_model
+        - pcc_app_version
+        - fraud_model_version
+        - iso_speed_ratings
+        - exposure_time
+        - as_shot_neutral
+        - capture_timestamp
+        - per_channel_avg_intensity_map
+        - fraud_score
+        - confidence_score
+        - tracer1_fraud_score
+        - tracer1_confidence_score
+        - tracer2_fraud_score
+        - tracer2_confidence_score
+    ImageMetadata:
+      type: object
+      description: 'Metadata associated with the image.
+
+        To make it possible to change versions of this metadata in the future, we hold the version identifier as optional field in the top level json.
+
+        Exactly one top level such fields is expected to be populated.
+
+'
+      properties:
+        imageMetadataV1:
+          $ref: '#/components/schemas/ImageMetadataV1'
+    VerifyImageRequest:
+      type: object
+      description: Request body for verifying an image.
+      properties:
+        imageID:
+          description: The unique identifier for the image.
+          $ref: '#/components/schemas/ImageID'
+        sensorID:
+          description: The identifier of the sensor that captured the image.
+          $ref: '#/components/schemas/SensorID'
+        imageHash:
+          description: The hash of the image data.
+          $ref: '#/components/schemas/ImageHash'
+        developmentTime:
+          description: The timestamp when the image was developed.
+          $ref: '#/components/schemas/Timestamp'
+        imageFraudScore:
+          description: A score indicating the likelihood of fraud associated with the image.
+          $ref: '#/components/schemas/ImageFraudScore'
+        imageMetadata:
+          $ref: '#/components/schemas/ImageMetadata'
+        confidenceScore:
+          $ref: '#/components/schemas/ImageConfidenceScore'
+      required:
+        - imageID
+        - sensorID
+        - imageHash
+        - developmentTime
+        - imageFraudScore
+        - imageMetadata
+    VerificationResult:
+      type: object
+      description: The result of an image verification attempt.
+      properties:
+        status:
+          type: string
+          enum:
+            - ACCEPTED
+            - REJECTED
+          description: The overall verification status of the image.
+          examples:
+            - ACCEPTED
+        reason:
+          type: string
+          enum:
+            - IMAGE_ALLOWLISTED
+            - SENSOR_BANNED
+            - FRAUD_SCORE_TRIGGERED_DETECTION
+            - IMAGE_ALREADY_VALID
+            - IMAGE_ALREADY_REVOKED
+            - ALL_CHECKS_PASSED
+          description: The reason for the verification status.
+      required:
+        - status
+        - reason
+    Error:
+      type: object
+      description: Standard error response structure.
+      properties:
+        code:
+          type: string
+          examples:
+            - INVALID_PARAMETER
+        message:
+          type: string
+          examples:
+            - The provided `from` timestamp or `lastImageID` is invalid.
+      required:
+        - code
+        - message

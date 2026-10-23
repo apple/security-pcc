@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,6 +23,8 @@ import CloudTelemetry
 import PrivateCloudCompute
 import os.log
 
+private let logger = Logger(for: .metricReporter)
+
 protocol CloudTelemetryReportable: Sendable {
     associatedtype EventName: Hashable, RawRepresentable<String>
     var name: String { get }
@@ -42,7 +44,6 @@ extension CloudTelemetryReportable {
 
 struct MetricReporter {
     let cloudTelemetryTeamID = "63QTMWFK24"
-    let logger = tc2Logger(forCategory: .metricReporter)
 
     func reportCloudTelemetryMetric(metric: some CloudTelemetryReportable) async {
         do {

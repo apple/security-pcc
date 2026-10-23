@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -62,6 +62,18 @@ package protocol EnsemblePorterProvideActor: DistributedActor, Codable where Sel
 /// to fetch keys.
 @Resolvable
 package protocol EnsemblePorterFetchActor: DistributedActor, Codable where Self.ActorSystem == XPCSystem {
+    /// Fetches cryptographic data using the specified turn key.
+    ///
+    /// - Parameters:
+    ///   - forTurnNumber: The number of the turn key that we are to fetch. Turns start at 0 and increment on each turn.
+    /// - Returns: A result containing either the requested data or an error
+    distributed func fetchKey(forTurnNumber turnNumber: Int) -> CodableResult<Data, EnsemblePorterError>
+
+    /// Gets the number of available turn keys.
+    ///
+    /// - Returns: A result containing either the number of turn keys or an error
+    distributed func getNumberOfTurnKeys() -> CodableResult<Int, EnsemblePorterError>
+
     distributed func fetchFollowerTokens(requestID: UUID, spanID: UInt64) async -> CodableResult<FollowerTokens, EnsemblePorterError>
 
     /// Fetches the FT/ET key from EnsemblePorter.

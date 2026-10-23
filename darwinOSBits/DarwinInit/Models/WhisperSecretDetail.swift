@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,6 +18,7 @@
 //
 //
 
+import DarwinInitConfig
 import Foundation
 
 // TODO: see if Whisper people can get this in the sdk and then we don't need to copy/paste code

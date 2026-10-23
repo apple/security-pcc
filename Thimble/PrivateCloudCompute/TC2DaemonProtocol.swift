@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -26,32 +26,40 @@ import Foundation
     func currentEnvironment(completion: @escaping @Sendable (String) -> Void)
     /// Tests connection to daemon. Should return the same string passed in.
     func echo(text: String, completion: @escaping @Sendable (String) -> Void)
-    func trustedRequest(
-        withParameters parameters: Data,
-        requestID: UUID,
-        multiTurn: Bool,
-        bundleIdentifier: String?,
-        originatingBundleIdentifier: String?,
-        featureIdentifier: String?,
-        sessionIdentifier: UUID?,
+    func request(
+        parametersData: RequestParameters.Data,
         completion: @escaping @Sendable ((any TC2XPCTrustedRequestProtocol)?, Data?) -> Void
     )
     func prefetchRequest(workloadType: String, workloadParameters: [String: String], completion: @escaping @Sendable (Data?) -> Void)
-    func prewarmRequest(workloadType: String, workloadParameters: [String: String], bundleIdentifier: String?, featureIdentifier: String, runOnEventStream: Bool, completion: @escaping @Sendable () -> Void)
+    func prewarmRequest(parametersData: PrewarmParameters.Data, completion: @escaping @Sendable () -> Void)
     func prefetchCache(completion: @escaping @Sendable ([String]) -> Void)
     func prefetchParametersCache(completion: @escaping @Sendable ([String]) -> Void)
     func prefetchParametersCacheSavedState(completion: @escaping @Sendable ([String]) -> Void)
     func prefetchCacheReset(completion: @escaping @Sendable (Bool) -> Void)
-    func knownRateLimits(bundleIdentifier: String?, featureIdentifier: String?, skipFetch: Bool, completion: @escaping @Sendable (Data?) -> Void)
+    func knownRateLimits(bundleIdentifier: String?, featureIdentifier: String?, completion: @escaping @Sendable (Data?) -> Void)
     func listRateLimits(bundleIdentifier: String?, featureIdentifier: String?, fetch: Bool, completion: @escaping @Sendable (Data?) -> Void)
-    func addRateLimit(bundleIdentifier: String?, featureIdentifier: String?, workloadType: String?, count: UInt, duration: Double, ttl: Double, jitter: Double, completion: @escaping @Sendable () -> Void)
-    func resetRateLimits(completion: @escaping @Sendable () -> Void)
+    func addRateLimit(
+        source: RateLimitSource.RawValue,
+        bundleIdentifier: String?,
+        featureIdentifier: String?,
+        workloadType: String?,
+        count: UInt,
+        duration: Double,
+        ttl: Double,
+        jitter: Double,
+        completion: @escaping @Sendable () -> Void
+    )
+    func resetRateLimits(completion: @escaping @Sendable (Data?) -> Void)
     func fetchServerDrivenConfiguration(completion: @escaping @Sendable (Data) -> Void)
     func listServerDrivenConfiguration(completion: @escaping @Sendable (Data) -> Void)
     func setServerDrivenConfiguration(json: Data, completion: @escaping @Sendable (Data) -> Void)
 }
 
 @objc package protocol TC2XPCTrustedRequestProtocol: Sendable {
+    /// Returns a JSON-encoded `RequestSetupConfiguration` with per-request
+    /// settings computed by the daemon (e.g. chunk size).
+    func prepare(completion: @escaping @Sendable (Data?) -> Void)
+
     /// Takes data to send, returns an error data blob (PrivateCloudComputeError), if an error occurs
     func send(data: XPCRequestMessage.Data, completion: @escaping @Sendable (Data?) -> Void)
 
@@ -67,6 +75,9 @@ import Foundation
     /// daemon otherwise.
     func close(completion: @escaping @Sendable () -> Void)
 
+    /// Waits until Swift Task running PCC request on the daemon side finishes and will cancel that Swift Task if it takes too long.
+    func waitForRequestCompletion(completion: @escaping @Sendable () -> Void)
+
     /// Takes data of the XPCSubrequest, returns an error data blob (PrivateCloudComputeError), if an error occurs
     func createSubrequest(request: XPCSubrequest.Data, completion: @escaping @Sendable (Data?) -> Void)
 
@@ -79,8 +90,8 @@ package func interfaceForTC2DaemonProtocol() -> NSXPCInterface {
     ret.setInterface(
         NSXPCInterface(with: (any TC2XPCTrustedRequestProtocol).self),
         for: #selector(
-            (any TC2DaemonProtocol).trustedRequest(
-                withParameters:requestID:multiTurn:bundleIdentifier:originatingBundleIdentifier:featureIdentifier:sessionIdentifier:completion:
+            (any TC2DaemonProtocol).request(
+                parametersData:completion:
             )
         ),
         argumentIndex: 0,

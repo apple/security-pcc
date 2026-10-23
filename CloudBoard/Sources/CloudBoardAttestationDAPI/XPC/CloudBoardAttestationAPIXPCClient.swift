@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -113,6 +113,19 @@ extension CloudBoardAttestationAPIXPCClient: CloudBoardAttestationAPIClientToSer
             )
         )
     }
+
+    package func warmWorkerValidation(
+        rawWorkerAttestationBundle: Data
+    ) async throws -> WarmWorkerValidationSummary {
+        guard let connection else {
+            throw CloudBoardAttestationAPIError.notConnected
+        }
+        return try await connection.send(
+            CloudBoardAttestationAPIXPCClientToServerMessages.RequestWarmWorkerValidation(
+                rawWorkerAttestationBundle: rawWorkerAttestationBundle
+            )
+        )
+    }
 }
 
 extension CloudBoardAttestationAPIXPCClient: CloudBoardAttestationAPIClientProtocol {
@@ -124,7 +137,7 @@ extension CloudBoardAttestationAPIXPCClient: CloudBoardAttestationAPIClientProto
         await self.connection?.activate(buildMessageHandlerStore: self.configureHandlers)
     }
 
-    internal func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
+    internal nonisolated func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
         handlers.register(CloudBoardAttestationAPIXPCServerToClientMessages.KeyRotated.self) { message in
             try await self.delegate?.keyRotated(newKeySet: message.newKeySet)
             return ExplicitSuccess()

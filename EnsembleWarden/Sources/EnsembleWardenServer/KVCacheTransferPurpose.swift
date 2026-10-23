@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,6 +22,16 @@
 
 public enum KVCacheTransferPurpose: Codable, Equatable, Sendable {
     case ftET
+    case multiTurn
+
+    /// Stable, low-cardinality string for metric dimensions. Distinct from `description`,
+    /// which is human-prose ("split FT/ET") and would change with copy edits.
+    package var metricsLabel: String {
+        switch self {
+        case .ftET: return "ftET"
+        case .multiTurn: return "multiTurn"
+        }
+    }
 }
 
 // This is safe to log.
@@ -29,6 +39,7 @@ extension KVCacheTransferPurpose: CustomStringConvertible {
     public var description: String {
         switch self {
         case .ftET: "split FT/ET"
+        case .multiTurn: "multi-turn"
         }
     }
     

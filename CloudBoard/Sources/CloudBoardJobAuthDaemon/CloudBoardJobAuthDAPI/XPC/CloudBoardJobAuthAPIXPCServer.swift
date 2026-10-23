@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -36,7 +36,8 @@ extension CloudBoardJobAuthAPIXPCServer {
         self.init(
             listener: CloudBoardAsyncXPCListener(
                 localService: kJobAuthAPIXPCLocalServiceName,
-                entitlement: kJobAuthAPIXPCLocalServiceEntitlement
+                entitlement: kJobAuthAPIXPCLocalServiceEntitlement,
+                singleClient: false
             ),
             delegate: nil
         )
@@ -44,9 +45,9 @@ extension CloudBoardJobAuthAPIXPCServer {
 }
 
 extension CloudBoardJobAuthAPIXPCServer: CloudBoardJobAuthAPIServerToClientProtocol {
-    public func authKeysUpdated(newKeySet: AuthTokenKeySet) async throws {
+    public func costTokenKeyUpdated(newKey: CostTokenSigningKeyPair) async throws {
         await self.listener.broadcast(
-            CloudBoardJobAuthAPIXPCServerToClientMessages.AuthKeysUpdated(newKeySet: newKeySet)
+            CloudBoardJobAuthAPIXPCServerToClientMessages.CostTokenKeyUpdated(newKeyPair: newKey)
         )
     }
 }
@@ -60,18 +61,12 @@ extension CloudBoardJobAuthAPIXPCServer: CloudBoardJobAuthAPIServerProtocol {
         await self.listener.listen(buildMessageHandlerStore: self.configureHandlers)
     }
 
-    internal func configureHandlers(handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
-        handlers.register(CloudBoardJobAuthAPIXPCClientToServerMessages.RequestTGTSigningKeys.self) { _ in
+    internal nonisolated func configureHandlers(handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
+        handlers.register(CloudBoardJobAuthAPIXPCClientToServerMessages.RequestCostTokenSigningKey.self) { _ in
             guard let delegate = await self.delegate else {
                 throw CloudBoardJobAuthAPIError.noDelegateSet
             }
-            return try await delegate.requestTGTSigningKeys()
-        }
-        handlers.register(CloudBoardJobAuthAPIXPCClientToServerMessages.RequestOTTSigningKeys.self) { _ in
-            guard let delegate = await self.delegate else {
-                throw CloudBoardJobAuthAPIError.noDelegateSet
-            }
-            return try await delegate.requestOTTSigningKeys()
+            return try await delegate.requestCostTokenSigningKey()
         }
     }
 }

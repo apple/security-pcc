@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,25 +24,39 @@ extension CLI.ReleaseCmd {
     struct ReleaseListCmd: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "list",
-            abstract: "Display list of releases in the Private Cloud Compute Transparency Log.",
-            discussion: "Each release is represented by a SW Release Log index and a (SHA256) digest of the aggregate manifest tickets that make up the components."
+            abstract: "Display releases in the Private Cloud Compute Transparency Log.",
+            discussion: """
+            By default, only the \(defaultReleaseCount) most recent releases are \
+            displayed. Use --count to retrieve more (or fewer) entries or \
+            --start/--end to select a specific index range. Each release is shown \
+            as a log index, the application name and build version, and a (SHA256) \
+            digest of the aggregate manifest tickets that make up the components.
+
+            Releases marked "(downloadable)" have been published for inspection. \
+            Releases marked "(expired)" are no longer trusted by PCC clients.
+
+            Duplicate digest entries and expired releases are hidden unless --all \
+            is specified. There are additional types of entries in the transparency \
+            log that are not listed by this command (e.g., key bundles and liveness \
+            checks), which account for gaps in index numbers.
+            """
         )
 
         @OptionGroup var globalOptions: CLI.globalOptions
         @OptionGroup var swlogOptions: CLI.ReleaseCmd.options
 
-        @Option(name: [.customLong("count"), .customShort("c")], help: "Releases to enumerate.")
+        @Option(name: [.customLong("count"), .customShort("c")], help: "Number of releases to display.")
         var reqCount: UInt = defaultReleaseCount
 
         @Flag(name: [.customLong("all")], help: "Include expired & duplicate releases in output.")
         var includeAll: Bool = false
 
         @Option(name: [.customLong("startWindow"), .customLong("start")],
-                help: "Start log search window (< 0 from last/end; >= 0 from first).")
+                help: "Start of the log index range (inclusive).")
         var startWindow: Int64?
 
         @Option(name: [.customLong("endWindow"), .customLong("end")],
-                help: "End log search window.")
+                help: "End of the log index range (exclusive).")
         var endWindow: UInt64?
 
         @Flag(name: [.customLong("detail")],
@@ -73,6 +87,7 @@ extension CLI.ReleaseCmd {
             )
 
             try await swlog.fetchReleases(
+                helper: PCCVREAttestationHelperResolver(environment: logEnvironment),
                 reqCount: reqCount,
                 includeAll: includeAll,
                 searchRangeStart: startWindow,
@@ -85,7 +100,7 @@ extension CLI.ReleaseCmd {
 
             let relCount = min(UInt(swlog.count), reqCount)
             if !jsonOutput {
-                print("Found \(relCount) release\(relCount != 1 ? "s" : ""):\n")
+                print("Showing \(relCount) release\(relCount != 1 ? "s" : ""):\n")
             }
 
             var swReleases: [ReleaseInfo] = []
@@ -113,6 +128,15 @@ extension CLI.ReleaseCmd {
                 print(asJSONString(swReleases, pretty: true))
             } else if !showDetails {
                 print()
+            }
+
+            if !jsonOutput && swlog.hasMore {
+                print("More releases available")
+            }
+
+            if !swlog.skippedIndices.isEmpty {
+                let indices = swlog.skippedIndices.sorted().map { String($0) }.joined(separator: ", ")
+                fputs("Warning: Some data from \(swlog.skippedIndices.count) release(s) could not be parsed (log indices: \(indices)); consider updating macOS to a newer version to see more details.\n", stderr)
             }
         }
     }

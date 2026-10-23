@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,10 +17,11 @@
 //  darwin-init
 //
 
-import Foundation
 import ArgumentParserInternal
-import System
+import DarwinInitConfig
+import Foundation
 import libnarrativecert
+import System
 
 struct Generate: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -182,6 +183,14 @@ be passed to the darwinOS through boot-args. This allows the command \
         } else {
             try FilePath(fileName).save(json)
         }
+
+        let deprecationNotice = """
+            error: `darwin-init generate` is deprecated and will be removed.
+            The JSON has still been produced for now, but this command will be removed entirely in the future.
+
+            """
+        FileHandle.standardError.write(Data(deprecationNotice.utf8))
+        throw ExitCode.failure
     }
 
     func validate() throws {
@@ -206,10 +215,10 @@ extension Generate {
         var size: [Int] = []
 
         @Option(name: [.customLong("cryptex-sha256")], help: "Hexadecimal sha256 digests of the compressed cryptexes")
-        var sha256: [DInitSHA256Digest] = []
+        var sha256: [Sha256] = []
 
         @Option(name: [.customLong("cryptex-authorization-service")], help: "Authorization services used to verify cryptex validities")
-        var auth: [DInitAuthorizationService] = []
+        var auth: [Config.Cryptex.Cryptex.SigningEnvironment] = []
         
         @Option(name: [.customLong("daw-token")], help: "Daw token for authenticating with Knox when downloading and fetching decryption key for a Knox cryptex.")
         var dawToken: [String] = []
@@ -351,7 +360,7 @@ extension Generate {
 
     struct ResultOptions: ParsableArguments {
         @Option(name: .customLong("failure-action"), help: "Set the trigger action for failures. Options reboot/shutdown")
-        var failureAction: DInitFailureAction?
+        var failureAction: Config.Finish.FailureAction?
 
         var config: DInitResultConfig? {
             guard let failure = failureAction else { return nil }

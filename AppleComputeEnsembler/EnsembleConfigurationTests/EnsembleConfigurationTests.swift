@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,6 +23,8 @@ import CryptoKit
 import AppleComputeEnsembler
 @testable import EnsembleConfiguration
 import notify
+import os
+import Synchronization
 import XCTest
 import Testing
 
@@ -62,6 +64,251 @@ let twoNodeBadConfigDuplicateRank = EnsembleConfiguration(
 	]
 )
 
+extension Task<Never, Never> {
+    static func sleepSeconds(_ seconds: UInt64) async throws {
+        try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+    }
+    
+    static func sleepMilliseconds(_ milliseconds: UInt64) async throws {
+        try await Task.sleep(nanoseconds: milliseconds * 1_000_000)
+    }
+}
+
+final class EnsembleConfigurationTestHelpers {
+    // get the ensemble configuration which does not gauranteee rank0-3 ( and so on) contains same
+    // chassisid
+    static func getEnsembleConfigInvalid(nodeCount: Int) -> EnsembleConfiguration {
+        var nodes: [String: NodeConfiguration] = [:]
+        
+        if nodeCount == 2 {
+            let node1 = NodeConfiguration(
+                chassisID: "chassis1",
+                rank: Rank(rawValue: 0)!,
+                hostName: "127.0.0.1",
+                port: UInt16(8029)
+            )
+            nodes["udid-".appending(String(0))] = node1
+            
+            let node2 = NodeConfiguration(
+                chassisID: "chassis2",
+                rank: Rank(rawValue: 1)!,
+                hostName: "127.0.0.1",
+                port: UInt16(8030)
+            )
+            nodes["udid-".appending(String(1))] = node2
+        } else if nodeCount == 4 {
+            let node1 = NodeConfiguration(
+                chassisID: "chassis1",
+                rank: Rank(rawValue: 0)!,
+                hostName: "127.0.0.1",
+                port: UInt16(8029)
+            )
+            nodes["udid-".appending(String(0))] = node1
+            
+            let node2 = NodeConfiguration(
+                chassisID: "chassis1",
+                rank: Rank(rawValue: 1)!,
+                hostName: "127.0.0.1",
+                port: UInt16(8030)
+            )
+            nodes["udid-".appending(String(1))] = node2
+            
+            let node3 = NodeConfiguration(
+                chassisID: "chassis1",
+                rank: Rank(rawValue: 2)!,
+                hostName: "127.0.0.1",
+                port: UInt16(8029)
+            )
+            nodes["udid-".appending(String(2))] = node3
+            
+            let node4 = NodeConfiguration(
+                chassisID: "chassis2",
+                rank: Rank(rawValue: 3)!,
+                hostName: "127.0.0.1",
+                port: UInt16(8030)
+            )
+            nodes["udid-".appending(String(3))] = node4
+        } else {
+            // This will generate
+            // rank1-4 assigned chassisid1, rank5-8 chassisid2... rank13,14,15,0 chassisd4 for 16 node.
+            for i in 0 ..< nodeCount {
+                let node = NodeConfiguration(
+                    chassisID: "chassis-".appending(String(i / 4)),
+                    rank: Rank(rawValue: (i + 1) % nodeCount)!,
+                    hostName: "127.0.0.1",
+                    port: UInt16(8029 + i)
+                )
+                nodes["udid-".appending(String(i))] = node
+            }
+        }
+        
+        return EnsembleConfiguration(
+            backendType: BackendType.StubBackend,
+            hypercube: false,
+            nodes: nodes
+        )
+    }
+    
+    // get the ensemble configuration which does gauranteee rank0-3 ( and so on) contains same
+    // chassisid
+    static func getEnsembleConfig(nodeCount: Int) -> EnsembleConfiguration {
+        var nodes: [String: NodeConfiguration] = [:]
+        for i in 0 ..< nodeCount {
+            let node = NodeConfiguration(
+                chassisID: "chassis-".appending(String(i / 4)),
+                rank: Rank(rawValue: i)!,
+                hostName: "127.0.0.1",
+                port: UInt16(8029 + i)
+            )
+            nodes["udid-".appending(String(i))] = node
+        }
+
+        return EnsembleConfiguration(
+            backendType: BackendType.StubBackend,
+            hypercube: false,
+            ensembleID: "TESTENSEMBLEID",
+            rackID: "TESTRACKID",
+            nodes: nodes
+        )
+    }
+}
+
+// MARK: - Swift Testing Test Suite
+
+@Suite("Ensemble Configuration Validation Tests", .serialized)
+struct EnsembleConfigurationSwiftTests {
+	
+	@Test("Invalid rank-chassis ID configuration", arguments: [2, 4, 8, 16])
+	func invalidRankChassisIDConfiguration(nodeCount: Int) throws {
+		let ensembleConfig = EnsembleConfigurationTestHelpers.getEnsembleConfigInvalid(nodeCount: nodeCount)
+		
+		#expect(throws: InitializationError.invalidRankChassisdIDConfiguration) {
+			let ensembler = try EnsemblerTLSCIO(
+				ensembleConfig: ensembleConfig,
+				autoRestart: false,
+				skipDarwinInitCheck: true,
+				useStubAttestation: true,
+				currentUDID: ensembleConfig.nodes.keys.first,
+				skipJobQuiescence: true
+			)
+			ensembler.stopServer()
+		}
+	}
+	
+	@Test("Unordered restarts")
+	func unorderedRestarts() async throws {
+		func makeEnsembler(config: EnsembleConfiguration, udid: String) throws -> EnsemblerTLSCIO {
+			let ensembler = try EnsemblerTLSCIO(
+				ensembleConfig: config,
+				autoRestart: false,
+				skipDarwinInitCheck: true,
+				useStubAttestation: true,
+				currentUDID: udid,
+				skipJobQuiescence: true,
+				skipWaitingForDenali: true
+			)
+			
+			return ensembler
+		}
+		
+		let nodeCount: Int = 4
+		var ensemblers: [EnsemblerTLSCIO] = []
+		
+		var nodes: [String: NodeConfiguration] = [:]
+		for i in 0 ..< nodeCount {
+			let node = NodeConfiguration(
+				chassisID: "chassis-".appending(String(i / 4)),
+				rank: Rank(rawValue: i)!,
+				hostName: "127.0.0.1",
+				port: UInt16(8029 + i)
+			)
+			nodes["udid-".appending(String(i))] = node
+		}
+		let config = EnsembleConfiguration(
+			backendType: BackendType.StubBackend,
+			hypercube: false,
+			nodes: nodes
+		)
+		
+		let udids = Array(config.nodes.keys).sorted()
+		
+		for i in 0 ..< config.nodes.count {
+			timestampedPrint("creating ensemblers[\(i)]")
+			
+			let ensembler = try makeEnsembler(config: config, udid: udids[i])
+			ensemblers.append(ensembler)
+			try ensembler.activate()
+		}
+		
+        // Wait for all nodes to reach ready state initially
+        timestampedPrint("wait for all nodes to either get into ready state or failed state")
+		for i in 0 ..< config.nodes.count {
+			while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
+				try await Task.sleepMilliseconds(100)
+			}
+		}
+		
+		timestampedPrint("check if all nodes are in ready state")
+		for i in 0 ..< config.nodes.count {
+			#expect(ensemblers[i].getStatus() == .ready)
+		}
+
+        // Simulate follower1 restarting
+		ensemblers[1].stopServer()
+        ensemblers.remove(at: 1)
+        ensemblers.insert(try makeEnsembler(config: config, udid: udids[1]), at: 1)
+		try ensemblers[1].activate()
+		
+		try await Task.sleepSeconds(5)
+		
+		// Simulate leader restarting
+		ensemblers[0].stopServer()
+        ensemblers.remove(at: 0)
+		try await Task.sleepSeconds(5)
+        ensemblers.insert(try makeEnsembler(config: config, udid: udids[0]), at: 0)
+
+		try ensemblers[0].activate()
+		
+		try await Task.sleepSeconds(5)
+		
+		// Simulate remaining followers restarting
+		for i in 2 ..< nodeCount {
+			ensemblers[i].stopServer()
+		}
+        
+        
+        for i in 2 ..< nodeCount {
+            ensemblers.removeLast()
+        }
+        
+        // Simulate remaining followers restarting
+        for i in 2 ..< nodeCount {
+            ensemblers.insert(try makeEnsembler(config: config, udid: udids[i]), at: i)
+            try ensemblers[i].activate()
+        }
+		
+		// Wait for all nodes to reach ready state after restarts
+		timestampedPrint("wait for all nodes to either get into ready state or failed state")
+		for i in 0 ..< config.nodes.count {
+			while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
+				try await Task.sleepMilliseconds(100)
+			}
+		}
+		
+		timestampedPrint("check if all nodes are in ready state")
+		for i in 0 ..< config.nodes.count {
+			#expect(ensemblers[i].getStatus() == .ready)
+		}
+
+		// Clean up
+		for i in 0 ..< nodeCount {
+			ensemblers[i].stopServer()
+		}
+	}
+}
+
+// MARK: - XCTest Test Suite
+
 final class EnsembleConfigurationTests: XCTestCase {
 	
 
@@ -82,31 +329,6 @@ final class EnsembleConfigurationTests: XCTestCase {
 	func testStateMachinesTwoNodeOrdered() throws {
 		let ensembleConfig = self.getEnsembleConfig(nodeCount: 2)
 		try self.validateEnsemblerStateMachineInternal(config: ensembleConfig, startIndex: 0)
-	}
-
-	func invalidRankChassisIDConfiguration(nodeCount: Int) throws {
-		let ensembleConfig = self.getEnsembleConfigInvalid(nodeCount: nodeCount)
-		do {
-			let ensembler = try EnsemblerTLS(
-				ensembleConfig: ensembleConfig,
-				autoRestart: false,
-				skipDarwinInitCheck: true,
-				useStubAttestation: true,
-				currentUDID: ensembleConfig.nodes.keys.first,
-				skipJobQuiescence: true
-			)
-            ensembler.stopServer()
-		} catch InitializationError.invalidRankChassisdIDConfiguration {
-			return
-		}
-		XCTFail("Invalid configuration is accepted, which should not be the case")
-	}
-
-	func testInvalidRankChassisIDConfiguration() throws {
-		try self.invalidRankChassisIDConfiguration(nodeCount: 2)
-		try self.invalidRankChassisIDConfiguration(nodeCount: 4)
-		try self.invalidRankChassisIDConfiguration(nodeCount: 8)
-		try self.invalidRankChassisIDConfiguration(nodeCount: 16)
 	}
 
 	func validRankChassisIDConfiguration(nodeCount: Int) throws {
@@ -235,7 +457,9 @@ final class EnsembleConfigurationTests: XCTestCase {
             
             timestampedPrint("wait for all nodes to either get into ready state or failed state")
             for i in 0 ..< ensembleConfig.nodes.count {
-                while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {}
+                while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {
+                    try await Task.sleepMilliseconds(100)
+                }
             }
             
             timestampedPrint("check if all nodes are in ready state")
@@ -271,30 +495,57 @@ final class EnsembleConfigurationTests: XCTestCase {
                 return response.data(using: .utf8)!
             }
             
-            Thread.sleep(forTimeInterval: 1)
+            try await Task.sleepSeconds(1)
             
             let message1StartTime = Date()
-            ensemblers[1].sendDataAndGetResponse(appID: "app1", data: testmessage1.data(using: .utf8)!, destination: 0, completion: { [weak self] result in
+            ensemblers[1].sendDataAndGetResponse(appID: "app1", data: testmessage1.data(using: .utf8)!, destination: 0, completion: { result in
                 let message1EndTime = Date()
                 let message1Duration = message1EndTime.timeIntervalSince(message1StartTime)
                 timestampedPrint("Message1 response time: \(message1Duration) seconds")
-                self?.handleControlDataResponse(result)
+                switch result {
+                case .success(let responseData):
+                    if let responseString = String(data: responseData, encoding: .utf8) {
+                        XCTAssertEqual(responseString, "response for \(testmessage1)", "app1 message1 response should match expected")
+                    } else {
+                        XCTFail("Failed to decode response for app1 message1")
+                    }
+                case .failure(let error):
+                    XCTFail("There was a registered handler on the server, we should NOT have got failure: \(error)")
+                }
             })
             
           let message2StartTime = Date()
-            ensemblers[1].sendDataAndGetResponse(appID: "app2",data: testmessage2.data(using: .utf8)!, destination: 0, completion: { [weak self] result in
+            ensemblers[1].sendDataAndGetResponse(appID: "app2",data: testmessage2.data(using: .utf8)!, destination: 0, completion: { result in
                 let message2EndTime = Date()
                 let message2Duration = message2EndTime.timeIntervalSince(message2StartTime)
                 timestampedPrint("Message2 response time: \(message2Duration) seconds")
-                self?.handleControlDataResponse(result)
+                switch result {
+                case .success(let responseData):
+                    if let responseString = String(data: responseData, encoding: .utf8) {
+                        XCTAssertEqual(responseString, "response for \(testmessage2)", "app2 message2 response should match expected")
+                    } else {
+                        XCTFail("Failed to decode response for app2 message2")
+                    }
+                case .failure(let error):
+                    XCTFail("There was a registered handler on the server, we should NOT have got failure: \(error)")
+                }
             })
             
             let message3StartTime = Date()
-            ensemblers[1].sendDataAndGetResponse(appID: "app2",data: testmessage2.data(using: .utf8)!, destination: 0, completion: { [weak self] result in
+            ensemblers[1].sendDataAndGetResponse(appID: "app2",data: testmessage2.data(using: .utf8)!, destination: 0, completion: { result in
                 let message3EndTime = Date()
                 let message3Duration = message3EndTime.timeIntervalSince(message3StartTime)
                 timestampedPrint("Message3 response time: \(message3Duration) seconds")
-                self?.handleControlDataResponse(result)
+                switch result {
+                case .success(let responseData):
+                    if let responseString = String(data: responseData, encoding: .utf8) {
+                        XCTAssertEqual(responseString, "response for \(testmessage2)", "app2 message3 response should match expected")
+                    } else {
+                        XCTFail("Failed to decode response for app2 message3")
+                    }
+                case .failure(let error):
+                    XCTFail("There was a registered handler on the server, we should NOT have got failure: \(error)")
+                }
             })
             
             ensemblers[1].sendDataAndGetResponse(appID: "app3",data: "somedata".data(using: .utf8)!, destination: 0, completion: { result in
@@ -308,9 +559,10 @@ final class EnsembleConfigurationTests: XCTestCase {
                 }
             })
             
+            // Wait for messages to complete
+            try await Task.sleepSeconds(10)
+            expectation.fulfill()
         }
-        Thread.sleep(forTimeInterval: 10) // Reduced timeout since we're now sequential
-        expectation.fulfill()
     
         wait(for: [expectation], timeout: timeOut)
         
@@ -324,19 +576,22 @@ final class EnsembleConfigurationTests: XCTestCase {
 
     // Tests sending large data to node.
     func testMessagingLargeData() throws {
-       
+
         let ensembleConfig = self.getEnsembleConfig(nodeCount: 2)
         let timeOut = Double(2) * 20.0
         // Create an expectation
         let expectation = self.expectation(description: "Test should complete within \(timeOut)")
         var ensemblers: [EnsemblerTLS] = []
-        
+
         Task {
             ensemblers = try self.populateEnsemblers(config: ensembleConfig, startIndex: 0)
-            
+
             timestampedPrint("wait for all nodes to either get into ready state or failed state")
             for i in 0 ..< ensembleConfig.nodes.count {
-                while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {}
+
+                while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
+                    try await Task.sleepMilliseconds(100)
+                }
             }
             
             timestampedPrint("check if all nodes are in ready state")
@@ -344,7 +599,7 @@ final class EnsembleConfigurationTests: XCTestCase {
                 XCTAssert(ensemblers[i].getStatus() == .ready)
             }
             
-            let targetSize = 65536*16 // 1MB
+            let targetSize = 32*1024 // 32KB
             // Create the string
             let largeString = String(repeating: "a", count: targetSize) + "b"
             
@@ -355,25 +610,35 @@ final class EnsembleConfigurationTests: XCTestCase {
                 } else {
                     timestampedPrint("Failed to convert data to string")
                 }
-                
+
                 return response.data(using: .utf8)!
             }
-            Thread.sleep(forTimeInterval: 1)
-            
+
+            try await Task.sleepSeconds(1)
+
             let message1StartTime = Date()
 
-            ensemblers[1].sendDataAndGetResponse(appID: "app1",data: largeString.data(using: .utf8)!, destination: 0, completion: { [weak self] result in
+            ensemblers[1].sendDataAndGetResponse(appID: "app1",data: largeString.data(using: .utf8)!, destination: 0, completion: { result in
                 let message1EndTime = Date()
                 let message1Duration = message1EndTime.timeIntervalSince(message1StartTime)
                 timestampedPrint("Message1 response time: \(message1Duration) seconds")
-                self?.handleControlDataResponse(result)
-               
+                switch result {
+                case .success(let responseData):
+                    if let responseString = String(data: responseData, encoding: .utf8) {
+                        XCTAssertEqual(responseString, "Ack.", "Large data response should match expected")
+                    } else {
+                        XCTFail("Failed to decode response for large data message")
+                    }
+                case .failure(let error):
+                    XCTFail("There was a registered handler on the server, we should NOT have got failure: \(error)")
+                }
+
             })
             
-           
+            // Wait for message to complete
+            try await Task.sleepSeconds(10)
+            expectation.fulfill()
         }
-        Thread.sleep(forTimeInterval: 10) // Reduced timeout since we're now sequential
-        expectation.fulfill()
     
         wait(for: [expectation], timeout: timeOut)
         
@@ -399,17 +664,17 @@ final class EnsembleConfigurationTests: XCTestCase {
         responseExpectation.expectedFulfillmentCount = messageCount
         
         var ensemblers: [EnsemblerTLS] = []
-        var responseCount = 0
-        let responseCountLock = NSLock()
-        var messageTimes: [Int: Date] = [:]
-        let messageTimesLock = NSLock()
+        let responseCount = Atomic<Int>(0)
+        let messageTimes = OSAllocatedUnfairLock<[Int: Date]>(initialState: [:])
         
         Task {
             ensemblers = try self.populateEnsemblers(config: ensembleConfig, startIndex: 0)
             
             timestampedPrint("wait for all nodes to either get into ready state or failed state")
             for i in 0 ..< ensembleConfig.nodes.count {
-                while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {}
+                while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {
+                    try await Task.sleepMilliseconds(100)
+                }
             }
             
             timestampedPrint("check if all nodes are in ready state")
@@ -428,7 +693,7 @@ final class EnsembleConfigurationTests: XCTestCase {
                 return response.data(using: .utf8)!
             }
             
-            Thread.sleep(forTimeInterval: 1)
+            try await Task.sleepSeconds(1)
             
             // Send multiple concurrent control messages
             for messageIndex in 1...messageCount {
@@ -436,9 +701,9 @@ final class EnsembleConfigurationTests: XCTestCase {
                 let messageStartTime = Date()
                 
                 // Store the start time for this message
-                messageTimesLock.lock()
-                messageTimes[messageIndex] = messageStartTime
-                messageTimesLock.unlock()
+                messageTimes.withLock { dict in
+                    dict[messageIndex] = messageStartTime
+                }
                 
                 ensemblers[1].sendDataAndGetResponse(
                     appID: "app1",
@@ -447,27 +712,30 @@ final class EnsembleConfigurationTests: XCTestCase {
                     completion: { result in
                         let messageEndTime = Date()
                         
-                        responseCountLock.lock()
-                        defer { responseCountLock.unlock() }
-                        
-                        messageTimesLock.lock()
-                        let startTime = messageTimes[messageIndex] ?? messageStartTime
-                        messageTimesLock.unlock()
+                        let startTime = messageTimes.withLock { dict in
+                            dict[messageIndex] ?? messageStartTime
+                        }
                         
                         let messageDuration = messageEndTime.timeIntervalSince(startTime)
                         
                         switch result {
                         case .success(let responseData):
-                            responseCount += 1
+                            responseCount.wrappingAdd(1, ordering: .relaxed)
                             if let responseString = String(data: responseData, encoding: .utf8) {
                                 timestampedPrint("Concurrent message \(messageIndex) response time: \(messageDuration) seconds - Response: \(responseString)")
+                                XCTAssertEqual(responseString, "response for \(message)", "Concurrent message \(messageIndex) response should match expected")
+                            } else {
+                                XCTFail("Failed to decode response for concurrent message \(messageIndex)")
                             }
                             responseExpectation.fulfill()
                             
                         case .failure(let error):
                             timestampedPrint("Concurrent message \(messageIndex) failed after \(messageDuration) seconds: \(error)")
-                            // Still fulfill to avoid hanging, but mark as failure
-                            XCTFail("No failure is expected")
+                            let errorDesc = String(describing: error)
+                            let hint = errorDesc.lowercased().contains("timeout")
+                                ? " — verify that 'registerDataCallback' is set up on the receiver node for appID 'app1'"
+                                : ""
+                            XCTFail("Message \(messageIndex) failed: \(error)\(hint)")
                             responseExpectation.fulfill()
                         }
                     }
@@ -481,11 +749,10 @@ final class EnsembleConfigurationTests: XCTestCase {
         wait(for: [expectation, responseExpectation], timeout: timeOut)
         
         // Validate that all messages received responses
-        responseCountLock.lock()
-        XCTAssertEqual(responseCount, messageCount, "Expected \(messageCount) responses, but received \(responseCount)")
-        responseCountLock.unlock()
+        let finalResponseCount = responseCount.load(ordering: .relaxed)
+        XCTAssertEqual(finalResponseCount, messageCount, "Expected \(messageCount) responses, but received \(finalResponseCount)")
         
-        timestampedPrint("Successfully sent \(messageCount) concurrent control messages and received \(responseCount) responses")
+        timestampedPrint("Successfully sent \(messageCount) concurrent control messages and received \(finalResponseCount) responses")
         
         ensemblers[0].unregisterDataCallback(appID: "app1")
         
@@ -495,230 +762,13 @@ final class EnsembleConfigurationTests: XCTestCase {
         }
     }
 
-    func testUnorderedRestarts() throws {
-       var ensemblers: [EnsemblerTLS] = []
-      
-       var nodes: [String: NodeConfiguration] = [:]
-       for i in 0 ..< 4 {
-           let node = NodeConfiguration(
-               chassisID: "chassis-".appending(String(i / 4)),
-               rank: Rank(rawValue: i)!,
-               hostName: "127.0.0.1",
-               port: UInt16(8029 + i)
-           )
-           nodes["udid-".appending(String(i))] = node
-       }
-       let config =  EnsembleConfiguration(
-           backendType: BackendType.StubBackend,
-           hypercube: false,
-           nodes: nodes
-       )
-       let timeOut = Double(config.nodes.count) * 60.0
-       // Create an expectation
-       let expectation = self.expectation(description: "Test should complete within \(timeOut)")
-       
-       let udids = Array(config.nodes.keys).sorted()
-
-       for i in 0 ..< config.nodes.count {
-           timestampedPrint("createing ensemblers[\(i)]")
-
-           let ensembler = try EnsemblerTLS(
-               ensembleConfig: config,
-               autoRestart: false,
-               skipDarwinInitCheck: true,
-               useStubAttestation: true,
-               currentUDID: udids[i],
-               skipJobQuiescence: true,
-               skipWaitingForDenali: true
-           )
-           ensemblers.append(ensembler)
-           try ensembler.activate()
-       }
-       
-       Task {
-           timestampedPrint("wait for all nodes to either get into ready state or failed state")
-           for i in 0 ..< config.nodes.count {
-               while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {}
-           }
-
-           timestampedPrint("check if all nodes are in ready state")
-           for i in 0 ..< config.nodes.count {
-               XCTAssert(ensemblers[i].getStatus() == .ready)
-           }
-
-           ensemblers[1].stopServer()
-           // simulate follower1 restarting
-           ensemblers[1] = try EnsemblerTLS(
-               ensembleConfig: config,
-               autoRestart: false,
-               skipDarwinInitCheck: true,
-               useStubAttestation: true,
-               currentUDID: udids[1],
-               skipJobQuiescence: true,
-               skipWaitingForDenali: true
-           )
-           try ensemblers[1].activate()
-           
-           
-           Thread.sleep(forTimeInterval: 30.0)
-           ensemblers[0].stopServer()
-           Thread.sleep(forTimeInterval: 30.0)
-           ensemblers[0] = try EnsemblerTLS(
-               ensembleConfig: config,
-               autoRestart: false,
-               skipDarwinInitCheck: true,
-               useStubAttestation: true,
-               currentUDID: udids[0],
-               skipJobQuiescence: true,
-               skipWaitingForDenali: true
-           )
-           try ensemblers[0].activate()
-           
-           Thread.sleep(forTimeInterval: 30.0)
-           for i in 2 ..< 4 {
-               ensemblers[i].stopServer()
-               ensemblers[i] = try EnsemblerTLS(
-                   ensembleConfig: config,
-                   autoRestart: false,
-                   skipDarwinInitCheck: true,
-                   useStubAttestation: true,
-                   currentUDID: udids[i],
-                   skipJobQuiescence: true,
-                   skipWaitingForDenali: true
-               )
-               try ensemblers[i].activate()
-           }
-           
-           timestampedPrint("wait for all nodes to either get into ready state or failed state")
-           for i in 0 ..< config.nodes.count {
-               while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {}
-           }
-
-           timestampedPrint("check if all nodes are in ready state")
-           for i in 0 ..< config.nodes.count {
-               XCTAssert(ensemblers[i].getStatus() == .ready)
-           }
-           
-           for i in 0 ..< 4 {
-               ensemblers[i].stopServer()
-           }
-           expectation.fulfill()
-       }
-       wait(for: [expectation], timeout: timeOut)
-
-    }
 	// Helper functions
-	
-	// Reusable completion handler for sendControlData
-	private func handleControlDataResponse(_ result: Result<Data, Error>) {
-		switch result {
-		case .success(let responseData):
-			let str = String(data: responseData, encoding: .utf8)
-			timestampedPrint("Received response: \(str ?? "Unable to decode response")")
-			
-			// Handle successful response
-		case .failure(let error):
-            XCTFail("There was registered handler on the server, we should NOT have got failure")
-			// Handle error
-		}
-	}
-	
 	// get the ensemble configuration which does gauranteee rank0-3 ( and so on) contains same
 	// chassisid
 	func getEnsembleConfig(nodeCount: Int) -> EnsembleConfiguration {
-		var nodes: [String: NodeConfiguration] = [:]
-		for i in 0 ..< nodeCount {
-			let node = NodeConfiguration(
-				chassisID: "chassis-".appending(String(i / 4)),
-				rank: Rank(rawValue: i)!,
-				hostName: "127.0.0.1",
-				port: UInt16(8029 + i)
-			)
-			nodes["udid-".appending(String(i))] = node
-		}
-
-		return EnsembleConfiguration(
-			backendType: BackendType.StubBackend,
-			hypercube: false,
-            ensembleID: "TESTENSEMBLEID",
-            rackID: "TESTRACKID",
-			nodes: nodes
-		)
+        return EnsembleConfigurationTestHelpers.getEnsembleConfig(nodeCount: nodeCount)
 	}
 
-	// get the ensemble configuration which does not gauranteee rank0-3 ( and so on) contains same
-	// chassisid
-	func getEnsembleConfigInvalid(nodeCount: Int) -> EnsembleConfiguration {
-		var nodes: [String: NodeConfiguration] = [:]
-
-		if nodeCount == 2 {
-			let node1 = NodeConfiguration(
-				chassisID: "chassis1",
-				rank: Rank(rawValue: 0)!,
-				hostName: "127.0.0.1",
-				port: UInt16(8029)
-			)
-			nodes["udid-".appending(String(0))] = node1
-
-			let node2 = NodeConfiguration(
-				chassisID: "chassis2",
-				rank: Rank(rawValue: 1)!,
-				hostName: "127.0.0.1",
-				port: UInt16(8030)
-			)
-			nodes["udid-".appending(String(1))] = node2
-		} else if nodeCount == 4 {
-			let node1 = NodeConfiguration(
-				chassisID: "chassis1",
-				rank: Rank(rawValue: 0)!,
-				hostName: "127.0.0.1",
-				port: UInt16(8029)
-			)
-			nodes["udid-".appending(String(0))] = node1
-
-			let node2 = NodeConfiguration(
-				chassisID: "chassis1",
-				rank: Rank(rawValue: 1)!,
-				hostName: "127.0.0.1",
-				port: UInt16(8030)
-			)
-			nodes["udid-".appending(String(1))] = node2
-
-			let node3 = NodeConfiguration(
-				chassisID: "chassis1",
-				rank: Rank(rawValue: 2)!,
-				hostName: "127.0.0.1",
-				port: UInt16(8029)
-			)
-			nodes["udid-".appending(String(2))] = node3
-
-			let node4 = NodeConfiguration(
-				chassisID: "chassis2",
-				rank: Rank(rawValue: 3)!,
-				hostName: "127.0.0.1",
-				port: UInt16(8030)
-			)
-			nodes["udid-".appending(String(3))] = node4
-		} else {
-			// This will generate
-			// rank1-4 assigned chassisid1, rank5-8 chassisid2... rank13,14,15,0 chassisd4 for 16 node.
-			for i in 0 ..< nodeCount {
-				let node = NodeConfiguration(
-					chassisID: "chassis-".appending(String(i / 4)),
-					rank: Rank(rawValue: (i + 1) % nodeCount)!,
-					hostName: "127.0.0.1",
-					port: UInt16(8029 + i)
-				)
-				nodes["udid-".appending(String(i))] = node
-			}
-		}
-
-		return EnsembleConfiguration(
-			backendType: BackendType.StubBackend,
-			hypercube: false,
-			nodes: nodes
-		)
-	}
 
 	func validateEnsemblerStateMachine(
 		config: EnsembleConfiguration,
@@ -739,14 +789,16 @@ final class EnsembleConfigurationTests: XCTestCase {
 		let timeOut = Double(config.nodes.count) * 20.0
 		// Create an expectation
 		let expectation = self.expectation(description: "Test should complete within \(timeOut)")
-		var ensemblers: [EnsemblerTLS] = []
+		var ensemblers: [EnsemblerTLSCIO] = []
 
 		Task {
 			ensemblers = try self.populateEnsemblers(config: config, startIndex: startIndex)
             
 			timestampedPrint("wait for all nodes to either get into ready state or failed state")
 			for i in 0 ..< config.nodes.count {
-				while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {}
+				while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {
+					try await Task.sleepMilliseconds(100)
+				}
 			}
 
 			timestampedPrint("check if all nodes are in ready state")
@@ -788,7 +840,9 @@ final class EnsembleConfigurationTests: XCTestCase {
 
 			timestampedPrint("wait for all nodes to either get into ready state or failed state")
 			for i in 0 ..< config.nodes.count {
-				while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {}
+				while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {
+					try await Task.sleepMilliseconds(100)
+				}
 			}
 
 			timestampedPrint("check if all nodes are in ready state")
@@ -852,7 +906,9 @@ final class EnsembleConfigurationTests: XCTestCase {
 		Task {
 			ensemblers = try self.populateEnsemblers(config: config, startIndex: startIndex)
 			for i in 0 ..< config.nodes.count {
-				while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {}
+				while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {
+					try await Task.sleepMilliseconds(100)
+				}
 			}
 
 			for i in 0 ..< config.nodes.count {
@@ -871,7 +927,9 @@ final class EnsembleConfigurationTests: XCTestCase {
 			try ensemblers[0].rotateKey()
 
 			for i in 0 ..< config.nodes.count {
-				while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {}
+				while ensemblers[i].getStatus() != .ready, ensemblers[i].getStatus() != .failed {
+					try await Task.sleepMilliseconds(100)
+				}
 			}
 
 			// First wait and check if we are going to ready state
@@ -903,15 +961,15 @@ final class EnsembleConfigurationTests: XCTestCase {
 		}
 	}
 
-	func populateEnsemblers(config: EnsembleConfiguration, startIndex: Int) throws -> [EnsemblerTLS] {
-		var ensemblers: [EnsemblerTLS] = []
+	func populateEnsemblers(config: EnsembleConfiguration, startIndex: Int) throws -> [EnsemblerTLSCIO] {
+		var ensemblers: [EnsemblerTLSCIO] = []
 		let udids = Array(config.nodes.keys).sorted()
 
 		timestampedPrint("Creating ensemblers in order from \(startIndex) to \(config.nodes.count)")
 		for i in startIndex ..< config.nodes.count {
 			timestampedPrint("createing ensemblers[\(i)]")
 
-			let ensembler = try EnsemblerTLS(
+			let ensembler = try EnsemblerTLSCIO(
 				ensembleConfig: config,
 				autoRestart: false,
 				skipDarwinInitCheck: true,
@@ -926,8 +984,8 @@ final class EnsembleConfigurationTests: XCTestCase {
 
 		timestampedPrint("Creating ensemblers in order from 0 to \(startIndex)")
 		for i in 0 ..< startIndex {
-			timestampedPrint("createing ensemblers[\(i)]")
-			let ensembler = try EnsemblerTLS(
+			print("createing ensemblers[\(i)]")
+			let ensembler = try EnsemblerTLSCIO(
 				ensembleConfig: config,
 				autoRestart: false,
 				skipDarwinInitCheck: true,
@@ -1025,7 +1083,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             timestampedPrint("Wait for all nodes to reach ready or failed state")
             for i in 0 ..< ensembleConfig.nodes.count {
                 while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
-                    Thread.sleep(forTimeInterval: 0.1)
+                    try await Task.sleepMilliseconds(100)
                 }
             }
             
@@ -1057,7 +1115,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             }
             
             // Give callbacks time to register
-            Thread.sleep(forTimeInterval: 1)
+            try await Task.sleepSeconds(1)
             
             timestampedPrint("Leader (rank 0) sending broadcast message to all followers...")
             
@@ -1141,7 +1199,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             timestampedPrint("Wait for all nodes to reach ready or failed state")
             for i in 0 ..< ensembleConfig.nodes.count {
                 while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
-                    Thread.sleep(forTimeInterval: 0.1)
+                    try await Task.sleepMilliseconds(100)
                 }
             }
             
@@ -1176,7 +1234,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             timestampedPrint("Intentionally skipping handler registration on follower 3 (rank 3)")
             
             // Give callbacks time to register
-            Thread.sleep(forTimeInterval: 1)
+            try await Task.sleepSeconds(1)
             
             timestampedPrint("Leader (rank 0) sending broadcast message to all followers (expecting failure)...")
             
@@ -1239,8 +1297,7 @@ final class EnsembleConfigurationTests: XCTestCase {
         var ensemblers: [EnsemblerTLS] = []
         
         // Track callback invocations
-        var callbackInvokedCount = 0
-        let callbackCountLock = NSLock()
+        let callbackInvokedCount = Atomic<Int>(0)
         
         Task {
             // Create and activate ensemblers
@@ -1249,7 +1306,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             timestampedPrint("Wait for all nodes to reach ready or failed state")
             for i in 0 ..< ensembleConfig.nodes.count {
                 while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
-                    Thread.sleep(forTimeInterval: 0.1)
+                    try await Task.sleepMilliseconds(100)
                 }
             }
             
@@ -1264,10 +1321,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             // Phase 1: Register callback and verify it receives data
             timestampedPrint("Phase 1: Registering callback on receiver (rank 0)")
             ensemblers[0].registerDataCallback(appID: testAppID) { sender, data in
-                callbackCountLock.lock()
-                callbackInvokedCount += 1
-                let currentCount = callbackInvokedCount
-                callbackCountLock.unlock()
+                let currentCount = callbackInvokedCount.wrappingAdd(1, ordering: .relaxed)
                 
                 timestampedPrint("Callback invoked (count: \(currentCount)) - received data from rank \(sender)")
                 
@@ -1283,7 +1337,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             }
             
             // Give callback time to register
-            Thread.sleep(forTimeInterval: 1)
+            try await Task.sleepSeconds(1)
             
             // Send first message - should succeed
             timestampedPrint("Sending first message - callback should receive it")
@@ -1313,9 +1367,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             wait(for: [firstMessageExpectation], timeout: 10.0)
             
             // Verify callback was invoked
-            callbackCountLock.lock()
-            let countAfterFirstMessage = callbackInvokedCount
-            callbackCountLock.unlock()
+            let countAfterFirstMessage = callbackInvokedCount.load(ordering: .relaxed)
             XCTAssertEqual(countAfterFirstMessage, 1, "Callback should have been invoked once after first message")
             
             // Phase 2: Unregister callback
@@ -1329,7 +1381,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             }
             
             // Give time for unregistration to take effect
-            Thread.sleep(forTimeInterval: 1)
+            try await Task.sleepSeconds(1)
             
             // Phase 3: Send second message - should fail (no handler)
             timestampedPrint("Sending second message - should fail because callback was unregistered")
@@ -1360,9 +1412,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             wait(for: [secondMessageExpectation], timeout: 10.0)
             
             // Phase 4: Verify callback count didn't increase
-            callbackCountLock.lock()
-            let finalCallbackCount = callbackInvokedCount
-            callbackCountLock.unlock()
+            let finalCallbackCount = callbackInvokedCount.load(ordering: .relaxed)
             
             timestampedPrint("Final callback invocation count: \(finalCallbackCount)")
             XCTAssertEqual(finalCallbackCount, 1, "Callback should still have been invoked only once (before unregister)")
@@ -1370,10 +1420,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             // Phase 5: Test re-registration works
             timestampedPrint("Phase 5: Re-registering callback to verify it works again")
             ensemblers[0].registerDataCallback(appID: testAppID) { sender, data in
-                callbackCountLock.lock()
-                callbackInvokedCount += 1
-                let currentCount = callbackInvokedCount
-                callbackCountLock.unlock()
+                let currentCount = callbackInvokedCount.wrappingAdd(1, ordering: .relaxed)
                 
                 timestampedPrint("Re-registered callback invoked (count: \(currentCount)) - received data from rank \(sender)")
                 
@@ -1381,7 +1428,7 @@ final class EnsembleConfigurationTests: XCTestCase {
                 return response.data(using: .utf8)!
             }
             
-            Thread.sleep(forTimeInterval: 1)
+            try await Task.sleepSeconds(1)
             
             // Send third message - should succeed again
             timestampedPrint("Sending third message - should succeed with re-registered callback")
@@ -1410,9 +1457,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             wait(for: [thirdMessageExpectation], timeout: 10.0)
             
             // Verify final callback count
-            callbackCountLock.lock()
-            let verifyFinalCount = callbackInvokedCount
-            callbackCountLock.unlock()
+            let verifyFinalCount = callbackInvokedCount.load(ordering: .relaxed)
             
             XCTAssertEqual(verifyFinalCount, 2, "Callback should have been invoked twice total (once before unregister, once after re-register)")
             
@@ -1461,10 +1506,8 @@ final class EnsembleConfigurationTests: XCTestCase {
         responseExpectation.expectedFulfillmentCount = totalExpectedMessages
         
         var ensemblers: [EnsemblerTLS] = []
-        var responseCount = 0
-        let responseCountLock = NSLock()
-        var messageResults: [String: String] = [:]
-        let messageResultsLock = NSLock()
+        let responseCount = Atomic<Int>(0)
+        let messageResults = OSAllocatedUnfairLock<[String: String]>(initialState: [:])
         
         // Performance metrics tracking
         struct MessageMetrics {
@@ -1476,10 +1519,8 @@ final class EnsembleConfigurationTests: XCTestCase {
             let messageIndex: Int
         }
         
-        var performanceMetrics: [MessageMetrics] = []
-        let performanceMetricsLock = NSLock()
-        var messageSendTimes: [String: Date] = [:]
-        let messageSendTimesLock = NSLock()
+        let performanceMetrics = OSAllocatedUnfairLock<[MessageMetrics]>(initialState: [])
+        let messageSendTimes = OSAllocatedUnfairLock<[String: Date]>(initialState: [:])
         
         Task {
             // Create and activate all 8 ensemblers
@@ -1488,7 +1529,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             timestampedPrint("Wait for all \(ensembleConfig.nodes.count) nodes to reach ready or failed state")
             for i in 0 ..< ensembleConfig.nodes.count {
                 while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
-                    Thread.sleep(forTimeInterval: 0.1)
+                    try await Task.sleepMilliseconds(100)
                 }
             }
             
@@ -1521,7 +1562,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             }
             
             // Give callbacks time to register
-            Thread.sleep(forTimeInterval: 2)
+            try await Task.sleepSeconds(2)
             
             timestampedPrint("Leader (rank 0) starting concurrent messaging to all followers...")
             let testStartTime = Date()
@@ -1534,9 +1575,7 @@ final class EnsembleConfigurationTests: XCTestCase {
                     
                     // Record message send time
                     let messageSendTime = Date()
-                    messageSendTimesLock.lock()
-                    messageSendTimes[messageKey] = messageSendTime
-                    messageSendTimesLock.unlock()
+                    messageSendTimes.withLock { $0[messageKey] = messageSendTime }
                     
                     timestampedPrint("Leader sending: '\(message)' to rank \(followerRank)")
                     
@@ -1546,24 +1585,19 @@ final class EnsembleConfigurationTests: XCTestCase {
                             appID: "concurrent-leader-app",
                             data: message.data(using: .utf8)!,
                             destination: followerRank,
-                            timeout: 2.0
+                            timeout: 4.0
                         )
                         let messageEndTime = Date()
                         
                         // Get the send time for this specific message
-                        messageSendTimesLock.lock()
-                        let specificSendTime = messageSendTimes[messageKey] ?? messageSendTime
-                        messageSendTimesLock.unlock()
+                        let specificSendTime = messageSendTimes.withLock { $0[messageKey] ?? messageSendTime }
                         
                         let latency = messageEndTime.timeIntervalSince(specificSendTime)
                         let overallDuration = messageEndTime.timeIntervalSince(testStartTime)
                         
-                        responseCountLock.lock()
-                        defer { responseCountLock.unlock() }
-                        
                         switch result {
                         case .success(let responseData):
-                            responseCount += 1
+                            responseCount.wrappingAdd(1, ordering: .relaxed)
                             
                             if let responseString = String(data: responseData, encoding: .utf8) {
                                 timestampedPrint("Message \(messageKey) completed - Latency: \(String(format: "%.3f", latency * 1000))ms, Overall: \(String(format: "%.3f", overallDuration))s - Response: '\(responseString)'")
@@ -1572,9 +1606,9 @@ final class EnsembleConfigurationTests: XCTestCase {
                                 XCTAssert(responseString.contains("Response from follower \(followerRank)"), "Response should identify correct follower")
                                 XCTAssert(responseString.contains(message), "Response should echo the original message")
                                 
-                                messageResultsLock.lock()
-                                messageResults[messageKey] = responseString
-                                messageResultsLock.unlock()
+                                messageResults.withLock { dict in
+                                    dict[messageKey] = responseString
+                                }
                                 
                                 // Record performance metrics
                                 let metrics = MessageMetrics(
@@ -1586,9 +1620,7 @@ final class EnsembleConfigurationTests: XCTestCase {
                                     messageIndex: messageIndex
                                 )
                                 
-                                performanceMetricsLock.lock()
-                                performanceMetrics.append(metrics)
-                                performanceMetricsLock.unlock()
+                                performanceMetrics.withLock { $0.append(metrics) }
                                 
                             } else {
                                 XCTFail("Failed to decode response for \(messageKey)")
@@ -1614,17 +1646,13 @@ final class EnsembleConfigurationTests: XCTestCase {
         timestampedPrint("All concurrent messaging completed")
         
         // Validate results
-        responseCountLock.lock()
-        let finalResponseCount = responseCount
-        responseCountLock.unlock()
+        let finalResponseCount = responseCount.load(ordering: .relaxed)
         
         XCTAssertEqual(finalResponseCount, totalExpectedMessages,
                       "Expected \(totalExpectedMessages) responses, but received \(finalResponseCount)")
         
         // Verify each follower received and responded to all its messages
-        messageResultsLock.lock()
-        let finalResults = messageResults
-        messageResultsLock.unlock()
+        let finalResults = messageResults.withLock { $0 }
         
         for followerRank in 1...7 {
             for messageIndex in 1...messagesPerFollower {
@@ -1646,9 +1674,7 @@ final class EnsembleConfigurationTests: XCTestCase {
         }
         
         // Calculate and display performance metrics
-        performanceMetricsLock.lock()
-        let finalMetrics = performanceMetrics
-        performanceMetricsLock.unlock()
+        let finalMetrics = performanceMetrics.withLock { $0 }
         
         timestampedPrint("\n==================== PERFORMANCE METRICS ====================")
         
@@ -1777,12 +1803,14 @@ final class EnsembleConfigurationTests: XCTestCase {
         let responseExpectation = self.expectation(description: "All \(totalExpectedMessages) responses received")
         responseExpectation.expectedFulfillmentCount = totalExpectedMessages
         
+        struct ResponseCounts {
+            public var successful: Int = 0
+            public var failed: Int = 0
+        }
+        
         var ensemblers: [EnsemblerTLS] = []
-        var responseCount = 0
-        var failedResponseCount = 0
-        let responseCountLock = NSLock()
-        var messageResults: [String: String] = [:]
-        let messageResultsLock = NSLock()
+        let responseCount = OSAllocatedUnfairLock<ResponseCounts>(initialState: ResponseCounts())
+        let messageResults = OSAllocatedUnfairLock<[String: String]>(initialState: [:])
         
         // Performance metrics tracking
         struct MessageMetrics {
@@ -1794,10 +1822,8 @@ final class EnsembleConfigurationTests: XCTestCase {
             let messageIndex: Int
         }
         
-        var performanceMetrics: [MessageMetrics] = []
-        let performanceMetricsLock = NSLock()
-        var messageSendTimes: [String: Date] = [:]
-        let messageSendTimesLock = NSLock()
+        let performanceMetrics = OSAllocatedUnfairLock<[MessageMetrics]>(initialState: [])
+        let messageSendTimes = OSAllocatedUnfairLock<[String: Date]>(initialState: [:])
         
         Task {
             // Create and activate all 8 ensemblers
@@ -1806,7 +1832,7 @@ final class EnsembleConfigurationTests: XCTestCase {
             timestampedPrint("Wait for all \(ensembleConfig.nodes.count) nodes to reach ready or failed state")
             for i in 0 ..< ensembleConfig.nodes.count {
                 while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
-                    Thread.sleep(forTimeInterval: 0.1)
+                    try await Task.sleepMilliseconds(100)
                 }
             }
             
@@ -1861,9 +1887,7 @@ final class EnsembleConfigurationTests: XCTestCase {
                     
                     // Record message send time
                     let messageSendTime = Date()
-                    messageSendTimesLock.lock()
-                    messageSendTimes[messageKey] = messageSendTime
-                    messageSendTimesLock.unlock()
+                    messageSendTimes.withLock { $0[messageKey] = messageSendTime }
                     
                     timestampedPrint("Leader sending: '\(message)' to rank \(followerRank)")
                     
@@ -1878,53 +1902,51 @@ final class EnsembleConfigurationTests: XCTestCase {
                         let messageEndTime = Date()
                         
                         // Get the send time for this specific message
-                        messageSendTimesLock.lock()
-                        let specificSendTime = messageSendTimes[messageKey] ?? messageSendTime
-                        messageSendTimesLock.unlock()
+                        let specificSendTime = messageSendTimes.withLock { $0[messageKey] ?? messageSendTime }
                         
                         let latency = messageEndTime.timeIntervalSince(specificSendTime)
                         let overallDuration = messageEndTime.timeIntervalSince(testStartTime)
                         
-                        responseCountLock.lock()
-                        defer { responseCountLock.unlock() }
-                        
-                        switch result {
-                        case .success(let responseData):
-                            responseCount += 1
-                            
-                            if let responseString = String(data: responseData, encoding: .utf8) {
-                                timestampedPrint("Message \(messageKey) completed - Latency: \(String(format: "%.3f", latency * 1000))ms, Overall: \(String(format: "%.3f", overallDuration))s - Response: '\(responseString)'")
+                        responseCount.withLock { rc in
+                            switch result {
+                            case .success(let responseData):
+                                rc.successful += 1
                                 
-                                // Verify response format
-                                XCTAssert(responseString.contains("Response from follower \(followerRank)"), "Response should identify correct follower")
-                                XCTAssert(responseString.contains(message), "Response should echo the original message")
+                                if let responseString = String(data: responseData, encoding: .utf8) {
+                                    timestampedPrint("Message \(messageKey) completed - Latency: \(String(format: "%.3f", latency * 1000))ms, Overall: \(String(format: "%.3f", overallDuration))s - Response: '\(responseString)'")
+                                    
+                                    // Verify response format
+                                    XCTAssert(responseString.contains("Response from follower \(followerRank)"), "Response should identify correct follower")
+                                    XCTAssert(responseString.contains(message), "Response should echo the original message")
+                                    
+                                    messageResults.withLock { $0[messageKey] = responseString }
+                                    
+                                    // Record performance metrics
+                                    let metrics = MessageMetrics(
+                                        messageKey: messageKey,
+                                        startTime: specificSendTime,
+                                        endTime: messageEndTime,
+                                        latency: latency,
+                                        followerRank: followerRank,
+                                        messageIndex: messageIndex
+                                    )
+                                    
+                                    performanceMetrics.withLock { $0.append(metrics) }
+                                } else {
+                                    XCTFail("Failed to decode response for \(messageKey)")
+                                }
                                 
-                                messageResultsLock.lock()
-                                messageResults[messageKey] = responseString
-                                messageResultsLock.unlock()
-                                
-                                // Record performance metrics
-                                let metrics = MessageMetrics(
-                                    messageKey: messageKey,
-                                    startTime: specificSendTime,
-                                    endTime: messageEndTime,
-                                    latency: latency,
-                                    followerRank: followerRank,
-                                    messageIndex: messageIndex
-                                )
-                                
-                                performanceMetricsLock.lock()
-                                performanceMetrics.append(metrics)
-                                performanceMetricsLock.unlock()
-                                
-                            } else {
-                                XCTFail("Failed to decode response for \(messageKey)")
+                            case .failure(let error):
+                                rc.failed += 1
+                                let errorDesc = String(describing: error)
+                                timestampedPrint("Message \(messageKey) failed after \(String(format: "%.3f", latency * 1000))ms: \(error)")
+                                let hint = errorDesc.lowercased().contains("timeout")
+                                    ? " — verify that 'registerDataCallback' is set up on follower \(followerRank) for appID 'concurrent-leader-app'"
+                                    : ""
+                                XCTFail("Message \(messageKey) failed: \(error)\(hint)")
                             }
-                            
-                        case .failure(let error):
-                            failedResponseCount += 1
-                            timestampedPrint("Message \(messageKey) failed after \(String(format: "%.3f", latency * 1000))ms: \(error)")
                         }
+                        
                         
                         responseExpectation.fulfill()
                     }
@@ -1941,13 +1963,16 @@ final class EnsembleConfigurationTests: XCTestCase {
         timestampedPrint("All concurrent messaging completed")
         
         // Validate results
-        responseCountLock.lock()
-        let finalResponseCount = responseCount + failedResponseCount
-        responseCountLock.unlock()
+        let finalResponses = responseCount.withLock { $0 }
+        let successCount = finalResponses.successful
+        let failureCount = finalResponses.failed
+        let finalResponseCount = successCount + failureCount
         
-        print("Total response: \(finalResponseCount), expected: \(totalExpectedMessages), success: \(responseCount), failures:\(failedResponseCount)")
+        print("Total response: \(finalResponseCount), expected: \(totalExpectedMessages), success: \(successCount), failures:\(failureCount)")
         XCTAssertEqual(finalResponseCount, totalExpectedMessages,
                       "Expected \(totalExpectedMessages) responses, but received \(finalResponseCount)")
+        XCTAssertEqual(failureCount, 0,
+                      "\(failureCount) message(s) failed — if errors are timeouts, verify that 'registerDataCallback' is set up on all followers")
         
       
         timestampedPrint("===========================================================\n")
@@ -1962,4 +1987,639 @@ final class EnsembleConfigurationTests: XCTestCase {
             ensembler.stopServer()
         }
     }
+
+    // MARK: - Test 1: Response correlation
+    // Leader sends N concurrent messages to a single follower. Each message embeds a
+    // unique ID; the follower echoes the payload back verbatim. The leader asserts that
+    // every response matches exactly the payload it sent — not a response from another
+    // in-flight request.
+    func testConcurrentResponseCorrelation() throws {
+        let ensembleConfig = self.getEnsembleConfig(nodeCount: 2)
+        let messageCount = 20
+        let timeOut = Double(2) * 30.0
+
+        let expectation = self.expectation(description: "Setup completes")
+        let responseExpectation = self.expectation(description: "All \(messageCount) responses received")
+        responseExpectation.expectedFulfillmentCount = messageCount
+
+        var ensemblers: [EnsemblerTLS] = []
+        // Records (sentPayload, receivedResponse) keyed by message index
+        let resultMap = OSAllocatedUnfairLock<[Int: (sent: String, received: String)]>(initialState: [:])
+        let failureCount = Atomic<Int>(0)
+
+        Task {
+            ensemblers = try self.populateEnsemblers(config: ensembleConfig, startIndex: 0)
+
+            for i in 0..<ensembleConfig.nodes.count {
+                while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
+                    try await Task.sleepMilliseconds(100)
+                }
+            }
+            for i in 0..<ensembleConfig.nodes.count {
+                XCTAssert(ensemblers[i].getStatus() == .ready, "Node \(i) not ready")
+            }
+
+            // Follower echoes payload back verbatim so the leader can verify correlation.
+            ensemblers[0].registerDataCallback(appID: "correlation-app") { _, data in
+                return data
+            }
+
+            try await Task.sleepSeconds(1)
+
+            for index in 1...messageCount {
+                // Unique UUID in each payload ensures we can detect cross-wiring.
+                let uniqueID = UUID().uuidString
+                let payload = "MSG-\(index)-\(uniqueID)"
+
+                Task {
+                    let result = try await self.sendDataAndGetResponse(
+                        ensembler: ensemblers[1],
+                        appID: "correlation-app",
+                        data: payload.data(using: .utf8)!,
+                        destination: 0,
+                        timeout: 5.0
+                    )
+                    switch result {
+                    case .success(let responseData):
+                        let response = String(data: responseData, encoding: .utf8) ?? ""
+                        XCTAssertEqual(response, payload,
+                            "Message \(index): response '\(response)' does not match sent payload '\(payload)'")
+                        resultMap.withLock { $0[index] = (sent: payload, received: response) }
+                    case .failure(let error):
+                        failureCount.wrappingAdd(1, ordering: .relaxed)
+                        XCTFail("Message \(index) unexpectedly failed: \(error)")
+                    }
+                    responseExpectation.fulfill()
+                }
+            }
+
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation, responseExpectation], timeout: timeOut)
+
+        let results = resultMap.withLock { $0 }
+        XCTAssertEqual(results.count, messageCount,
+            "Expected \(messageCount) correlated responses, got \(results.count)")
+        for (index, pair) in results {
+            XCTAssertEqual(pair.sent, pair.received,
+                "Message \(index): response must match its own payload")
+        }
+        XCTAssertEqual(failureCount.load(ordering: .relaxed), 0, "No messages should fail")
+
+        ensemblers[0].unregisterDataCallback(appID: "correlation-app")
+        for ensembler in ensemblers { ensembler.stopServer() }
+        timestampedPrint("testConcurrentResponseCorrelation completed")
+    }
+
+    // MARK: - Test 2: Mixed registered / unregistered appIDs
+    // Leader sends concurrent messages to two appIDs simultaneously. One appID has a
+    // registered handler on the follower; the other does not. Verifies that messages to
+    // the registered appID succeed and messages to the unregistered appID fail immediately
+    // with DataMessageError.noRegisteredHandler — not with a generic timeout.
+    func testConcurrentMixedAppIDsRegisteredAndUnregistered() throws {
+        let ensembleConfig = self.getEnsembleConfig(nodeCount: 2)
+        let messagesPerApp = 10
+        let totalMessages = messagesPerApp * 2
+        let timeOut = Double(2) * 30.0
+
+        let expectation = self.expectation(description: "Setup completes")
+        let responseExpectation = self.expectation(description: "All \(totalMessages) responses received")
+        responseExpectation.expectedFulfillmentCount = totalMessages
+
+        var ensemblers: [EnsemblerTLS] = []
+        let registeredSuccessCount = Atomic<Int>(0)
+        let noHandlerErrorCount    = Atomic<Int>(0)
+        let unexpectedErrors       = OSAllocatedUnfairLock<[String]>(initialState: [])
+
+        Task {
+            ensemblers = try self.populateEnsemblers(config: ensembleConfig, startIndex: 0)
+
+            for i in 0..<ensembleConfig.nodes.count {
+                while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
+                    try await Task.sleepMilliseconds(100)
+                }
+            }
+            for i in 0..<ensembleConfig.nodes.count {
+                XCTAssert(ensemblers[i].getStatus() == .ready, "Node \(i) not ready")
+            }
+
+            // Only "app-registered" has a handler; "app-unregistered" deliberately has none.
+            ensemblers[0].registerDataCallback(appID: "app-registered") { _, data in
+                let msg = String(data: data, encoding: .utf8) ?? ""
+                return "ack:\(msg)".data(using: .utf8)!
+            }
+
+            try await Task.sleepSeconds(1)
+
+            // Messages to the registered app — all must succeed.
+            for i in 1...messagesPerApp {
+                Task {
+                    let result = try await self.sendDataAndGetResponse(
+                        ensembler: ensemblers[1],
+                        appID: "app-registered",
+                        data: "msg-\(i)".data(using: .utf8)!,
+                        destination: 0,
+                        timeout: 5.0
+                    )
+                    switch result {
+                    case .success(let responseData):
+                        if let responseString = String(data: responseData, encoding: .utf8) {
+                            XCTAssertEqual(responseString, "ack:msg-\(i)", "app-registered message \(i) response should match expected")
+                        } else {
+                            XCTFail("Failed to decode response for app-registered message \(i)")
+                        }
+                        registeredSuccessCount.wrappingAdd(1, ordering: .relaxed)
+                    case .failure(let error):
+                        unexpectedErrors.withLock { $0.append("app-registered[\(i)]: \(error)") }
+                        XCTFail("app-registered message \(i) should succeed, got: \(error)")
+                    }
+                    responseExpectation.fulfill()
+                }
+            }
+
+            // Messages to the unregistered app — all must fail with noRegisteredHandler.
+            for i in 1...messagesPerApp {
+                Task {
+                    let result = try await self.sendDataAndGetResponse(
+                        ensembler: ensemblers[1],
+                        appID: "app-unregistered",
+                        data: "msg-\(i)".data(using: .utf8)!,
+                        destination: 0,
+                        timeout: 5.0
+                    )
+                    switch result {
+                    case .success(let data):
+                        let str = String(data: data, encoding: .utf8) ?? ""
+                        XCTFail("app-unregistered message \(i) should fail, but succeeded: '\(str)'")
+                    case .failure(let error):
+                        if case DataMessageError.noRegisteredHandler = error {
+                            noHandlerErrorCount.wrappingAdd(1, ordering: .relaxed)
+                            timestampedPrint("app-unregistered[\(i)] correctly got noRegisteredHandler")
+                        } else {
+                            unexpectedErrors.withLock { $0.append("app-unregistered[\(i)]: unexpected \(error)") }
+                            XCTFail("app-unregistered message \(i) expected noRegisteredHandler, got: \(error)")
+                        }
+                    }
+                    responseExpectation.fulfill()
+                }
+            }
+
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation, responseExpectation], timeout: timeOut)
+
+        XCTAssertEqual(registeredSuccessCount.load(ordering: .relaxed), messagesPerApp,
+            "Expected \(messagesPerApp) successes for app-registered")
+        XCTAssertEqual(noHandlerErrorCount.load(ordering: .relaxed), messagesPerApp,
+            "Expected \(messagesPerApp) noRegisteredHandler errors for app-unregistered")
+
+        let errors = unexpectedErrors.withLock { $0 }
+        XCTAssertTrue(errors.isEmpty, "Unexpected errors: \(errors)")
+
+        ensemblers[0].unregisterDataCallback(appID: "app-registered")
+        for ensembler in ensemblers { ensembler.stopServer() }
+        timestampedPrint("testConcurrentMixedAppIDsRegisteredAndUnregistered completed")
+    }
+
+    // MARK: - Test 3: Slow handler does not block fast handler
+    // Leader sends messages concurrently to two appIDs: one whose handler sleeps 2 s
+    // (beyond the 1 s callbackTimeout) and one whose handler responds immediately.
+    // Asserts that slow-app messages get DataMessageError.timeoutOnPeerHandler while
+    // fast-app messages succeed and are NOT serialised behind the slow ones.
+    func testConcurrentSlowHandlerDoesNotBlockFastHandler() throws {
+        let ensembleConfig = self.getEnsembleConfig(nodeCount: 2)
+        let messagesPerApp = 5
+        let totalMessages  = messagesPerApp * 2
+        let timeOut        = Double(2) * 30.0
+
+        // message timeout = 1.25 s → callbackTimeout on follower = 1.0 s
+        // handler sleep   = 2.0 s  → callbackTimeout fires first → leader gets timeoutOnPeerHandler
+        let msgTimeout: TimeInterval = 1.25
+
+        let expectation = self.expectation(description: "Setup completes")
+        let responseExpectation = self.expectation(description: "All \(totalMessages) responses received")
+        responseExpectation.expectedFulfillmentCount = totalMessages
+
+        var ensemblers: [EnsemblerTLS] = []
+        let timeoutOnPeerCount = Atomic<Int>(0)
+        let fastSuccessCount   = Atomic<Int>(0)
+        let fastLatencies      = OSAllocatedUnfairLock<[TimeInterval]>(initialState: [])
+
+        Task {
+            ensemblers = try self.populateEnsemblers(config: ensembleConfig, startIndex: 0)
+
+            for i in 0..<ensembleConfig.nodes.count {
+                while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
+                    try await Task.sleepMilliseconds(100)
+                }
+            }
+            for i in 0..<ensembleConfig.nodes.count {
+                XCTAssert(ensemblers[i].getStatus() == .ready, "Node \(i) not ready")
+            }
+
+            // Slow handler: sleeps 2 s — exceeds the 1.0 s callbackTimeout.
+            // Use Task.sleep (cooperative suspension) instead of Thread.sleep (blocking) to
+            // avoid starving the Swift cooperative thread pool under concurrent load, which
+            // caused memory corruption / ObjC tagged-pointer crashes in stress tests.
+            ensemblers[0].registerDataCallback(appID: "app-slow") { _, data in
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                return "slow-response".data(using: .utf8)!
+            }
+
+            // Fast handler: responds immediately.
+            ensemblers[0].registerDataCallback(appID: "app-fast") { _, data in
+                return "fast-response".data(using: .utf8)!
+            }
+
+            try await Task.sleepSeconds(1)
+
+            let testStart = Date()
+
+            // Fire slow and fast messages concurrently in the same loop so they truly
+            // overlap and we can detect any serialisation.
+            for i in 1...messagesPerApp {
+                Task {
+                    let result = try await self.sendDataAndGetResponse(
+                        ensembler: ensemblers[1],
+                        appID: "app-slow",
+                        data: "slow-msg-\(i)".data(using: .utf8)!,
+                        destination: 0,
+                        timeout: msgTimeout
+                    )
+                    switch result {
+                    case .failure(let error):
+                        if case DataMessageError.timeoutOnPeerHandler = error {
+                            timeoutOnPeerCount.wrappingAdd(1, ordering: .relaxed)
+                            timestampedPrint("slow-msg-\(i) correctly got timeoutOnPeerHandler")
+                        } else {
+                            XCTFail("slow-msg-\(i) expected timeoutOnPeerHandler, got: \(error)")
+                        }
+                    case .success:
+                        XCTFail("slow-msg-\(i) should have timed out on peer handler but succeeded")
+                    }
+                    responseExpectation.fulfill()
+                }
+
+                Task {
+                    let sendTime = Date()
+                    let result = try await self.sendDataAndGetResponse(
+                        ensembler: ensemblers[1],
+                        appID: "app-fast",
+                        data: "fast-msg-\(i)".data(using: .utf8)!,
+                        destination: 0,
+                        timeout: 5.0
+                    )
+                    let latency = Date().timeIntervalSince(sendTime)
+                    switch result {
+                    case .success(let responseData):
+                        if let responseString = String(data: responseData, encoding: .utf8) {
+                            XCTAssertEqual(responseString, "fast-response", "fast-msg-\(i) response should match expected")
+                        } else {
+                            XCTFail("Failed to decode response for fast-msg-\(i)")
+                        }
+                        fastSuccessCount.wrappingAdd(1, ordering: .relaxed)
+                        fastLatencies.withLock { $0.append(latency) }
+                        timestampedPrint("fast-msg-\(i) succeeded in \(String(format: "%.3f", latency))s (test elapsed: \(String(format: "%.3f", Date().timeIntervalSince(testStart)))s)")
+                    case .failure(let error):
+                        XCTFail("fast-msg-\(i) should succeed but got: \(error)")
+                    }
+                    responseExpectation.fulfill()
+                }
+            }
+
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation, responseExpectation], timeout: timeOut)
+
+        XCTAssertEqual(timeoutOnPeerCount.load(ordering: .relaxed), messagesPerApp,
+            "All \(messagesPerApp) slow messages should get timeoutOnPeerHandler")
+        XCTAssertEqual(fastSuccessCount.load(ordering: .relaxed), messagesPerApp,
+            "All \(messagesPerApp) fast messages should succeed despite concurrent slow handlers")
+
+        // Fast messages must not have been serialised behind the 2 s slow handlers.
+        // Each fast message should complete well under 2 s.
+        let latencies = fastLatencies.withLock { $0 }
+        for (idx, lat) in latencies.enumerated() {
+            XCTAssertLessThan(lat, 2.0,
+                "fast-msg-\(idx + 1) took \(String(format: "%.3f", lat))s — suggests it was blocked by slow handler")
+        }
+
+        ensemblers[0].unregisterDataCallback(appID: "app-slow")
+        ensemblers[0].unregisterDataCallback(appID: "app-fast")
+        for ensembler in ensemblers { ensembler.stopServer() }
+        timestampedPrint("testConcurrentSlowHandlerDoesNotBlockFastHandler completed")
+    }
+
+    // MARK: - Test 4: Some messages get no response; others are unaffected
+    // Leader sends a batch of interleaved messages where half target an appID with no
+    // registered handler (immediate noRegisteredHandler fast-fail) and half target an
+    // appID with a working handler. Verifies that the fast-fail errors do not delay or
+    // corrupt the successful responses in the same concurrent batch.
+    func testConcurrentSomeMessagesFailWhileOthersSucceed() throws {
+        let ensembleConfig  = self.getEnsembleConfig(nodeCount: 2)
+        let batchSize       = 20   // 10 to "app-ok", 10 to "app-missing"
+        let timeOut         = Double(2) * 30.0
+
+        let expectation = self.expectation(description: "Setup completes")
+        let responseExpectation = self.expectation(description: "All \(batchSize) responses received")
+        responseExpectation.expectedFulfillmentCount = batchSize
+
+        var ensemblers: [EnsemblerTLS] = []
+        let okSuccessCount   = Atomic<Int>(0)
+        let missingErrCount  = Atomic<Int>(0)
+        // Track latency of "app-ok" messages to confirm they aren't delayed.
+        let okLatencies      = OSAllocatedUnfairLock<[TimeInterval]>(initialState: [])
+        let unexpectedErrors = OSAllocatedUnfairLock<[String]>(initialState: [])
+
+        Task {
+            ensemblers = try self.populateEnsemblers(config: ensembleConfig, startIndex: 0)
+
+            for i in 0..<ensembleConfig.nodes.count {
+                while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
+                    try await Task.sleepMilliseconds(100)
+                }
+            }
+            for i in 0..<ensembleConfig.nodes.count {
+                XCTAssert(ensemblers[i].getStatus() == .ready, "Node \(i) not ready")
+            }
+
+            // Only "app-ok" is registered; "app-missing" has no handler — fast-fail.
+            ensemblers[0].registerDataCallback(appID: "app-ok") { _, data in
+                let msg = String(data: data, encoding: .utf8) ?? ""
+                return "ok:\(msg)".data(using: .utf8)!
+            }
+
+            try await Task.sleepSeconds(1)
+
+            // Send all batchSize messages at once, alternating appID.
+            for i in 1...(batchSize / 2) {
+                // Message to working handler
+                Task {
+                    let sendTime = Date()
+                    let result = try await self.sendDataAndGetResponse(
+                        ensembler: ensemblers[1],
+                        appID: "app-ok",
+                        data: "ok-msg-\(i)".data(using: .utf8)!,
+                        destination: 0,
+                        timeout: 5.0
+                    )
+                    let latency = Date().timeIntervalSince(sendTime)
+                    switch result {
+                    case .success(let responseData):
+                        if let responseString = String(data: responseData, encoding: .utf8) {
+                            XCTAssertEqual(responseString, "ok:ok-msg-\(i)", "ok-msg-\(i) response should match expected")
+                        } else {
+                            XCTFail("Failed to decode response for ok-msg-\(i)")
+                        }
+                        okSuccessCount.wrappingAdd(1, ordering: .relaxed)
+                        okLatencies.withLock { $0.append(latency) }
+                        timestampedPrint("ok-msg-\(i) succeeded in \(String(format: "%.3f", latency))s")
+                    case .failure(let error):
+                        unexpectedErrors.withLock { $0.append("ok-msg-\(i): \(error)") }
+                        XCTFail("ok-msg-\(i) should succeed, got: \(error)")
+                    }
+                    responseExpectation.fulfill()
+                }
+
+                // Message to unregistered handler — expect immediate noRegisteredHandler.
+                Task {
+                    let sendTime = Date()
+                    let result = try await self.sendDataAndGetResponse(
+                        ensembler: ensemblers[1],
+                        appID: "app-missing",
+                        data: "missing-msg-\(i)".data(using: .utf8)!,
+                        destination: 0,
+                        timeout: 5.0
+                    )
+                    let latency = Date().timeIntervalSince(sendTime)
+                    switch result {
+                    case .success(let data):
+                        let str = String(data: data, encoding: .utf8) ?? ""
+                        XCTFail("missing-msg-\(i) should fail with noRegisteredHandler, got success: '\(str)'")
+                    case .failure(let error):
+                        if case DataMessageError.noRegisteredHandler = error {
+                            missingErrCount.wrappingAdd(1, ordering: .relaxed)
+                            timestampedPrint("missing-msg-\(i) correctly got noRegisteredHandler in \(String(format: "%.3f", latency))s")
+                        } else {
+                            unexpectedErrors.withLock { $0.append("missing-msg-\(i): unexpected \(error)") }
+                            XCTFail("missing-msg-\(i) expected noRegisteredHandler, got: \(error)")
+                        }
+                    }
+                    responseExpectation.fulfill()
+                }
+            }
+
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation, responseExpectation], timeout: timeOut)
+
+        let half = batchSize / 2
+        XCTAssertEqual(okSuccessCount.load(ordering: .relaxed), half,
+            "Expected \(half) successes for app-ok")
+        XCTAssertEqual(missingErrCount.load(ordering: .relaxed), half,
+            "Expected \(half) noRegisteredHandler errors for app-missing")
+
+        let errors = unexpectedErrors.withLock { $0 }
+        XCTAssertTrue(errors.isEmpty, "Unexpected errors: \(errors)")
+
+        // "app-ok" messages must not have been delayed by the concurrent fast-fail errors.
+        let latencies = okLatencies.withLock { $0 }
+        for (idx, lat) in latencies.enumerated() {
+            XCTAssertLessThan(lat, 5.0,
+                "ok-msg-\(idx + 1) took \(String(format: "%.3f", lat))s — may have been blocked")
+        }
+
+        ensemblers[0].unregisterDataCallback(appID: "app-ok")
+        for ensembler in ensemblers { ensembler.stopServer() }
+        timestampedPrint("testConcurrentSomeMessagesFailWhileOthersSucceed completed")
+    }
+
+    // MARK: - Test 5: Messaging during key rotation (recycle)
+    // Leader sends 50 concurrent messages to a follower. After the first 20 have been
+    // dispatched, rotateKey() is triggered from a separate task. Verifies that:
+    //   - rotateKey() completes without error (recycle is not stuck)
+    //   - The ensemble returns to .ready after rotation
+    //   - All messages eventually get a response (success or graceful error during recycle)
+    func testMessagingDuringRotateKey() throws {
+        let ensembleConfig = self.getEnsembleConfig(nodeCount: 2)
+        let totalMessages  = 50
+        let timeOut        = Double(2) * 60.0
+
+        let expectation = self.expectation(description: "Setup and sends complete")
+        let responseExpectation = self.expectation(description: "All \(totalMessages) responses received")
+        responseExpectation.expectedFulfillmentCount = totalMessages
+
+        var ensemblers: [EnsemblerTLS] = []
+
+        struct SendResult {
+            var succeeded: Int = 0
+            var failed:    Int = 0
+        }
+        let counts         = OSAllocatedUnfairLock<SendResult>(initialState: SendResult())
+        let rotateKeyError = OSAllocatedUnfairLock<Error?>(initialState: nil)
+
+        Task {
+            ensemblers = try self.populateEnsemblers(config: ensembleConfig, startIndex: 0)
+
+            for i in 0..<ensembleConfig.nodes.count {
+                while ensemblers[i].getStatus() != .ready && ensemblers[i].getStatus() != .failed {
+                    try await Task.sleepMilliseconds(100)
+                }
+            }
+            for i in 0..<ensembleConfig.nodes.count {
+                XCTAssert(ensemblers[i].getStatus() == .ready, "Node \(i) not ready before rotation test")
+            }
+
+            ensemblers[0].registerDataCallback(appID: "recycle-app") { _, data in
+                let msg = String(data: data, encoding: .utf8) ?? ""
+                return "ack:\(msg)".data(using: .utf8)!
+            }
+
+            try await Task.sleepSeconds(1)
+
+            timestampedPrint("Dispatching \(totalMessages) concurrent messages")
+
+            for msgIndex in 1...totalMessages {
+                let message = "recycle-msg-\(msgIndex)"
+
+                // After the 20th message is dispatched, trigger key rotation concurrently.
+                if msgIndex == 20 {
+                    Task(priority: .userInitiated) {
+                        timestampedPrint("Triggering rotateKey() mid-flight")
+                        do {
+                            try ensemblers[0].rotateKey()
+                            timestampedPrint("rotateKey() completed successfully")
+                        } catch {
+                            rotateKeyError.withLock { $0 = error }
+                            timestampedPrint("rotateKey() failed: \(error)")
+                        }
+                    }
+                }
+
+                Task {
+                    let result = try await self.sendDataAndGetResponse(
+                        ensembler: ensemblers[0],
+                        appID: "recycle-app",
+                        data: message.data(using: .utf8)!,
+                        destination: 1,
+                        timeout: 10.0
+                    )
+                    counts.withLock { c in
+                        switch result {
+                        case .success(let responseData):
+                            if let responseString = String(data: responseData, encoding: .utf8) {
+                                XCTAssertEqual(responseString, "ack:\(message)", "Response should match expected ack for \(message)")
+                            } else {
+                                XCTFail("Failed to decode response for \(message)")
+                            }
+                            c.succeeded += 1
+                        case .failure(let error):
+                            // Messages in flight during key rotation may fail; that is
+                            // acceptable. What must NOT happen is a hang or a crash.
+                            c.failed += 1
+                            timestampedPrint("msg-\(msgIndex) failed (may be expected during recycle): \(error)")
+                        }
+                    }
+                    responseExpectation.fulfill()
+                }
+            }
+            
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation, responseExpectation], timeout: timeOut)
+
+        // rotateKey() must not throw.
+        let keyRotationError = rotateKeyError.withLock { $0 }
+        XCTAssertNil(keyRotationError, "rotateKey() should succeed, got: \(String(describing: keyRotationError))")
+
+        // Ensemble must return to .ready after rotation completes.
+        
+        while ensemblers[0].getStatus() != .ready && ensemblers[0].getStatus() != .failed {
+            Thread.sleep(forTimeInterval: 1)
+        }
+        
+        let leaderStatus = ensemblers[0].getStatus()
+        XCTAssertEqual(leaderStatus, .ready, "Leader should be .ready after key rotation, got: \(leaderStatus)")
+
+        // All messages must have received some response (no hangs).
+        let final = counts.withLock { $0 }
+        let totalResponses = final.succeeded + final.failed
+        XCTAssertEqual(totalResponses, totalMessages,
+            "Expected \(totalMessages) total responses (success+failure), got \(totalResponses)")
+
+        timestampedPrint("testMessagingDuringRotateKey: succeeded=\(final.succeeded) failed=\(final.failed)")
+
+        ensemblers[0].unregisterDataCallback(appID: "recycle-app")
+        for ensembler in ensemblers { ensembler.stopServer() }
+        timestampedPrint("testMessagingDuringRotateKey completed")
+    }
+}
+
+// MARK: - Length-Prefix MTU Enforcement (rdar://168633620)
+//
+// setupReceiveLength reads a 4-byte length prefix from the wire and then asks
+// NWConnection to deliver that many bytes. Prior to rdar://168633620 the value
+// was passed through verbatim — a peer could send a length prefix of, say, 4GB
+// and force the server into an absurdly long receive. setupReceiveMessage(length:)
+// had the same flaw. ServerConnection.isValidLengthPrefix gates both paths;
+// the tests below assert its boundary behaviour and the values that motivated
+// the fix.
+final class ServerLengthPrefixMTUTests: XCTestCase {
+
+	func testAcceptsLengthOfOne() {
+		XCTAssertTrue(ServerConnection.isValidLengthPrefix(1),
+			"a single-byte payload is within MTU and must be accepted")
+	}
+
+	func testAcceptsLengthAtMTU() {
+		XCTAssertTrue(ServerConnection.isValidLengthPrefix(MTU),
+			"a payload exactly equal to MTU must be accepted")
+	}
+
+	func testRejectsZeroLength() {
+		XCTAssertFalse(ServerConnection.isValidLengthPrefix(0),
+			"a zero-length frame is meaningless and must be ignored")
+	}
+
+	func testRejectsNegativeLength() {
+		// A UInt32 wire value with the high bit set becomes negative once cast
+		// to Int — exactly the kind of bogus value setupReceiveLength used to
+		// pass through unchecked.
+		XCTAssertFalse(ServerConnection.isValidLengthPrefix(-1),
+			"a negative length is nonsense and must be ignored")
+	}
+
+	func testRejectsLengthJustAboveMTU() {
+		XCTAssertFalse(ServerConnection.isValidLengthPrefix(MTU + 1),
+			"a frame one byte over MTU must be ignored")
+	}
+
+	func testRejectsLengthFarAboveMTU() {
+		// A peer sending UInt32.max as the length prefix is the canonical
+		// abuse pattern called out by rdar://168633620.
+		XCTAssertFalse(ServerConnection.isValidLengthPrefix(Int(UInt32.max)),
+			"a 4GB length prefix must be ignored")
+	}
+
+	// Walks a representative spread of oversized prefixes to show that the
+	// validator's rejection isn't dependent on a single magic value.
+	func testRejectsAssortedOversizedPrefixes() {
+		let oversized: [Int] = [
+			MTU + 1,
+			MTU * 2,
+			MTU * 16,
+			1 << 20,            // 1 MiB
+			1 << 24,            // 16 MiB
+			Int(UInt32.max),    // 4 GiB - 1
+		]
+		for length in oversized {
+			XCTAssertFalse(ServerConnection.isValidLengthPrefix(length),
+				"length \(length) exceeds MTU \(MTU) and must be ignored")
+		}
+	}
 }

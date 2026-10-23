@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,17 +24,22 @@ private import DarwinPrivate.os.variant
 import PrivateCloudCompute
 import os.log
 
-private let logger = tc2Logger(forCategory: .configuration)
+private let logger = Logger(for: .configuration)
 
 extension Configuration {
-    private func appendCSFBypassIfNeeded(toString string: String) -> String {
+    func appendCSFBypassIfNeeded(toString string: String) -> String {
         var ret = string
         guard os_variant_allows_internal_security_policies(privateCloudComputeOsVariantSubsystem) else {
             return ret
         }
 
-        guard GMBypass.gmEligibilityBypass() else {
-            logger.log("not appending csf bypass because no eligibility bypass")
+        guard GMBypass.gmEligibilityBypass() || self[.forceTokenFetcherTestOptions] else {
+            logger.log("not appending csf bypass because no eligibility bypass nor force token fetcher test options")
+            return ret
+        }
+
+        guard !ret.contains("device-csf-bypass=true") else {
+            logger.log("not appending csf bypass because it's already present")
             return ret
         }
 

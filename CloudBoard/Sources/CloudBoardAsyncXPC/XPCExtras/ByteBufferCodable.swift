@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -166,6 +166,21 @@ extension Date: ByteBufferCodable {
     public init(from buffer: inout ByteBuffer) throws {
         let timeInterval: TimeInterval = try .init(from: &buffer)
         self = .init(timeIntervalSince1970: timeInterval)
+    }
+}
+
+extension Duration: ByteBufferCodable {
+    @inlinable
+    public func encode(to buffer: inout ByteBuffer) throws {
+        try self.components.seconds.encode(to: &buffer)
+        try self.components.attoseconds.encode(to: &buffer)
+    }
+
+    public init(from buffer: inout ByteBuffer) throws {
+        self = try .init(
+            secondsComponent: .init(from: &buffer),
+            attosecondsComponent: .init(from: &buffer)
+        )
     }
 }
 
@@ -371,6 +386,23 @@ extension Optional: ByteBufferCodable where Wrapped: ByteBufferCodable {
         } else {
             self = .none
         }
+    }
+}
+
+extension Int64: ByteBufferCodable {
+    @inlinable
+    public func encode(to buffer: inout ByteBuffer) throws {
+        buffer.writeInteger(self)
+    }
+
+    public init(from buffer: inout ByteBuffer) throws {
+        guard let integer: Self = buffer.readInteger() else {
+            throw DecodingError.valueNotFound(
+                Self.self,
+                .init(codingPath: [], debugDescription: "no expected value")
+            )
+        }
+        self = integer
     }
 }
 

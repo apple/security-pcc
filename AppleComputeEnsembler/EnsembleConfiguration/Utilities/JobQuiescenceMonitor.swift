@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,7 +21,7 @@
 
 import Foundation
 
-import JobQuiescence
+@_weakLinked import JobQuiescence
 import os
 
 public class JobQuiescenceMonitor {

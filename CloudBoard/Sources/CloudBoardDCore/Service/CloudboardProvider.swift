@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -29,8 +29,16 @@ import NIOCore
 import NIOHPACK
 import os
 import ServiceContextModule
+import Synchronization
 import Tracing
 
+/// Handles gRPC service duties for a _single_ CloudApp
+///
+/// It duplicates some general seemingly shared functionality (watching attestations as an example) so that
+/// any system talking to that single CloudApp doesn't have to worry about "where" to find the general
+/// gRPC endpoints, it just talks to the same endpoint.
+/// That was a backwards compatibility decision when multi tenancy was added but it is leaned on heavily
+/// still today.
 final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvider, Sendable {
     internal static let logger: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard",
@@ -41,6 +49,8 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
         subsystem: "com.apple.cloudos.cloudboard.tracing",
         category: "CloudBoardProvider"
     )
+
+    internal static let chunkLogSampler = ChunkLogSampler.default
 
     enum Error: Swift.Error {
         case receivedMultipleFinalChunks
@@ -66,11 +76,15 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
     let pccWorkerToInitiatorMapping: PccWorkerToInitiatorMapping = .init()
 
     let healthMonitor: ServiceHealthMonitor
+    /// Tracks affinity keys carried by in-progress requests so load responses can echo them back to ROPES.
+    let affinityKeyStore = InProgressAffinityKeyStore()
     let attestationProvider: AttestationProvider
     let loadState: OSAllocatedUnfairLock<LoadState> = .init(initialState: .init(
         concurrentRequestCount: 0,
         maxConcurrentRequests: 0,
-        paused: false
+        paused: false,
+        availablePrewarmedInstances: 0,
+        healthy: false
     ))
     // exposed purely for unit test checking of the state
     internal var loadStateSnapshot: LoadState {
@@ -79,6 +93,14 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
 
     let loadConfiguration: CloudBoardDConfiguration.LoadConfiguration
     private let hotProperties: HotPropertiesController?
+    private let perAppMaxCumulativeRequestBytes: Int?
+    /// How this cloud app advertises capacity and admits requests with respect to prewarmed-instance availability.
+    /// `.rejectIfNoPrewarmed` rejects a request that arrives with no ready prewarmed instance; `.waitForPrewarmed`
+    /// instead admits it (up to the configured concurrency ceiling) and lets it wait for an instance to warm up.
+    private let prewarmedAdmissionPolicy: SecureConfig.PrewarmedAdmissionPolicy
+    /// Whether the proxy sends the attestation transparency log tree ID and revision to ROPES as find-worker
+    /// routing-parameter constraints. Sourced from the global secure config.
+    private let includeTransparencyConstraintsInWorkerRequests: Bool
     let metrics: any MetricsSystem
     let tracer: RequestSummaryTracer
 
@@ -88,12 +110,12 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
         self._concurrentRequestCountStream
     }
 
-    private let drainState = OSAllocatedUnfairLock(initialState: DrainState())
+    private let drainState = Mutex(DrainState())
     public var activeRequestsBeforeDrain: Int {
         self.drainState.withLock { $0.activeRequestsBeforeDrain }
     }
 
-    struct DrainState {
+    private struct DrainState {
         var activeRequests: Int
         var activeRequestsBeforeDrain: Int
         var draining: Bool
@@ -147,7 +169,10 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
         attestationProvider: AttestationProvider,
         loadConfiguration: CloudBoardDConfiguration.LoadConfiguration,
         hotProperties: HotPropertiesController?,
-        sessionStore: SessionStore
+        perAppMaxCumulativeRequestBytes: Int? = nil,
+        sessionStore: SessionStore,
+        prewarmedAdmissionPolicy: SecureConfig.PrewarmedAdmissionPolicy = .disabled,
+        includeTransparencyConstraintsInWorkerRequests: Bool = true
     ) {
         self.isProxy = isProxy
         self.cloudAppName = cloudAppName
@@ -160,22 +185,43 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
         self.tracer = tracer
         self.loadConfiguration = loadConfiguration
         self.hotProperties = hotProperties
+        self.perAppMaxCumulativeRequestBytes = perAppMaxCumulativeRequestBytes
         self.sessionStore = sessionStore
+        self.prewarmedAdmissionPolicy = prewarmedAdmissionPolicy
+        self.includeTransparencyConstraintsInWorkerRequests = includeTransparencyConstraintsInWorkerRequests
     }
 
     func run() async {
         // We start our own watch of the service health here in order to manage
         // max concurrent requests.
         for await update in self.healthMonitor.watch() {
+            // Only a healthy leader advertises a concrete load level. A follower/persistent-service node is healthy
+            // but serves no workloads, so it advertises no capacity. CloudBoardProvider only runs on leaders, but we
+            // match exhaustively to be safe.
             let maxConcurrentRequests: Int = switch update {
-            case .initializing, .unhealthy:
+            case .initializing, .unhealthy, .terminal, .healthy(.follower), .healthy(.persistentService):
                 0
-            case .healthy(let state):
-                state?.maxBatchSize ?? 0
+            case .healthy(.leader(let loadLevel)):
+                loadLevel.maxBatchSize
             }
+            // Tracked separately from maxConcurrentRequests because, when maxBatchDependsOnPrewarmedSize is enabled, a
+            // healthy leader with no prewarmed instances reports maxConcurrentRequests == 0 — indistinguishable from
+            // an unhealthy node by the concurrency count alone.
+            let isHealthyLeader = switch update {
+            case .initializing, .unhealthy, .terminal, .healthy(.follower), .healthy(.persistentService):
+                false
+            case .healthy(.leader):
+                true
+            }
+            // Read this out before taking loadState's lock: availablePrewarmedInstances acquires the health
+            // monitor's own lock, and nesting it inside loadState.withLock would pin a loadState -> healthMonitor
+            // acquisition order that every other call site would then have to respect to avoid deadlock.
+            let availablePrewarmedInstances = self.healthMonitor.availablePrewarmedInstances
 
             self.loadState.withLock {
                 $0.maxConcurrentRequests = maxConcurrentRequests
+                $0.availablePrewarmedInstances = availablePrewarmedInstances
+                $0.healthy = isHealthyLeader
                 if maxConcurrentRequests > 0 {
                     $0.paused = false
                     $0.pauseReason = nil
@@ -223,11 +269,14 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                                 jobHelperResponseDelegateProvider: self.jobHelperResponseDelegateProvider,
                                 jobHelperClientProvider: self.jobHelperClientProvider,
                                 sessionStore: self.sessionStore,
+                                affinityKeyStore: self.affinityKeyStore,
                                 pccWorkerToInitiatorMapping: self.pccWorkerToInitiatorMapping,
                                 attestationProvider: self.attestationProvider,
                                 isProxy: self.isProxy,
                                 cloudAppName: self.cloudAppName,
                                 enforceRequestBypass: self.enforceRequestBypass,
+                                includeTransparencyConstraintsInWorkerRequests: self
+                                    .includeTransparencyConstraintsInWorkerRequests,
                                 idleTimeoutDuration: idleTimeoutDuration,
                                 maxCumulativeRequestBytes: self.currentMaxCumulativeRequestBytes(),
                                 metrics: self.metrics,
@@ -262,15 +311,17 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                             span.durationMicrosIncludingJobHelperExit = durationMicrosIncludingJobHelperExit
                                 .microsecondsClamped
                             throw error
+                        } catch GRPCTransformableError.abortedCleanly {
+                            // Not an error — ROPES sent termination then closed the stream cleanly.
+                            // Fall through to the success path for metrics and cleanup.
                         }
                     }
                 }
             } onCancel: {
                 // This callback is not guaranteed to be in the structured task hierachy
-                Self.logger
-                    .log(
-                        "\(Self.logMetadata(context: detachedServiceContext, spanID: invokeWorkloadSpanID), privacy: .public) Connection cancelled"
-                    )
+                Self.logger.log(
+                    "\(Self.logMetadata(context: detachedServiceContext, spanID: invokeWorkloadSpanID), privacy: .public) Connection cancelled"
+                )
                 span.attributes.requestSummary.invocationAttributes.connectionCancelled = true
             }
             let parentSpanID = TraceContextCache.singletonCache.getSpanID(
@@ -292,15 +343,78 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
         }
     }
 
+    /// Selects the gRPC error used to reject an over-limit request, based on the node's real state rather than on
+    /// `maxConcurrentRequests` alone — which is overloaded: it is zero for an unhealthy node, a paused node, AND a
+    /// healthy leader whose advertised capacity has collapsed because no prewarmed instances are available.
+    ///
+    /// Pure function of its inputs (a `LoadState` snapshot, the per-app flag, and the configured ceiling) so the
+    /// selection can be unit-tested directly without constructing a provider.
+    ///
+    /// - Parameters:
+    ///   - loadState: A snapshot of the load state at rejection time. `maxConcurrentRequests` is read from it.
+    ///   - maxBatchDependsOnPrewarmedSize: Whether the app's advertised capacity depends on prewarmed availability.
+    ///   - configuredMaxConcurrentRequests: The controller-configured concurrency ceiling (pre prewarm collapse),
+    ///     used to tell a genuine concurrency-limit rejection apart from one caused purely by a prewarm shortfall.
+    static func rejectionError(
+        for loadState: LoadState,
+        maxBatchDependsOnPrewarmedSize: Bool,
+        configuredMaxConcurrentRequests: Int
+    ) -> GRPCTransformableError {
+        // Checked first because a busy node is a healthy leader (healthy == true) that has additionally been paused.
+        if loadState.paused {
+            return .workloadBusy(loadState.pauseReason)
+        }
+        // Not a healthy leader (unhealthy / initializing / follower): nothing to serve.
+        guard loadState.healthy else {
+            return .workloadUnhealthy
+        }
+        // Genuinely at the configured concurrency ceiling: even with every instance warm the node could serve no
+        // more, so this is a plain "exceeded" — not a prewarming shortfall. Checked before the prewarmed branch
+        // because a saturated node naturally has zero available prewarmed instances (all capacity is in use), which
+        // would otherwise be misclassified as "not enough prewarmed". Keyed off the *configured* ceiling rather than
+        // the (possibly prewarm-collapsed) effective max so it still fires when the advertised capacity has dropped
+        // to zero — e.g. in the wait-for-prewarmed mode, where admission is gated on the configured ceiling.
+        if configuredMaxConcurrentRequests != 0,
+           loadState.concurrentRequestCount >= configuredMaxConcurrentRequests {
+            return .maxConcurrentRequestsExceeded
+        }
+        // Advertised capacity that depends on prewarmed availability collapsed below the configured ceiling because
+        // no prewarmed instance is ready to serve immediately, even though the ceiling still has headroom. Reported
+        // as a dedicated error because a node short on prewarmed instances can still report maxConcurrentRequests > 0.
+        if maxBatchDependsOnPrewarmedSize, loadState.availablePrewarmedInstances == 0 {
+            return .maxConcurrentRequestsExceededNotEnoughPrewarmed
+        }
+        // Genuinely at its (effective) concurrency limit.
+        if loadState.maxConcurrentRequests != 0 {
+            return .maxConcurrentRequestsExceeded
+        }
+        // Healthy leader transiently advertising zero capacity (e.g. initializing, or mid busy-transition before the
+        // pause has taken effect): there is no capacity to exceed, so report unavailable rather than a spurious
+        // "exceeded".
+        return .workloadUnhealthy
+    }
+
     /// This maintains the needed invariants for loadState.concurrentRequestCount
     /// It is deliberately pessimisitc, it increments as soon as possble, and decrements only when it is sure the helper
     /// has terminated, to achieve the latter it has to resort to starting a detached task when cancellations occur
     fileprivate func enforceConcurrentWorkloadLimit(
         executeWorkload: (@Sendable (CloudBoardJobHelperInstanceProtocol) -> Void) async throws -> Void
     ) async throws {
+        // Read before taking loadState's lock: configuredMaxBatchSize acquires the health monitor's own lock, and
+        // nesting it inside loadState.withLock would pin a loadState -> healthMonitor acquisition order.
+        let configuredMaxConcurrentRequests = self.healthMonitor.configuredMaxBatchSize
         try self.loadState.withLock { loadState in
-            let maxConcurrentRequests = loadState.maxConcurrentRequests
-            if loadState.concurrentRequestCount >= maxConcurrentRequests {
+            // The admission ceiling. Normally this is the advertised (effective) max, which collapses with prewarmed
+            // availability when maxBatchDependsOnPrewarmedSize is enabled. In wait-for-prewarmed mode, however, we
+            // admit up to the controller-configured ceiling and let the request wait for an instance to warm up —
+            // restoring the pre-feature behavior — rather than rejecting it because no instance is ready yet.
+            let admissionLimit = if self.prewarmedAdmissionPolicy == .waitForPrewarmed,
+                                    loadState.healthy {
+                configuredMaxConcurrentRequests
+            } else {
+                loadState.maxConcurrentRequests
+            }
+            if loadState.concurrentRequestCount >= admissionLimit {
                 self.metrics.emit(Metrics.CloudBoardProvider.MaxConcurrentRequestCountExceededTotal(
                     action: .increment,
                     cloudApp: self.cloudAppName
@@ -314,20 +428,16 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
                         )
                     )
                     Self.logger.warning(
-                        "\(Self.logMetadata(), privacy: .public) incoming workload rejected because it would exceed the number of max concurrent request count of \(maxConcurrentRequests, privacy: .public)"
+                        "\(Self.logMetadata(), privacy: .public) incoming workload rejected because it would exceed the number of max concurrent request count of \(admissionLimit, privacy: .public)"
                     )
-                    if maxConcurrentRequests != 0 {
-                        throw GRPCTransformableError.maxConcurrentRequestsExceeded
-                    } else if loadState.paused {
-                        // Workload controller is busy
-                        throw GRPCTransformableError.workloadBusy(loadState.pauseReason)
-                    } else {
-                        // Oh shoot we're unhealthy!
-                        throw GRPCTransformableError.workloadUnhealthy
-                    }
+                    throw Self.rejectionError(
+                        for: loadState,
+                        maxBatchDependsOnPrewarmedSize: self.prewarmedAdmissionPolicy != .disabled,
+                        configuredMaxConcurrentRequests: configuredMaxConcurrentRequests
+                    )
                 } else {
                     Self.logger.warning(
-                        "\(Self.logMetadata(), privacy: .public) incoming workload request exceeds the number of max concurrent request count of \(maxConcurrentRequests, privacy: .public) but accepted as enforcement is disabled"
+                        "\(Self.logMetadata(), privacy: .public) incoming workload request exceeds the number of max concurrent request count of \(admissionLimit, privacy: .public) but accepted as enforcement is disabled"
                     )
                 }
             }
@@ -374,6 +484,13 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
 
         do {
             try await executeWorkload(notifyOfClientCreation)
+            if Task.isCancelled {
+                // executeWorkload cancellation doesn't always throw CancellationError.
+                // Explicitly throwing error to make sure the cleanup happens in a detached task.
+                // This prevents the current task cancellation from
+                // cascading and interrupting the graceful termination of jobHelperInstance.
+                throw CancellationError()
+            }
             await self.waitForExit(jobHelperInstance.withLock { $0 })
             // This must be last call, or part of non throwing final section
             onJobConsideredFinished()
@@ -480,18 +597,27 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
         try await executeWorkload()
     }
 
-    private func currentMaxCumulativeRequestBytes() async -> Int {
-        let defaultValue = self.loadConfiguration.maxCumulativeRequestBytes
-
-        guard let hotProperties = self.hotProperties else {
-            return defaultValue
+    /// Resolves the active cumulative request byte limit.
+    /// Priority: hot properties (dynamic) > per-app SecureConfig (static) > LoadConfiguration (global).
+    /// Returns nil when no source sets a limit, meaning requests are unlimited.
+    /// Note: a nil hot-properties value means "not configured" and falls through — hot properties
+    /// can tighten a limit set at a lower tier but cannot remove one.
+    private func currentMaxCumulativeRequestBytes() async -> Int? {
+        if let hotProperties = self.hotProperties,
+           let currentConfigValue = await hotProperties.currentValue,
+           let hotPropValue = currentConfigValue.maxCumulativeRequestBytes {
+            return hotPropValue
         }
-
-        guard let currentConfigValue = await hotProperties.currentValue else {
-            return defaultValue
+        if let perAppValue = self.perAppMaxCumulativeRequestBytes {
+            return perAppValue
         }
-
-        return currentConfigValue.maxCumulativeRequestBytes ?? defaultValue
+        let resolved = self.loadConfiguration.maxCumulativeRequestBytes
+        if resolved == nil {
+            Self.logger.info(
+                "no maxCumulativeRequestBytes limit configured for cloud app \(self.cloudAppName, privacy: .public)"
+            )
+        }
+        return resolved
     }
 
     func watchLoadLevel(
@@ -502,27 +628,75 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
         try await withErrorLogging(operation: "watchLoadLevel", sensitiveError: false) {
             Self.logger.info("received watch load level request")
 
-            for await status in self.healthMonitor.watch() {
-                Self.logger.info("new load status: \(status, privacy: .public)")
-
-                switch status {
-                case .healthy(let healthy):
-                    if let healthy {
-                        try await responseStream.send(.init(healthy))
-                    } else {
-                        fallthrough
-                    }
-                case .initializing, .unhealthy:
-                    // Unhealthy means load level of 0.
-                    try await responseStream.send(.with {
-                        $0.currentBatchSize = 0
-                        $0.maxBatchSize = 0
-                        $0.optimalBatchSize = 0
-                    })
-                    // Deliberately don't reset the workload: if the same workload comes back, we don't need
-                    // to send this value again.
-                }
+            // Merge two event sources into one serial send loop. Health-status changes always re-send the load
+            // level; affinity-key changes re-send only while we are the leader, since followers, persistent
+            // services, and unhealthy/initializing states advertise no keys. A single consumer keeps writes to
+            // responseStream serialized.
+            enum Event {
+                case status(ServiceHealthMonitor.Status)
+                case affinityChanged
             }
+            let (events, continuation) = AsyncStream<Event>.makeStream()
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    for await status in self.healthMonitor.watch() {
+                        continuation.yield(.status(status))
+                    }
+                    // When the health stream ends the merge loop has nothing left to advertise, so stop it.
+                    continuation.finish()
+                }
+                group.addTask {
+                    for await _ in self.affinityKeyStore.changes() {
+                        continuation.yield(.affinityChanged)
+                    }
+                }
+
+                var lastStatus: ServiceHealthMonitor.Status?
+                for await event in events {
+                    switch event {
+                    case .status(let status):
+                        Self.logger.info("new load status: \(status, privacy: .public)")
+                        lastStatus = status
+                        try await self.sendLoadResponse(for: status, on: responseStream)
+                    case .affinityChanged:
+                        if case .healthy(.leader) = lastStatus {
+                            let keysInProgress = self.affinityKeyStore.keysInProgress
+                            Self.logger.info(
+                                "affinity keys in progress changed; sending \(keysInProgress.count, privacy: .public) keys to ROPES: \(keysInProgress, privacy: .public)"
+                            )
+                            try await self.sendLoadResponse(for: lastStatus!, on: responseStream)
+                        }
+                    }
+                }
+                // ROPES disconnect cancels this task; cancelling the children ends both child loops and unblocks
+                // teardown so no merge tasks leak.
+                group.cancelAll()
+            }
+        }
+    }
+
+    /// Writes the load response for `status` to the ROPES load stream, attaching in-progress affinity keys only
+    /// when we are the leader.
+    private func sendLoadResponse(
+        for status: ServiceHealthMonitor.Status,
+        on responseStream: GRPCAsyncResponseStreamWriter<Com_Apple_Cloudboard_Api_V1_LoadResponse>
+    ) async throws {
+        switch status {
+        case .healthy(.leader(let loadLevel)):
+            try await responseStream.send(.init(
+                loadLevel,
+                affinityKeysInProgress: self.affinityKeyStore.keysInProgress
+            ))
+        case .healthy(.follower), .healthy(.persistentService), .initializing, .unhealthy, .terminal:
+            // A follower or persistent service advertises no load level, and unhealthy/initializing/terminal means
+            // load level of 0.
+            try await responseStream.send(.with {
+                $0.currentBatchSize = 0
+                $0.maxBatchSize = 0
+                $0.optimalBatchSize = 0
+            })
+            // Deliberately don't reset the workload: if the same workload comes back, we don't need
+            // to send this value again.
         }
     }
 
@@ -577,13 +751,13 @@ final class CloudBoardProvider: Com_Apple_Cloudboard_Api_V1_CloudBoardAsyncProvi
             _ attestation: AttestationSet.Attestation
         ) {
             meta.keyID = attestation.keyID
-            meta.supportedRelease = attestation.proxiedReleaseDigests
-                .map { release in
-                    .with {
-                        $0.digest = release
-                    }
-                }
             meta.expiresAfter = .init(date: attestation.expiry)
+            if let treeID = attestation.transparencyTreeID {
+                meta.transparencyTreeID = treeID
+            }
+            if let revision = attestation.transparencyRevision {
+                meta.transparencyRevision = revision
+            }
         }
 
         try await withErrorLogging(operation: "watchAttestation", sensitiveError: false) {
@@ -633,6 +807,12 @@ struct LoadState {
     var paused: Bool
     var pauseReason: String?
     var idleContinuation: AsyncStream<Void>.Continuation?
+    var availablePrewarmedInstances: Int
+    /// Whether the node is currently a healthy leader (last health update was `.healthy(.leader)`). Tracked
+    /// separately from `maxConcurrentRequests` because, when `maxBatchDependsOnPrewarmedSize` is enabled, a healthy
+    /// leader with no prewarmed instances reports `maxConcurrentRequests == 0` — indistinguishable from an unhealthy
+    /// node by the concurrency count alone.
+    var healthy: Bool
 }
 
 final class InvokeWorkloadRequestStreamHandler: Sendable {
@@ -650,11 +830,14 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
     private static let signposter: OSSignposter = .init(logger: logger)
     private static let requestBypassEnforceableWorkloads: Set<String> = ["tie-cloudboard-apple-com"]
 
+    static let chunkLogSampler = ChunkLogSampler.default
+
     fileprivate enum WorkloadTaskResult {
         case jobHelperExited
         case receiveInputCompleted
         case responseOutputCompleted
         case laContextUsed
+        case idleTimeoutTriggered(GRPCTransformableError)
     }
 
     /// Stream of inbound requests coming in
@@ -667,6 +850,10 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
 
     /// Session store for detecting replay attacks. Shared across all streams
     private let sessionStore: SessionStore
+
+    /// Tracks this request's affinity keys for the lifetime of the stream. Shared across all streams; this handler
+    /// registers its keys once admitted and removes them when `handle()` returns.
+    private let affinityKeyStore: InProgressAffinityKeyStore
 
     /// Mapping for remote PCC worker nodes to communicate back to the initiating app.
     ///
@@ -684,8 +871,11 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
     private let isProxy: Bool
     private let cloudAppName: String
     private let enforceRequestBypass: Bool
+    /// Whether the proxy sends the attestation transparency log tree ID and revision to ROPES as find-worker
+    /// routing-parameter constraints.
+    private let includeTransparencyConstraintsInWorkerRequests: Bool
     private let idleTimeoutDuration: Duration
-    private let maxCumulativeRequestBytes: Int
+    private let maxCumulativeRequestBytes: Int?
     private let invokeWorkloadSpanID: UInt64
 
     let metrics: any MetricsSystem
@@ -703,19 +893,24 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
     let trustedProxyParametersToFirstRewrapDurationMeasurement: OSAllocatedUnfairLock<ContinuousTimeMeasurement?>
     let requestSummarySpan: RequestSummaryTracer.Span
 
+    let requestFinalReceived: Mutex<Bool> = .init(false)
+    let responseFinalReceived: Mutex<Bool> = .init(false)
+
     init(
         requestStream: GRPCAsyncRequestStream<Com_Apple_Cloudboard_Api_V1_InvokeWorkloadRequest>,
         responseWriter: GRPCAsyncResponseStreamWriter<Com_Apple_Cloudboard_Api_V1_InvokeWorkloadResponse>,
         jobHelperResponseDelegateProvider: CloudBoardJobHelperResponseDelegateProvider,
         jobHelperClientProvider: CloudBoardJobHelperClientProvider,
         sessionStore: SessionStore,
+        affinityKeyStore: InProgressAffinityKeyStore,
         pccWorkerToInitiatorMapping: PccWorkerToInitiatorMapping,
         attestationProvider: AttestationProvider,
         isProxy: Bool,
         cloudAppName: String,
         enforceRequestBypass: Bool,
+        includeTransparencyConstraintsInWorkerRequests: Bool = true,
         idleTimeoutDuration: Duration,
-        maxCumulativeRequestBytes: Int,
+        maxCumulativeRequestBytes: Int?,
         metrics: any MetricsSystem,
         tracer: RequestSummaryTracer,
         workloadInvocationSpanID: UInt64,
@@ -727,11 +922,13 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
         self.jobHelperResponseDelegateProvider = jobHelperResponseDelegateProvider
         self.jobHelperClientProvider = jobHelperClientProvider
         self.sessionStore = sessionStore
+        self.affinityKeyStore = affinityKeyStore
         self.pccWorkerToInitiatorMapping = pccWorkerToInitiatorMapping
         self.attestationProvider = attestationProvider
         self.isProxy = isProxy
         self.cloudAppName = cloudAppName
         self.enforceRequestBypass = enforceRequestBypass
+        self.includeTransparencyConstraintsInWorkerRequests = includeTransparencyConstraintsInWorkerRequests
         self.idleTimeoutDuration = idleTimeoutDuration
         self.maxCumulativeRequestBytes = maxCumulativeRequestBytes
         self.metrics = metrics
@@ -751,6 +948,16 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
             diagnosticKeys: CloudBoardDaemonDiagnosticKeys([.rpcID]),
             sensitiveError: false
         ) {
+            // Guarantees affinity-key cleanup on every exit path (success, throw, cancellation). Wraps the whole task
+            // group below so the keys stay advertised for the entire request lifetime — input, output, and jobhelper
+            // exit — and are dropped exactly once when the stream completes.
+            defer {
+                let requestID = self.serviceContext.withLock { $0.requestID }
+                if let requestID, !requestID.isEmpty {
+                    self.affinityKeyStore.remove(requestID: requestID)
+                }
+            }
+
             CloudBoardProviderCheckpoint(
                 logMetadata: Self.logMetadata(spanID: self.invokeWorkloadSpanID),
                 operationName: "cloudboard_invoke_workload_request_received",
@@ -781,13 +988,34 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                         do {
                             try await idleTimeout.run()
                         } catch let error as IdleTimeoutError {
+                            Self.logger.info("Idle timeout triggered. Querying jobhelper request status.")
+                            let requestStatus = await self.queryRequestStatusOnTimeout(jobHelperClient: jobHelperClient)
                             CloudBoardProviderCheckpoint(
                                 logMetadata: Self.logMetadata(spanID: self.invokeWorkloadSpanID),
                                 operationName: "cloudboard_invoke_workload_idle_timeout_error",
-                                message: "idle timeout trigerred",
+                                message: "idle timeout triggered",
                                 error: error
-                            ).log(workloadStreamState: invokeWorkloadStreamState, to: Self.tracingLogger, level: .error)
-                            throw GRPCTransformableError(idleTimeoutError: error)
+                            ).log(
+                                workloadStreamState: invokeWorkloadStreamState,
+                                requestStatus: requestStatus,
+                                to: Self.tracingLogger,
+                                level: .error
+                            )
+
+                            let grpcError = GRPCTransformableError(
+                                idleTimeoutError: error,
+                                requestStatus: requestStatus
+                            )
+                            if self.isProxy {
+                                // On a proxy node we must wait for cb_jobhelper to finalize the REL before
+                                // closing the ROPES connection. Trigger teardown and let the response stream
+                                // drain naturally — the task group will complete once both jobHelperExited
+                                // and responseOutputCompleted are received.
+                                await jobHelperClient.triggerTeardown(error: grpcError)
+                                return .idleTimeoutTriggered(grpcError)
+                            } else {
+                                throw grpcError
+                            }
                         }
                     }
 
@@ -846,8 +1074,6 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                             delegate: delegate,
                             invokeWorkloadSpanID: self.invokeWorkloadSpanID
                         )
-                        // Not including cb_jobhelper exit time in the request duration calculation.
-                        self.requestSummarySpan.endTimeManual = DefaultTracerClock.now.nanosecondsSinceEpoch
 
                         return .responseOutputCompleted
                     }
@@ -861,6 +1087,7 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                         case completed
                     }
                     var status: CompletionStatus = .awaitingCompletion
+                    var idleTimeoutError: GRPCTransformableError? = nil
                     taskResultLoop: for try await result in group {
                         if group.isCancelled {
                             break
@@ -881,6 +1108,12 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                         case .receiveInputCompleted, .laContextUsed:
                             // Nothing to do, job helper is expected to terminate on its own at this point
                             ()
+                        case .idleTimeoutTriggered(let error):
+                            // On a proxy node, teardown has already been triggered. We do not cancel the
+                            // group here — instead we wait for jobHelperExited + responseOutputCompleted
+                            // so that the final REL entry is forwarded to ROPES before we close the
+                            // connection. The error is surfaced after the group drains.
+                            idleTimeoutError = error
                         }
                         if case .completed = status {
                             CloudBoardProviderCheckpoint(
@@ -892,9 +1125,49 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                             break taskResultLoop
                         }
                     }
+                    if let idleTimeoutError {
+                        throw idleTimeoutError
+                    }
                 }
             }
         }
+    }
+
+    private func queryRequestStatusOnTimeout(
+        jobHelperClient: CloudBoardJobHelperInstanceProtocol
+    ) async -> ReportableRequestStatus {
+        if self.isProxy {
+            do {
+                // Best effort attempt to determine request status via cb_jobhelper
+                return try await withTimeout(.seconds(1)) {
+                    return try await jobHelperClient.queryProxyRequestStatus()
+                }
+            } catch {
+                CloudBoardProviderCheckpoint(
+                    logMetadata: Self.logMetadata(spanID: self.invokeWorkloadSpanID),
+                    operationName: "query_request_status_error",
+                    message: "Failed to query cb_jobhelper for request status",
+                    error: error
+                ).log(to: Self.tracingLogger, level: .error)
+                return ProxyRequestStatus(subrequestsStatus: .unavailable, workersStatus: .unavailable)
+            }
+        } else {
+            if !self.requestIsFinalReceived() {
+                return ComputeRequestsStatus.requestPathNotFinished
+            } else if !self.responseIsFinalReceived() {
+                return ComputeRequestsStatus.responsePathNotFinished
+            } else {
+                return ComputeRequestsStatus.requestFinished
+            }
+        }
+    }
+
+    private func requestIsFinalReceived() -> Bool {
+        self.requestFinalReceived.withLock { $0 }
+    }
+
+    private func responseIsFinalReceived() -> Bool {
+        self.responseFinalReceived.withLock { $0 }
     }
 
     fileprivate func encodeInvokeProxyInitiate(
@@ -971,6 +1244,10 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                 }
 
                 $0.isDiscardable = query.isDiscardable
+
+                if let subrequstID = query.subrequestID {
+                    $0.subrequestID = subrequstID
+                }
             }
         }
     }
@@ -990,7 +1267,10 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
             context: self.serviceContext.withLock { $0 }
         ) { span in
             var requestedWorkerIDs: Set<UUID> = .init()
+            var requestDurationEndTime: UInt64?
             defer {
+                self.requestSummarySpan.endTimeManual = requestDurationEndTime
+                    ?? DefaultTracerClock.now.nanosecondsSinceEpoch
                 // this should get closed on sending last response chunk, but that isn't the case when an error
                 // happens, so we close it here anyway
                 self.finalRequestChunkToEndResponseSpan.withLock { span in
@@ -1024,6 +1304,13 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                 for requestedWorkerID in requestedWorkerIDs {
                     self.pccWorkerToInitiatorMapping.unlink(workerID: requestedWorkerID)
                 }
+                // Terminate any InvokeProxyDialBack streams associated with this workload.
+                // If processJobHelperResponses exits for any reason (error, cancellation, normal
+                // completion) before the worker continuations have been naturally finished,
+                // this ensures the dialback outgoing task throws and triggers group.cancelAll(),
+                // closing the InvokeProxyDialBack gRPC stream immediately instead of waiting
+                // for cb_jobhelper to eventually exit.
+                delegate.finishAllWorkerContinuations(throwing: InvokeProxyDialBackError.invokeWorkloadTerminated)
             }
             span.attributes.requestSummary.responseChunkAttributes.spanID = workloadResponseSpanID
             span.attributes.requestSummary.responseChunkAttributes.parentSpanID = invokeWorkloadSpanID
@@ -1054,6 +1341,8 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                             }
                         })
                         if responseChunk.isFinal {
+                            self.responseFinalReceived.withLock { $0 = true }
+                            requestDurationEndTime = DefaultTracerClock.now.nanosecondsSinceEpoch
                             CloudBoardProviderCheckpoint(
                                 logMetadata: Self.logMetadata(spanID: invokeWorkloadSpanID),
                                 operationName: "sentResponseChunkFinal",
@@ -1098,45 +1387,32 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                                 initialState: ContinuousTimeMeasurement
                                     .start()
                             )
-                        // By the time we get a findWorker call we must know the key used
-                        // It may not have been validated as the *correct* one yet, but that's not a problem
-                        // because we just want to filter things here, we validate later
-                        let ourTransitiveTrust = try await self.attestationProvider.findProxiedReleaseDigests(
-                            keyID: self.keyID.withLock { $0 }
-                        )
+
                         var routingParameters = query.routingParameters
-                        if !ourTransitiveTrust.isEmpty {
-                            // If the proxy app specified it we do NOT change it's decision
-                            // We do log to make sure it's clear it's happening though
-                            if let preSpecified = routingParameters["releaseDigest"] {
-                                if preSpecified.count == 0 {
-                                    Self.logger
-                                        .error(
-                                            "cloud app overrode the transitively trusted set of release digests to empty"
-                                        )
-                                } else if Set(preSpecified).isSubset(of: ourTransitiveTrust) {
-                                    if preSpecified.count == ourTransitiveTrust.count {
-                                        Self.logger
-                                            .debug(
-                                                "cloud app respecified the transitively trusted set of release digests"
-                                            )
-                                    } else {
-                                        Self.logger
-                                            .log("cloud app restricted the transitively trusted set of release digests")
-                                    }
-                                } else {
-                                    /// If we are performing validation then these requests may fail later
-                                    /// if they end up used. This is deemed acceptable so people can test
-                                    /// failure modes or force behaviours in ephemeral
-                                    Self.logger
-                                        .error(
-                                            "cloud app overrode the transitively trusted set of release digests with ones we don't trust"
-                                        )
-                                }
-                            } else {
-                                routingParameters["releaseDigest"] = ourTransitiveTrust
+                        routingParameters.removeValue(forKey: "releaseDigest")
+                        // The tree ID and revision are trusted values that CloudBoard derives from the
+                        // attestation itself. Always strip any values the cloud app may have supplied so it
+                        // cannot influence or spoof the transparency constraints sent to ROPES.
+                        routingParameters.removeValue(forKey: "treeId")
+                        routingParameters.removeValue(forKey: "revision")
+
+                        // Unless disabled by secure config, include the transparency log tree ID and revision
+                        // from the attestation associated with the client-provided key ID as routing parameters
+                        // so ROPES can factor them into worker selection. By the time we reach a findWorker call
+                        // the key ID is known and its attestation must be available; if it is not, we cannot make
+                        // the outbound request and this throws.
+                        if self.includeTransparencyConstraintsInWorkerRequests {
+                            let transparencyLogInfo = try await self.attestationProvider.findTransparencyLogInfo(
+                                keyID: self.keyID.withLock { $0 }
+                            )
+                            if let treeID = transparencyLogInfo.treeID {
+                                routingParameters["treeId"] = [String(treeID)]
+                            }
+                            if let revision = transparencyLogInfo.revision {
+                                routingParameters["revision"] = [String(revision)]
                             }
                         }
+
                         CloudBoardProviderCheckpoint(
                             logMetadata: Self.logMetadata(spanID: query.spanID),
                             operationName: "requesting_worker",
@@ -1431,6 +1707,13 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                         ).log(to: Self.tracingLogger, level: .error)
                         throw error
                     }
+
+                    // Advertise this request's affinity keys only after the replay/bypass guards above have passed, so
+                    // rejected requests never contribute keys.
+                    let affinityKeys = request.parameters.affinityKey
+                    if !affinityKeys.isEmpty {
+                        self.affinityKeyStore.register(requestID: requestID, keys: affinityKeys)
+                    }
                 case .requestChunk(let chunk):
                     requestChunksReceived += 1
                     let message: StaticString = if chunk.isFinal {
@@ -1439,6 +1722,7 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                         "workload_request_chunk_received"
                     }
                     if chunk.isFinal {
+                        self.requestFinalReceived.withLock { $0 = true }
                         self.finalRequestChunkToEndResponseSpan.withLock {
                             $0 = self.tracer.startSpan(OperationNames.invokeWorkloadRequestFinalToResponseEnd)
                         }
@@ -1446,11 +1730,13 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
                             $0 = Self.signposter.beginInterval("CB.finalRequestChunkToEndResponseSignpost")
                         }
                     }
-                    CloudBoardProviderCheckpoint(
-                        logMetadata: Self.logMetadata(spanID: invokeWorkloadSpanID),
-                        operationName: message,
-                        message: message
-                    ).log(to: Self.tracingLogger)
+                    if Self.chunkLogSampler.shouldLog(index: requestChunksReceived, isFinal: chunk.isFinal) {
+                        CloudBoardProviderCheckpoint(
+                            logMetadata: Self.logMetadata(spanID: invokeWorkloadSpanID),
+                            operationName: message,
+                            message: message
+                        ).log(chunkIndex: requestChunksReceived, isFinal: chunk.isFinal, to: Self.tracingLogger)
+                    }
                     span.attributes.requestSummary.workloadRequestAttributes.chunkSize = chunk.encryptedPayload
                         .count
                     span.attributes.requestSummary.workloadRequestAttributes.isFinal = chunk.isFinal
@@ -1531,7 +1817,11 @@ final class InvokeWorkloadRequestStreamHandler: Sendable {
             operationName: "preparing_idle_timeout",
             message: "preparing idle timeout"
         ).log(timeoutDuration: duration, to: Self.tracingLogger)
-        return IdleTimeout(timeout: duration, taskName: taskName, taskID: taskID)
+        return IdleTimeout(
+            timeout: duration,
+            taskName: taskName,
+            taskID: taskID
+        )
     }
 }
 
@@ -1660,7 +1950,11 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         """)
     }
 
-    func log(workloadStreamState: InvokeWorkloadStreamState, to logger: Logger, level: OSLogType = .default) {
+    func log(
+        workloadStreamState: InvokeWorkloadStreamState,
+        to logger: Logger,
+        level: OSLogType = .default
+    ) {
         logger.log(level: level, """
         ttl=\(self.type, privacy: .public)
         jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
@@ -1678,6 +1972,33 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         error.detailed=\(self.error.map { String(describing: $0) } ?? "", privacy: .private)
         message=\(self.message, privacy: .public)
         workloadStreamState=\(workloadStreamState, privacy: .public)
+        """)
+    }
+
+    func log(
+        workloadStreamState: InvokeWorkloadStreamState,
+        requestStatus: ReportableRequestStatus,
+        to logger: Logger,
+        level: OSLogType = .default
+    ) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+        remotePid=\(self.logMetadata.remotePID.map { String(describing: $0) } ?? "", privacy: .public)
+        request.uuid=\(self.requestID ?? "", privacy: .public)
+        rpcId=\(self.logMetadata.rpcID?.uuidString ?? "", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        error.detailed=\(self.error.map { String(describing: $0) } ?? "", privacy: .private)
+        message=\(self.message, privacy: .public)
+        workloadStreamState=\(workloadStreamState, privacy: .public)
+        request.status=\(requestStatus.description, privacy: .public)
         """)
     }
 
@@ -1827,6 +2148,57 @@ struct CloudBoardProviderCheckpoint: RequestCheckpoint {
         worker.uuid=\(workerID?.uuidString ?? "", privacy: .public)
         """)
     }
+
+    func log(chunkIndex: Int, isFinal: Bool, to logger: Logger, level: OSLogType = .default) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+        remotePid=\(String(describing: self.logMetadata.remotePID), privacy: .public)
+        request.uuid=\(self.requestID ?? "", privacy: .public)
+        rpcId=\(self.logMetadata.rpcID?.uuidString ?? "", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        error.detailed=\(self.error.map { String(describing: $0) } ?? "", privacy: .private)
+        message=\(self.message, privacy: .public)
+        chunk.index=\(chunkIndex, privacy: .public)
+        chunk.isFinal=\(isFinal, privacy: .public)
+        """)
+    }
+
+    func log(
+        workerID: UUID?,
+        chunkIndex: Int,
+        isFinal: Bool,
+        to logger: Logger,
+        level: OSLogType = .default
+    ) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        jobID=\(self.logMetadata.jobID?.uuidString ?? "", privacy: .public)
+        remotePid=\(String(describing: self.logMetadata.remotePID), privacy: .public)
+        request.uuid=\(self.requestID ?? "", privacy: .public)
+        rpcId=\(self.logMetadata.rpcID?.uuidString ?? "", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.span_id=\(self.logMetadata.spanID?.hexEncoded ?? "", privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        error.detailed=\(self.error.map { String(describing: $0) } ?? "", privacy: .private)
+        message=\(self.message, privacy: .public)
+        worker.uuid=\(workerID?.uuidString ?? "", privacy: .public)
+        chunk.index=\(chunkIndex, privacy: .public)
+        chunk.isFinal=\(isFinal, privacy: .public)
+        """)
+    }
 }
 
 struct FetchAttestationRequestSummary: RequestSummary {
@@ -1914,4 +2286,52 @@ final class PccWorkerToInitiatorMapping: Sendable {
     func isEmpty() -> Bool {
         self.pccWorkerDelegates.withLock { $0.isEmpty }
     }
+}
+
+package enum ComputeRequestsStatus: ReportableRequestStatus {
+    case requestPathNotFinished
+    case responsePathNotFinished
+    case requestFinished
+
+    package var description: String {
+        switch self {
+        case .requestPathNotFinished: "request_path_not_finished"
+        case .responsePathNotFinished: "response_path_not_finished"
+        case .requestFinished: "request_finished"
+        }
+    }
+}
+
+private struct TimeoutError: Error {}
+
+/// Executes the given `operation` up to `maxDuration` seconds and cancels it if it exceeds the timeout.
+/// - Parameters:
+///   - maxDuration: max execution duration in seconds of `operation`
+///   - operation: the task to start and cancel after `maxDuration` seconds
+/// - Returns: the result of `operation`
+/// - Throws: if `operation` does not return a result after `maxDuration`
+private func withTimeout<Result: Sendable>(
+    _ maxDuration: Duration,
+    operation: @escaping @Sendable () async throws -> Result
+) async throws -> Result {
+    try await withThrowingTaskGroup(of: Result?.self, returning: Swift.Result<Result, any Error>.self) { group in
+        // add actual operation
+        group.addTask(operation: operation)
+        // add watchdog
+        group.addTask {
+            try? await Task.sleep(for: maxDuration)
+            return nil
+        }
+        // we add two tasks and it is therefore safe to unwrap at least one call to `group.next()`
+        let firstResult = try await group.next()!
+        // either the operation or the watchdog has finished
+        // regardless of which finished first, we need to cancel the second task
+        group.cancelAll()
+
+        if let firstResult {
+            return .success(firstResult)
+        } else {
+            return .failure(TimeoutError())
+        }
+    }.get()
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,6 +21,7 @@
 
 import DarwinPrivate.os.variant
 import FeatureFlags
+@_weakLinked import SecureConfigDB
 
 public enum Environment: String, Sendable, Codable {
     case dev
@@ -39,7 +40,7 @@ public enum Environment: String, Sendable, Codable {
 
     public static var `default`: Self {
         if os_variant_is_darwinos("com.apple.CloudAttestation") {
-            return environmentFromPref ?? .dev
+            return environmentFromSecureConfig ?? environmentFromPref ?? .dev
         }
 
         var env: Self
@@ -63,6 +64,13 @@ public enum Environment: String, Sendable, Codable {
     private static var environmentFromPref: Environment? {
         let pref = CFPreferencesCopyAppValue("environment" as CFString, "com.apple.privateCloudCompute" as CFString) as? String ?? ""
         return Environment(rawValue: pref)
+    }
+
+    private static var environmentFromSecureConfig: Environment? {
+        guard #_hasSymbol(SecureConfigParameters.self) else { return nil }
+        guard let params = try? SecureConfigParameters.loadContents() else { return nil }
+        guard let envString = try? params.unvalidatedStringParameter("com.apple.CloudAttestation.environment") else { return nil }
+        return Environment(rawValue: envString)
     }
 
     public static var current: Self {

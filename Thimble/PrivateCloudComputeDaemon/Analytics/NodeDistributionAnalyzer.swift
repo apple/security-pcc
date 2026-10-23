@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,6 +23,8 @@ import Foundation
 import PrivateCloudCompute
 import os.log
 
+private let logger = Logger(for: .metricReporter)
+
 package enum NodeReceivingSource: String, Codable, CaseIterable {
     case prefetch = "prefetch"
     case prewarm = "prewarm"
@@ -39,8 +41,6 @@ final actor NodeDistributionAnalyzer<
 
     private let environment: String
     private let systemInfo: SystemInfo
-
-    let logger = tc2Logger(forCategory: .metricReporter)
 
     /// store helper
     private let storeHelper: NodeDistributionAnalyzerStoreHelper
@@ -70,12 +70,12 @@ final actor NodeDistributionAnalyzer<
 
     /// receiving new node
     func receivedNodesWith(nodeIDs: [String], from source: NodeReceivingSource) async {
-        self.logger.debug("Receiving nodes \(nodeIDs) from \(source.rawValue)")
+        logger.debug("Receiving nodes \(nodeIDs) from \(source.rawValue)")
         let lines = [source.rawValue] + nodeIDs
         do {
             try await self.storeHelper.writeToFile(lines: lines)
         } catch {
-            self.logger.error("Failed writing to file: \(error)")
+            logger.error("Failed writing to file: \(error)")
         }
     }
 
@@ -85,7 +85,7 @@ final actor NodeDistributionAnalyzer<
         do {
             data = try await self.storeHelper.readFromFile()
         } catch {
-            self.logger.error("Failed to read from temp file: \(error)")
+            logger.error("Failed to read from temp file: \(error)")
             return []
         }
 
@@ -178,7 +178,6 @@ final actor NodeDistributionAnalyzer<
                     eventTime: .now,
                     environment: self.environment,
                     systemInfo: self.systemInfo,
-                    locale: .current,
                     attestationSource: source,
                     totalNumberOfAttestations: nodeDistribution.totalCount,
                     attestationDistribution: String(data: jsonData, encoding: .utf8)

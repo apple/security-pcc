@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -35,8 +35,8 @@ struct TrustedRequestMetric: CloudTelemetryReportable {
         case featureID = "appleFeatureid"
         case bundleID = "appleBundleid"
         case originatingBundleID = "originatingBundleID"
-        case locale = "appleLocale"
         case clientRequestId = "clientRequestId"
+        case qos = "qos"
 
         // Trusted Request Measurements
         // This will measure overall success of a request from a client, as well as the wall clock time it took to complete.
@@ -49,10 +49,30 @@ struct TrustedRequestMetric: CloudTelemetryReportable {
         case authTokenFetchTime = "authtokenfetchtimems"
         case authTokenFetchSuccess = "authTokenFetchSuccess"
         case authTokenFetchError = "authTokenFetchError"
-        // This will measure how long from reqeust start to sending the TGT/OTT
-        case authTokenSendTime = "authtokensendtimems"
-        case authTokenSendSuccess = "authTokenSendSuccess"
-        case authTokenSendError = "authTokenSendError"
+
+        /// This will measure how long from request start to fetch the waitlist token
+        case waitlistTokenFetchTime = "waitlistTokenFetchTimeMs"
+        case waitlistTokenFetchSuccess = "waitlistTokenFetchSuccess"
+        case waitlistTokenFetchError = "waitlistTokenFetchError"
+
+        /// This will measure how long from request start to fetch the reputation token
+        case reputationTokenFetchTime = "reputationTokenFetchTimeMs"
+        case reputationTokenFetchSuccess = "reputationTokenFetchSuccess"
+        case reputationTokenFetchError = "reputationTokenFetchError"
+
+        case reputationRefundState = "reputationRefundState"
+        case reputationRefundError = "reputationRefundError"
+
+        /// This will measure how long from request start to sending OpenRequestPayload on data stream.
+        /// OpenRequestPayload is the first message we send on data stream.
+        /// Raw value is legacy from a previous protocol.
+        case openRequestPayloadSendTime = "authtokensendtimems"
+        /// Whether sending OpenRequestPayload on data stream was successful.
+        /// Raw value is legacy from a previous protocol.
+        case openRequestPayloadSuccess = "authTokenSendSuccess"
+        /// If sending OpenRequestPayload on data stream failed, this field captures the error.
+        /// Raw value is legacy from a previous protocol.
+        case openRequestPayloadSendError = "authTokenSendError"
 
         // OHTTP Connection Establishment Measurements
         // This will measure when our rootConnection becomes ready.
@@ -146,6 +166,7 @@ struct TrustedRequestMetric: CloudTelemetryReportable {
 
     init<
         Clock: _Concurrency.Clock,
+        LegacyAttestationStore: LegacyAttestationStoreProtocol,
         AttestationStore: AttestationStoreProtocol,
         SystemInfo: SystemInfoProtocol,
         BiomeReporter: BiomeReporterProtocol
@@ -156,17 +177,17 @@ struct TrustedRequestMetric: CloudTelemetryReportable {
         systemInfo: SystemInfo,
         featureID: String?,
         originatingBundleID: String?,
-        locale: Locale,
         clientRequestId: UUID,
-        requestMetricsState: RequestMetrics<Clock, AttestationStore, SystemInfo, BiomeReporter>.State
+        qos: ServerQoS,
+        requestMetricsState: RequestMetrics<Clock, LegacyAttestationStore, AttestationStore, SystemInfo, BiomeReporter>.State
     ) {
         var fields: [EventName: EventValue] = [
             .bundleID: .string(bundleID),
             .eventTime: .int(Int64(eventTime.timeIntervalSince1970)),
             .environment: .string(environment),
             .clientInfo: .string(systemInfo.osInfoWithDeviceModel),
-            .locale: .string(locale.identifier),
             .clientRequestId: .string(clientRequestId.uuidString),
+            .qos: .string(qos.rawValue),
 
         ]
 
@@ -235,16 +256,56 @@ struct TrustedRequestMetric: CloudTelemetryReportable {
             fields[.authTokenFetchError] = .string(error.telemetryString)
         }
 
-        switch requestMetricsState.authTokenSendState {
+        switch requestMetricsState.waitlistTokenFetchState {
+        case .none:
+            // Waitlist is not used for the request.
+            break
+        case .notStarted:
+            // It was expected to have reputation token for this request.
+            fields[.waitlistTokenFetchSuccess] = false
+        case .succeeded(let duration):
+            fields[.waitlistTokenFetchSuccess] = true
+            fields[.waitlistTokenFetchTime] = .milliseconds(duration)
+        case .failed(let error, let duration):
+            fields[.waitlistTokenFetchSuccess] = false
+            fields[.waitlistTokenFetchTime] = .milliseconds(duration)
+            fields[.waitlistTokenFetchError] = .string(error.telemetryString)
+        }
+
+        switch requestMetricsState.reputationTokenFetchState {
+        case .none:
+            // Reputation token is not used for the request.
+            break
+        case .notStarted:
+            // It was expected to have reputation token for this request.
+            fields[.reputationTokenFetchSuccess] = false
+        case .succeeded(let duration):
+            fields[.reputationTokenFetchSuccess] = true
+            fields[.reputationTokenFetchTime] = .milliseconds(duration)
+        case .failed(let error, let duration):
+            fields[.reputationTokenFetchSuccess] = false
+            fields[.reputationTokenFetchTime] = .milliseconds(duration)
+            fields[.reputationTokenFetchError] = .string(error.telemetryString)
+        }
+
+        fields[.reputationRefundState] = requestMetricsState.reputationRefundState?.telemetryString
+        switch requestMetricsState.reputationRefundState {
+        case .none, .notStarted, .skippedDueToTokenFetchFailure, .tokenRequestGenerated, .tokenRequestSent, .succeeded:
+            break
+        case .tokenRequestGenerationFailed(let error), .tokenRequestSendFailed(let error), .tokenResponseSaveFailed(let error):
+            fields[.reputationRefundError] = .string(error.telemetryString)
+        }
+
+        switch requestMetricsState.openRequestPayloadSendState {
         case .notStarted:
             break
         case .succeeded(let duration):
-            fields[.authTokenSendTime] = .milliseconds(duration)
-            fields[.authTokenSendSuccess] = true
+            fields[.openRequestPayloadSendTime] = .milliseconds(duration)
+            fields[.openRequestPayloadSuccess] = true
         case .failed(let error, let duration):
-            fields[.authTokenSendTime] = .milliseconds(duration)
-            fields[.authTokenSendSuccess] = false
-            fields[.authTokenSendError] = .string(error.telemetryString)
+            fields[.openRequestPayloadSendTime] = .milliseconds(duration)
+            fields[.openRequestPayloadSuccess] = false
+            fields[.openRequestPayloadSendError] = .string(error.telemetryString)
         }
 
         switch requestMetricsState.attestationsReceivedState {

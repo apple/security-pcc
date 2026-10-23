@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,7 +25,8 @@ public actor NullCloudControllerAPIXPCServer {
     public init() {
         self.listener = .init(
             localService: kNullCloudControllerAPIXPCLocalServiceName,
-            entitlement: kNullCloudControllerAPIXPCLocalServiceEntitlement
+            entitlement: kNullCloudControllerAPIXPCLocalServiceEntitlement,
+            singleClient: false
         )
         self.delegate = nil
     }
@@ -35,7 +36,7 @@ public actor NullCloudControllerAPIXPCServer {
         await self.listener.listen(buildMessageHandlerStore: self.configureHandlers)
     }
 
-    private func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
+    private nonisolated func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
         handlers.register(NullCloudControllerAPIXPCClientToServerMessages.UpdateState.self) { message in
             guard let delegate = await self.delegate else {
                 throw NullCloudControllerAPIError.noDelegateSet

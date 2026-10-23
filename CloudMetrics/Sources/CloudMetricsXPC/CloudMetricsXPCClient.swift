@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -259,7 +259,9 @@ extension CloudMetricsXPCClient {
             }
         }
         if shouldLog {
-            logger.error("Metric \(metric.label) not allowed")
+            // A metric outside the audit allow list is a configuration outcome rather than a
+            // failure of this process, so it is logged below the error level.
+            logger.log("Metric not allowed type=\(metric.type, privacy: .public) label=\(metric.label)")
             unallowedMetricLogTracker[metric.label] = .now
         }
     }

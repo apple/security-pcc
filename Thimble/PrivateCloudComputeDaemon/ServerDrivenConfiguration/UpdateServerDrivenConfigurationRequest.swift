@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -28,6 +28,8 @@ import PrivateCloudCompute
 import Security
 import os.lock
 
+private let logger = Logger(for: .updateServerDrivenConfiguration)
+
 final class UpdateServerDrivenConfigurationRequest<
     ServerDrivenConfiguration: ServerDrivenConfigurationProtocol,
     SystemInfo: SystemInfoProtocol
@@ -39,7 +41,6 @@ final class UpdateServerDrivenConfigurationRequest<
         case responseBase64DecodeError
     }
 
-    private let logger = tc2Logger(forCategory: .updateServerDrivenConfiguration)
     private let logPrefix: String
     private let requestID: UUID
     private let config: any Configuration
@@ -73,9 +74,9 @@ final class UpdateServerDrivenConfigurationRequest<
     }
 
     func sendRequest() async throws {
-        self.logger.log("\(self.logPrefix) executing configbag request")
+        logger.log("\(self.logPrefix) executing configbag request")
         defer {
-            self.logger.log("\(self.logPrefix) finished configbag request")
+            logger.log("\(self.logPrefix) finished configbag request")
         }
 
         // Set up the request
@@ -87,30 +88,30 @@ final class UpdateServerDrivenConfigurationRequest<
             urlRequest.addValue(automatedDeviceGroup, forHTTPHeaderField: HTTPField.Name.appleAutomatedDeviceGroup.rawName)
         }
         urlRequest.addValue("application/json", forHTTPHeaderField: HTTPField.Name.accept.rawName)
-        self.logger.debug("\(self.logPrefix) request ready, request=\(urlRequest)")
+        logger.debug("\(self.logPrefix) request ready, request=\(urlRequest)")
 
         // Set up the session
         let urlSessionConfig = URLSessionConfiguration.ephemeral
         // Allow the session to run over OHTTP
         urlSessionConfig.usesClassicLoadingMode = false
         let urlSession = URLSession(configuration: urlSessionConfig)
-        self.logger.debug("\(self.logPrefix) session ready, session=\(urlSession)")
+        logger.debug("\(self.logPrefix) session ready, session=\(urlSession)")
 
         let data: Data
         let response: URLResponse
         do {
-            self.logger.debug("\(self.logPrefix) running session async")
+            logger.debug("\(self.logPrefix) running session async")
             (data, response) = try await urlSession.data(for: urlRequest)
-            self.logger.debug("\(self.logPrefix) response returning, response=\(response) data=\(String(describing: data))")
+            logger.debug("\(self.logPrefix) response returning, response=\(response) data=\(String(describing: data))")
         } catch {
-            self.logger.error("\(self.logPrefix) response throwing, error=\(error)")
+            logger.error("\(self.logPrefix) response throwing, error=\(error)")
             throw Error.urlSessionError
         }
 
         let model: BagContainerModel
         do {
             model = try self.decoder.decode(BagContainerModel.self, from: data)
-            self.logger.debug("\(self.logPrefix) model decoded, model=\(String(describing: model))")
+            logger.debug("\(self.logPrefix) model decoded, model=\(String(describing: model))")
         } catch {
             logger.error("\(self.logPrefix) unable to decode json response data, error=\(error)")
             throw Error.responseDataDecodeError
@@ -125,7 +126,7 @@ final class UpdateServerDrivenConfigurationRequest<
             logger.error("\(self.logPrefix) unable to decode base64 bag")
             throw Error.responseBase64DecodeError
         }
-        self.logger.debug("\(self.logPrefix) base64 bag decoded, pushing update of utf8jsonBag=\(utf8jsonBag)")
+        logger.debug("\(self.logPrefix) base64 bag decoded, pushing update of utf8jsonBag=\(utf8jsonBag)")
 
         await self.serverDrivenConfiguration.updateJsonModel(utf8jsonBag)
 
@@ -151,8 +152,6 @@ extension DefaultConfiguration {
         serverDrivenConfiguration: ServerDrivenConfiguration,
         systemInfo: any SystemInfoProtocol
     ) {
-        let logger = tc2Logger(forCategory: .updateServerDrivenConfiguration)
-
         // We only ever write this proposal for internal builds.
         guard os_variant_has_internal_content(privateCloudComputeOsVariantSubsystem) else {
             return

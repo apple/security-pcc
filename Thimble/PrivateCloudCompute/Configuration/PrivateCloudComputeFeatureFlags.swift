@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -31,6 +31,65 @@ package enum PrivateCloudComputeFeatureFlags: FeatureFlagsKey {
     /// Enable chunked data transfer for memory optimization
     case applicationDataChunking
 
+    /// Enable chunked data transfer on non-production environments.
+    /// Mutually exclusive with `applicationDataChunking`: on pre-production, this flag alone
+    /// controls chunking; on production, `applicationDataChunking` controls it.
+    /// Setting `applicationDataChunkingSize` to 0 disables chunking regardless of environment.
+    case applicationDataChunkingPreProduction
+
+    /// When enabled, client info header as well as telemetry events, will include an identification of whether the
+    /// build is seed or not.
+    case identifySeedBuildsInClientInfo
+
+    /// When enabled, it changes how cancellations are handled. Instead of canceling a TrustedRequest in the daemon right away, it will
+    /// signal to the server if possible, and then it will attempt to wait for the request to finish before eventually canceling the task.
+    case requestCancellationV2
+
+    /// Enable the new V3 AttestationStore with reusable pool model and two-phase commit
+    case attestationStoreV3
+
+    /// Enable fetching of rate limits from the vault.
+    case vaultConfiguration
+
+    /// When enabled, enforce the required inline attestation count for anti-targetability on production.
+    case enforceAntiTargetability
+
+    /// When enabled, enforce the required inline attestation count for anti-targetability on non-production
+    /// environments (e.g. carry).
+    case enforceAntiTargetabilityOnPreProduction
+
+    /// When enabled, enforce the required attestation count for anti-targetability during prefetch.
+    case enforceAntiTargetabilityOnPrefetch
+
+    /// When enabled, we would send `routing-key` inside of workload params on the invoke and prefetch.
+    case routingKey
+
+    /// Enable reputation tokens. When enabled, pccd would send reputation token request
+    /// to the server and handle a corresponding response from the server.
+    case reputationTokens
+
+    /// When enabled, pccd would fetch
+    case waitlistTokens
+
+    /// When enabled, pccd runs its own watchdog timer around communications with the server and times out the
+    /// request after inactivity.
+    case clientTimeout
+
+    /// Resolve bundle identifiers using the SecTask framework for code-signing verification.
+    case secTaskBundleIDResolution
+
+    /// Cap NWConnection reads to reduce peak memory usage during large responses (e.g. attestation prefetch).
+    case boundedNetworkReads2
+
+    /// Store the daemon's state in a data-vaulted Protected System container on macOS.
+    case protectedSystemContainerMacOS
+
+    /// Store the daemon's state in a data-vaulted Protected System container on embedded platforms.
+    case protectedSystemContainerEmbedded
+
+    /// When enabled, supported REL compression algorithms are announced as part of Cababilities message.
+    case requestExecutionLogCompression
+
     package var domain: StaticString {
         return "PrivateCloudCompute"
     }
@@ -40,6 +99,23 @@ package enum PrivateCloudComputeFeatureFlags: FeatureFlagsKey {
         case .fetchAuthTokenOnPrewarm: return "fetchAuthTokenOnPrewarm"
         case .featureUsageAnalyzer: return "featureUsageAnalyzer"
         case .applicationDataChunking: return "applicationDataChunking"
+        case .applicationDataChunkingPreProduction: return "applicationDataChunkingPreProduction"
+        case .identifySeedBuildsInClientInfo: return "identifySeedBuildsInClientInfo"
+        case .requestCancellationV2: return "requestCancellationV2"
+        case .attestationStoreV3: return "attestationStoreV3"
+        case .vaultConfiguration: return "vaultConfiguration"
+        case .enforceAntiTargetabilityOnPreProduction: return "enforceAntiTargetabilityOnPreProduction"
+        case .enforceAntiTargetability: return "enforceAntiTargetability"
+        case .enforceAntiTargetabilityOnPrefetch: return "enforceAntiTargetabilityOnPrefetch"
+        case .routingKey: return "routingKey"
+        case .reputationTokens: return "reputationTokens"
+        case .waitlistTokens: return "waitlistTokens"
+        case .clientTimeout: return "clientTimeout"
+        case .secTaskBundleIDResolution: return "secTaskBundleIDResolution"
+        case .boundedNetworkReads2: return "boundedNetworkReads2"
+        case .protectedSystemContainerMacOS: return "protectedSystemContainerMacOS"
+        case .protectedSystemContainerEmbedded: return "protectedSystemContainerEmbedded"
+        case .requestExecutionLogCompression: return "requestExecutionLogCompression"
         }
     }
 }

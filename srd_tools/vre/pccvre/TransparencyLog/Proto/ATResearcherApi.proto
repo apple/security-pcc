@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,9 +22,6 @@ option java_package = "com.apple.keyt.api.at";
 option java_outer_classname = "ATResearcherApi";
 
 import "Transparency.proto";
-import "ATServiceApi.proto";
-import "KtClientApi.proto";
-import "AuditorApi.proto";
 
 // Protobuf definitions for the Private Cloud Compute researcher client interface
 // Currently all APIs needed for AT researchers are identical to existing ones

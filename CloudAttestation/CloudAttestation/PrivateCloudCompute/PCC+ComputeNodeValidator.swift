@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -29,48 +29,143 @@ extension PCC {
         @_spi(Private)
         public var inner: NodeValidator
 
+        @_spi(Private)
+        public var transitiveReleaseTransparency = false
+
         public let proxyingAttestation: AttestationBundle
+
+        @_spi(Private)
+        public let proxyEnvironment: Environment?
+
+        var enforceEnvironment: Bool
 
         /// Constructs a ``ComputeNodeValidator`` with a default validity duration of 1 day
         /// - Parameters:
         ///   - proxyingAttestation: The attestation bundle of a node that is proxying attestations being validated.
+        @available(*, deprecated, renamed: "init(proxyingAttestation:transparencyCache:)", message: "use the initializer with a transparencyCache")
         public init(proxyingAttestation: AttestationBundle) {
-            self = .init(proxyingAttestation: proxyingAttestation, validity: .days(1))
+            self.proxyingAttestation = proxyingAttestation
+            self.proxyEnvironment = proxyingAttestation.attestedEnvironment
+            self.inner = NodeValidator()
+            self.inner.transparencyProofValidation = false
+            self.inner.transparencyVerifier = NopTransparencyLog()
+
+            let configuration = Configuration(for: Environment.current)
+            self.enforceEnvironment = configuration.enforceEnvironment
+        }
+
+        /// Constructs a ``ComputeNodeValidator`` with a default validity duration of 1 day using transitive transparency.
+        /// - Parameters:
+        ///   - proxyingAttestation: The attestation bundle of a node that is proxying attestations being validated.
+        ///   - transparencyCache: A cache to store transparency proofs.
+        public init(proxyingAttestation: AttestationBundle, transparencyCache: TransparencyCache?) {
+            self = .init(
+                proxyingAttestation: proxyingAttestation,
+                validity: .days(1),
+                environment: Environment.current,
+                transparencyLog: nil,
+                transparencyCache: transparencyCache
+            )
+        }
+
+        /// Constructs a ``ComputeNodeValidator`` with a default validity duration of 1 day using transitive transparency.
+        /// - Parameters:
+        ///   - proxyingAttestation: The attestation bundle of a node that is proxying attestations being validated.
+        ///   - transparencyProver: A prover to fetch transparency proofs from.
+        ///   - transparencyCache: A cache to store transparency proofs.
+        public init(proxyingAttestation: AttestationBundle, transparencyLog: TransparencyLog, transparencyCache: TransparencyCache?) {
+            self = .init(
+                proxyingAttestation: proxyingAttestation,
+                validity: .days(1),
+                environment: Environment.current,
+                transparencyLog: transparencyLog,
+                transparencyCache: transparencyCache
+            )
         }
 
         /// Constructs a ``ComputeNodeValidator`` with the specified environment, and a default validity duration of 1 day.
         /// - Parameters:
         ///   - proxyingAttestation: The attestation bundle of a node that is proxying attestations being validated.
         ///   - environment: The environment to validate the AttestationBundle in.
+        @_spi(Private)
+        @available(
+            *,
+            deprecated,
+            renamed: "init(proxyingAttestation:validity:environment:transparencyLog:transparencyCache:)",
+            message: "use the initializer with a transparencyCache"
+        )
         public init(proxyingAttestation: AttestationBundle, environment: Environment) {
-            self = .init(proxyingAttestation: proxyingAttestation, validity: .days(1), environment: environment)
+            self.proxyingAttestation = proxyingAttestation
+            self.proxyEnvironment = proxyingAttestation.attestedEnvironment
+            self.inner = NodeValidator(environment: environment)
+            self.inner.transparencyProofValidation = false
+            self.inner.transparencyVerifier = NopTransparencyLog()
+
+            let configuration = Configuration(for: environment)
+            self.enforceEnvironment = configuration.enforceEnvironment
         }
 
-        /// Constructs a ``ComputeNodeValidator``
+        /// Constructs a ``ComputeNodeValidator`` using transitive transparency.
         /// - Parameters:
         ///   - proxyingAttestation: The attestation bundle of a node that is proxying attestations being validated.
-        ///   - validity: a ``Swift/Duration`` object indicating a lower bound on how long a validated AttestationBundle should be valid for
+        ///   - validity: A ``Swift/Duration`` object indicating a lower bound on how long a validated AttestationBundle should be valid for
+        @_spi(Private)
         public init(proxyingAttestation: AttestationBundle, validity: Duration) {
             self = .init(proxyingAttestation: proxyingAttestation, validity: validity, environment: Environment.current)
         }
 
-        /// Creates a ``ComputeNodeValidator``...
+        /// Creates a ``ComputeNodeValidator`` using transitive transparency.
         /// - Parameters:
         ///   - proxyingAttestation: The attestation bundle of a node that is proxying attestations being validated.
         ///   - validity: The ``Swift/Duration`` object indicating a lower bound on how long a validated AttestationBundle should last.
         ///   - environment: The environment to validate the AttestationBundle in.
+        @_spi(Private)
         public init(proxyingAttestation: AttestationBundle, validity: Duration, environment: Environment) {
+            self = .init(proxyingAttestation: proxyingAttestation, validity: validity, environment: environment, transparencyLog: nil, transparencyCache: nil)
+        }
+
+        /// Creates a ``ComputeNodeValidator`` using transitive transparency.
+        /// - Parameters:
+        ///   - proxyingAttestation: The attestation bundle of a node that is proxying attestations being validated.
+        ///   - validity: The ``Swift/Duration`` object indicating a lower bound on how long a validated AttestationBundle should last.
+        ///   - environment: The environment to validate the AttestationBundle in.
+        public init(
+            proxyingAttestation: AttestationBundle,
+            validity: Duration,
+            environment: Environment,
+            transparencyLog: TransparencyLog?,
+            transparencyCache: TransparencyCache?
+        ) {
+            self.transitiveReleaseTransparency = true
+
             self.proxyingAttestation = proxyingAttestation
-            self.inner = NodeValidator()
-            self.inner.transparencyProofValidation = false
-            self.inner.transparencyVerifier = NopTransparencyLog()
+            self.proxyEnvironment = proxyingAttestation.attestedEnvironment
+            self.inner = NodeValidator(validity: validity, environment: environment)
+
+            if let transparencyLog {
+                self.inner.transparencyVerifier = transparencyLog
+            } else {
+                self.inner.transparencyVerifier = TransitiveTransparencyVerifier(
+                    transitivelyWith: proxyingAttestation,
+                    transparencyLog: SWTransparencyLog(environment: environment),
+                    transparencyCache: transparencyCache
+                )
+            }
+
+            let configuration = Configuration(for: environment)
+            self.enforceEnvironment = configuration.enforceEnvironment
         }
 
         /// The policy to use for validation.
         @PolicyBuilder
         public var policy: some AttestationPolicy {
             inner.policy
-            ProxiedReleasePolicy(proxyingAttestation: proxyingAttestation)
+            if !transitiveReleaseTransparency {
+                ProxiedReleasePolicy(proxyingAttestation: proxyingAttestation)
+            }
+            if enforceEnvironment {
+                EnvironmentPolicy(expected: proxyEnvironment)
+            }
         }
     }
 }

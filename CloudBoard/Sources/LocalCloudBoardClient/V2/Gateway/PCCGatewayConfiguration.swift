@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -42,6 +42,25 @@ extension PCCHarness {
             availableEndpoints: [ComputeCloudAppEndpoint]
         ) -> ExtendedSelectionResult?
     }
+
+    package struct ComputeNodeSelectorCallback: ComputeNodeSelector {
+        private let select: @Sendable (PCCHarness.ComputeNodeSelectionContext, [PCCHarness.ComputeCloudAppEndpoint])
+            -> PCCHarness.ComputeCloudAppEndpoint?
+
+        package init(
+            select: @Sendable @escaping (PCCHarness.ComputeNodeSelectionContext, [PCCHarness.ComputeCloudAppEndpoint])
+                -> PCCHarness.ComputeCloudAppEndpoint?
+        ) {
+            self.select = select
+        }
+
+        package func selectNode(
+            context: PCCHarness.ComputeNodeSelectionContext,
+            availableEndpoints: [PCCHarness.ComputeCloudAppEndpoint]
+        ) -> PCCHarness.ComputeCloudAppEndpoint? {
+            return self.select(context, availableEndpoints)
+        }
+    }
 }
 
 // MARK: - Gateway Configuration
@@ -58,6 +77,10 @@ extension PCCHarness {
         package var serviceDiscovery: ServiceDiscoveryAbstraction.ConsumerClientProtocol?
         /// Configuration for injecting ensemble selections during negotiate/pick for tests
         public var injectedEnsembleSelectionConfig: InjectedEnsembleSelectionConfig?
+        /// Factor by which the simulated ROPES tries to scale the announced pick ratio during
+        /// negotiate/pick. Clamped to the proxy-announced `ratioCanScaleTo` and to available
+        /// candidates. Defaults to 1 (no scaling), preserving historical behaviour.
+        package var negotiatePickDesiredScale: UInt32 = 1
 
         /// Public accessor that hides the extended strategy details
         public var computeNodeSelectionStrategy: ComputeNodeSelectionStrategy {
@@ -120,6 +143,19 @@ extension PCCHarness {
         }
     }
 
+    /// Simplified subset of InvokeProxyInitiate.NegotiateEnsembleChoice
+    package struct NegotiateEnsembleChoice {
+        var freeChoice: Bool
+        var trustedEnsembles: [EnsembleInstanceId]
+        var trustedRackIds: [String]
+
+        init(proto: Com_Apple_Cloudboard_Api_V1_InvokeProxyInitiate.NegotiateEnsembleChoice) {
+            self.freeChoice = proto.freeChoice
+            self.trustedEnsembles = proto.trustedEnsembles.map { .init(from: $0) }
+            self.trustedRackIds = proto.trustedRackIds
+        }
+    }
+
     /// Simplified subset of InvokeProxyInitiate.ReuseConstraints
     /// Note: This is package only this till it's more stable
     package struct ReuseConstraints: Sendable, CustomStringConvertible {
@@ -172,6 +208,10 @@ extension PCCHarness {
 
             /// Additional routing constraints related to reuse of previously trusted nodes
             package var reuseConstraints: ReuseConstraints?
+            /// Rules on how to select ensembles for trust reasons
+            /// This is for information purposes only, the point of this code is to be able to violate
+            /// those terms to test the protections within the system
+            package var negotiate: NegotiateEnsembleChoice?
 
             init(
                 taskID: String,
@@ -179,7 +219,8 @@ extension PCCHarness {
                 serviceName: String,
                 workloadParameters: [String: [String]],
                 isDiscardable: Bool,
-                reuseConstraints: ReuseConstraints?
+                reuseConstraints: ReuseConstraints?,
+                negotiate: NegotiateEnsembleChoice?
             ) {
                 self.taskID = taskID
                 self.groupID = groupID
@@ -187,6 +228,7 @@ extension PCCHarness {
                 self.workloadParameters = workloadParameters
                 self.isDiscardable = isDiscardable
                 self.reuseConstraints = reuseConstraints
+                self.negotiate = negotiate
             }
         }
 
@@ -222,20 +264,42 @@ extension PCCHarness {
         }
     }
 
+    package enum ObserverAction {
+        /// just pass the message along
+        case passthrough
+        /// Drop the message entirely - this is only reasonable for specific subsets of messages
+        /// but it can be a means to cause some tests to take a specific path that would otherwise be
+        /// dependent on timing considerations
+        case drop
+    }
+
     /// Observer for InvokeProxyDialBack messages with a specific proxy node
     package struct ProxyDialBackMessageObserver: Sendable {
         /// Called when gateway sends message to proxy (InvokeProxyDialBackRequest)
         package let onRequestToProxy: @Sendable (ObservedInvokeProxyDialBackRequest) -> Void
 
         /// Called when gateway receives message from proxy (InvokeProxyDialBackResponse)
-        package let onResponseFromProxy: @Sendable (ObservedInvokeProxyDialBackResponse) -> Void
+        package let onResponseFromProxy: @Sendable (ObservedInvokeProxyDialBackResponse) -> ObserverAction
 
         package init(
             onRequestToProxy: @escaping @Sendable (ObservedInvokeProxyDialBackRequest) -> Void = { _ in },
-            onResponseFromProxy: @escaping @Sendable (ObservedInvokeProxyDialBackResponse) -> Void = { _ in }
+            onResponseFromProxy: @escaping @Sendable (ObservedInvokeProxyDialBackResponse) -> ObserverAction = { _ in
+                .passthrough
+            }
         ) {
             self.onRequestToProxy = onRequestToProxy
             self.onResponseFromProxy = onResponseFromProxy
+        }
+
+        package init(
+            onRequestToProxy: @escaping @Sendable (ObservedInvokeProxyDialBackRequest) -> Void = { _ in },
+            onResponseFromProxy: @escaping @Sendable (ObservedInvokeProxyDialBackResponse) -> Void
+        ) {
+            self.onRequestToProxy = onRequestToProxy
+            self.onResponseFromProxy = {
+                onResponseFromProxy($0)
+                return .passthrough
+            }
         }
     }
 }
@@ -275,10 +339,10 @@ extension PCCHarness {
     /// Configuration for injecting test ensemble selections during negotiate/pick
     public struct InjectedEnsembleSelectionConfig: Sendable {
         /// Strategy for injecting ensemble selection
-        public let strategy: EnsembleInjectionStrategy
+        public var strategy: EnsembleInjectionStrategy
 
         /// If true, the injected selection is expected to fail validation
-        public let expectValidationFailure: Bool
+        public var expectValidationFailure: Bool
 
         public init(
             strategy: EnsembleInjectionStrategy,

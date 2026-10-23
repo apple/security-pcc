@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -33,6 +33,14 @@ package struct ReuseTargetConstraints: Hashable, ByteBufferCodable, Sendable {
         self.workloadAdditions = workloadAdditions
     }
 
+    package func withoutRack() -> ReuseTargetConstraints {
+        return .init(
+            ensemble: self.ensemble,
+            rack: nil,
+            workloadAdditions: self.workloadAdditions
+        )
+    }
+
     package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
         try self.ensemble.encode(to: &buffer)
         try self.rack.encode(to: &buffer)
@@ -64,6 +72,11 @@ package struct FindWorkerQuery: Hashable, ByteBufferCodable, Sendable {
     /// - For subrequest-level: Sourced from OpenSubrequestPayload
     public var oneTimeToken: Data?
     public var isDiscardable: Bool
+    /// Identifier if this qeury is part of a subrequest.
+    public var subrequestID: UInt64?
+    /// When true, cb_jobhelper delivers non-discardable find-worker / worker-session failures to
+    /// the cloud app instead of triggering teardown.
+    public var deliversNonDiscardableFailures: Bool
 
     public init(
         workerID: UUID,
@@ -77,7 +90,9 @@ package struct FindWorkerQuery: Hashable, ByteBufferCodable, Sendable {
         spanID: UInt64,
         groupID: String? = nil,
         oneTimeToken: Data? = nil,
-        isDiscardable: Bool
+        isDiscardable: Bool,
+        subRequestID: UInt64? = nil,
+        deliversNonDiscardableFailures: Bool = false
     ) {
         self.workerID = workerID
         self.serviceName = serviceName
@@ -93,6 +108,8 @@ package struct FindWorkerQuery: Hashable, ByteBufferCodable, Sendable {
         self.groupID = groupID
         self.oneTimeToken = oneTimeToken
         self.isDiscardable = isDiscardable
+        self.subrequestID = subRequestID
+        self.deliversNonDiscardableFailures = deliversNonDiscardableFailures
     }
 
     @inlinable
@@ -109,6 +126,8 @@ package struct FindWorkerQuery: Hashable, ByteBufferCodable, Sendable {
         try self.groupID.encode(to: &buffer)
         try self.oneTimeToken.encode(to: &buffer)
         try self.isDiscardable.encode(to: &buffer)
+        try self.subrequestID.encode(to: &buffer)
+        try self.deliversNonDiscardableFailures.encode(to: &buffer)
     }
 
     public init(from buffer: inout ByteBuffer) throws {
@@ -124,7 +143,9 @@ package struct FindWorkerQuery: Hashable, ByteBufferCodable, Sendable {
             spanID: .init(from: &buffer),
             groupID: .init(from: &buffer),
             oneTimeToken: .init(from: &buffer),
-            isDiscardable: .init(from: &buffer)
+            isDiscardable: .init(from: &buffer),
+            subRequestID: .init(from: &buffer),
+            deliversNonDiscardableFailures: .init(from: &buffer)
         )
     }
 }
@@ -140,9 +161,17 @@ package struct PickOptions: ByteBufferCodable, Hashable, Sendable, CustomStringC
     /// NumSelectedChoices in the negotiate setup message
     package var allowedEnsemblesFromProxy: Int
 
+    /// The maximum integer factor by which ROPES may scale the announced ratio.
+    /// ROPES may return `requiredEnsemblesFromROPES * s` ensembles for any integer `s` in
+    /// `[1, ratioCanScaleTo]`, in which case the proxy accepts `allowedEnsemblesFromProxy * s` of
+    /// them, preserving the ratio. Always >= 1; a zero or negative input is normalised to 1,
+    /// and a value of 1 means no scaling.
+    package var ratioCanScaleTo: Int
+
     package init(
         requiredEnsemblesFromROPES: Int,
-        allowedEnsemblesFromProxy: Int
+        allowedEnsemblesFromProxy: Int,
+        ratioCanScaleTo: Int
     ) {
         /// These numbers are driven from config, if fundamentally invalid the system is unusable
         guard requiredEnsemblesFromROPES >= 1, allowedEnsemblesFromProxy >= 1,
@@ -153,20 +182,24 @@ package struct PickOptions: ByteBufferCodable, Hashable, Sendable, CustomStringC
         }
         self.requiredEnsemblesFromROPES = Int(requiredEnsemblesFromROPES)
         self.allowedEnsemblesFromProxy = Int(allowedEnsemblesFromProxy)
+        /// A zero or negative scale factor is meaningless and simply means "no scaling".
+        self.ratioCanScaleTo = max(1, ratioCanScaleTo)
     }
 
     package var description: String {
-        "\(self.allowedEnsemblesFromProxy) from \(self.requiredEnsemblesFromROPES)"
+        "\(self.allowedEnsemblesFromProxy) from \(self.requiredEnsemblesFromROPES) (scale to \(self.ratioCanScaleTo))"
     }
 
     package func encode(to buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
         buffer.writeHostInteger(self.requiredEnsemblesFromROPES)
         buffer.writeHostInteger(self.allowedEnsemblesFromProxy)
+        buffer.writeHostInteger(self.ratioCanScaleTo)
     }
 
     package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
         self.requiredEnsemblesFromROPES = try buffer.readHostIntegerOrThrow()
         self.allowedEnsemblesFromProxy = try buffer.readHostIntegerOrThrow()
+        self.ratioCanScaleTo = try buffer.readHostIntegerOrThrow()
     }
 }
 
@@ -227,7 +260,8 @@ package struct Negotiate: ByteBufferCodable, Hashable, Sendable {
             freeChoice: false,
             pick: PickOptions(
                 requiredEnsemblesFromROPES: requiredEnsemblesFromROPES,
-                allowedEnsemblesFromProxy: allowedEnsemblesFromProxy
+                allowedEnsemblesFromProxy: allowedEnsemblesFromProxy,
+                ratioCanScaleTo: 1
             )
         )
     }

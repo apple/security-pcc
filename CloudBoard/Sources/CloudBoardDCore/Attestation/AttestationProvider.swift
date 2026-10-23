@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -29,6 +29,13 @@ public enum AttestationError: Error {
     case unknownOrExpiredKeyID(_ keyID: Data)
 }
 
+/// Transparency log tree ID and revision extracted from an attestation bundle's transparency proof.
+/// Either value may be absent if the bundle carries no transparency proof.
+struct TransparencyLogInfo: Equatable, Sendable {
+    var treeID: UInt64?
+    var revision: UInt64?
+}
+
 /// Obtains and manages attestations provided by cb_attestationd
 final actor AttestationProvider: CloudBoardAttestationAPIClientDelegateProtocol {
     private static let metricsRecordingInterval: Duration = .seconds(60)
@@ -46,6 +53,9 @@ final actor AttestationProvider: CloudBoardAttestationAPIClientDelegateProtocol 
     // maintained as an efficient lookup for the proxy
     // Only required by the proxy, but harmless to maintain anyway
     private var keyIDToTransitivelyTrustedReleases: [Data: [String]] = .init()
+    // Transparency log tree ID and revision for each attestation, keyed by key ID.
+    // As with the releases above, only the proxy needs this but it is harmless to maintain.
+    private var keyIDToTransparencyLogInfo: [Data: TransparencyLogInfo] = .init()
 
     private var attestationInvalidFlag: Bool = false
     private var healthMonitors: [ServiceHealthMonitor]
@@ -130,8 +140,13 @@ final actor AttestationProvider: CloudBoardAttestationAPIClientDelegateProtocol 
         // If any old key is not longer supported by attestationd it's useless anyway, and this avoids
         // trying to manage expiry to avoid a slow memory leak
         self.keyIDToTransitivelyTrustedReleases.removeAll()
+        self.keyIDToTransparencyLogInfo.removeAll()
         for attestation in attestationSet.allAttestations {
             self.keyIDToTransitivelyTrustedReleases[attestation.keyID] = attestation.proxiedReleaseDigests
+            self.keyIDToTransparencyLogInfo[attestation.keyID] = TransparencyLogInfo(
+                treeID: attestation.transparencyTreeID,
+                revision: attestation.transparencyRevision
+            )
         }
     }
 
@@ -143,7 +158,7 @@ final actor AttestationProvider: CloudBoardAttestationAPIClientDelegateProtocol 
     }
 
     func keyRotated(newKeySet _: CloudBoardAttestationDAPI.AttestedKeySet) async throws {
-        // attestationRotated covers us
+        Self.logger.error("Unexpected to receive key rotation notification from attestation daemon")
     }
 
     /// Used to force an attestation to be dropped entirely - this may trigger a new attestation
@@ -195,6 +210,22 @@ final actor AttestationProvider: CloudBoardAttestationAPIClientDelegateProtocol 
             throw AttestationError.unknownOrExpiredKeyID(keyID)
         }
         return releases
+    }
+
+    /// Find the transparency log tree ID and revision associated to the attestation with key `keyID`.
+    /// If no such attestation is known (whether through loss, or expiry) this throws.
+    func findTransparencyLogInfo(keyID: Data) async throws -> TransparencyLogInfo {
+        // this really only covers unit tests where the system is assumed to always
+        // have had one successful call (because cloudboard daemon does this)
+        if !self.attestationStateMachine.hasCompletedSuccessfullyAtLeastOnce {
+            // this is called on the hotpath, so don't block forever if this
+            // assumption was wrong
+            _ = try await self.currentAttestationSetWithTimeout()
+        }
+        guard let info = self.keyIDToTransparencyLogInfo[keyID] else {
+            throw AttestationError.unknownOrExpiredKeyID(keyID)
+        }
+        return info
     }
 
     func currentAttestationSet() async throws -> AttestationSet {

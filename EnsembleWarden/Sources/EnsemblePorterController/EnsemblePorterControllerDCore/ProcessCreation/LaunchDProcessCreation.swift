@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,6 +24,7 @@ package import EnsemblePorter
 package import EnsemblePorterCommon
 package import Foundation
 private import OSLog
+private import Synchronization
 private import System
 private import XPC
 private import XPCPrivate
@@ -31,19 +32,99 @@ private import XPCPrivate
 /// Creates porter processes using launchd.
 ///
 /// This is how we manage processes running in production.
-package struct LaunchDProcessCreation: ProcessCreationProtocol, Sendable {
+package final class LaunchDProcessCreation: ProcessCreationProtocol, Sendable {
     private let metrics: EnsemblePorterMetrics
     private let logger = Logger(subsystem: EnsemblePorterConstants.controllerLoggerSubsystem,
                                 category: "EnsemblePorterControllerProduction")
+    /// Last instances created, ordered from oldest to newest
+    private let createdInstanceUUIDs: Mutex<[UUID]> = .init([])
+    /// Hard ceiling against runaway porter leaks. Sized well above expected steady-state
+    /// concurrency (≤ 3 active porters per host today) so that hitting it indicates a real
+    /// leak — not normal load. Hitting this cap evicts a live porter, which can crash a
+    /// concurrent leader's request, so any time `maxPortersReached` is non-zero is an
+    /// alarm-worthy event.
+    private let maxInstances: Int
 
-    package init(metrics: EnsemblePorterMetrics) {
+    package init(metrics: EnsemblePorterMetrics,
+                 maxInstances: Int = EnsemblePorterConstants.maxPorterInstances) {
         self.metrics = metrics
+        self.maxInstances = maxInstances
+    }
+
+    /// Returns the UUIDs of every managed launchd job instance for `ensemblefollowerporterd`.
+    ///
+    /// This reflects launchd's view of the world — it can include instances created by
+    /// previous incarnations of `ensembleportercontrollerd` that survived a controller
+    /// restart. The controller's heartbeat-timeout sweep is responsible for reaping
+    /// any UUID returned here that the controller has no record of.
+    package func runningInstances() throws -> [UUID] {
+        var uuids: [UUID] = []
+        let jobs = try OSLaunchdJob.copyJobsManaged(
+            by: EnsemblePorterConstants.managedByEnsemblePorterControllerLabel)
+        for job in jobs {
+            guard let jobInfo = job.getCurrentJobInfo() else {
+                continue
+            }
+            guard let instance = jobInfo.instance else {
+                continue
+            }
+            uuids.append(instance)
+        }
+        return uuids
+    }
+
+    /// If the in-memory + launchd-tracked porter set is over `maxInstances`, evict the oldest.
+    /// This is a leak guard, not a concurrency cap: any time it fires we may be killing a porter
+    /// that a concurrent leader is still using, which crashes that leader's request.
+    private func cleanupStaleInstances()  {
+        let running = try? self.runningInstances()
+        guard let running else {
+            logger.error("Unable to get running porter instances")
+            return
+        }
+
+        let oldest = self.createdInstanceUUIDs.withLock {
+            $0 = $0.filter {
+                running.contains($0)
+            }
+            return $0.first
+        }
+
+        if running.count > 0 {
+            let uuids = running.map { $0.uuidString }.joined(separator: ", ")
+            logger.log("""
+                Currently running porter instances: \(running.count) \
+                (\(uuids, privacy: .public))
+                """)
+        } else {
+            logger.log("Currently running porter instances: none")
+        }
+
+        guard running.count >= self.maxInstances else {
+            return
+        }
+
+        // ALARM: reaching this cap means a porter is being evicted while still in use,
+        // which will crash a concurrent leader's request. The metric is the alarm signal.
+        self.metrics.maxPortersReached.increment()
+        logger.error("""
+            Reached max porters, removing oldest. \
+            max_instances=\(self.maxInstances)
+            """)
+        guard let oldest else {
+            logger.error("Unable to find oldest porter instance UUID")
+            return
+        }
+        logger.info("Oldest porter is \(oldest)")
+
+        try? self.removeInstance(instanceUUID: oldest)
     }
 
     package func createInstance() async throws -> UUID {
         logger.log("""
             Starting new ensemblefollowerporterd.
             """)
+        self.cleanupStaleInstances()
         var instanceUUID = UUID()
         let managedJobs = try OSLaunchdJob.copyJobsManaged(by: EnsemblePorterConstants.managedByEnsemblePorterControllerLabel)
         // Only get the original launchd job, not all instances of this job
@@ -60,7 +141,7 @@ package struct LaunchDProcessCreation: ProcessCreationProtocol, Sendable {
                 actual=\(managedJobs.count) \
                 process_token=\(instanceUUID, privacy: .sensitive)
                 """)
-            metrics.instanceCreationFailure.increment()
+            metrics.recordInstanceCreation(success: false)
             throw EnsemblePorterError.launchdManagedJobMismatch(expected: 1, actual: managedJobs.count)
         }
         logger.log("""
@@ -73,6 +154,9 @@ package struct LaunchDProcessCreation: ProcessCreationProtocol, Sendable {
             let jobInstance = try withUnsafeMutablePointer(to: &instanceUUID) { id in
                 try job.createInstance(id)
             }
+            self.createdInstanceUUIDs.withLock {
+                $0.append(instanceUUID)
+            }
 
             jobInstance.monitor(on: DispatchQueue.global()) { jobInfo, errno in
                 self.handleJobInfoUpdate(
@@ -83,11 +167,11 @@ package struct LaunchDProcessCreation: ProcessCreationProtocol, Sendable {
                 )
             }
         } catch {
-            metrics.instanceCreationFailure.increment()
+            metrics.recordInstanceCreation(success: false)
             throw error
         }
 
-        metrics.instanceCreationSuccess.increment()
+        metrics.recordInstanceCreation(success: true)
         return instanceUUID
     }
 
@@ -118,7 +202,18 @@ package struct LaunchDProcessCreation: ProcessCreationProtocol, Sendable {
         return provider
     }
 
-    package func removeInstance(instanceUUID: UUID) async throws {
+    package func isInstanceRunning(instanceUUID: UUID) -> Bool {
+        guard let running = try? self.runningInstances() else {
+            return false
+        }
+        return running.contains(instanceUUID)
+    }
+
+    package func runningInstanceCount() throws -> Int {
+        return try self.runningInstances().count
+    }
+
+    package func removeInstance(instanceUUID: UUID) throws {
         logger.log("""
             Removing porter instance. \
             instance_uuid=\(instanceUUID, privacy: .public)
@@ -136,7 +231,7 @@ package struct LaunchDProcessCreation: ProcessCreationProtocol, Sendable {
         }) else {
             logger.error("""
                 Attempted to remove unknown instance. \
-                instance_uuid=\(instanceUUID, privacy: .sensitive)
+                instance_uuid=\(instanceUUID, privacy: .public)
                 """)
             throw EnsemblePorterError.unexpectedError
         }
@@ -147,15 +242,23 @@ package struct LaunchDProcessCreation: ProcessCreationProtocol, Sendable {
 
             logger.log("""
                 Successfully removed porter instance. \
-                instance_uuid=\(instanceUUID, privacy: .sensitive)
+                instance_uuid=\(instanceUUID, privacy: .public)
                 """)
-        } catch {
-            logger.error("""
-                Failed to remove porter instance. \
-                instance_uuid=\(instanceUUID, privacy: .sensitive) \
-                error=\(String(reportable: error), privacy: .public)
-                """)
-            throw error
+        } catch let error as NSError {
+            if error.domain == "OSLaunchdErrorDomain",
+               error.code == EINPROGRESS {
+                logger.info("""
+                    Removal already in progress for porter instance. \
+                    instance_uuid=\(instanceUUID, privacy: .public)
+                    """)
+            } else {
+                logger.error("""
+                    Failed to remove porter instance. \
+                    instance_uuid=\(instanceUUID, privacy: .public) \
+                    error=\(String(reportable: error), privacy: .public)
+                    """)
+                throw error
+            }
         }
     }
 
@@ -171,12 +274,14 @@ package struct LaunchDProcessCreation: ProcessCreationProtocol, Sendable {
                 errno=\(errno) \
                 process_token=\(processToken, privacy: .sensitive)
                 """)
-            metrics.instanceCreationFailure.increment()
+            metrics.recordInstanceCreation(success: false)
             return
         }
         switch jobInfo.state {
         case .neverRan:
-            logger.log("""
+            // Every job traverses this state on the way to `.running`, so this fires once per
+            // porter instance.
+            logger.debug("""
                 ensemblefollowerporterd launchd job reported neverRan. \
                 process_token=\(processToken, privacy: .sensitive)
                 """)
@@ -192,7 +297,7 @@ package struct LaunchDProcessCreation: ProcessCreationProtocol, Sendable {
                 errno=\(errNo, privacy: .public) \
                 process_token=\(processToken, privacy: .sensitive)
                 """)
-            metrics.instanceCreationFailure.increment()
+            metrics.recordInstanceCreation(success: false)
         case .exited:
             logger.log("""
                 ensemblefollowerporterd process reported exit. \
@@ -202,4 +307,3 @@ package struct LaunchDProcessCreation: ProcessCreationProtocol, Sendable {
         }
     }
 }
-

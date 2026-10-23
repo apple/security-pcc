@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,14 +19,27 @@ import os
 #endif
 public final class OSLogWriter: EHTransform {
     public let name = "OSLogWriter"
-    private let log = EHLog.withCategory(EventHorizonKit.eventCategory)
-    let encoder = JSONEncoder()
+    private let log: EHLog.EHLoggerType
+    let encoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.outputFormatting = [.withoutEscapingSlashes]
+        return e
+    }()
+
+    private let eventTypeFilter: Set<String>?
+
+    public init(eventTypeFilter: Set<String>? = nil, category: String? = nil) {
+        self.eventTypeFilter = eventTypeFilter
+        self.log = EHLog.withCategory(category ?? EventHorizonKit.eventCategory)
+    }
+
     public func process(_ event: any EHUEFEvent) -> EHTransformReturn {
-        os_log(.info, log: log, "category: \(event.event_category.rawValue), type: \(event.event_type, privacy: .public), jsondata: \(event.jsonString, privacy: .public)")
+        if let eventTypeFilter, !eventTypeFilter.contains(event.event_type) {
+            return (.proceed, nil, nil, nil)
+        }
+        os_log(.info, log: log, "\(event.jsonString, privacy: .public)")
         return (.proceed, nil, nil, nil)
     }
 
-    public func configure() throws { }
-
-    public init() {}
+    public func configure() async throws { }
 }

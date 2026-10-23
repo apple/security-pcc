@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -32,7 +32,6 @@ struct AttestationDistributionMetric: CloudTelemetryReportable {
         case eventTime = "eventTime"
         case environment = "env"
         case clientInfo = "appleClientInfo"
-        case locale = "appleLocale"
 
         case attestationDistribution = "attestationDistribution"
         case attestationSource = "attestationSource"
@@ -45,7 +44,6 @@ struct AttestationDistributionMetric: CloudTelemetryReportable {
         eventTime: Date,
         environment: String,
         systemInfo: SystemInfo,
-        locale: Locale,
         attestationSource: NodeReceivingSource,
         totalNumberOfAttestations: Int,
         attestationDistribution: String?
@@ -54,7 +52,6 @@ struct AttestationDistributionMetric: CloudTelemetryReportable {
             .eventTime: .int(Int64(eventTime.timeIntervalSince1970)),
             .environment: .string(environment),
             .clientInfo: .string(systemInfo.osInfoWithDeviceModel),
-            .locale: .string(locale.identifier),
             .attestationSource: .string(attestationSource.rawValue),
             .totalNumberOfAttestations: .int(Int64(Int.roundToOneSignificantFigure(totalNumberOfAttestations))),
         ]

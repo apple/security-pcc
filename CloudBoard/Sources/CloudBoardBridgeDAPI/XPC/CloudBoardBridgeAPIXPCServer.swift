@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,6 +13,7 @@
 // 10/02/2024
 
 internal import CloudBoardAsyncXPC
+internal import CloudBoardDomain
 import os
 
 public actor CloudBoardBridgeAPIXPCServer {
@@ -23,13 +24,16 @@ public actor CloudBoardBridgeAPIXPCServer {
 
     private let listener: CloudBoardAsyncXPCListener
     private weak var delegate: CloudBoardBridgeAPIServerDelegateProtocol?
+    private let enforceEntitlements: Bool
 
     init(
         listener: CloudBoardAsyncXPCListener,
-        delegate: CloudBoardBridgeAPIServerDelegateProtocol?
+        delegate: CloudBoardBridgeAPIServerDelegateProtocol?,
+        enforceEntitlements: Bool = true,
     ) {
         self.listener = listener
         self.delegate = delegate
+        self.enforceEntitlements = enforceEntitlements
     }
 }
 
@@ -38,9 +42,11 @@ extension CloudBoardBridgeAPIXPCServer {
         self.init(
             listener: CloudBoardAsyncXPCListener(
                 localService: kCloudBoardBridgeAPIXPCLocalServiceName,
-                entitlement: kCloudBoardBridgeAPIXPCLocalServiceEntitlement
+                entitlement: kCloudBoardBridgeAPIXPCOutboundRequestEntitlement,
+                singleClient: false
             ),
-            delegate: nil
+            delegate: nil,
+            enforceEntitlements: true
         )
     }
 }
@@ -56,11 +62,23 @@ extension CloudBoardBridgeAPIXPCServer: CloudBoardBridgeAPIServerProtocol {
         self.delegate = delegate
     }
 
-    internal func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
+    internal nonisolated func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
+        handlers.register(ClientToServerMessage.Ping.self) { [weak self] _ in
+            guard let self else {
+                throw CloudBoardAsyncXPCError.noConnection
+            }
+            return ExplicitSuccess()
+        }
+
         handlers.register(ClientToServerMessage.MakeEncryptedPIRRequest.self) { [weak self] message in
             guard let self else {
                 throw CloudBoardAsyncXPCError.noConnection
             }
+
+            try await self.validateEntitlements(
+                expectedEntitlement: OutboundRequestEntitlement.privateInformationRetrieval
+            )
+
             guard let delegate = await self.delegate else {
                 Self.logger.error("No delegate set to handle MakeEncryptedPIRRequest message")
                 throw CloudBoardXPCAPIError.noDelegateSet
@@ -69,6 +87,101 @@ extension CloudBoardBridgeAPIXPCServer: CloudBoardBridgeAPIServerProtocol {
                 message.encryptedRequest,
                 traceContext: message.traceContext
             )
+        }
+
+        handlers.register(PCCToolInvocationMessage.self) { [weak self] message in
+            guard let self else {
+                throw CloudBoardAsyncXPCError.noConnection
+            }
+
+            try await self.validateEntitlements(
+                expectedEntitlement: OutboundRequestEntitlement.toolInvocation
+            )
+
+            guard let delegate = await self.delegate else {
+                Self.logger.error("No delegate set to handle PCCToolInvocationMessage")
+                throw CloudBoardXPCAPIError.noDelegateSet
+            }
+            return try await delegate.makeToolInvocationRequest(message.request)
+        }
+
+        handlers.register(InternalAppleSigningServiceSignMessage.self) { [weak self] message in
+            guard let self else {
+                throw CloudBoardAsyncXPCError.noConnection
+            }
+            try await self.validateEntitlements(
+                expectedEntitlement: OutboundRequestEntitlement.appleSigningService
+            )
+            guard let delegate = await self.delegate else {
+                Self.logger.error("No delegate set to handle InternalAppleSigningServiceSignMessage")
+                throw CloudBoardXPCAPIError.noDelegateSet
+            }
+            return try await delegate.makeAppleSigningServiceSignRequest(
+                message.request,
+                traceContext: message.traceContext
+            )
+        }
+
+        handlers.register(InternalAppleSigningServiceGetKeyVersionsMessage.self) { [weak self] message in
+            guard let self else {
+                throw CloudBoardAsyncXPCError.noConnection
+            }
+            try await self.validateEntitlements(
+                expectedEntitlement: OutboundRequestEntitlement.appleSigningService
+            )
+            guard let delegate = await self.delegate else {
+                Self.logger.error("No delegate set to handle InternalAppleSigningServiceGetKeyVersionsMessage")
+                throw CloudBoardXPCAPIError.noDelegateSet
+            }
+            return try await delegate.makeAppleSigningServiceGetKeyVersionsRequest(traceContext: message.traceContext)
+        }
+
+        handlers.register(InternalCIPCompanionServiceVerifyImageMessage.self) { [weak self] message in
+            guard let self else {
+                throw CloudBoardAsyncXPCError.noConnection
+            }
+            try await self.validateEntitlements(
+                expectedEntitlement: OutboundRequestEntitlement.cipCompanionService
+            )
+            guard let delegate = await self.delegate else {
+                Self.logger.error("No delegate set to handle InternalCIPCompanionServiceVerifyImageMessage")
+                throw CloudBoardXPCAPIError.noDelegateSet
+            }
+            return try await delegate.makeCIPCompanionServiceVerifyImageRequest(
+                message.request,
+                traceContext: message.traceContext
+            )
+        }
+    }
+
+    private func validateEntitlements(expectedEntitlement: OutboundRequestEntitlement) async throws {
+        guard let xpcConnection = CloudBoardAsyncXPCContext.context?.peerConnection else {
+            // This is a programming error, there is no condition where we would get a message but not have
+            // a `peerConnection` available.
+            Self.logger.error("xpcConnection not available")
+            assertionFailure("xpcConnection not available")
+            throw CloudBoardXPCAPIError.internalError
+        }
+
+        let entitlements = await xpcConnection.getEntitlement(
+            kCloudBoardBridgeAPIXPCOutboundRequestEntitlement
+        )
+
+        if self.enforceEntitlements {
+            guard entitlements.contains(expectedEntitlement.rawValue) else {
+                Self.logger.error("""
+                \(xpcConnection.name, privacy: .public) not entitled to make 
+                \(expectedEntitlement.rawValue, privacy: .public) request
+                """)
+                fatalError("\(xpcConnection.name) not entitled to make \(expectedEntitlement.rawValue) request")
+            }
+        } else {
+            if !entitlements.contains(expectedEntitlement.rawValue) {
+                Self.logger.error("""
+                    \(xpcConnection.name, privacy: .public) not entitled to make 
+                    \(expectedEntitlement.rawValue, privacy: .public) requests but this check is disabled
+                """)
+            }
         }
     }
 }

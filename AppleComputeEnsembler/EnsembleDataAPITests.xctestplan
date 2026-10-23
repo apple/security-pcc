@@ -1,0 +1,58 @@
+{
+  "configurations" : [
+    {
+      "id" : "2102F76D-BD83-46D3-AC11-573AA0641DDA",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : false,
+    "performanceAntipatternCheckerEnabled" : true
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : false,
+      "skippedTests" : {
+        "suites" : [
+          {
+            "name" : "EnsembleConfigurationSwiftTests"
+          }
+        ],
+        "xctestClasses" : [
+          {
+            "name" : "EnsembleConfigurationTests",
+            "xctestMethods" : [
+              "testConcurrentLeaderToFollowerMessagingWithRotateKey()",
+              "testInvalidRankChassisIDConfiguration()",
+              "testStateMachinesEigthNodeOrdered()",
+              "testStateMachinesEigthNodeUnordered()",
+              "testStateMachinesFourNodeOrdered()",
+              "testStateMachinesFourNodeUnordered()",
+              "testStateMachinesSingleNode()",
+              "testStateMachinesSixteenNodeOrdered()",
+              "testStateMachinesSixteenNodeUnOrdered()",
+              "testStateMachinesThirtyTwoNodeOrdered()",
+              "testStateMachinesThirtyTwoNodeUnOrdered()",
+              "testStateMachinesTwoNodeKeyrotation()",
+              "testStateMachinesTwoNodeOrdered()",
+              "testStateMachinesTwoNodeUnordered()",
+              "testStateMachinesTwoNodeWithFailure()",
+              "testUnorderedRestarts()",
+              "testValidateDistributeDataKey()",
+              "testValidRankChassisIDConfiguration()"
+            ]
+          }
+        ]
+      },
+      "target" : {
+        "containerPath" : "container:AppleComputeEnsembler.xcodeproj",
+        "identifier" : "0D4CE0C62F40DADB00BD81D1",
+        "name" : "EnsembleDataAPITests"
+      }
+    }
+  ],
+  "version" : 2
+}

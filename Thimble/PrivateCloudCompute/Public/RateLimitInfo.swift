@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -26,9 +26,11 @@ import Foundation
 // across XPC.
 
 package struct RateLimitInfo: Sendable, Codable {
+    package var rateLimitSource: RateLimitSource
     // filter applied
     package var bundleID: String?
     package var featureID: String?
+    package var qos: QoS?
     package var workloadType: String?
     package var workloadTags: [WorkloadTag]
     package struct WorkloadTag: Sendable, Codable {
@@ -48,16 +50,20 @@ package struct RateLimitInfo: Sendable, Codable {
     package var retryAfterDate: Date
 
     package init(
+        rateLimitSource: RateLimitSource,
         bundleID: String?,
         featureID: String?,
+        qos: QoS?,
         workloadType: String?,
         workloadTags: [WorkloadTag],
         count: UInt,
         duration: TimeInterval,
         retryAfterDate: Date
     ) {
+        self.rateLimitSource = rateLimitSource
         self.bundleID = bundleID
         self.featureID = featureID
+        self.qos = qos
         self.workloadType = workloadType
         self.workloadTags = workloadTags
         self.count = count
@@ -65,13 +71,19 @@ package struct RateLimitInfo: Sendable, Codable {
         self.retryAfterDate = retryAfterDate
     }
 
-    package init(retryAfter: TimeInterval?, retryAfterDate: Date) {
+    package init(rateLimitSource: RateLimitSource, retryAfter: TimeInterval?, retryAfterDate: Date) {
+        self.rateLimitSource = rateLimitSource
         self.bundleID = nil
         self.featureID = nil
+        self.qos = nil
         self.workloadType = nil
         self.workloadTags = []
         self.count = 0
         self.duration = retryAfter ?? 0.0
         self.retryAfterDate = retryAfterDate
+    }
+
+    package var deniesAllRequests: Bool {
+        count == 0
     }
 }

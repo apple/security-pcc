@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,12 +17,12 @@
 // When testing (never in customer) it is not always tenable to get a proper SEP backed key and associated
 // CloudAttestation. Instead conventional (in memroy) keys are used.
 // The clients are informed of these keys through a serialisation protocol that must 'fit' into the same
-// messages as are used for the real CloudAttestaions (as this is how the PublicKey and other information is
+// messages as are used for the real CloudAttestations (as this is how the PublicKey and other information is
 // passed in the proper production paths to retain the needed privacy gurantees)
 //
 // Since the attestation format is not controled by this project, and has important verifiability requirements,
 // it is undesirable for the testing code paths to try to 'fake' something that is parsable as a
-// CloudAttestaion. An alternative format is therefore required which can be hidden behind an abstraction
+// CloudAttestation. An alternative format is therefore required which can be hidden behind an abstraction
 // layer. This code provides that formatting so it can be defined in one place
 //
 // Since:
@@ -44,19 +44,104 @@ import Foundation
 /// The data available on this may change over time, the wire format backing it supports it.
 /// This looks very like the `ValidatedAttestation`` type - that is because it is attempting to
 /// encode all the data that can provide
-package struct TestOnlyAttestationInfo: Codable, Sendable {
+
+/// We take complete control of what is serialized because it needs to be stable
+/// We also want to retain strong backward compatibility for the last version
+///
+/// This enum functions as a namespace for all types involved in the serialisation.
+/// Types may be used in many versions where their format is unchanged, or where the change is
+/// trivially compatible (for example adding an optional field). Anything retained solely for compatibility
+/// should be marked as such.
+///
+/// Where types are reasonable to use as both the basis for the encoding format and the API
+/// they may be placed in a package extension. Where they are solely for the encoding (say to retain
+/// backward compatibility keep them fileprivate
+internal enum TestOnlyAttestationFormat {}
+
+extension TestOnlyAttestationFormat {
+    // Note: Version 0 is no longer supported, this was simply the PublickKey and KEM
+    // We detect it to trigger a clean error
+
+    /// Version 1 information embedded in the attestation
+    struct Info: Codable {
+        var expiration: Date
+        var releaseDigest: String
+        var computeNodeMetadata: [String: Data]?
+        /// older forms used udid instead of hardwareID - we emit both and parse both
+        /// to retain compatibility till the older implementations are no longer in use
+        var udid: String?
+        var hardwareID: String?
+        var appData: TestOnlyAttestationInfo.AppData
+
+        init(info: TestOnlyAttestationInfo) {
+            self.expiration = info.expiration
+            self.releaseDigest = info.releaseDigest
+            self.computeNodeMetadata = info.computeNodeMetadata
+            // write to both names so older versions will understand it
+            self.udid = info.hardwareID
+            self.hardwareID = info.hardwareID
+            self.appData = info.appData
+        }
+    }
+
+    /// Version 1 complete bundle
+    struct Version1: Codable {
+        // the public key
+        var nameKeyConfiguration: Data
+        // additional information
+        var info: Info
+    }
+}
+
+/// The data available on this may change over time.
+/// This looks very like the `ValidatedAttestation`` type - that is because it is attempting to
+/// encode all the data that can provide
+package struct TestOnlyAttestationInfo: Sendable {
     /// The key should not be used after this date
-    public var expiration: Date
+    package var expiration: Date
 
     /// The SHA256 digest of the release this attestation is for
-    public var releaseDigest: String
+    package var releaseDigest: String
 
-    public var computeNodeMetadata: [String: Data]?
+    package var computeNodeMetadata: [String: Data]?
 
-    /// The UDID of the device
-    public var udid: String?
+    /// the identifier for the device that provided this attestation, equivalent to a UDID
+    package var hardwareID: String?
 
-    package struct ProxyAppData: Codable, Sendable {
+    /// Application-specific data such as the trusted release set for proxy node attestations
+    package var appData: TestOnlyAttestationInfo.AppData
+
+    package init(
+        expiration: Date,
+        releaseDigest: String,
+        appData: TestOnlyAttestationInfo.AppData,
+        computeNodeMetadata: [String: Data],
+        // This is not nillable because CloudAttestations always have a udid
+        // The nillability for the property is because it comes over the wire and we must handle it
+        // not being present
+        hardwareID: String
+    ) {
+        self.expiration = expiration
+        self.releaseDigest = releaseDigest
+        self.appData = appData
+        self.computeNodeMetadata = computeNodeMetadata
+        self.hardwareID = hardwareID
+    }
+
+    fileprivate init(info: TestOnlyAttestationFormat.Info) {
+        self.expiration = info.expiration
+        self.releaseDigest = info.releaseDigest
+        self.appData = info.appData
+        self.computeNodeMetadata = info.computeNodeMetadata
+        /// if both preasent hardwareID wins, fallback to udid for older version support
+        self.hardwareID = info.hardwareID ?? info.udid
+    }
+}
+
+/// Part of the API, and the serialization format
+package extension TestOnlyAttestationInfo {
+    /// Proxy specific additional information
+    struct ProxyAppData: Codable, Sendable {
         /// The SHA256 digests of the releases this attestation transitively trusts
         package var transitivelyTrustedReleaseDigests: [String]
 
@@ -65,7 +150,8 @@ package struct TestOnlyAttestationInfo: Codable, Sendable {
         }
     }
 
-    package struct ComputeAppData: Codable, Sendable {
+    /// Compute specific additional information
+    struct ComputeAppData: Codable, Sendable {
         /// Metadata associated with the compute node app data
         package var metadata: [String: Data]
 
@@ -74,28 +160,11 @@ package struct TestOnlyAttestationInfo: Codable, Sendable {
         }
     }
 
-    // Application specific data contained in the
-    package enum AppData: Codable, Sendable {
+    // Application specific data contained in the attestation
+    enum AppData: Codable, Sendable {
         case none
         case proxy(ProxyAppData)
         case compute(ComputeAppData)
-    }
-
-    /// Application-specific data such as the trusted release set for proxy node attestations
-    public var appData: AppData
-
-    public init(
-        expiration: Date,
-        releaseDigest: String,
-        appData: AppData,
-        computeNodeMetadata: [String: Data],
-        udid: String? = nil
-    ) {
-        self.expiration = expiration
-        self.releaseDigest = releaseDigest
-        self.appData = appData
-        self.computeNodeMetadata = computeNodeMetadata
-        self.udid = udid
     }
 }
 
@@ -104,26 +173,19 @@ package enum TestOnlyAttestationError: Error {
     case invalidKeyId(keyId: UInt8)
     case unsupportedKEM(kem: Data)
     case unexpected(error: StaticString)
+    case jsonOutputNotValidUtf8
 }
 
-// There is the 'old' form of the in memory attestation, which is nothing but
-// public key stored via the OHHTP NameKeyConfigurationEncoding
-// and a new, as yet unwritten one, which allows including the release sets and other information
-// We can differentiate them easily thanks to the original having a fixed size based on the
-// AEAD algorithm over the time period this format was used.
-// The back compatibility mode can be eliminated without worrying about anyone outside of
-// the CloudBoard development team as the InMemoryKey mode is a development tool,
-// not something used outside of ephemeral
+/// The InMemoryKey mode (a development tool) uses this.
+/// Previously it was something which could be broken at will but other components might use it for testing
+/// too so it has a requirement for some degree of backwards and forwards compatibilty.
+/// Since it is relatively simple serialized JSON this is not complex to achieve.
 package enum TestOnlyAttestationBundle {
-    /// https://www.ietf.org/archive/id/draft-thomson-http-oblivious-01.html#name-key-configuration-encoding
-    /// only stores the public key and the KEM (which we ignore anyway)
-    case nameKeyConfigurationEncoding(Curve25519.KeyAgreement.PublicKey)
-
     /// Format that allows for additional metadata to be included in the attestation bundle
     case version1(Curve25519.KeyAgreement.PublicKey, TestOnlyAttestationInfo)
 
-    // Calling code knows which it is making, so just directly ask for the wire form
-
+    /// https://www.ietf.org/archive/id/draft-thomson-http-oblivious-01.html#name-key-configuration-encoding
+    /// only stores the public key and the KEM (which we ignore anyway)
     private static func encodeAsNameKeyConfigurationEncoding(
         for publicKey: any HPKEDiffieHellmanPublicKey,
         kem: HPKE.KEM
@@ -135,44 +197,22 @@ package enum TestOnlyAttestationBundle {
         keyBytes.append(contentsOf: [0x00, 0x04]) // Length of the following in bytes
         keyBytes.append(contentsOf: [0x00, 0x01]) // KDF ID
         keyBytes.append(contentsOf: [0x00, 0x01]) // AEAD ID
-
         return keyBytes
     }
 
-    /// This function should be used only if you want backward compatibility with older client versions
-    /// It will likely be removed in the near future
-    public static func encodeWithOnlyThePublicKey(
-        for publicKey: any HPKEDiffieHellmanPublicKey,
-        kem: HPKE.KEM
-    ) throws -> Data {
-        try self.encodeAsNameKeyConfigurationEncoding(for: publicKey, kem: kem)
-    }
-
-    fileprivate struct Version1: Codable {
-        // the public key
-        var nameKeyConfiguration: Data
-        // additional information
-        var info: TestOnlyAttestationInfo
-    }
-
-    public static func encodeAsNewFormat(
+    package static func encodeAsVersion1(
         for publicKey: any HPKEDiffieHellmanPublicKey,
         kem: HPKE.KEM,
         info: TestOnlyAttestationInfo
     ) throws -> Data {
         var result = Data()
-        // sentinel value, deliberately not the same as the legacy format
+        // sentinel value, deliberately not the same as the prior legacy format
         result.append(0x0F)
         // version number (highly unlikely to change)
         result.append(0x01)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let version1Data = try encoder.encode(
-            Version1(
-                nameKeyConfiguration: self.encodeAsNameKeyConfigurationEncoding(for: publicKey, kem: kem),
-                info: info
-            )
-        )
+        let version1Data = try Self.encodeAsJson(for: publicKey, kem: kem, info: info)
         // Length of version1Data in network byte order as UInt32
         // if the encoded form gets bigger than UInt32.max it's fine to crash, this is testing code
         let length = UInt32(version1Data.count)
@@ -180,6 +220,21 @@ package enum TestOnlyAttestationBundle {
         // The version 1 in JSON coded form
         result.append(contentsOf: version1Data)
         return result
+    }
+
+    private static func encodeAsJson(
+        for publicKey: any HPKEDiffieHellmanPublicKey,
+        kem: HPKE.KEM = Self.kem,
+        info: TestOnlyAttestationInfo
+    ) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(
+            TestOnlyAttestationFormat.Version1(
+                nameKeyConfiguration: self.encodeAsNameKeyConfigurationEncoding(for: publicKey, kem: kem),
+                info: TestOnlyAttestationFormat.Info(info: info)
+            )
+        )
     }
 
     // Could decode more, but we assume the HPKE.KEM
@@ -223,14 +278,22 @@ package enum TestOnlyAttestationBundle {
         return publicKey
     }
 
+    /// Heuristic, returns false if definitely not, true if it might be
+    package static func mightBeThisFormat(bundle data: Data) -> Bool {
+        // 0   : magic byte
+        // 1   : version byte
+        // 2-5 : UInt32 length
+        // 6   : '{' for opening JSON (It is never an array, and we always encode as UTF-8)
+        if data.count >= 7, data[0] == 0x0F, data[1] == 0x01, data[6] == 0x7B {
+            return true
+        }
+        return false
+    }
+
     /// Infer the format from the wire form, if it's unrecognisable it returns nil,
     /// if it recognises the format but fails to parse it will throw
     public init?(data: Data) throws {
-        // Distinguishable by the length and knowing the first byte (key id) is always 0
-        if data.count == 41, data[0] == 0 {
-            let publicKey = try Self.decodeNameKeyConfigurationEncoding(data)
-            self = .nameKeyConfigurationEncoding(publicKey)
-        } else if data.count >= 2, data[0] == 0x0F, data[1] == 0x01 {
+        if data.count >= 2, data[0] == 0x0F, data[1] == 0x01 {
             var data = data
             _ = try data.popUInt8("Magic Number")
             _ = try data.popUInt8("Version")
@@ -241,21 +304,28 @@ package enum TestOnlyAttestationBundle {
                     expected: Int(lengthJson), actual: data.count, section: "Embedded JSON"
                 )
             }
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            let version1 = try decoder.decode(Version1.self, from: data)
-            let publicKey = try Self.decodeNameKeyConfigurationEncoding(version1.nameKeyConfiguration)
-            self = .version1(publicKey, version1.info)
+            self = try Self(jsonData: data)
         } else {
             return nil
         }
     }
 
+    private init(jsonData data: Data) throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let version1 = try decoder.decode(TestOnlyAttestationFormat.Version1.self, from: data)
+        let publicKey = try Self.decodeNameKeyConfigurationEncoding(version1.nameKeyConfiguration)
+        self = .version1(publicKey, TestOnlyAttestationInfo(info: version1.info))
+    }
+
+    /// Construct an ``TestOnlyAttestationBundle`` output of ``jsonString()``
+    public init(jsonString json: String) throws {
+        self = try Self(jsonData: json.data(using: .utf8)!)
+    }
+
     /// All attestations provide the public key
     public var publicKey: Curve25519.KeyAgreement.PublicKey {
         switch self {
-        case .nameKeyConfigurationEncoding(let publicKey):
-            publicKey
         case .version1(let publicKey, _):
             publicKey
         }
@@ -264,17 +334,13 @@ package enum TestOnlyAttestationBundle {
     /// All attestations provide the version as a StaticString for safe logging
     public var version: StaticString {
         switch self {
-        case .nameKeyConfigurationEncoding:
-            "nameKeyConfigurationEncoding"
         case .version1:
-            "newFormat"
+            "version1"
         }
     }
 
     public var releaseDigest: String {
         switch self {
-        case .nameKeyConfigurationEncoding:
-            ""
         case .version1(_, let info):
             info.releaseDigest
         }
@@ -282,19 +348,40 @@ package enum TestOnlyAttestationBundle {
 
     public var appData: TestOnlyAttestationInfo.AppData {
         switch self {
-        case .nameKeyConfigurationEncoding:
-            .none
         case .version1(_, let info):
             info.appData
         }
     }
 
-    public func jsonString() -> String {
-        "\"\(self.publicKey.rawRepresentation.base64EncodedString())\""
+    /// This is assumed/validated in the customer parts too
+    private static let kem = HPKE.KEM.Curve25519_HKDF_SHA256
+
+    /// This is used is LocalCloudBoardClient to make a string representation of the bundle
+    /// It is not expected to be human readable but it should round trip through a constructor taking
+    /// `jsonString`
+    public func jsonString() throws -> String {
+        switch self {
+        case .version1(let key, let info):
+            guard let json = try Self.encodeAsJson(for: key, info: info).utf8String else {
+                throw TestOnlyAttestationError.jsonOutputNotValidUtf8
+            }
+            return json
+        }
     }
 
-    public func serializedData() -> Data {
-        self.publicKey.rawRepresentation
+    /// This is exposed by LocalCloudBoardClient to provide an equivalent to
+    /// ``CloudAttestation/AttestationBundle/serializedData``
+    /// It should round trip via ``init(data:)``
+    public func serializedData() throws -> Data {
+        switch self {
+        case .version1(let key, let info):
+            return try Self.encodeAsVersion1(
+                for: key,
+                // This is assumed/validated in the customer parts too
+                kem: .Curve25519_HKDF_SHA256,
+                info: info
+            )
+        }
     }
 }
 
@@ -359,6 +446,19 @@ extension Data {
     
     var hex: String {
         return reduce("") {$0 + String(format: "%02x", $1)}
+    }
+    
+    /// Converts Data to a UTF-8 encoded String.
+    internal var utf8String: String? {
+        String(data: self, encoding: .utf8)
+    }
+    
+    /// Converts Data to a String by trying utf8, and if not base64 encoding.
+    fileprivate var utf8StringOrBase64: String {
+        guard let s = utf8String else {
+            return self.base64EncodedString()
+        }
+        return s
     }
 }
 

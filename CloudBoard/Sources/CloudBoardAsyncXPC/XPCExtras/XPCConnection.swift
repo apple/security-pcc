@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -74,6 +74,9 @@ internal class XPCLocalConnection {
 
     internal required init(_ connection: xpc_connection_t) {
         self.rawValue = connection
+        // Intentionally unbounded: this stream is used across many XPC connections system-wide,
+        // and bounding it here would risk breaking unrelated subsystems. A backpressure mechanism
+        // acceptable to all consumers would need to be designed holistically.
         (self.events, self.eventsContinuation) = AsyncStream.makeStream()
         xpc_connection_set_event_handler(connection) { [weak self] event in
             guard let self else { return }
@@ -192,10 +195,31 @@ extension XPCLocalConnection: XPCConnection {
     // MARK: Entitlement
 
     internal func hasEntitlement(_ entitlement: String) -> Bool {
-        guard let entitlement = xpc_connection_copy_entitlement_value(self.rawValue, entitlement) else {
+        guard let value = xpc_connection_copy_entitlement_value(self.rawValue, entitlement) else {
             return false
         }
-        return xpc_bool_get_value(entitlement)
+
+        let type = xpc_get_type(value)
+        switch type {
+        case XPC_TYPE_BOOL:
+            return xpc_bool_get_value(value)
+        case XPC_TYPE_ARRAY:
+            return xpc_array_get_count(value) > 0
+        case XPC_TYPE_DICTIONARY:
+            return xpc_dictionary_get_count(value) > 0
+        case XPC_TYPE_STRING:
+            return xpc_string_get_length(value) > 0
+        case XPC_TYPE_DATA:
+            return xpc_data_get_length(value) > 0
+        case XPC_TYPE_INT64:
+            return xpc_int64_get_value(value) != 0
+        case XPC_TYPE_UINT64:
+            return xpc_uint64_get_value(value) != 0
+        case XPC_TYPE_NULL:
+            return false
+        default:
+            return false
+        }
     }
 
     internal func entitlementValue(for entitlement: String) -> [String] {

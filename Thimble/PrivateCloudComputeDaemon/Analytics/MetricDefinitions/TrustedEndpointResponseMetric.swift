@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -34,7 +34,6 @@ struct TrustedEndpointResponseMetric: CloudTelemetryReportable {
         case clientInfo = "appleClientInfo"
         case featureID = "appleFeatureid"
         case bundleID = "appleBundleid"
-        case locale = "appleLocale"
         case clientRequestId = "clientRequestId"
 
         case trustedEndpointResponseSuccess = "trustedEndpointResponseSuccess"
@@ -51,7 +50,6 @@ struct TrustedEndpointResponseMetric: CloudTelemetryReportable {
         environment: String,
         systemInfo: SystemInfo,
         featureID: String?,
-        locale: Locale,
         nodeID: String,
         error: (any Error)?
     ) {
@@ -61,7 +59,6 @@ struct TrustedEndpointResponseMetric: CloudTelemetryReportable {
             .clientRequestId: .string(clientRequestId.uuidString),
             .environment: .string(environment),
             .clientInfo: .string(systemInfo.osInfoWithDeviceModel),
-            .locale: .string(locale.identifier),
             .trustedEndpointResponseNodeIdentifier: .string(nodeID),
         ]
 

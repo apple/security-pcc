@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -37,7 +37,7 @@ extension AttestedTLS {
 
 extension AttestedTLS.KeyType {
     func createKey() throws -> SecKey {
-        let acl = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleAlwaysThisDeviceOnlyPrivate, SecAccessControlCreateFlags.privateKeyUsage, nil)!
+        let acl = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleUntilReboot, SecAccessControlCreateFlags.privateKeyUsage, nil)!
 
         let keyAttr: [CFString: Any]
         switch self {

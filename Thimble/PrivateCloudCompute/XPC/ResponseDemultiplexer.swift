@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,6 +21,8 @@
 
 import OSLog
 import Synchronization
+
+private let logger = Logger(for: .connection)
 
 /// Applicable for long-lived connections where there is a single "response channel" from the
 /// daemon returning responses tagged for different subrequests, and possibly multiple
@@ -100,7 +102,7 @@ final class ResponseDemultiplexer: Sendable {
             consumers = [:]
         }
 
-        mutating func runloopFinished(logPrefix: String, logger: Logger, error: (any Error)? = nil) {
+        mutating func runloopFinished(logPrefix: String, error: (any Error)? = nil) {
             if let error {
                 self.runloopResult = .failure(error)
                 self.finishConsumers(error: error)
@@ -119,16 +121,16 @@ final class ResponseDemultiplexer: Sendable {
 
     private let state = Mutex(State())
     private let logPrefix: String
-    private let logger: Logger
     private let producer: any XPCRequestProxyProtocol
+    private let featureFlagChecker: any FeatureFlagCheckerProtocol
 
-    init(logPrefix: String, logger: Logger, producer: any XPCRequestProxyProtocol) {
+    init(logPrefix: String, producer: any XPCRequestProxyProtocol, featureFlagChecker: any FeatureFlagCheckerProtocol) {
         self.logPrefix = "\(logPrefix) response demultiplexer"
-        self.logger = logger
         self.producer = producer
+        self.featureFlagChecker = featureFlagChecker
     }
 
-    func run(closure: () async throws -> Void) async throws {
+    nonisolated(nonsending) func run(closure: @concurrent () async throws -> Void) async throws {
         logger.log("\(self.logPrefix) run")
         defer {
             logger.log("\(self.logPrefix) run end")
@@ -139,15 +141,15 @@ final class ResponseDemultiplexer: Sendable {
                 // after the adopter finished running the closure, they shouldn't care
                 // what happens during response "draining".
                 do {
-                    try await self.logger.logLifetime("runTheRunloop", logPrefix: self.logPrefix) {
+                    try await logger.logLifetime("runTheRunloop", logPrefix: self.logPrefix) {
                         try await self.runTheRunloop()
                         self.state.withLock {
-                            $0.runloopFinished(logPrefix: self.logPrefix, logger: self.logger)
+                            $0.runloopFinished(logPrefix: self.logPrefix)
                         }
                     }
                 } catch {
                     self.state.withLock {
-                        $0.runloopFinished(logPrefix: self.logPrefix, logger: self.logger, error: error)
+                        $0.runloopFinished(logPrefix: self.logPrefix, error: error)
                     }
                 }
             }
@@ -213,7 +215,7 @@ final class ResponseDemultiplexer: Sendable {
             logger.log("\(self.logPrefix) runloop iteration, shouldReadFromProducer=\(shouldReadFromProducer), revision=\(revision)")
 
             if shouldReadFromProducer {
-                let message: XPCResponseMessage? = try await self.logger.logLifetime("producer next", logPrefix: self.logPrefix) {
+                let message: XPCResponseMessage? = try await logger.logLifetime("producer next", logPrefix: self.logPrefix) {
                     try await self.producer.next()
                 }
 
@@ -307,7 +309,7 @@ final class ResponseDemultiplexer: Sendable {
             if state.canceledRequestIds.contains(requestId) {
                 asyncEvent.fire(throwing: CancellationError())
             } else if let result = state.runloopResult {
-                self.logger.warning("\(self.logPrefix) received new consumer after runloop ended, result=\(String(describing: result))")
+                logger.warning("\(self.logPrefix) received new consumer after runloop ended, result=\(String(describing: result))")
                 switch result {
                 case .success:
                     asyncEvent.fire(throwing: PrivateCloudComputeError(code: .connectionNoLongerRunning))

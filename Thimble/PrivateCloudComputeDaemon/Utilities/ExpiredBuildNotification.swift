@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,7 +25,7 @@ import Foundation
 import PrivateCloudCompute
 import os.log
 
-private let logger = tc2Logger(forCategory: .notifications)
+private let logger = Logger(for: .notifications)
 
 protocol ExpiredBuildNotificationStore: Sendable {
     var expiredBuildLastNotificationTime: Date? { get set }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,19 +13,41 @@
 // 10/02/2024
 
 
+import AST
+
 class MockGenerator: EHGenerator {
     func stop() throws {
         self.done = true
     }
 
-    struct MockEvent: EHUEFEvent {
-        var tags = Set<String>()
-
-        var fields: [String: EHValueType] = [:]
+    struct MockEvent: EHUEFEvent, EHRegoConvertible {
+        var metadata = EHEventMetadata()
         var event_category: EHUEFCategory = .system
         var event_type: String = "mock"
 
         var mock: Bool = true
+
+        init() {}
+
+        init(fields: [String: EHValueType] = [:], tags: Set<String> = []) {
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
+        }
+
+        private static let rkEventType: AST.RegoValue = .string("event_type")
+        private static let rkEventCategory: AST.RegoValue = .string("event_category")
+        private static let rkTags: AST.RegoValue = .string("tags")
+        private static let rkFields: AST.RegoValue = .string("fields")
+        private static let rkMock: AST.RegoValue = .string("mock")
+
+        func toRegoValue() -> AST.RegoValue {
+            var obj: [AST.RegoValue: AST.RegoValue] = [:]
+            obj[Self.rkEventType] = .string(event_type)
+            obj[Self.rkEventCategory] = .string(event_category.rawValue)
+            obj[Self.rkTags] = tags.toRegoValue()
+            obj[Self.rkFields] = fields.toRegoValue()
+            obj[Self.rkMock] = .boolean(mock)
+            return .object(obj)
+        }
     }
 
     func configure(_ pipeline: EHPipeline) throws {

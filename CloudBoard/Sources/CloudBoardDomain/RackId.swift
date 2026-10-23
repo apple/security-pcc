@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -14,18 +14,67 @@
 
 package import CloudBoardAsyncXPC
 
-/// A simple wrapper on a string that represents the rackId
-/// This could be done as a type alias but it's important to note this is the CloudBoard view of what rackId
-/// is, no one elses. And we reserve the right to change it in any way that is necessary
+/// A wrapper on a string that represents the rackId
+/// This is the CloudBoard view of what rackId is, no one elses. since it can control privacy invariants
+/// CloudBoard reserve the right to change it in any way that is necessary
+///
+/// When code using RackId (rather than just passing it along):
+/// * compares two instances for being "on the same rack"
+///    * Use ``IsInSameRackAs(rackID:)``
+/// * Checks if the rackID should be put into a constraint passed to another system
+///   * Use ``isIrrelevant``
+/// * The initialisers may alter the value of the underlying string when they imply the need to treat
+///   it as irrelevant
+///
+/// Note on ABI compatibility:
+/// * Could be an enum, but it would be binary breaking.
+/// * Should have been `RackID` but fixing is breaking.
 public struct RackId: Sendable, Hashable, CustomStringConvertible {
+    /// Special sentinel value to explicitly indicate that the rack of the machine is irrelevant
+    /// This value is *not* considered to match to anything else - including itself
+    private static let rackIsIrrelevant: String = "rack_not_relevant"
+
+    /// Use when the rackId is irrelevant (unknown or the specific value would not matter)
+    /// Any rackID string which would impliy this is unified to be identical to this
+    public static let irrelevant = RackId(Self.rackIsIrrelevant)
+
     public let rackId: String
 
     public init(_ rackId: String) {
-        self.rackId = rackId
+        if Self.treatAsIrrelevant(rackId) {
+            self.rackId = Self.rackIsIrrelevant
+        } else {
+            self.rackId = rackId
+        }
     }
 
     public var description: String {
         self.rackId
+    }
+
+    private static func treatAsIrrelevant(_ rackId: String) -> Bool {
+        // By treating the empty string as the same as explicitly stating irrelevance we make accidental
+        // lack of definition of the rackID safe. Two things presenting an empty rackID should not be
+        // considered to be close in networking terms
+        return rackId.isEmpty || rackId == self.rackIsIrrelevant
+    }
+
+    /// The RackId was irrelevant (either unknown or explcitly marked as such)
+    /// There is no need to try to use it for Reuse or in negotation.
+    /// If such a RackID is passed in it will be silently stripped from any downstream
+    /// communications.
+    public var isIrrelevant: Bool {
+        // make use of all initialisers checking treatAsIrrelevant()
+        self.rackId == Self.rackIsIrrelevant
+    }
+
+    /// if either this instance, or `rackId` are ``isIrrelevant`` this return false,
+    /// otherwise if returns the same as ``Equatable`` would
+    public func IsInSameRackAs(rackID other: RackId) -> Bool {
+        if self.isIrrelevant || other.isIrrelevant {
+            return false
+        }
+        return self == other
     }
 
     // MARK: ByteBufferCodable without declaration
@@ -35,6 +84,11 @@ public struct RackId: Sendable, Hashable, CustomStringConvertible {
     }
 
     package init(from buffer: inout CloudBoardAsyncXPC.ByteBuffer) throws {
-        self.rackId = try String(from: &buffer)
+        let rawValue = try String(from: &buffer)
+        if Self.treatAsIrrelevant(rawValue) {
+            self.rackId = Self.rackIsIrrelevant
+        } else {
+            self.rackId = rawValue
+        }
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -1477,6 +1477,9 @@ AppleCIOMeshService::_meshControlCommandHandler(__unused IOInterruptEventSource 
 			txForwardNotificationHandlerGated(controlPath, &controlCommand->data.txForward);
 			break;
 		case MeshControlCommandType::RawMessage:
+			if (controlMessage->header.data.controlMessage.length > kCommandMessageDataSize) {
+				break;
+			}
 			controlMessageHandlerGated(controlPath, controlMessage);
 			break;
 		case MeshControlCommandType::NewGeneration:
@@ -1691,7 +1694,9 @@ AppleCIOMeshService::controlMessageHandlerGated(AppleCIOMeshControlPath * path, 
 	if (message->header.data.controlMessage.destinationNode == getLocalNodeId()) {
 		_dummyRxMeshMessage.node   = message->header.data.controlMessage.sourceNode;
 		_dummyRxMeshMessage.length = message->header.data.controlMessage.length;
-		memcpy(_dummyRxMeshMessage.rawData, message->data, kCommandMessageDataSize);
+        memset(_dummyRxMeshMessage.rawData, 0, kCommandMessageDataSize);
+        const auto messageLength = MIN(_dummyRxMeshMessage.length, kCommandMessageDataSize);
+		memcpy(_dummyRxMeshMessage.rawData, message->data, messageLength);
 
 		IOLockLock(_ucLock);
 		for (uint32_t i = 0; i < _configUserClients->getCount(); i++) {
@@ -2362,7 +2367,20 @@ AppleCIOMeshService::commandeerSend(
 	_commandeerSMSend         = sm;
 	_commandeerSMSendOffset   = offset;
 	_commandeerSendUserClient = uc;
-	_commandeerSendTag        = tag;
+
+	// A null tag is a caller contract violation; the commandeer loop later hands
+	// this buffer to sendAssignedData, so fail loudly here rather than there.
+	if (tag == nullptr) {
+		panic("commandeerSend: null tag with tagSz %zu!\n", tagSz);
+	}
+
+	// Copy into service-owned storage: callers pass a pointer into their stack
+	// frame and may return before the commandeer loop consumes it (e.g. when
+	// interrupted), leaving a dangling pointer. rdar://170757756
+	if (tagSz > sizeof(_commandeerSendTag)) {
+		tagSz = sizeof(_commandeerSendTag);
+	}
+	memcpy(_commandeerSendTag, tag, tagSz);
 	_commandeerSendTagSz      = tagSz;
 	_commanderSMSendStart     = mach_absolute_time();
 	_commanderSMSendCounter   = 0;
@@ -2607,21 +2625,28 @@ AppleCIOMeshService::_allocateSharedMemoryUCGated(void * sharedMemoryArg, void *
 		return kIOReturnBadArgument;
 	}
 
-	if (memory->size == 0 || memory->chunkSize == 0 || memory->address == 0) {
+	if (memory->size <= 0 || memory->chunkSize <= 0 || memory->address == 0) {
 		LOG("Invalid memory size:%lld, chunkSize:%lld, address:%llx\n", memory->size, memory->chunkSize, memory->address);
 		return kIOReturnBadArgument;
 	}
 
 	// Divide the chunk size by the number of links in each channel.
 	memory->chunkSize /= getLinksPerChannel();
-	if (memory->chunkSize > kMaxChunkSizePerLink) {
+	if (memory->chunkSize <= 0 || memory->chunkSize > kMaxChunkSizePerLink) {
 		LOG("Invalid chunk size: %lld\n", memory->chunkSize);
 		return kIOReturnBadArgument;
 	}
 
 	int64_t runningBreakdown = 0;
 	for (int i = 0; i < kMaxTBTCommandCount; i++) {
-		runningBreakdown += memory->forwardBreakdown[i];
+		if (memory->forwardBreakdown[i] < 0 || memory->forwardBreakdown[i] > memory->chunkSize) {
+			LOG("forwardBreakdown[%d] %lld is out of range [0, %lld]\n", i, memory->forwardBreakdown[i], memory->chunkSize);
+			return kIOReturnBadArgument;
+		}
+		if (UNLIKELY(__builtin_add_overflow(runningBreakdown, memory->forwardBreakdown[i], &runningBreakdown))) {
+			LOG("forwardBreakdown overflow at index %d\n", i);
+			return kIOReturnBadArgument;
+		}
 	}
 	if (runningBreakdown > memory->chunkSize) {
 		LOG("Running breakdown %lld is greater than chunk size %lld\n", runningBreakdown, memory->chunkSize);
@@ -3474,7 +3499,7 @@ AppleCIOMeshService::_establishTXConnectionUCGated(void * connectionArg)
 		return kIOReturnBadArgument;
 	}
 
-	if (connection->node == MCUCI::kUnassignedNode) {
+	if (connection->node == MCUCI::kUnassignedNode || connection->node >= kMaxCIOMeshNodes) {
 		ERROR("Invalid node id: %d\n", connection->node);
 		return kIOReturnBadArgument;
 	}

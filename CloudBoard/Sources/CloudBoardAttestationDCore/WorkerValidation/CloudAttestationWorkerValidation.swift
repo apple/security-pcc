@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,6 +13,7 @@
 // 10/02/2024
 
 import CloudAttestation
+import CloudAttestationV2
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
 import CloudBoardLogging
@@ -25,19 +26,55 @@ import os
 /// A means to make instances of ``AttestationValidatorProtocol`` for a specific request.
 /// A request is tied to the attestation on a proxy, which then transitively indicates the trusted worker
 /// release sets.
+///
+/// This factory supports both CloudAttestation (v1, Apple Silicon) and CloudAttestationV2 (GCPv1) worker
+/// attestation formats. CloudAttestation test-only attestation bundles (not the same as CloudBoard test-only
+/// attestations) are rejected. Format detection is based on the protobuf `oneOf` discriminator; bundles without a
+/// discriminator (old builds) default to v1.
 final class CloudAttestationValidatorFactory: AttestationValidatorFactoryProtocol {
-    /// Make a validator which will validate compute node attestations using CloudAttestation
+    private static let logger: Logger = .init(
+        subsystem: "com.apple.cloudos.cloudboard",
+        category: "CloudAttestationValidatorFactory"
+    )
+
+    private let enableTransitiveProofVerification: Bool
+    private let transparencyCache: (any CloudAttestation.TransparencyCache & CloudAttestationV2.TransparencyCache)?
+    private let pccEnvironment: CloudAttestation.Environment
+
+    init(
+        enableTransitiveProofVerification: Bool,
+        transparencyCache: (any CloudAttestation.TransparencyCache & CloudAttestationV2.TransparencyCache)?,
+        pccEnvironment: CloudAttestation.Environment
+    ) {
+        self.enableTransitiveProofVerification = enableTransitiveProofVerification
+        self.transparencyCache = transparencyCache
+        self.pccEnvironment = pccEnvironment
+    }
+
+    /// Make a validator which will validate compute node attestations using CloudAttestation (v1) or
+    /// CloudAttestationV2, auto-detecting the format at validation time.
     /// Parameters:
     ///   - proxyAttestationBundle: the actual attestation of the proxy in use
     ///   - enableReleaseSetValidation: if true, the validator will enforce that the compute node attestation must run
     ///   a release that corresponds to the set of trusted releases associated with the provided proxyAttestationBundle
     func makeForProxyAttestation(
-        rawProxyAttestationBundle: Data,
+        rawProxyAttestationBundle: RawAttestationBundle,
         enableReleaseSetValidation: Bool
     ) async throws -> any AttestationValidatorProtocol {
-        return try CloudAttestationValidator(
+        let cloudAttestationValidator = try CloudAttestationValidator(
             rawProxyAttestationBundle: rawProxyAttestationBundle,
-            enableReleaseSetValidation: enableReleaseSetValidation
+            enableReleaseSetValidation: enableReleaseSetValidation,
+            enableTransitiveProofVerification: self.enableTransitiveProofVerification,
+            transparencyCache: self.transparencyCache
+        )
+        let cloudAttestationV2Validator = try CloudAttestationV2Validator(
+            rawProxyAttestationBundle: rawProxyAttestationBundle,
+            transparencyCache: self.transparencyCache,
+            pccEnvironment: self.pccEnvironment.v2PCCEnvironment
+        )
+        return CloudAttestationFormatDetectingValidator(
+            cloudAttestationValidator: cloudAttestationValidator,
+            cloudAttestationV2Validator: cloudAttestationV2Validator
         )
     }
 }
@@ -48,8 +85,8 @@ final class CloudAttestationValidator: AttestationValidatorProtocol, Sendable {
         category: "CloudAttestationValidator"
     )
 
-    let validator: any Validator
-    let rawProxyAttestationBundle: Data
+    let validator: any CloudAttestation.Validator
+    let rawProxyAttestationBundle: RawAttestationBundle
     let enableReleaseSetValidation: Bool
 
     var additionalDiagnosticDetails: String {
@@ -60,8 +97,10 @@ final class CloudAttestationValidator: AttestationValidatorProtocol, Sendable {
     let proxiedReleaseDigests: [String]
 
     init(
-        rawProxyAttestationBundle: Data,
-        enableReleaseSetValidation: Bool
+        rawProxyAttestationBundle: RawAttestationBundle,
+        enableReleaseSetValidation: Bool,
+        enableTransitiveProofVerification: Bool,
+        transparencyCache: (any CloudAttestation.TransparencyCache)?
     ) throws {
         self.enableReleaseSetValidation = enableReleaseSetValidation
         self.rawProxyAttestationBundle = rawProxyAttestationBundle
@@ -69,25 +108,46 @@ final class CloudAttestationValidator: AttestationValidatorProtocol, Sendable {
         self.proxiedReleaseDigests = try CloudAttestationProvider.parseProxiedReleaseDigests(
             attestationBundle: rawProxyAttestationBundle
         )
-        if enableReleaseSetValidation {
-            let proxyAttestationBundle: AttestationBundle
-            do {
-                proxyAttestationBundle = try AttestationBundle(data: rawProxyAttestationBundle)
-            } catch {
-                throw CloudAttestationValidatorError.unrecognisedAttestationFormat(
-                    description: error.localizedDescription
-                )
-            }
+
+        if enableTransitiveProofVerification {
+            // Transitive proof verification supersedes release set validation entirely
+            let proxyAttestationBundle = try Self.parseProxyAttestationBundle(rawProxyAttestationBundle)
+            self.validator = PCC.ComputeNodeValidator(
+                proxyingAttestation: proxyAttestationBundle,
+                transparencyCache: transparencyCache
+            )
+        } else if enableReleaseSetValidation {
+            let proxyAttestationBundle = try Self.parseProxyAttestationBundle(rawProxyAttestationBundle)
             self.validator = PCC.ComputeNodeValidator(proxyingAttestation: proxyAttestationBundle)
         } else {
             self.validator = NodeValidator()
         }
     }
 
-    func validate(rawAttestationBundle: Data) async throws -> ValidatedWorker {
-        let attestationBundle = try AttestationBundle(data: rawAttestationBundle)
+    private static func parseProxyAttestationBundle(
+        _ rawProxyAttestationBundle: RawAttestationBundle
+    ) throws -> CloudAttestation.AttestationBundle {
+        do {
+            return try CloudAttestation.AttestationBundle(data: rawProxyAttestationBundle)
+        } catch {
+            throw CloudAttestationValidatorError.unrecognisedAttestationFormat(
+                description: "\(error)"
+            )
+        }
+    }
+
+    func validate(rawAttestationBundle: RawAttestationBundle) async throws -> ValidatedWorker {
+        let attestationBundle = try CloudAttestation.AttestationBundle(data: rawAttestationBundle)
+        return try await self.validate(attestationBundle: attestationBundle)
+    }
+
+    /// Exposed to allow the ``AutoDetectingAttestationValidator`` to skip reparsing the raw bundle
+    internal func validate(attestationBundle: CloudAttestation.AttestationBundle) async throws -> ValidatedWorker {
         let (key, expiration, validatedAttestation) = try await validator.validate(bundle: attestationBundle)
-        let udid = validatedAttestation.udid
+        guard let udid = validatedAttestation.udid else {
+            throw AttestationFormatError.hardwareIDMissing(format: .cloudAttestation)
+        }
+        let appIdentifiers = validatedAttestation.appIdentifiers
         guard case .curve25519(let rawKey) = key else {
             throw CloudAttestationValidatorError.unexpectedPublicKeyType
         }
@@ -120,15 +180,22 @@ final class CloudAttestationValidator: AttestationValidatorProtocol, Sendable {
             publicKey: .init(rawRepresentation: rawKey),
             releaseDigest: releaseDigest,
             appData: appDataMap,
-            udid: udid
+            hardwareID: .cloudAttestation(udid: udid),
+            appIdentifiers: appIdentifiers
         )
     }
 
     func parseReleaseDigest(
-        rawAttestationBundle: Data
+        rawAttestationBundle: RawAttestationBundle
+    ) async throws -> String {
+        let attestationBundle = try CloudAttestation.AttestationBundle(data: rawAttestationBundle)
+        return try self.parseReleaseDigest(attestationBundle: attestationBundle)
+    }
+
+    func parseReleaseDigest(
+        attestationBundle: CloudAttestation.AttestationBundle
     ) throws -> String {
-        let parsed = try AttestationBundle(data: rawAttestationBundle)
-        let release = try Release(bundle: parsed)
+        let release = try Release(bundle: attestationBundle)
         return release.sha256
     }
 }

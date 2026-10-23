@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,11 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import InternalSwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -226,23 +230,23 @@ package struct Proto_Ropes_Common_Attestation: Sendable {
   /// Clears the value of `expirationTime`. Subsequent reads from it will return its default value.
   package mutating func clearExpirationTime() {self._expirationTime = nil}
 
-  package var cloudosVersion: String {
-    get {_cloudosVersion ?? String()}
-    set {_cloudosVersion = newValue}
+  package var nodeBuildVersion: String {
+    get {_nodeBuildVersion ?? String()}
+    set {_nodeBuildVersion = newValue}
   }
-  /// Returns true if `cloudosVersion` has been explicitly set.
-  package var hasCloudosVersion: Bool {self._cloudosVersion != nil}
-  /// Clears the value of `cloudosVersion`. Subsequent reads from it will return its default value.
-  package mutating func clearCloudosVersion() {self._cloudosVersion = nil}
+  /// Returns true if `nodeBuildVersion` has been explicitly set.
+  package var hasNodeBuildVersion: Bool {self._nodeBuildVersion != nil}
+  /// Clears the value of `nodeBuildVersion`. Subsequent reads from it will return its default value.
+  package mutating func clearNodeBuildVersion() {self._nodeBuildVersion = nil}
 
-  package var cloudosReleaseType: String {
-    get {_cloudosReleaseType ?? String()}
-    set {_cloudosReleaseType = newValue}
+  package var nodeReleaseType: String {
+    get {_nodeReleaseType ?? String()}
+    set {_nodeReleaseType = newValue}
   }
-  /// Returns true if `cloudosReleaseType` has been explicitly set.
-  package var hasCloudosReleaseType: Bool {self._cloudosReleaseType != nil}
-  /// Clears the value of `cloudosReleaseType`. Subsequent reads from it will return its default value.
-  package mutating func clearCloudosReleaseType() {self._cloudosReleaseType = nil}
+  /// Returns true if `nodeReleaseType` has been explicitly set.
+  package var hasNodeReleaseType: Bool {self._nodeReleaseType != nil}
+  /// Clears the value of `nodeReleaseType`. Subsequent reads from it will return its default value.
+  package mutating func clearNodeReleaseType() {self._nodeReleaseType = nil}
 
   /// Client must verify cleartext cell_id against the cell_id encoded in attestation_bundle by CloudBoard,
   /// and drop the attestation if mismatch.
@@ -270,8 +274,8 @@ package struct Proto_Ropes_Common_Attestation: Sendable {
 
   fileprivate var _ohttpContext: UInt32? = nil
   fileprivate var _expirationTime: InternalSwiftProtobuf.Google_Protobuf_Timestamp? = nil
-  fileprivate var _cloudosVersion: String? = nil
-  fileprivate var _cloudosReleaseType: String? = nil
+  fileprivate var _nodeBuildVersion: String? = nil
+  fileprivate var _nodeReleaseType: String? = nil
   fileprivate var _cellID: String? = nil
   fileprivate var _ensembleID: String? = nil
 }
@@ -291,6 +295,8 @@ package struct Proto_Ropes_Common_Capabilities: Sendable {
   package var trustedProxyRequestNack: Bool = false
 
   package var trustedProxyDuplicateFirstRequestChunk: Bool = false
+
+  package var antiTargetabilityMinAttestationEnforcement: Bool = false
 
   package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
@@ -765,7 +771,7 @@ extension Proto_Ropes_Common_Chunk: InternalSwiftProtobuf.Message, InternalSwift
 
 extension Proto_Ropes_Common_Attestation: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = _protobuf_package + ".Attestation"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}attestation_bundle\0\u{3}node_identifier\0\u{3}ohttp_context\0\u{3}expiration_time\0\u{3}cloudos_version\0\u{3}cloudos_release_type\0\u{3}cell_id\0\u{3}ensemble_id\0")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}attestation_bundle\0\u{3}node_identifier\0\u{3}ohttp_context\0\u{3}expiration_time\0\u{3}node_build_version\0\u{3}node_release_type\0\u{3}cell_id\0\u{3}ensemble_id\0")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -777,8 +783,8 @@ extension Proto_Ropes_Common_Attestation: InternalSwiftProtobuf.Message, Interna
       case 2: try { try decoder.decodeSingularStringField(value: &self.nodeIdentifier) }()
       case 3: try { try decoder.decodeSingularUInt32Field(value: &self._ohttpContext) }()
       case 4: try { try decoder.decodeSingularMessageField(value: &self._expirationTime) }()
-      case 5: try { try decoder.decodeSingularStringField(value: &self._cloudosVersion) }()
-      case 6: try { try decoder.decodeSingularStringField(value: &self._cloudosReleaseType) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self._nodeBuildVersion) }()
+      case 6: try { try decoder.decodeSingularStringField(value: &self._nodeReleaseType) }()
       case 7: try { try decoder.decodeSingularStringField(value: &self._cellID) }()
       case 8: try { try decoder.decodeSingularStringField(value: &self._ensembleID) }()
       default: break
@@ -803,10 +809,10 @@ extension Proto_Ropes_Common_Attestation: InternalSwiftProtobuf.Message, Interna
     try { if let v = self._expirationTime {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
     } }()
-    try { if let v = self._cloudosVersion {
+    try { if let v = self._nodeBuildVersion {
       try visitor.visitSingularStringField(value: v, fieldNumber: 5)
     } }()
-    try { if let v = self._cloudosReleaseType {
+    try { if let v = self._nodeReleaseType {
       try visitor.visitSingularStringField(value: v, fieldNumber: 6)
     } }()
     try { if let v = self._cellID {
@@ -823,8 +829,8 @@ extension Proto_Ropes_Common_Attestation: InternalSwiftProtobuf.Message, Interna
     if lhs.nodeIdentifier != rhs.nodeIdentifier {return false}
     if lhs._ohttpContext != rhs._ohttpContext {return false}
     if lhs._expirationTime != rhs._expirationTime {return false}
-    if lhs._cloudosVersion != rhs._cloudosVersion {return false}
-    if lhs._cloudosReleaseType != rhs._cloudosReleaseType {return false}
+    if lhs._nodeBuildVersion != rhs._nodeBuildVersion {return false}
+    if lhs._nodeReleaseType != rhs._nodeReleaseType {return false}
     if lhs._cellID != rhs._cellID {return false}
     if lhs._ensembleID != rhs._ensembleID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -834,7 +840,7 @@ extension Proto_Ropes_Common_Attestation: InternalSwiftProtobuf.Message, Interna
 
 extension Proto_Ropes_Common_Capabilities: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = _protobuf_package + ".Capabilities"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}compression_algorithm\0\u{3}attestation_streaming\0\u{3}trusted_proxy_request_nack\0\u{3}trusted_proxy_duplicate_first_request_chunk\0")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}compression_algorithm\0\u{3}attestation_streaming\0\u{3}trusted_proxy_request_nack\0\u{3}trusted_proxy_duplicate_first_request_chunk\0\u{3}anti_targetability_min_attestation_enforcement\0")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -846,6 +852,7 @@ extension Proto_Ropes_Common_Capabilities: InternalSwiftProtobuf.Message, Intern
       case 2: try { try decoder.decodeSingularBoolField(value: &self.attestationStreaming) }()
       case 3: try { try decoder.decodeSingularBoolField(value: &self.trustedProxyRequestNack) }()
       case 4: try { try decoder.decodeSingularBoolField(value: &self.trustedProxyDuplicateFirstRequestChunk) }()
+      case 5: try { try decoder.decodeSingularBoolField(value: &self.antiTargetabilityMinAttestationEnforcement) }()
       default: break
       }
     }
@@ -864,6 +871,9 @@ extension Proto_Ropes_Common_Capabilities: InternalSwiftProtobuf.Message, Intern
     if self.trustedProxyDuplicateFirstRequestChunk != false {
       try visitor.visitSingularBoolField(value: self.trustedProxyDuplicateFirstRequestChunk, fieldNumber: 4)
     }
+    if self.antiTargetabilityMinAttestationEnforcement != false {
+      try visitor.visitSingularBoolField(value: self.antiTargetabilityMinAttestationEnforcement, fieldNumber: 5)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -872,6 +882,7 @@ extension Proto_Ropes_Common_Capabilities: InternalSwiftProtobuf.Message, Intern
     if lhs.attestationStreaming != rhs.attestationStreaming {return false}
     if lhs.trustedProxyRequestNack != rhs.trustedProxyRequestNack {return false}
     if lhs.trustedProxyDuplicateFirstRequestChunk != rhs.trustedProxyDuplicateFirstRequestChunk {return false}
+    if lhs.antiTargetabilityMinAttestationEnforcement != rhs.antiTargetabilityMinAttestationEnforcement {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

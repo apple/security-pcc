@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -41,7 +41,7 @@ struct CryptexAddCommand: ParsableCommand {
         if noRepace, try config.hasCryptex(variant: variant) {
             return
         }
-        try config.appendOrReplaceCryptex(.init(variant: variant, url: url, mergeStrat: .none))
+        try config.appendOrReplaceCryptex(.init(variant: variant, url: url))
         try options.writeOutputConfig(config)
     }
 }

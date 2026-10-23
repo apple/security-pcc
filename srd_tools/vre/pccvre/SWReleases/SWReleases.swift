@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -32,6 +32,9 @@ public struct SWReleases: RandomAccessCollection {
 
     private var swlog: TransparencyLog
     private var releases: [Release] = []
+    private(set) var skippedLeaves: [TransparencyLog.ATLeaf] = []
+    var skippedIndices: [UInt64] { skippedLeaves.map { $0.index } }
+    private(set) var hasMore: Bool = false
     public var count: Int { releases.count }
 
     static var logger: Logger { TransparencyLog.logger }
@@ -51,11 +54,12 @@ public struct SWReleases: RandomAccessCollection {
 
     @discardableResult
     mutating func fetchReleases(
+        helper: PCCVREAttestationHelperResolver?, // nil = decode v1 only; v2 leaves get skipped
         reqCount: UInt, // requested number of releases
         includeAll: Bool = false, // include expired & duplicate releases
         searchRangeStart: Int64? = nil, // log index search windows
         searchRangeEnd: UInt64? = nil,
-        batchSize: UInt64 = 100,
+        batchSize: UInt64 = 10000,
         altEndpoint: URL? = nil
     ) async throws -> Int {
         var releases: [Release] = []
@@ -72,7 +76,10 @@ public struct SWReleases: RandomAccessCollection {
         let searchIndexLowest: UInt64
         if let searchRangeStart {
             if searchRangeStart < 0 {
-                searchIndexLowest = Swift.max(0, searchIndexHighest - UInt64(-searchRangeStart))
+                // UInt64 subtraction traps on underflow; clamp first so callers
+                // can pass `-N` against logs shorter than N entries.
+                let lookback = UInt64(-searchRangeStart)
+                searchIndexLowest = lookback >= searchIndexHighest ? 0 : searchIndexHighest - lookback
             } else {
                 searchIndexLowest = UInt64(searchRangeStart)
             }
@@ -103,12 +110,16 @@ public struct SWReleases: RandomAccessCollection {
                 start: fetchWindowStart,
                 end: fetchWindowLast,
                 batchSize: batchSize,
+                dataType: .release,
                 altEndpoint: altEndpoint
             )
 
+            // This `where` clause can be removed once all server instances support filtering by type
             for leaf in leaves where leaf.nodeData.type == .RELEASE {
-                if let rel = try? Release(leaf: leaf) {
-                    releases.append(rel)
+                do {
+                    releases.append(try await Release(leaf: leaf, helper: helper))
+                } catch {
+                    skippedLeaves.append(leaf)
                 }
             }
 
@@ -124,6 +135,8 @@ public struct SWReleases: RandomAccessCollection {
             fetchWindowStart = Swift.max(searchIndexLowest,
                                          fetchWindowStart - Swift.min(fetchWindowStart, batchSize))
         } while releases.count < reqCount && fetchWindowLast > searchIndexLowest
+
+        self.hasMore = releases.count >= reqCount && fetchWindowLast > searchIndexLowest
 
         releases = releases.sorted { // final sort of the batch
             $0 > $1

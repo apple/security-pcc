@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,7 +13,6 @@
 // 10/02/2024
 
 import Foundation
-import Security
 
 public protocol CloudBoardJobAuthAPIServerProtocol: CloudBoardJobAuthAPIServerToClientProtocol {
     func set(delegate: CloudBoardJobAuthAPIServerDelegateProtocol) async
@@ -21,17 +20,7 @@ public protocol CloudBoardJobAuthAPIServerProtocol: CloudBoardJobAuthAPIServerTo
 }
 
 public protocol CloudBoardJobAuthAPIServerToClientProtocol: Actor {
-    func authKeysUpdated(newKeySet: AuthTokenKeySet) async throws
-}
-
-public struct AuthTokenKeySet: Codable, Sendable, Equatable {
-    public var ottPublicSigningKeys: [SigningKey]
-    public var tgtPublicSigningKeys: [SigningKey]
-
-    public init(ottPublicSigningKeys: [SigningKey], tgtPublicSigningKeys: [SigningKey]) {
-        self.ottPublicSigningKeys = ottPublicSigningKeys
-        self.tgtPublicSigningKeys = tgtPublicSigningKeys
-    }
+    func costTokenKeyUpdated(newKey: CostTokenSigningKeyPair) async throws
 }
 
 public protocol CloudBoardJobAuthAPIServerDelegateProtocol: AnyObject, Sendable,

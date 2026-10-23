@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -15,17 +15,33 @@
 
 public protocol ProcessEnumeratorProvider {
     func enumerateProcesses() -> [EventNormalizer.NormalizedProcess]?
+    func enumerateLiveProcesses() -> [(pid: Int64, startTime: Double)]?
 }
 
 public actor ProcessEnumerator {
-    static let instance = ProcessEnumerator()
+    public static let instance = ProcessEnumerator()
+
     private var provider: ProcessEnumeratorProvider
 
-    init() {
+    public init() {
+        #if os(Linux)
+        self.provider = LinuxProcessEnumerator()
+        #else
         self.provider = LibprocProcessEnumerator()
+        #endif
     }
+
+    #if os(Linux)
+    public init(procPath: String) {
+        self.provider = LinuxProcessEnumerator(procPath: procPath)
+    }
+    #endif
 
     public func enumerateProcesses() -> [EventNormalizer.NormalizedProcess]? {
         return provider.enumerateProcesses()
+    }
+
+    public func enumerateLiveProcesses() -> [(pid: Int64, startTime: Double)]? {
+        return provider.enumerateLiveProcesses()
     }
 }

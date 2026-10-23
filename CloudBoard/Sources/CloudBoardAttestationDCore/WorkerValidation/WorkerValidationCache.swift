@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -15,6 +15,7 @@
 import CloudAttestation
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
+import CloudBoardDomain
 import CloudBoardLogging
 import CloudBoardMetrics
 import CryptoKit
@@ -51,7 +52,7 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
     private let maximumValidatedEntrySize: Int
     private var validatedEntriesTotal: Int = 0
     private var allowedToAddToCacheTotal: Int = 0
-    private var workerRackIDCache: [String: WorkerRackValidationEntry<ClockType>] = [:]
+    private var workerRackIDCache: [HardwareID: WorkerRackValidationEntry<ClockType>] = [:]
     private var workerRackIDCacheTTLMinutes: Int
     private var lastRackCacheCleanupTime: ClockType.Instant?
     private let minimumCleanupIntervalSeconds: Int = 30
@@ -121,12 +122,13 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
         }
         // not bothering to emit a metric related to deduplicating, it's low value as it's
         // likely to remain zero for the most part outside of tests
-        self.metrics.emit(Metrics.CloudAttestationValidator.WorkerValidationCacheCountGauge(
+        self.metrics.emit(CloudBoardAttestationMetrics.CloudAttestationValidator.WorkerValidationCacheCountGauge(
             value: Double(total.validated)
         ))
-        self.metrics.emit(Metrics.CloudAttestationValidator.WorkerValidationCacheValidatingCountGauge(
-            value: Double(total.validating)
-        ))
+        self.metrics
+            .emit(CloudBoardAttestationMetrics.CloudAttestationValidator.WorkerValidationCacheValidatingCountGauge(
+                value: Double(total.validating)
+            ))
         self.validatedEntriesTotal = total.validated
         self.allowedToAddToCacheTotal = total.validatingCacheable
     }
@@ -193,33 +195,34 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
         self.logger.debug(
             "notifyCacheSizeChange \(attestationCache.proxyKeyId.hexString, privacy: .public) : \(delta, privacy: .public) resulted in \(total, privacy: .public)"
         )
-        self.metrics.emit(Metrics.CloudAttestationValidator.WorkerValidationCacheCountGauge(
+        self.metrics.emit(CloudBoardAttestationMetrics.CloudAttestationValidator.WorkerValidationCacheCountGauge(
             value: Double(total.validated)
         ))
-        self.metrics.emit(Metrics.CloudAttestationValidator.WorkerValidationCacheValidatingCountGauge(
-            value: Double(total.validating)
-        ))
+        self.metrics
+            .emit(CloudBoardAttestationMetrics.CloudAttestationValidator.WorkerValidationCacheValidatingCountGauge(
+                value: Double(total.validating)
+            ))
         self.validatedEntriesTotal = total.validated
         self.allowedToAddToCacheTotal = total.validatingCacheable
     }
 
-    private func recordWorkerRackId(workerUDID: String, rackId: String) async {
+    private func recordWorkerRackId(hardwareID: HardwareID, rackId: RackId) async {
         let now = self.clock.now
-        self.workerRackIDCache[workerUDID] = WorkerRackValidationEntry(
-            workerUDID: workerUDID,
+        self.workerRackIDCache[hardwareID] = WorkerRackValidationEntry(
+            hardwareID: hardwareID,
             rackId: rackId,
             creationInstant: now,
             entryLifetimeMinutes: self.workerRackIDCacheTTLMinutes
         )
-        self.logger.debug("Recorded new worker \(workerUDID, privacy: .public) -> rack \(rackId, privacy: .public)")
+        self.logger.debug("Recorded new worker \(hardwareID, privacy: .public) -> rack \(rackId, privacy: .public)")
     }
 
     /// Updates the last update timestamp to now, extending the cache entry's lifetime before expiration
-    private func resetLastUpdateTime(workerUDID: String) async {
-        guard var entry = workerRackIDCache[workerUDID] else { return }
+    private func resetLastUpdateTime(hardwareID: HardwareID) async {
+        guard var entry = workerRackIDCache[hardwareID] else { return }
         entry.lastUpdateInstant = self.clock.now
-        self.workerRackIDCache[workerUDID] = entry
-        self.logger.debug("Reset last update time for worker \(workerUDID, privacy: .public)")
+        self.workerRackIDCache[hardwareID] = entry
+        self.logger.debug("Reset last update time for worker \(hardwareID, privacy: .public)")
     }
 
     /// Removes cache entries that haven't been updated within the configured TTL (default 1 hour)
@@ -264,33 +267,36 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
     /// - First connection: Records the worker's rack and allows the connection
     /// - Same rack: Resets the expiration timer and allows the connection
     /// - Different rack: Blocks the connection and resets the timer to extend the blocking period
-    public func validateWorkerRackId(workerUDID: String, currentRackId: String) async throws -> RackValidationResult {
+    internal func validateWorkerRackId(
+        hardwareID: HardwareID,
+        currentRackId: RackId
+    ) async throws -> RackValidationResult {
         // Clean up expired entries first
         await self.cleanupWorkerRackValidationEntries()
 
-        guard let existingEntry = self.workerRackIDCache[workerUDID] else {
+        guard let existingEntry = self.workerRackIDCache[hardwareID] else {
             // First time seeing this worker - record and allow
-            await self.recordWorkerRackId(workerUDID: workerUDID, rackId: currentRackId)
+            await self.recordWorkerRackId(hardwareID: hardwareID, rackId: currentRackId)
             self.logger
                 .info(
-                    "First validation for worker \(workerUDID, privacy: .public) on rack \(currentRackId, privacy: .public)"
+                    "First validation for worker \(hardwareID, privacy: .public) on rack \(currentRackId, privacy: .public)"
                 )
-            return .allowed
+            return .allowed(currentRackId)
         }
 
         if existingEntry.rackId == currentRackId {
             // Same rack - reset the last update time and allow
-            await self.resetLastUpdateTime(workerUDID: workerUDID)
+            await self.resetLastUpdateTime(hardwareID: hardwareID)
             self.logger
                 .debug(
-                    "Worker \(workerUDID, privacy: .public) validated on same rack \(currentRackId, privacy: .public), last update time reset"
+                    "Worker \(hardwareID, privacy: .public) validated on same rack \(currentRackId, privacy: .public), last update time reset"
                 )
-            return .allowed
+            return .allowed(currentRackId)
         }
 
         // Rack has changed - fail worker validation and reset last update time
         self.logger.error("""
-        Worker \(workerUDID, privacy: .public) rack change detected!
+        Worker \(hardwareID, privacy: .public) rack change detected!
         Previous rack ID: \(existingEntry.rackId, privacy: .public) -> Attempted rack ID: \(
             currentRackId,
             privacy: .public
@@ -300,14 +306,18 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
 
         let rackChangeError = WorkerRackValidationError.rackIdChanged(
             reason: "Rack change detected",
-            originalRackId: existingEntry.rackId,
+            originalRackId: existingEntry.rackId.rackId,
             blockedUntil: Date.now.addingTimeInterval(TimeInterval(self.workerRackIDCacheTTLMinutes * 60)),
-            udid: workerUDID
+            hardwareID: hardwareID
         )
-        self.metrics.emit(Metrics.RackIdValidation.WorkerRackIdChangeCounter.Factory().make(rackChangeError))
+        self.metrics
+            .emit(
+                CloudBoardAttestationMetrics.RackIdValidation.WorkerRackIdChangeCounter.Factory()
+                    .make(rackChangeError)
+            )
 
         // Reset last update time to reset the blocking period
-        await self.resetLastUpdateTime(workerUDID: workerUDID)
+        await self.resetLastUpdateTime(hardwareID: hardwareID)
 
         return .blocked(rackValidationError: rackChangeError)
     }
@@ -327,12 +337,12 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
             "Validating worker attestation with digest \(workerKeyID.description, privacy: .public) against proxy \(proxyAttestationKeyID.base64EncodedString(), privacy: .public)"
         )
         // if we didn't work this out then it is simply considered not cached
-        var inCache = Metrics.CloudAttestationValidator.InCache.miss
+        var inCache = CloudBoardAttestationMetrics.CloudAttestationValidator.InCache.miss
         defer {
-            self.metrics.emit(Metrics.CloudAttestationValidator.ValidationDurationHistogram(
+            self.metrics.emit(CloudBoardAttestationMetrics.CloudAttestationValidator.ValidationDurationHistogram(
                 duration: timeMeasurement.duration, inCache: inCache
             ))
-            self.metrics.emit(Metrics.CloudAttestationValidator.ValidationCounter(
+            self.metrics.emit(CloudBoardAttestationMetrics.CloudAttestationValidator.ValidationCounter(
                 action: .increment(by: 1),
                 inCache: inCache
             ))
@@ -387,27 +397,39 @@ internal actor WorkerValidationCache<ClockType: DateAwareClock> {
             )
 
             let rackValidation: CloudBoardAttestationDAPI.RackValidationResult
-            let validationUdid = validated.udid
-            let validationRackID = validated.appData["rackID"]?.utf8String
+            let hardwareID = validated.hardwareID
+            let rack = validated.appData["rackID"]?.utf8String
 
-            if let validationUdid, let validationRackID {
-                rackValidation = try await self.validateWorkerRackId(
-                    workerUDID: validationUdid,
-                    currentRackId: validationRackID
-                )
+            if let rack {
+                let rackId = RackId(rack)
+                /// We know by now if this hardwareId is reasonable to use based on the security policy.
+                /// We special case unknown because lookup table no longer makes sense.
+                /// CloudAttestationV2 does not yet provide hardware identifiers, so rack
+                /// awareness is not supported for that format.
+                switch hardwareID {
+                case .unknown, .cloudAttestationV2:
+                    rackValidation = .allowed(rackId)
+                default:
+                    rackValidation = try await self.validateWorkerRackId(
+                        hardwareID: hardwareID,
+                        currentRackId: rackId
+                    )
+                }
             } else {
-                // If no udid/rackID available in attestation, default to allowed.
-                // This behavior will likely change in the future once we determine whether missing attestation data
-                // should be treated as a security concern or a valid state.
-                rackValidation = .allowed
+                // Without a RackId (or if it is explicitly not relevant) we proceed, but down stream code
+                // may then choose to consider this unreasonable, or behave differently
+                rackValidation = .allowed(RackId.irrelevant)
             }
-
             return CloudBoardAttestationDAPI.WorkerValidationResult(
                 validatedWorker: validated,
                 rackValidation: rackValidation
             )
         } catch {
-            self.metrics.emit(Metrics.CloudAttestationValidator.FailedValidationCounter.Factory().make(error))
+            self.metrics
+                .emit(
+                    CloudBoardAttestationMetrics.CloudAttestationValidator.FailedValidationCounter.Factory()
+                        .make(error)
+                )
             throw error
         }
     }
@@ -609,7 +631,11 @@ private final class PerProxyAttestationCache<ClockType: DateAwareClock>: Sendabl
         rawWorkerAttestationBundle: Data,
         allowedToAddToCache: Bool,
         notifySizeChange: @escaping @Sendable (CacheMetricsDelta) async -> Void
-    ) async throws -> (CloudBoardAttestationDAPI.ValidatedWorker, inCache: Metrics.CloudAttestationValidator.InCache) {
+    ) async throws
+        -> (
+            CloudBoardAttestationDAPI.ValidatedWorker,
+            inCache: CloudBoardAttestationMetrics.CloudAttestationValidator.InCache
+        ) {
         let (state, newTask, metricDelta) = self.workerKeyToValidation.withLock {
             cache -> (ValidationState, Task<Void, Never>?, CacheMetricsDelta) in
             if let state = cache.workerState[workerKeyID] {
@@ -748,7 +774,7 @@ private final class PerProxyAttestationCache<ClockType: DateAwareClock>: Sendabl
                         await notifySizeChange(metricDelta)
                         return SharableValidationState.completed
                     } catch {
-                        Self.logValidationFailure(
+                        await Self.logValidationFailure(
                             logger: logger,
                             originalError: error,
                             workerKeyID: workerKeyID,
@@ -802,13 +828,13 @@ private final class PerProxyAttestationCache<ClockType: DateAwareClock>: Sendabl
         workerKeyID: SHA256.Digest,
         validator: any AttestationValidatorProtocol,
         rawWorkerAttestationBundle: Data
-    ) {
+    ) async {
         let proxyAttestationDigest = SHA256.hash(data: validator.rawProxyAttestationBundle).description
         let workerAttestationDigest = SHA256.hash(data: rawWorkerAttestationBundle).description
 
         // lets see if we can parse the release digest
         do {
-            let releaseDigest = try validator.parseReleaseDigest(
+            let releaseDigest = try await validator.parseReleaseDigest(
                 rawAttestationBundle: rawWorkerAttestationBundle
             )
             logger.error(
@@ -929,8 +955,8 @@ private struct CacheMetricsDelta: CustomStringConvertible {
 /// Timer resets on each successful validation from the same rack, or when a rack change is detected (to extend the
 /// blocking period)
 internal struct WorkerRackValidationEntry<ClockType: Clock>: Sendable where ClockType.Duration == Duration {
-    let workerUDID: String
-    let rackId: String
+    let hardwareID: HardwareID
+    let rackId: RackId
     var lastUpdateInstant: ClockType.Instant
     let lifetimeSinceLastUpdateMinutes: Int
 
@@ -940,14 +966,13 @@ internal struct WorkerRackValidationEntry<ClockType: Clock>: Sendable where Cloc
         return elapsed >= Duration.minutes(self.lifetimeSinceLastUpdateMinutes)
     }
 
-    // MARK: - Codable Support for ContinuousClock.Instant
-
-    private enum CodingKeys: String, CodingKey {
-        case workerUDID, rackId, creationTimestamp, entryLifetime
-    }
-
-    init(workerUDID: String, rackId: String, creationInstant: ClockType.Instant, entryLifetimeMinutes: Int) {
-        self.workerUDID = workerUDID
+    init(
+        hardwareID: HardwareID,
+        rackId: RackId,
+        creationInstant: ClockType.Instant,
+        entryLifetimeMinutes: Int
+    ) {
+        self.hardwareID = hardwareID
         self.rackId = rackId
         self.lastUpdateInstant = creationInstant
         self.lifetimeSinceLastUpdateMinutes = entryLifetimeMinutes

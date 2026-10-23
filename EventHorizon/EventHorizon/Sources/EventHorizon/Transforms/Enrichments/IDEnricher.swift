@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -33,7 +33,7 @@ private actor NameCache {
     private let cacheDuration: TimeInterval
     private let maxCacheSize: Int
 
-    init(cacheDuration: TimeInterval = 300, maxCacheSize: Int = 1000) { // 5 minutes default, 1000 entries max
+    init(cacheDuration: TimeInterval = 300, maxCacheSize: Int = 1000) {
         self.cacheDuration = cacheDuration
         self.maxCacheSize = maxCacheSize
         self.cache = LRUCache<UInt32, NameCacheEntry>(totalCount: maxCacheSize)
@@ -45,7 +45,7 @@ private actor NameCache {
         }
 
         if entry.isExpired {
-            cache[id] = nil // Remove expired entry
+            cache[id] = nil
             return nil
         }
 
@@ -146,22 +146,31 @@ private final class IDNameEnricher: Sendable {
     }
 
     private func extractPropertyValue(from event: any EHUEFEvent, propertyName: String) -> UInt32? {
+        if let extractable = event as? EHFieldExtractable,
+           let value = extractable.fieldValue(for: propertyName) {
+            return convertToUInt32(value)
+        }
         let mirror = Mirror(reflecting: event)
 
         for child in mirror.children where child.label == propertyName {
-            if let id = child.value as? UInt32 {
-                return id
-            }
-            if let intValue = child.value as? Int,
-               let id = UInt32(exactly: intValue) {
-                return id
-            }
-            if let int64Value = child.value as? Int64,
-               let id = UInt32(exactly: int64Value) {
-                return id
-            }
+            return convertToUInt32(child.value)
         }
 
+        return nil
+    }
+
+    private func convertToUInt32(_ value: Any) -> UInt32? {
+        if let id = value as? UInt32 {
+            return id
+        }
+        if let intValue = value as? Int,
+           let id = UInt32(exactly: intValue) {
+            return id
+        }
+        if let int64Value = value as? Int64,
+           let id = UInt32(exactly: int64Value) {
+            return id
+        }
         return nil
     }
 
@@ -207,20 +216,25 @@ public final class UsernameEnricher: EHTransform {
         await enricher.process(event)
     }
 
-    public func configure() throws {
+    public func configure() async throws {
     }
 
     private static func resolveUsername(for uid: UInt32) -> String? {
         var pwd = passwd()
         var result: UnsafeMutablePointer<passwd>?
 
-        let bufferSize = sysconf(_SC_GETPW_R_SIZE_MAX)
-        let buffer = UnsafeMutablePointer<Int8>.allocate(capacity: Int(bufferSize))
+        #if os(Linux)
+        let sysconfSize = sysconf(Int32(_SC_GETPW_R_SIZE_MAX))
+        #else
+        let sysconfSize = sysconf(_SC_GETPW_R_SIZE_MAX)
+        #endif
+        let bufferSize = sysconfSize > 0 ? Int(sysconfSize) : 16384
+        let buffer = UnsafeMutablePointer<Int8>.allocate(capacity: bufferSize)
         defer {
             buffer.deallocate()
         }
 
-        let status = getpwuid_r(uid, &pwd, buffer, Int(bufferSize), &result)
+        let status = getpwuid_r(uid, &pwd, buffer, bufferSize, &result)
 
         guard status == 0, let validResult = result else {
             return nil
@@ -257,20 +271,25 @@ public final class GroupnameEnricher: EHTransform {
         await enricher.process(event)
     }
 
-    public func configure() throws {
+    public func configure() async throws {
     }
 
     private static func resolveGroupname(for gid: UInt32) -> String? {
         var grp = group()
         var result: UnsafeMutablePointer<group>?
 
-        let bufferSize = sysconf(_SC_GETGR_R_SIZE_MAX)
-        let buffer = UnsafeMutablePointer<Int8>.allocate(capacity: Int(bufferSize))
+        #if os(Linux)
+        let sysconfSize = sysconf(Int32(_SC_GETGR_R_SIZE_MAX))
+        #else
+        let sysconfSize = sysconf(_SC_GETGR_R_SIZE_MAX)
+        #endif
+        let bufferSize = sysconfSize > 0 ? Int(sysconfSize) : 16384
+        let buffer = UnsafeMutablePointer<Int8>.allocate(capacity: bufferSize)
         defer {
             buffer.deallocate()
         }
 
-        let status = getgrgid_r(gid, &grp, buffer, Int(bufferSize), &result)
+        let status = getgrgid_r(gid, &grp, buffer, bufferSize, &result)
 
         guard status == 0, let validResult = result else {
             return nil

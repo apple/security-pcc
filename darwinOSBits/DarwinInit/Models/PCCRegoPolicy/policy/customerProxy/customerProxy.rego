@@ -1,4 +1,4 @@
-# Copyright © 2025 Apple Inc. All Rights Reserved.
+# Copyright © 2026 Apple Inc. All Rights Reserved.
 
 # APPLE INC.
 # PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,6 +17,104 @@ package policy.customerProxy
 import rego.v1
 
 import data.policy.common.has_key
+import data.policy.common.paths
+import data.policy.common.path_in_allowed
+import data.policy.common.invalid_patterns
+
+_allowed_paths := {
+    "authentication/apple_connect",
+    "authentication/daw_token",
+    "authentication/oidc_token",
+    "authentication/westgate/username",
+    "authentication/westgate/token",
+    "ca_roots/apple_corporate_root",
+    "config_security_policy/policy",
+    "config_security_policy/version",
+    "cryptex/lock",
+    "cryptex/network/alternate_cdn_host",
+    "cryptex/network/network_service_type",
+    "cryptex/network/bandwidth_limit",
+    "cryptex/network/retry_count",
+    "cryptex/network/download_tasks",
+    "cryptex/network/chunk_size",
+    "cryptex/cryptexes/*/url",
+    "cryptex/cryptexes/*/sha256",
+    "cryptex/cryptexes/*/size",
+    "cryptex/cryptexes/*/variant",
+    "cryptex/cryptexes/*/cacheable",
+    "cryptex/cryptexes/*/readwrite",
+    "cryptex/cryptexes/*/dependencies/*",
+    "cryptex/cryptexes/*/signing_environment",
+    "cryptex/cryptexes/*/signing_environment_url",
+    "cryptex/cryptexes/*/original_knox_url",
+    "cryptex/cryptexes/*/jetsam_properties_variant",
+    "cryptex/cryptexes/*/aea_decryption_params/archive_id",
+    "cryptex/cryptexes/*/aea_decryption_params/decryption_key",
+    "cryptex/cache/retained_cryptexes/**",
+    "cryptex/cache/invalidation_id",
+    "feature_flags/*/domain",
+    "feature_flags/*/feature",
+    "feature_flags/*/enable",
+    "feature_flags/*/attribute_name",
+    "feature_flags/*/attribute_value",
+    "feature_flags/*/feature_phase",
+    "finish/message",
+    "finish/on_failure",
+    "finish/userspace_reboot",
+    "identification/computer_name",
+    "identification/hostname",
+    "identification/local_hostname",
+    "identification/usage_label",
+    "log/privacy_level",
+    "log/persist",
+    "meta/apply_timeout",
+    "meta/name",
+    "narrative/**",
+    "network/firewall/rules/*",
+    "network/uplink_mtu",
+    "preferences/**",
+    "secure_config/**",
+    "ssh/enabled",
+    "ssh/pwauth",
+    "volumes/**"
+}
+
+# METADATA
+# title: deny if allowlist contains invalid glob patterns
+# description: Catch policy authoring errors — ** is only valid as trailing /**
+# custom:
+#  version: 10
+#  key: invalid_allowlist_pattern
+deny contains issue if {
+    some pattern in invalid_patterns(_allowed_paths)
+    msg := sprintf("invalid allowlist pattern %q: ** is only supported as a trailing /** suffix", [pattern])
+    issue := {
+        "index": 0,
+        "key": "invalid_allowlist_pattern",
+        "message": msg,
+        "version": rego.metadata.rule().custom.version,
+    }
+}
+
+# METADATA
+# title: deny if a config path is not in the allowlist
+# description: PrivateCloudOSValidator (darwinOSBits)
+# custom:
+#  version: 10
+#  key: disallowed_path
+deny contains issue if {
+    config := input["darwin-init"][i]
+    some path in paths(config)
+    not path_in_allowed(path, _allowed_paths)
+    key := concat(".", path)
+    msg := sprintf("key %q is not allow-listed", [key])
+    issue := {
+        "index": i,
+        "key": key,
+        "message": msg,
+        "version": rego.metadata.rule().custom.version,
+    }
+}
 
 # METADATA
 # title: deny if ssh.enabled is set to true
@@ -54,6 +152,25 @@ deny contains issue if {
         "message": msg,
         "version": version
     }
+}
+
+# METADATA
+# title: deny if ssh CA authentication is enabled
+# custom:
+#  version: 8
+#  key: ssh.ca
+deny contains issue if {
+       config := input["darwin-init"][i]
+       has_key(config.ssh, "ca")
+       msg := sprintf("Enabling ssh CA authentication not permitted. %s must be unset", [rego.metadata.rule().custom.key])
+
+       version := rego.metadata.rule().custom.version
+       issue := {
+               "index": i,
+               "key": rego.metadata.rule().custom.key,
+               "message": msg,
+               "version": version,
+       }
 }
 
 # METADATA
@@ -511,126 +628,6 @@ deny contains issue if {
 }
 
 # METADATA
-# title: deny if darwin-init.roots is present
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 8
-#  key: roots
-deny contains issue if {
-    config := input["darwin-init"][i]
-    has_key(config, "roots")
-    msg := sprintf("Installing custom roots not permitted. %s must be unset", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
-# title: deny if darwin-init.diavlo is present
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 8
-#  key: diavlo
-deny contains issue if {
-    config := input["darwin-init"][i]
-    has_key(config, "diavlo")
-    msg := sprintf("Diavlo personalization of cryptexes not supported. %s must be unset", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
-# title: deny if darwin-init.package is present
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 8
-#  key: packages
-deny contains issue if {
-    config := input["darwin-init"][i]
-    has_key(config, "packages")
-    msg := sprintf("Installing packages not permitted. %s must be unset", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
-# title: deny if darwin-init.user is present
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 8
-#  key: users
-deny contains issue if {
-    config := input["darwin-init"][i]
-    has_key(config, "users")
-    msg := sprintf("Creating and configuring users not permitted. %s must be unset", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
-# title: deny if darwin-init.network.interfaces is present
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 8
-#  key: network.interfaces
-deny contains issue if {
-    config := input["darwin-init"][i]
-    has_key(config.network, "interfaces")
-    msg := sprintf("Applying custom network configuration not permitted. %s must be unset", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
-# title: deny if darwin-init.tailspin is present
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 8
-#  key: tailspin
-deny contains issue if {
-    config := input["darwin-init"][i]
-    has_key(config, "tailspin")
-    msg := sprintf("Applying custom tailspin configuration is not permitted. %s must be unset", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
 # title: deny if darwin-init.finish.on_failure not set to reboot nor exit
 # description: PrivateCloudOSValidator (darwinOSBits)
 # custom:
@@ -653,46 +650,6 @@ deny contains issue if {
 }
 
 # METADATA
-# title: deny if darwin-init.finish.reboot is set true
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 8
-#  key: finish.reboot
-deny contains issue if {
-    config := input["darwin-init"][i]
-    config.finish.reboot == true
-    msg := sprintf("System reboot after set up not permitted. %s must be unset or false", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
-# title: deny if darwin-init.finish.scripts is present
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 8
-#  key: finish.scripts
-deny contains issue if {
-    config := input["darwin-init"][i]
-    has_key(config.finish, "scripts")
-    msg := sprintf("Executing scripts not permitted. %s must be unset", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
 # title: deny if darwin-init.cryptex.lock is set false
 # description: PrivateCloudOSValidator (darwinOSBits)
 # custom:
@@ -702,108 +659,6 @@ deny contains issue if {
     config := input["darwin-init"][i]
     config.cryptex.lock == false
     msg := sprintf("Disabling cryptex lockdown not permitted. %s must be unset or true", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
-# title: deny if darwin-init.start.scripts is present
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 8
-#  key: start.scripts
-deny contains issue if {
-    config := input["darwin-init"][i]
-    has_key(config.start, "scripts")
-    msg := sprintf("Executing pre-init scripts not permitted. %s must be unset", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
-# title: deny if darwin-init.cryptex.cache.retain_previously_cached_cryptexes_unsafely is true
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 8
-#  key: cryptex.cache.retain_previously_cached_cryptexes_unsafely
-deny contains issue if {
-    config := input["darwin-init"][i]
-    config.cryptex.cache.retain_previously_cached_cryptexes_unsafely == true
-
-    msg := sprintf("Retaining cryptexes from previous boot session configs not permitted. %s must be unset or false", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
-# title: deny if darwin-init.cryptex.cache.cache_max_size is present
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 8
-#  key: cryptex.cache.cache_max_size
-deny contains issue if {
-    config := input["darwin-init"][i]
-    has_key(config.cryptex.cache, "cache_max_size")
-    msg := sprintf("Setting maximum storage space for cryptex cache not permitted. %s must be unset", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
-# title: deny if darwin-init.anayltics.submit is true
-# description: Prevent the customer from enabling diagnostic log submissions
-# custom:
-#  version: 8
-#  key: analytics.submit
-deny contains issue if {
-    config := input["darwin-init"][i]
-    config.analytics.submit == true
-
-    msg := sprintf("Enabling diagnostic log submission not permitted. %s must be unset or false", [rego.metadata.rule().custom.key])
-
-    version := rego.metadata.rule().custom.version
-    issue := {
-        "index": i,
-        "key": rego.metadata.rule().custom.key,
-        "message": msg,
-        "version": version
-    }
-}
-
-# METADATA
-# title: deny if darwin-init.volumes is present
-# description: PrivateCloudOSValidator (darwinOSBits)
-# custom:
-#  version: 10
-#  key: volumes
-deny contains issue if {
-    config := input["darwin-init"][i]
-    has_key(config, "volumes")
-    msg := sprintf("Creating cache volumes not permitted. %s must be unset", [rego.metadata.rule().custom.key])
 
     version := rego.metadata.rule().custom.version
     issue := {

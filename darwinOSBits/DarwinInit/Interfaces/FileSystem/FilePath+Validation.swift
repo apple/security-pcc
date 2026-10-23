@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,6 +20,7 @@
 import CryptoKit
 import Foundation
 import System
+import DarwinInitConfig
 
 extension FilePath {
     func sizeEquals(expectedSize: Int) throws {
@@ -33,9 +34,9 @@ extension FilePath {
         }
     }
 
-    func sha256Equals(expectedSHA256: DInitSHA256Digest) throws {
+    func sha256Equals(expectedSHA256: Sha256) throws {
         do {
-            let actualSHA256 = try DInitSHA256Digest(SHA256.Digest(self))
+            let actualSHA256 = try Sha256(SHA256.Digest(self))
             guard actualSHA256 == expectedSHA256 else {
                 throw FileValidationError.mismatchedSHA256(self, actualSHA256, expectedSHA256)
             }
@@ -49,7 +50,7 @@ enum FileValidationError: Swift.Error {
     case failedToComputeSize(FilePath, Swift.Error)
     case failedToComputeSHA256(FilePath, Swift.Error)
     case mismatchedSize(FilePath, Int, Int)
-    case mismatchedSHA256(FilePath, DInitSHA256Digest, DInitSHA256Digest)
+    case mismatchedSHA256(FilePath, Sha256, Sha256)
 }
 
 extension FileValidationError: LocalizedError {

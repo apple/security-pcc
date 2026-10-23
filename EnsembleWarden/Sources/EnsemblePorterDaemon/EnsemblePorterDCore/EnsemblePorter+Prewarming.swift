@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -29,7 +29,7 @@ private import EnsembleWardenServer
 package import Foundation
 private import OSLog
 @_spi(OSMetric) private import os
-private import Synchronization
+internal import Synchronization
 @_spi(WorkAroundResolvableCrash) @_weakLinked private import XPCDistributed
 internal import InternalSwiftProtobuf
 
@@ -58,7 +58,6 @@ extension EnsemblePorterImpl {
         }
 
         guard let peers = try await self.intraEnsembleTransponder.peerInfo() else {
-            self.metrics.incrementFollowerSend(success: false, error: .ensembledError)
             self.logger.error("""
                 Error getting peer info from ensembled. \
                 request_id=\(PrismTracing.requestID, privacy: .public) \
@@ -91,6 +90,12 @@ extension EnsemblePorterImpl {
                 throw EnsemblePorterError.invalidStateTransition(existing: String(describing: state), proposed: "prewarmed")
             }
         }
+
+        self.logger.log("Prewarm complete. follower_count=\(followerInfo.count, privacy: .public)")
+
+        // Start heartbeating immediately so followers stay alive during the gap
+        // between prewarm and run().
+        self.startHeartbeat(followerInfo: followerInfo)
     }
 
     private func negotiateFollowerPorter(rank: Int) async throws -> FollowerInfo {
@@ -110,17 +115,31 @@ extension EnsemblePorterImpl {
 
         let startResponse: Data
         self.logger.log("Leader sending initial message to follower to start an ensemblefollowerporterd")
+        let sendStartTime = ContinuousClock.now
         do {
-            startResponse = try await PrismTracing.withResumed(requestID: .init()) {
+            startResponse = try await PrismTracing.withResumed(requestID: Self.noRequestSentinelID) {
                 try await self.intraEnsembleTransponder.sendData(appID: EnsemblePorterConstants.ensembledAppID,
                                                                  data: remotePorterStartRequest.serializedData(),
                                                                  destination: rank,
                                                                  // Longer timeout because we need to wait for the ensemble to come up
                                                                  timeout: 30)
             }
+            let elapsed = ContinuousClock.now - sendStartTime
+            self.metrics.recordECDHExchange(
+                rank: rank,
+                step: .sendStart,
+                success: true,
+                durationSeconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
             self.logger.log("Leader received response from start request")
         } catch {
-            self.metrics.incrementFollowerSend(success: false, error: .ensembledError)
+            let elapsed = ContinuousClock.now - sendStartTime
+            self.metrics.recordECDHExchange(
+                rank: rank,
+                step: .sendStart,
+                success: false,
+                durationSeconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
+            // ECDH `sendStart` step failure is already recorded by `recordECDHExchange` above;
+            // no legacy counter increment needed.
             throw error
         }
 
@@ -131,14 +150,55 @@ extension EnsemblePorterImpl {
 
         let instanceUUID = try UUID(data: startupReply.instanceUuid)
 
-        let followerPublicKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: startupReply.publicKey)
-        let sharedSecret = try intraEnsemblePrivateKey.sharedSecretFromKeyAgreement(with: followerPublicKey)
+        let followerPublicKey: Curve25519.KeyAgreement.PublicKey
+        do {
+            followerPublicKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: startupReply.publicKey)
+        } catch {
+            // Pubkey parsing is part of the key-attestation handshake; record under the
+            // `keyAgreement` ECDH step so it groups with related failures.
+            self.metrics.recordECDHExchange(
+                rank: rank,
+                step: .keyAgreement,
+                success: false,
+                durationSeconds: 0)
+            throw EnsemblePorterError.keyAttestationFailed
+        }
+
+        let keyAgreementStart = ContinuousClock.now
+        let sharedSecret: SharedSecret
+        do {
+            sharedSecret = try intraEnsemblePrivateKey.sharedSecretFromKeyAgreement(with: followerPublicKey)
+            let elapsed = ContinuousClock.now - keyAgreementStart
+            self.metrics.recordECDHExchange(
+                rank: rank,
+                step: .keyAgreement,
+                success: true,
+                durationSeconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
+        } catch {
+            let elapsed = ContinuousClock.now - keyAgreementStart
+            self.metrics.recordECDHExchange(
+                rank: rank,
+                step: .keyAgreement,
+                success: false,
+                durationSeconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
+            // Key-agreement step failure is already recorded by `recordECDHExchange` above.
+            throw EnsemblePorterError.keyAttestationFailed
+        }
+
+        let hkdfStart = ContinuousClock.now
         let symmetricKey = sharedSecret.hkdfDerivedSymmetricKey(
             using: SHA256.self,
             salt: Data(),
             sharedInfo: Data(),
             outputByteCount: 32
         )
+        let hkdfElapsed = ContinuousClock.now - hkdfStart
+        self.metrics.recordECDHExchange(
+            rank: rank,
+            step: .hkdf,
+            success: true,
+            durationSeconds: Double(hkdfElapsed.components.seconds) + Double(hkdfElapsed.components.attoseconds) / 1e18)
+
         return FollowerInfo(rank: rank,
                             instanceUUID: instanceUUID,
                             intraEnsembleKey: symmetricKey,

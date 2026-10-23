@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -34,15 +34,13 @@ enum ThimbledEvent {
 
     case attestationStoreCleanup
 
-    case prewarmAttestations(workloadType: String, workloadParameters: [String: String], bundleIdentifier: String?, featureIdentifier: String?)
-
     case reportDailyActiveUserIfNecessary(requestID: UUID, environment: String)
 
     case reportDailyPrefetchMetricIfNecessary(requestID: UUID, environment: String)
 
-    case prefetchAttestationsForNewWorkload(parameters: Workload)
+    case prefetchAttestationsForNewWorkload(workload: Workload)
 
-    case discardUsedAttestationsAndPrefetchBatch(serverRequestID: UUID, parameters: Workload)
+    case discardUsedAttestationsAndPrefetchBatch(serverRequestID: UUID, workload: Workload)
 
     case nodesReceived(udids: [String], fromSource: NodeReceivingSource)
 

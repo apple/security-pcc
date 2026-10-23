@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,11 +19,12 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
-internal import CollectionsInternal
 import Foundation
 import PrivateCloudCompute
 import Synchronization
 import os.log
+
+private let logger = Logger(for: .daemon)
 
 // This type is responsible for remembering the `maxCount` most recent elements
 // across restarts. It is used by the background prefetch activity to know which
@@ -31,7 +32,7 @@ import os.log
 // elements should be expired and discarded, which is accomplished by `trim`.
 
 private let oldWorkloadCacheFilename = "lrucache3.plist"
-private let workloadCacheFilename = "workloadcache_v2.plist"
+let workloadCacheFilename = "workloadcache_v2.plist"
 
 protocol LRUCacheProtocol<Value>: Sendable {
     associatedtype Value: Hashable & Sendable & Codable
@@ -49,7 +50,6 @@ package final class LRUCache<Value: Hashable & Sendable & Codable>: LRUCacheProt
     private let storeURL: URL?
     private let encoder = PropertyListEncoder()
     private let decoder = PropertyListDecoder()
-    let logger = tc2Logger(forCategory: .daemon)
 
     private struct DatedValue: Hashable & Sendable & Codable {
         var date: Date
@@ -76,12 +76,6 @@ package final class LRUCache<Value: Hashable & Sendable & Codable>: LRUCacheProt
         self.state = Mutex(State())
 
         logger.debug("initialized workloadcache, file=\(self.storeURL?.absoluteString ?? "")")
-    }
-
-    static func migrate(from source: URL, to destination: URL) {
-        let sourceFile = source.appending(path: workloadCacheFilename)
-        let destinationFile = destination.appending(path: workloadCacheFilename)
-        moveDaemonStateFile(from: sourceFile, to: destinationFile)
     }
 
     private func trim(_ state: inout State, now: Date) {

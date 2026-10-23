@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,7 @@
 import OSLog
 import Synchronization
 
-private let logger = tc2Logger(forCategory: .connection)
+private let logger = Logger(for: .connection)
 
 final class SubrequestProxy: PrivateCloudComputeConnectionSubrequestProxy {
     init(
@@ -104,7 +104,7 @@ final class SubrequestProxy: PrivateCloudComputeConnectionSubrequestProxy {
     private let state = Mutex(State())
 
     func open() async throws {
-        try await xpcProxy.send(message: .openSubrequest(requestId, request.priority, request.opaqueCryptoMaterial))
+        try await xpcProxy.send(message: .openSubrequest(.init(subrequestId: requestId, priority: request.priority, opaqueCryptoMaterial: request.opaqueCryptoMaterial)))
         state.withLock {
             $0.openSubrequestSent = true
         }
@@ -135,7 +135,7 @@ final class SubrequestProxy: PrivateCloudComputeConnectionSubrequestProxy {
         self.responseDemultiplexer.cancel(requestId: requestId)
 
         do {
-            try await self.xpcProxy.send(message: .cancelSubrequest(requestId))
+            try await self.xpcProxy.send(message: .cancelSubrequest(.init(subrequestId: requestId)))
         } catch {
             logger.error("\(self.logPrefix) sendCancelSubrequest error, requestId=\(self.requestId), error=\(error)")
         }
@@ -162,14 +162,14 @@ final class SubrequestProxy: PrivateCloudComputeConnectionSubrequestProxy {
         try self.state.withLock {
             try $0.checkCancellation()
         }
-        try await self.xpcProxy.send(message: .subrequestData(requestId, data))
+        try await self.xpcProxy.send(message: .subrequestData(.init(subrequestId: requestId, data: data)))
     }
 
     func finishSending() async throws {
         try self.state.withLock {
             try $0.checkCancellation()
         }
-        try await self.xpcProxy.send(message: .closeSubrequest(requestId))
+        try await self.xpcProxy.send(message: .closeSubrequest(.init(subrequestId: requestId)))
     }
 
     func cancel() {
@@ -203,13 +203,13 @@ final class SubrequestProxy: PrivateCloudComputeConnectionSubrequestProxy {
                 continue
             case .openSubresponse:
                 continue
-            case .subresponseData(_, let data):
-                return data
-            case .closeSubresponse(_, let status):
+            case .subresponseData(let payload):
+                return payload.data
+            case .closeSubresponse(let payload):
                 self.state.withLock {
                     $0.closeResponseReceived = true
                 }
-                try checkCloseSubresponseError(status: status)
+                try checkCloseSubresponseError(status: payload.status)
                 return nil
             }
         }

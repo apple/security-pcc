@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -47,7 +47,7 @@ struct VREInstanceConfiguration {
 
     let name: String
     let releaseID: String
-    let httpService: HTTPServer.Configuration?
+    var httpService: HTTPServer.Configuration?
     var releaseAssets: [ReleaseAsset] // expected to come from release metadata
 
     init(
@@ -68,7 +68,7 @@ struct VREInstanceConfiguration {
     init(contentsOf url: URL) throws {
         let data: Data
         do {
-            data = try Data(contentsOf: url)
+            data = try Globals.computer.fileSystem.contentsOfFile(at: url)
         } catch {
             throw VREError("load instance \(url.absoluteString): \(error)")
         }

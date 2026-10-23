@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,6 +13,8 @@
 // 10/02/2024
 
 
+import Foundation
+
 public struct PCCFrontend: EHFrontend {
     public enum Tags: String, CaseIterable {
         case pcc_allowed
@@ -21,57 +23,6 @@ public struct PCCFrontend: EHFrontend {
 
     public let name = "PCCFrontend"
     public init() {}
-
-    public static let pcc_ruletagger = RuleTagger([
-        .init(
-            constraints: [
-                RuleTagger.Constraint(operation: .equals, field: "event_type", value: EventNormalizer.NormalizedDevice().event_type),
-                RuleTagger.Constraint(operation: .included_in_exactly, field: "device_identifier", value: ["AGXDeviceUserClient", "IOGPUDeviceUserClient"]),
-                RuleTagger.Constraint(operation: .not_included_in, field: "binName", value: ["tie-inference", "tie-model-owner"])
-            ],
-            criteria: .all,
-            name: "iokit_filter",
-            tags: [Tags.pcc_allowed.rawValue, SharedTags.all_activity.rawValue]
-        ),
-        .init(
-            constraints: [
-                RuleTagger.Constraint(operation: .included_in_exactly, field: "event_type", value: [
-                    EventNormalizer.NormalizedProcess().event_type,
-                    EventNormalizer.NormalizedNetwork().event_type,
-                    ESClient.ESClientProcExitEvent().event_type,
-                    ESClient.ESClientSSHLoginEvent().event_type,
-                    ESClient.ESClientSSHLogoutEvent().event_type,
-                    NStatClient.NStatClientNWEvent().event_type,
-                    SandboxViolation.Event().event_type,
-                    CryptexGenerator.CryptexInstallEvent().event_type,
-                    CryptexGenerator.CryptexUninstallEvent().event_type,
-                    CryptexGenerator.CryptexUpgradedEvent().event_type
-                ])
-            ],
-            criteria: .all,
-            name: "allow_subtypes",
-            tags: [Tags.pcc_allowed.rawValue, SharedTags.all_activity.rawValue]
-        ),
-        .init(
-            constraints: [
-                RuleTagger.Constraint(operation: .included_in_exactly, field: "event_type", value: [
-                    RestrictedExecutionModeViolation.Event().event_type
-                ])
-            ],
-            criteria: .all,
-            name: "rem_violation",
-            tags: [Tags.pcc_allowed.rawValue, SharedTags.high_priority.rawValue]
-        ),
-        .init(
-            constraints: [
-                RuleTagger.Constraint(operation: .equals, field: "event_type", value: MDNSResponderQueries.Event().event_type),
-                RuleTagger.Constraint(operation: .equals, field: "rowtype", value: MDNSResponderQueries.Event.QueryType.result.rawValue)
-            ],
-            criteria: .all,
-            name: "allow_dns",
-            tags: [Tags.pcc_allowed.rawValue, SharedTags.all_activity.rawValue]
-        )
-    ])
 
     public let pipeline = EHPipeline(
         transforms: [
@@ -82,7 +33,13 @@ public struct PCCFrontend: EHFrontend {
                 windowDurationSeconds: 5.0
             ),
 
-            Self.pcc_ruletagger,
+            RegoEngine(
+                compressedBundleData: ["pcc": EHRegoBundle.plan_json_gz],
+                compressedBundleDataJSON: ["pcc": EHRegoBundle.data_json_gz],
+                enableAlertTags: Set(["system:cloudOS"]),
+                eventTypeEntrypoints: EHRegoBundle.eventTypeEntrypoints,
+                metadataEntrypoint: EHRegoBundle.metadataEntrypoint
+            ),
             TagFilter(tagSelection: [Tags.pcc_allowed.rawValue], transforms: [], dropNonMatching: true),
 
             HostInfoEnricher(),
@@ -90,12 +47,10 @@ public struct PCCFrontend: EHFrontend {
             UsernameEnricher(),
             GroupnameEnricher(),
 
-            AlertEngine(AlertLibrary.alertsWithTag([AlertEngine.Tags.cloudOS.rawValue])),
-
             DropOfType([ESClient.ESClientFileOpenEvent().event_type]),
 
             PCCPrivacyEventCaster(),
-            HTTPPosterTransform(bufferCount: 2, bufferSize: 655536, timeout: 30, encodingStrategy: UEFToASEP.self)!
+            HTTPPosterTransform(bufferCount: 2, bufferSize: 655536, timeout: 30, encodingStrategy: UEFToASEP.self, serverConfigKey: HTTPPosterTransform.SMLServerConfigParameterKey)!
         ],
     )
 
@@ -104,7 +59,7 @@ public struct PCCFrontend: EHFrontend {
         NStatClient()!,
         OSLogStreamer(predicates: [
             SandboxViolation.self,
-            RestrictedExecutionModeViolation.self
+            KernelLogStream.self
         ]),
         CryptexGenerator(),
         HeartbeatGenerator(interval: 60 * 10, metricOnly: false),

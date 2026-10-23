@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -42,7 +42,7 @@ struct AssetHelper {
         self.purgeable = purgeable
         if !FileManager.isDirectory(self.assetDir, resolve: true) {
             do {
-                try FileManager.default.createDirectory(at: self.assetDir,
+                try Globals.computer.fileSystem.createDirectory(at: self.assetDir,
                                                         withIntermediateDirectories: true)
             } catch {
                 throw AssetHelperError("create asset download folder \(directory): \(error)")
@@ -74,6 +74,19 @@ struct AssetHelper {
         return try self.releases.loadRelease(index: index,
                                              releaseHash: releaseHash,
                                              logEnvironment: logEnvironment)
+    }
+
+    // loadReleaseRawData looks up index or releaseHash and returns the raw transparency-log
+    //  leaf payload bytes (whatever schema) and the metadata json file. Used by `release verify`
+    //  so the v2 path can hand the bytes to pccvre-attestation-helper as-is.
+    func loadReleaseRawData(
+        index: UInt64? = nil,
+        releaseHash: Data? = nil,
+        logEnvironment: TransparencyLog.Environment
+    ) throws -> (Data, SWReleaseMetadata) {
+        return try self.releases.loadReleaseRawData(index: index,
+                                                    releaseHash: releaseHash,
+                                                    logEnvironment: logEnvironment)
     }
 
     // downloadAsset retrieves url to assetDir/ (as either provided destName or last url component);
@@ -122,12 +135,33 @@ struct AssetHelper {
     // downloadHTTP retrieves a file from a HTTP URL - the artifact is left in a temporary location
     //   indicated in the return URL
     private func downloadHTTP(from: URL) async throws -> URL {
-        let (tmpDest, response) = try await URLSession(configuration: .default).download(from: from)
+        var request = URLRequest(url: from)
+        // Google/NVIDIA-hosted researcher assets require an authenticated GCS bucket
+        //  fetch (rdar://184003623). Mirror cloudattestationv2's OSImageStore: attach a
+        //  bearer token from CLOUDSDK_AUTH_ACCESS_TOKEN when talking to googleapis.com.
+        if from.host?.hasSuffix("googleapis.com") == true {
+            if let token = CLIDefaults.gcsAccessToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            } else {
+                AssetHelper.logger.log("no CLOUDSDK_AUTH_ACCESS_TOKEN set; requesting \(from.host ?? "", privacy: .public) unauthenticated")
+            }
+        }
+
+        let (tmpDest, response) = try await URLSession(configuration: .default).download(for: request)
         guard let response = response as? HTTPURLResponse else {
             throw AssetHelperError("parse http response")
         }
 
         guard (200 ... 299).contains(response.statusCode) else {
+            if [401, 403].contains(response.statusCode),
+               from.host?.hasSuffix("googleapis.com") == true
+            {
+                throw AssetHelperError("""
+                    response: \(response.statusCode). \
+                    Provide a valid access token by running: \
+                    export CLOUDSDK_AUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)
+                    """)
+            }
             throw AssetHelperError("response: \(response.statusCode)")
         }
 
@@ -240,6 +274,15 @@ extension AssetHelper {
                 .appending(path: "tickets-\(entry.releaseHash)")
         }
 
+        // rawDataFile returns expected path of the raw transparency-log leaf payload bytes for
+        //  a releaseHash, persisted so `release verify` can hand them back to the helper without
+        //  re-fetching from the log.
+        private func rawDataFile(_ entry: Entry) -> URL {
+            return self.sourcePath
+                .deletingLastPathComponent()
+                .appending(path: "rawdata-\(entry.releaseHash)")
+        }
+
         // init either loads ReleasesTables from the file specified by 'from' or returns an empty table;
         //  failure to load isn't considered fatal as a new one would be generated (and assets downloaded
         //  as needed)
@@ -292,13 +335,40 @@ extension AssetHelper {
             }
         }
 
-        // loadRelease returns parsed release metadata file matching log index or releaseHash
-        //  and logEnvironment; nil if not found or couldn't otherwise load
+        // loadRelease returns parsed v1 release tickets + metadata for the matching log index or
+        //  releaseHash and logEnvironment. Decodes from the persisted raw bytes (rawdata-<hash> or
+        //  the legacy tickets-<hash> file) via loadReleaseRawData so it works regardless of which
+        //  file is on disk. Throws if the bytes aren't a v1 release.
         func loadRelease(
             index: UInt64? = nil,
             releaseHash: Data? = nil,
             logEnvironment: TransparencyLog.Environment
         ) throws -> (SWRelease.Tickets, SWReleaseMetadata) {
+            let (rawData, metadata) = try loadReleaseRawData(
+                index: index,
+                releaseHash: releaseHash,
+                logEnvironment: logEnvironment
+            )
+
+            let tickets: SWRelease.Tickets
+            do {
+                tickets = try SWRelease.Tickets(serializedData: rawData)
+            } catch {
+                throw AssetHelperError("decode release as v1 tickets: \(error)")
+            }
+
+            return (tickets, metadata)
+        }
+
+        // loadReleaseRawData returns the raw transparency-log leaf payload bytes (whatever schema)
+        //  plus parsed release metadata, matching log index or releaseHash and logEnvironment.
+        //  Falls back to the legacy tickets file when no rawdata file exists (releases downloaded
+        //  before this method was added).
+        func loadReleaseRawData(
+            index: UInt64? = nil,
+            releaseHash: Data? = nil,
+            logEnvironment: TransparencyLog.Environment
+        ) throws -> (Data, SWReleaseMetadata) {
             guard let relEntry = lookup(index: index,
                                         releaseHash: releaseHash,
                                         logEnvironment: logEnvironment)
@@ -306,15 +376,24 @@ extension AssetHelper {
                 throw AssetHelperError("release index/hash not found")
             }
 
+            let rawDataFileURL = self.rawDataFile(relEntry)
             let ticketsFileURL = self.ticketsFile(relEntry)
             let releaseFileURL = self.releaseFile(relEntry)
 
-            let tickets: SWRelease.Tickets
+            let rawData: Data
             do {
-                let ticketData = try Data(contentsOf: ticketsFileURL)
-                tickets = try SWRelease.Tickets(serializedData: ticketData)
+                if FileManager.isRegularFile(rawDataFileURL) {
+                    rawData = try Data(contentsOf: rawDataFileURL)
+                } else if FileManager.isRegularFile(ticketsFileURL) {
+                    // Older download — the v1 tickets file *is* the raw leaf bytes for v1 leaves.
+                    rawData = try Data(contentsOf: ticketsFileURL)
+                } else {
+                    throw AssetHelperError("no raw data file for release \(relEntry.releaseHash); re-download with `release download`")
+                }
+            } catch let error as AssetHelperError {
+                throw error
             } catch {
-                throw AssetHelperError("load release tickets file \(ticketsFileURL.path): \(error)")
+                throw AssetHelperError("read release rawdata \(rawDataFileURL.path): \(error)")
             }
 
             let metadata: SWReleaseMetadata
@@ -324,7 +403,7 @@ extension AssetHelper {
                 throw AssetHelperError("load release metadata file \(releaseFileURL.path): \(error)")
             }
 
-            return (tickets, metadata)
+            return (rawData, metadata)
         }
 
         // add stores (or replaces) release tickets and metadata (as json files) and adds entry to
@@ -354,7 +433,7 @@ extension AssetHelper {
                 }
             }
 
-            if let releaseTickets = release.tickets {
+            if let releaseTickets = release.v1Tickets {
                 let ticketsFileURL = self.ticketsFile(newEntry)
                 do {
                     try releaseTickets.serializedData.write(to: ticketsFileURL, options: .atomic)
@@ -362,6 +441,17 @@ extension AssetHelper {
                 } catch {
                     throw AssetHelperError("write release tickets file (\(ticketsFileURL.path)): \(error)")
                 }
+            }
+
+            // Persist the raw leaf payload regardless of schema so `release verify` can dispatch
+            // without re-fetching from the log. v1: same bytes as the tickets file (kept for
+            // back-compat with older cached releases). v2: DER bytes the helper consumes.
+            let rawDataFileURL = self.rawDataFile(newEntry)
+            do {
+                try release.rawData.write(to: rawDataFileURL, options: .atomic)
+                AssetHelper.logger.debug("saved release raw data file (\(rawDataFileURL.path))")
+            } catch {
+                throw AssetHelperError("write release raw data file (\(rawDataFileURL.path)): \(error)")
             }
 
             self.entries.append(newEntry)

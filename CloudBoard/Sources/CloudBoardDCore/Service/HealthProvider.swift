@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -61,7 +61,7 @@ actor HealthProvider: Grpc_Health_V1_HealthAsyncProvider, Sendable {
         // We use a watcher. This will auto-publish the most recent value.
         var previousResult: ServiceHealthMonitor.Status?
         for await update in self.monitor.watch() {
-            if update.stateHasChanged(from: previousResult) {
+            if update.servingStateHasChanged(from: previousResult) {
                 try await responseStream.send(.init(update))
             }
             previousResult = update
@@ -72,7 +72,7 @@ actor HealthProvider: Grpc_Health_V1_HealthAsyncProvider, Sendable {
 extension Grpc_Health_V1_HealthCheckResponse {
     init(_ status: ServiceHealthMonitor.Status) {
         switch status {
-        case .initializing, .unhealthy:
+        case .initializing, .unhealthy, .terminal:
             self = .with {
                 $0.status = .notServing
             }
@@ -86,21 +86,25 @@ extension Grpc_Health_V1_HealthCheckResponse {
 }
 
 extension ServiceHealthMonitor.Status {
-    fileprivate func stateHasChanged(from previous: ServiceHealthMonitor.Status?) -> Bool {
+    /// Whether this status maps to gRPC `SERVING`. Only a healthy node serves; initializing, unhealthy, and
+    /// terminal all map to `NOT_SERVING`. Exhaustive on purpose: a new `Status` case must be classified here.
+    fileprivate var isServing: Bool {
+        switch self {
+        case .healthy:
+            return true
+        case .initializing, .unhealthy, .terminal:
+            return false
+        }
+    }
+
+    fileprivate func servingStateHasChanged(from previous: ServiceHealthMonitor.Status?) -> Bool {
         switch (self, previous) {
         case (_, .none):
             return true
-        case (.initializing, .initializing),
-             (.unhealthy, .unhealthy),
-             (.healthy, .healthy),
-             (.initializing, .unhealthy),
-             (.unhealthy, .initializing):
-            return false
-        case (.unhealthy, .healthy),
-             (.healthy, .unhealthy),
-             (.initializing, .healthy),
-             (.healthy, .initializing):
-            return true
+        case (_, .some(let previous)):
+            // Transitions that don't cross the serving/not-serving boundary (e.g. initializing -> unhealthy) don't
+            // change what we advertise, so we don't re-send.
+            return self.isServing != previous.isServing
         }
     }
 }

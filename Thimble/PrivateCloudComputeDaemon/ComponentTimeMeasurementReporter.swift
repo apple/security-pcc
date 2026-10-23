@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,18 +20,12 @@
 //
 
 import AppleIntelligenceReporting
+private import DarwinPrivate.os.variant
 import Foundation
 import PrivateCloudCompute
 import os.log
 
-private let logger = tc2Logger(forCategory: .metricReporter)
-
-protocol AppleIntelligenceEventReporterProtocol: Sendable {
-    func emitAppleIntelligenceStartEvent(eventInfo: AppleIntelligenceEvent) throws -> EventIdentifier
-    func emitAppleIntelligenceEndEvent(eventInfo: AppleIntelligenceEvent, startEventIdentifier: EventIdentifier?) throws
-}
-
-extension EventReporter: AppleIntelligenceEventReporterProtocol {}
+private let logger = Logger(for: .metricReporter)
 
 /// Represents the source format of a component time measurement.
 enum ComponentTimeMeasurementSource: Sendable {
@@ -49,7 +43,7 @@ enum ComponentTimeMeasurementSource: Sendable {
 ///
 /// When emitted as AppleIntelligenceEvents, these metrics appear in the biome stream where they
 /// can be used for diagnosing issues during bug triage.
-final class ComponentTimeMeasurementReporter<Reporter: AppleIntelligenceEventReporterProtocol>: Sendable {
+final class ComponentTimeMeasurementReporter<Reporter: AppleIntelligenceEventReporter>: Sendable {
 
     /// Represents a single component time measurement.
     ///
@@ -64,10 +58,10 @@ final class ComponentTimeMeasurementReporter<Reporter: AppleIntelligenceEventRep
         let operation: String
 
         /// Optional request identifier for correlating metrics across hops
-        let identifier: String?
+        let identifier: UUID?
 
         /// Optional sub-request identifier for multi-turn or nested execution flows
-        let subIdentifier: String?
+        let subIdentifier: SpanID?
 
         /// Operation start time as milliseconds since epoch
         let startTime: Int64
@@ -87,8 +81,8 @@ final class ComponentTimeMeasurementReporter<Reporter: AppleIntelligenceEventRep
         init(
             componentName: String,
             operation: String,
-            identifier: String?,
-            subIdentifier: String?,
+            identifier: UUID?,
+            subIdentifier: SpanID?,
             startTime: Int64,
             endTime: Int64
         ) {
@@ -100,11 +94,27 @@ final class ComponentTimeMeasurementReporter<Reporter: AppleIntelligenceEventRep
             self.endTime = endTime
         }
 
-        init(_ proto: Proto_PrivateCloudCompute_ComponentTimeMeasurement) {
+        init?(_ proto: Proto_PrivateCloudCompute_ComponentTimeMeasurement) {
             self.componentName = proto.componentName
             self.operation = proto.operation
-            self.identifier = proto.hasIdentifier ? proto.identifier : nil
-            self.subIdentifier = proto.hasSubIdentifier ? proto.subIdentifier : nil
+            if proto.hasIdentifier {
+                guard let uuid = UUID(uuidString: proto.identifier) else {
+                    logger.warning("Invalid UUID in identifier field: '\(proto.identifier)'")
+                    return nil
+                }
+                self.identifier = uuid
+            } else {
+                self.identifier = nil
+            }
+            if proto.hasSubIdentifier {
+                guard let spanID = SpanID(proto.subIdentifier) else {
+                    logger.warning("Invalid SpanID in sub_identifier field: '\(proto.subIdentifier)'")
+                    return nil
+                }
+                self.subIdentifier = spanID
+            } else {
+                self.subIdentifier = nil
+            }
             self.startTime = proto.startTime
             self.endTime = proto.endTime
         }
@@ -114,8 +124,8 @@ final class ComponentTimeMeasurementReporter<Reporter: AppleIntelligenceEventRep
             <Measurement
             componentName=\(componentName)
             operation=\(operation)
-            identifier=\(identifier ?? "nil")
-            subIdentifier=\(subIdentifier ?? "nil")
+            identifier=\(identifier?.uuidString ?? "nil")
+            subIdentifier=\(subIdentifier.map(String.init) ?? "nil")
             startTime=\(startTime)
             endTime=\(endTime)>
             """
@@ -132,6 +142,9 @@ final class ComponentTimeMeasurementReporter<Reporter: AppleIntelligenceEventRep
 
     /// Parses and emits a component time measurement as an AppleIntelligenceReporting event.
     func process(clientRequestID: UUID, source: ComponentTimeMeasurementSource) {
+        guard os_variant_has_internal_diagnostics(privateCloudComputeOsVariantSubsystem) else {
+            return
+        }
         let measurement: Measurement
         switch source {
         case .json(let jsonValue):
@@ -146,7 +159,10 @@ final class ComponentTimeMeasurementReporter<Reporter: AppleIntelligenceEventRep
                 return
             }
         case .proto(let protoValue):
-            measurement = Measurement(protoValue)
+            guard let parsed = Measurement(protoValue) else {
+                return
+            }
+            measurement = parsed
         }
 
         logger.log("Processing component time measurement: \(measurement.loggingDescription)")
@@ -157,13 +173,20 @@ final class ComponentTimeMeasurementReporter<Reporter: AppleIntelligenceEventRep
         let startDate = Date(timeIntervalSince1970: TimeInterval(measurement.startTime) / 1000)
         let endDate = Date(timeIntervalSince1970: TimeInterval(measurement.endTime) / 1000)
 
+        let spanContext = AppleIntelligenceReportingSpanContext(
+            spanID: measurement.subIdentifier?.uuid,
+            parentSpanID: nil,
+            traceID: measurement.identifier,
+            name: nil
+        )
+
         let startEvent = AppleIntelligenceEvent.inference(
             .init(
                 subsystem: measurement.componentName,
                 stepIdentifier: measurement.operation,
                 modelManagerRequestIdentifier: clientRequestID,
                 metadata: nil,
-                spanContext: nil,
+                spanContext: spanContext,
                 timestamp: startDate
             )
         )
@@ -174,7 +197,7 @@ final class ComponentTimeMeasurementReporter<Reporter: AppleIntelligenceEventRep
                 stepIdentifier: measurement.operation,
                 modelManagerRequestIdentifier: clientRequestID,
                 metadata: nil,
-                spanContext: nil,
+                spanContext: spanContext,
                 timestamp: endDate
             )
         )

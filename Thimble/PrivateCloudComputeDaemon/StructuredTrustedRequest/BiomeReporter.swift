@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,18 +20,15 @@
 //
 
 @_spi(Restricted) import IntelligencePlatformLibrary
+import PrivateCloudCompute
+
+private let logger = Logger(for: .trustedRequest)
 
 protocol BiomeReporterProtocol: Sendable {
     func send(requestLog: PrivateCloudComputeRequestLog) throws
 }
 
 struct BiomeReporter: BiomeReporterProtocol {
-    private let logger: Logger
-
-    init(logger: Logger) {
-        self.logger = logger
-    }
-
     func send(requestLog: PrivateCloudComputeRequestLog) throws {
         let stream = Library.Streams.PrivateCloudCompute.RequestLog.self
         #if os(macOS)

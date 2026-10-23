@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,7 @@
 private import EnsembleWardenCommon
 private import os
 private import Synchronization
-@preconcurrency private import XPC
+@preconcurrency package import XPC
 
 /// Receives messages from EnsembleWarden
 ///
@@ -40,6 +40,10 @@ public final class EnsembleWardenServer<Handler: EnsembleWardenServerHandler & S
 
         public func run() async throws {
             try await self.serverImplementation.run()
+        }
+
+        package func runAnonymous(endpointHandler: @Sendable (XPCEndpoint) -> Void) async throws {
+            try await self.serverImplementation.runAnonymous(endpointHandler: endpointHandler)
         }
 
         package func waitForRunning() async {
@@ -122,6 +126,39 @@ package final class EnsembleWardenServerImplementation<Handler: EnsembleWardenSe
 
     /// Performs the necessary steps to start listening for XPC requests.
     package func run() async throws {
+        let listener = try XPCListener(
+            service: xpcServiceName,
+            targetQueue: .init(label: "com.apple.cloudos.ensemblewarden.xpcserver", qos: .userInitiated),
+            requirement: .hasEntitlement(self.entitlement),
+            incomingSessionHandler: self.makeIncomingSessionHandler()
+        )
+        try await self.serve(listener: listener)
+    }
+
+    /// Creates an anonymous XPC listener (no registered mach service name required) and vends
+    /// the resulting endpoint via `endpointHandler`, then blocks until cancelled/shutdown.
+    ///
+    /// This is intended for use in tests where launchd registration is unavailable.
+    package func runAnonymous(endpointHandler: @Sendable (XPCEndpoint) -> Void) async throws {
+        let listener = XPCListener(
+            targetQueue: .init(label: "com.apple.cloudos.ensemblewarden.xpcserver.anon", qos: .userInitiated),
+            incomingSessionHandler: self.makeIncomingSessionHandler()
+        )
+        endpointHandler(listener.endpoint)
+        try await self.serve(listener: listener)
+    }
+
+    private func makeIncomingSessionHandler() -> @Sendable (XPCListener.IncomingSessionRequest) -> XPCListener.IncomingSessionRequest.Decision {
+        return { request in
+            request.accept { _ in
+                XPCHandler(ensembleWardenHandler: self.handler,
+                           ensembleWardenMetrics: self.ensembleWardenMetrics)
+            }
+        }
+    }
+
+    /// Transitions to the starting state, blocks until shutdown, then cleans up.
+    private func serve(listener: XPCListener) async throws {
         try self.state.withLock { state in
             switch state {
             case .notStarted(let continuations):
@@ -132,16 +169,6 @@ package final class EnsembleWardenServerImplementation<Handler: EnsembleWardenSe
         }
         defer {
             self.state.withLock { $0 = .stopped }
-        }
-        let listener = try XPCListener(
-            service: xpcServiceName,
-            targetQueue: .init(label: "com.apple.cloudos.ensemblewarden.xpcserver", qos: .userInitiated),
-            requirement: .hasEntitlement(self.entitlement),
-        ) { request in
-            return request.accept { _ in
-                XPCHandler(ensembleWardenHandler: self.handler,
-                           ensembleWardenMetrics: self.ensembleWardenMetrics)
-            }
         }
         await withThrowingTaskGroup(of: Void.self) { group in
             // Wait for shutdown

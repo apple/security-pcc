@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -49,8 +49,8 @@ struct DarwinInitCommand: ParsableCommand {
                   completion: .file())
         var inputConfigPath: String
 
-        func readInputConfig() throws -> DarwinInitConfig {
-            return try DarwinInitConfig(json: try readInputConfigJSON())
+        func readInputConfig() throws -> PCCDarwinInitConfig {
+            return try PCCDarwinInitConfig(json: try readInputConfigJSON())
         }
 
         func readInputConfigJSON() throws -> String {
@@ -62,7 +62,7 @@ struct DarwinInitCommand: ParsableCommand {
             return try String(contentsOfFile: inputConfigPath, encoding: .utf8)
         }
 
-        func writeOutputConfig(_ config: DarwinInitConfig) throws {
+        func writeOutputConfig(_ config: PCCDarwinInitConfig) throws {
             let json = try config.json(pretty: pretty)
             try outputFile().write(json.data(using: .utf8)!)
         }

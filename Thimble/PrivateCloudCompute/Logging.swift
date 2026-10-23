@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,10 +22,13 @@
 import Foundation
 import OSLog
 
-package enum TC2LogCategory: String {
+package let logSubsystem = "com.apple.privatecloudcompute"
+
+package enum LogCategory: String {
     case daemon = "Daemon"
     case trustedRequest = "TrustedRequest"
     case trustedRequestXPCProxy = "TrustedRequestXPCProxy"
+    case xpcWrapper = "XPCWrapper"
     case client = "Client"
     /// Used for multi-turn requests.
     case connection = "Connection"
@@ -34,9 +37,11 @@ package enum TC2LogCategory: String {
     case scheduledTask = "ScheduledTask"
     case network = "Network"
     case attestationStore = "AttestationStore"
+    case legacyAttestationStore = "LegacyAttestationStore"
     case attestationVerifier = "AttestationVerifier"
     case unitTest = "UnitTest"
     case prefetchRequest = "PrefetchRequest"
+    case batchedPrefetchRequest = "BatchedPrefetchRequest"
     case sandbox = "Sandbox"
     case metricReporter = "MetricReporter"
     case rateLimiter = "RateLimiter"
@@ -44,11 +49,21 @@ package enum TC2LogCategory: String {
     case serverDrivenConfiguration = "ServerDrivenConfig"
     case tokenProvider = "TokenProvider"
     case updateServerDrivenConfiguration = "UpdateServerDrivenConfig"
-    case requestLog = "RequestLog"
+    case vaultConfiguration = "VaultConfiguration"
     case catalogService = "CatalogService"
     case notifications = "Notifications"
+    case migrator = "Migrator"
 }
 
-package func tc2Logger(forCategory: TC2LogCategory) -> Logger {
-    return Logger(subsystem: "com.apple.privatecloudcompute", category: forCategory.rawValue)
+extension LogCategory {
+    /// The os_log category for structured JSON request logs. Only use this to emit
+    /// request log entries or to read them back from the log stream. Not an enum case
+    /// so it can't be passed to `Logger(for:)` by accident.
+    package static let requestLogCategoryName = "RequestLog"
+}
+
+extension Logger {
+    package init(for category: LogCategory) {
+        self.init(subsystem: logSubsystem, category: category.rawValue)
+    }
 }

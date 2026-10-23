@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -54,6 +54,7 @@ extension PCCHarness.ProtoInvokeWorkloadRequest {
                 $0.requestID = requestID.uuidString
                 $0.requestBypassed = requestBypassed
                 $0.requestNack = requestNack
+                $0.patIssuer = metadata.patIssuer
                 if let responseBypass {
                     $0.trustedProxyMetadata = .with {
                         $0.responseBypassMode = responseBypass

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -363,7 +363,7 @@ extension RequestSummaryTracer {
                     let spanID = storage.spanID
                     self.logger?
                         .fault(
-                            "[rpcID: \(rpcID, privacy: .public), parentID: \(parentID?.hexEncoded ?? "", privacy: .public), spanID: \(spanID, privacy: .public)] endTimeNanos queried for closed span"
+                            "[rpcID: \(rpcID, privacy: .public), parentID: \(parentID?.hexEncoded ?? "", privacy: .public), spanID: \(spanID, privacy: .public)] endTimeNanos queried for open span"
                         )
                     return 0
                 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -33,19 +33,23 @@ public struct ProxiedReleaseTransparencyPolicy: AttestationPolicy {
     @usableFromInline
     let validateProofs: Bool
 
+    @usableFromInline
+    let fullReleaseSetVerification: Bool
+
     /// Creates a new transparency policy.
     /// - Parameter verifier: The transparency verifier.
-    public init(verifier: TransparencyVerifier) {
-        self.init(verifier: verifier, validateProofs: true)
+    init(verifier: TransparencyVerifier) {
+        self.init(verifier: verifier, validateProofs: true, fullReleaseSetVerification: true)
     }
 
     /// Creates a new transparency policy.
     /// - Parameters:
     ///   - verifier: The transparency verifier.
     ///   - validateProofs: The policy should validate the transparency log proofs.
-    public init(verifier: TransparencyVerifier, validateProofs: Bool) {
+    init(verifier: TransparencyVerifier, validateProofs: Bool, fullReleaseSetVerification: Bool) {
         self.verifier = verifier
         self.validateProofs = validateProofs
+        self.fullReleaseSetVerification = fullReleaseSetVerification
     }
 
     /// Performs the proxied releases policy evaluation.
@@ -62,7 +66,10 @@ public struct ProxiedReleaseTransparencyPolicy: AttestationPolicy {
                 throw TransparencyPolicy.Error.missingProofs
             }
 
-            for release in metadata.proxiedRelease {
+            let releases = fullReleaseSetVerification ? metadata.proxiedRelease : Array(metadata.proxiedRelease.randomElements(3))
+            Self.logger.log("Verifying inclusion of \(releases.count, privacy: .public)/\(metadata.proxiedRelease.count, privacy: .public) proxied releases in transparency log")
+
+            for release in releases {
                 let releaseDigest = release.digest.hexString
                 Self.logger.log("Verifying inclusion of proxied release \(releaseDigest, privacy: .public) in transparency log")
                 guard let proofs = TransparencyLogProofs(proxiedRelease: release) else {
@@ -108,5 +115,11 @@ public struct ProxiedReleaseTransparencyPolicy: AttestationPolicy {
 
             Self.logger.log("Failing transparency checks open since validateProofs is off")
         }
+    }
+}
+
+extension Array {
+    func randomElements(_ count: Int) -> Self.SubSequence {
+        self.shuffled().prefix(count)
     }
 }

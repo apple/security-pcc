@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -110,11 +110,13 @@ package final class EnsemblePorterKeySafe: Sendable {
                     switch state {
                     case .idle:
                         // This shouldn't happen in correct usage
+                        self.metrics.incrementKeysafeFatalError(reason: .waitBeforeSetFTET)
                         self.logger.error("waitForTurnKeys called before setFTETKey")
                         fatalError("waitForTurnKeys called before setFTETKey")
                     case .awaitingTurnKeys(let ftETKey, nil):
                         state = .awaitingTurnKeys(ftETKey: ftETKey, waiter: continuation)
                     case .awaitingTurnKeys(_, .some):
+                        self.metrics.incrementKeysafeFatalError(reason: .multipleWaiters)
                         self.logger.error("Multiple waiters for turn keys")
                         fatalError("Multiple waiters for turn keys")
                     case .ready:

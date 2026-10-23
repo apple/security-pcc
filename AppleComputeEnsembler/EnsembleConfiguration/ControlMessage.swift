@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,6 +23,8 @@
 // symbols.
 @_weakLinked import CloudAttestation
 import CryptoKit
+import Foundation
+import AppleComputeEnsembler
 
 enum EnsembleControlMessage: Codable, CustomStringConvertible {
 	case ensembleFailed /// Something went wrong. Tell everyone
@@ -50,7 +52,12 @@ enum EnsembleControlMessage: Codable, CustomStringConvertible {
 	case acknowledge // message to acknowledge that a server got the message
 	case ensembleShareDataKey(key: Data, singleUseToken: UUID)
 	case followerDataKeyObtained
-    case dataMessage(appID: String, data:Data, requestID: UUID) // wrapper message to send/receive data beween nodes.
+    /// Leader → Follower: carries the request payload and an advisory timeout for the follower's app callback.
+    case dataMessageRequest(appID: String, data: Data, requestID: UUID, callbackTimeout: TimeInterval)
+    /// Follower → Leader: carries the app callback's response payload.
+    case dataMessageResponse(appID: String, data: Data, requestID: UUID)
+    /// Follower → Leader: signals a typed error (no registered handler, app callback timeout, etc.).
+    case dataMessageError(error: DataMessageError, requestID: UUID)
 
 	// EnsembleControlMessage.description does not expose any private data.
 	var description: String {
@@ -71,9 +78,34 @@ enum EnsembleControlMessage: Codable, CustomStringConvertible {
 		case .acknowledge: return ".acknowledge"
 		case .ensembleShareDataKey: return "ensembleShareDataKey"
 		case .followerDataKeyObtained: return "followerDataKeyObtained"
-        case .dataMessage: return "dataMessage"
+        case .dataMessageRequest: return "dataMessageRequest"
+        case .dataMessageResponse: return "dataMessageResponse"
+        case .dataMessageError: return "dataMessageError"
 		}
 	}
+
+    // Darwin Foundation's JSONDecoder throws an ObjC NSException (not a Swift Error) when the
+    // root JSON value is not a dictionary (e.g. a bare string or number). Swift `catch` blocks
+    // don't intercept ObjC exceptions, so we pre-validate the root type via JSONSerialization —
+    // which returns a typed Swift Error for non-dict roots — before handing off to JSONDecoder.
+    static func decode(from data: Data) throws -> EnsembleControlMessage {
+        guard !data.isEmpty else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: [], debugDescription: "Empty data")
+            )
+        }
+        let root = try JSONSerialization.jsonObject(with: data)
+        guard root is [String: Any] else {
+            let hexPrefix = data.prefix(32).map { String(format: "%02x", $0) }.joined(separator: " ")
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: [],
+                    debugDescription: "Root JSON value is not a dictionary — cannot decode as EnsembleControlMessage. First \(min(32, data.count)) bytes: [\(hexPrefix)]"
+                )
+            )
+        }
+        return try JSONDecoder().decode(EnsembleControlMessage.self, from: data)
+    }
 
 	// EnsembleControlMessage.OuterNode.description does not expose any private data.
 	struct OuterNode: Codable, CustomStringConvertible {

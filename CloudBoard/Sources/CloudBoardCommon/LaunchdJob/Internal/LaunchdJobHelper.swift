@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -102,17 +102,16 @@ internal enum LaunchdJobHelper {
         )
     }
 
-    static let cloudBoardLaunchdManagerName = "com.apple.cloudos.cloudboardd"
-
     // Fetches the jobs that cloudboardd manages from launchd and returns the jobs of the matching type
     // (all types if none was specified).
     internal static func findManagedLaunchdJobs(
-        type: CloudBoardJobType? = nil,
+        type: CloudBoardJobType,
         name: String? = nil,
         state: OSLaunchdJobState? = nil,
         skippingInstances: Bool = false
     ) throws -> [ManagedLaunchdJob] {
-        let managedJobs = try OSLaunchdJob.copyJobsManaged(by: self.cloudBoardLaunchdManagerName)
+        let managerName = type.launchdManagerName
+        let managedJobs = try OSLaunchdJob.copyJobsManaged(by: managerName)
         var launchdJobs = [ManagedLaunchdJob]()
         for launchdJob in managedJobs {
             if let jobAttributes = getLaunchdJobAttributes(
@@ -134,7 +133,7 @@ internal enum LaunchdJobHelper {
     // none was specified).
     // Returns an array of (LaunchdJob, AdditionalPropertiesDict) (as defined in the AdditionalProperties dictionary)
     internal static func fetchManagedLaunchdJobs(
-        type: CloudBoardJobType? = nil,
+        type: CloudBoardJobType,
         state: OSLaunchdJobState? = nil,
         skippingInstances: Bool = false,
         logger: Logger
@@ -143,7 +142,8 @@ internal enum LaunchdJobHelper {
 
         let managedJobs: [OSLaunchdJob]?
         do {
-            try managedJobs = OSLaunchdJob.copyJobsManaged(by: self.cloudBoardLaunchdManagerName)
+            let managerName = type.launchdManagerName
+            try managedJobs = OSLaunchdJob.copyJobsManaged(by: managerName)
         } catch {
             logger.error("failed to query outstanding managed jobs")
             return launchdJobs
@@ -186,7 +186,8 @@ internal enum LaunchdJobHelper {
 
     public static func cleanupManagedLaunchdJobs(logger: Logger) async {
         var jobs: [ManagedLaunchdJob] = []
-        let jobTypes: [CloudBoardJobType] = [.cbJobHelper, .cloudBoardApp]
+        // .cbPClientHelper instances are owned by cb_bridged, not cloudboardd
+        let jobTypes: [CloudBoardJobType] = [.cbJobHelper, .cloudBoardApp, .cbPServerHelper]
 
         for jobType in jobTypes {
             jobs += self.fetchManagedLaunchdJobs(type: jobType, logger: logger)
@@ -272,6 +273,12 @@ internal enum LaunchdJobHelper {
                error.code == EINPROGRESS {
                 logger.info("""
                 Removal in progress on job \(uuidStr, privacy: .public) \
+                (PID \(pidStr, privacy: .public))
+                """)
+            } else if error.domain == "OSLaunchdErrorDomain",
+                      error.code == ESRCH {
+                logger.info("""
+                Job already exited \(uuidStr, privacy: .public) \
                 (PID \(pidStr, privacy: .public))
                 """)
             } else {

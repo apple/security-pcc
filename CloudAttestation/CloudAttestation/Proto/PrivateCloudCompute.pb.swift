@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -35,7 +35,7 @@ fileprivate struct _GeneratedWithProtocGenSwiftVersion: InternalSwiftProtobuf.Pr
   typealias Version = _2
 }
 
-public struct PrivateCloudCompute_ReleaseMetadata: @unchecked Sendable {
+public struct PrivateCloudCompute_ReleaseMetadata: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -43,11 +43,11 @@ public struct PrivateCloudCompute_ReleaseMetadata: @unchecked Sendable {
   public var schemaVersion: PrivateCloudCompute_ReleaseMetadata.SchemaVersion = .unspecified
 
   public var releaseCreation: InternalSwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _releaseCreation ?? InternalSwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_releaseCreation ?? InternalSwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_releaseCreation = newValue}
   }
   /// Returns true if `releaseCreation` has been explicitly set.
-  public var hasReleaseCreation: Bool {return self._releaseCreation != nil}
+  public var hasReleaseCreation: Bool {self._releaseCreation != nil}
   /// Clears the value of `releaseCreation`. Subsequent reads from it will return its default value.
   public mutating func clearReleaseCreation() {self._releaseCreation = nil}
 
@@ -56,22 +56,22 @@ public struct PrivateCloudCompute_ReleaseMetadata: @unchecked Sendable {
   public var assets: [PrivateCloudCompute_ReleaseMetadata.Asset] = []
 
   public var darwinInit: InternalSwiftProtobuf.Google_Protobuf_Struct {
-    get {return _darwinInit ?? InternalSwiftProtobuf.Google_Protobuf_Struct()}
+    get {_darwinInit ?? InternalSwiftProtobuf.Google_Protobuf_Struct()}
     set {_darwinInit = newValue}
   }
   /// Returns true if `darwinInit` has been explicitly set.
-  public var hasDarwinInit: Bool {return self._darwinInit != nil}
+  public var hasDarwinInit: Bool {self._darwinInit != nil}
   /// Clears the value of `darwinInit`. Subsequent reads from it will return its default value.
   public mutating func clearDarwinInit() {self._darwinInit = nil}
 
   public var requirements: [PrivateCloudCompute_ReleaseMetadata.ToolRequirement] = []
 
   public var application: PrivateCloudCompute_ReleaseMetadata.Application {
-    get {return _application ?? PrivateCloudCompute_ReleaseMetadata.Application()}
+    get {_application ?? PrivateCloudCompute_ReleaseMetadata.Application()}
     set {_application = newValue}
   }
   /// Returns true if `application` has been explicitly set.
-  public var hasApplication: Bool {return self._application != nil}
+  public var hasApplication: Bool {self._application != nil}
   /// Clears the value of `application`. Subsequent reads from it will return its default value.
   public mutating func clearApplication() {self._application = nil}
 
@@ -121,6 +121,7 @@ public struct PrivateCloudCompute_ReleaseMetadata: @unchecked Sendable {
     case model // = 3
     case hostTools // = 4
     case debugShell // = 5
+    case cryptex // = 6
     case UNRECOGNIZED(Int)
 
     public init() {
@@ -135,6 +136,7 @@ public struct PrivateCloudCompute_ReleaseMetadata: @unchecked Sendable {
       case 3: self = .model
       case 4: self = .hostTools
       case 5: self = .debugShell
+      case 6: self = .cryptex
       default: self = .UNRECOGNIZED(rawValue)
       }
     }
@@ -147,6 +149,7 @@ public struct PrivateCloudCompute_ReleaseMetadata: @unchecked Sendable {
       case .model: return 3
       case .hostTools: return 4
       case .debugShell: return 5
+      case .cryptex: return 6
       case .UNRECOGNIZED(let i): return i
       }
     }
@@ -159,6 +162,7 @@ public struct PrivateCloudCompute_ReleaseMetadata: @unchecked Sendable {
       .model,
       .hostTools,
       .debugShell,
+      .cryptex,
     ]
 
   }
@@ -243,7 +247,7 @@ public struct PrivateCloudCompute_ReleaseMetadata: @unchecked Sendable {
 
   }
 
-  public struct Digest: @unchecked Sendable {
+  public struct Digest: Sendable {
     // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
     // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
     // methods supported on all messages.
@@ -257,7 +261,7 @@ public struct PrivateCloudCompute_ReleaseMetadata: @unchecked Sendable {
     public init() {}
   }
 
-  public struct Asset: @unchecked Sendable {
+  public struct Asset: Sendable {
     // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
     // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
     // methods supported on all messages.
@@ -267,22 +271,22 @@ public struct PrivateCloudCompute_ReleaseMetadata: @unchecked Sendable {
     public var url: String = String()
 
     public var digest: PrivateCloudCompute_ReleaseMetadata.Digest {
-      get {return _digest ?? PrivateCloudCompute_ReleaseMetadata.Digest()}
+      get {_digest ?? PrivateCloudCompute_ReleaseMetadata.Digest()}
       set {_digest = newValue}
     }
     /// Returns true if `digest` has been explicitly set.
-    public var hasDigest: Bool {return self._digest != nil}
+    public var hasDigest: Bool {self._digest != nil}
     /// Clears the value of `digest`. Subsequent reads from it will return its default value.
     public mutating func clearDigest() {self._digest = nil}
 
     public var variant: String = String()
 
     public var ticket: Data {
-      get {return _ticket ?? Data()}
+      get {_ticket ?? Data()}
       set {_ticket = newValue}
     }
     /// Returns true if `ticket` has been explicitly set.
-    public var hasTicket: Bool {return self._ticket != nil}
+    public var hasTicket: Bool {self._ticket != nil}
     /// Clears the value of `ticket`. Subsequent reads from it will return its default value.
     public mutating func clearTicket() {self._ticket = nil}
 
@@ -338,7 +342,7 @@ public struct PrivateCloudCompute_ProxyNodeMetadata: Sendable {
 
   public var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
-  public struct ProxiedRelease: @unchecked Sendable {
+  public struct ProxiedRelease: Sendable {
     // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
     // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
     // methods supported on all messages.
@@ -346,11 +350,11 @@ public struct PrivateCloudCompute_ProxyNodeMetadata: Sendable {
     public var digest: Data = Data()
 
     public var transparencyProofs: Proto_TransparencyProofs {
-      get {return _transparencyProofs ?? Proto_TransparencyProofs()}
+      get {_transparencyProofs ?? Proto_TransparencyProofs()}
       set {_transparencyProofs = newValue}
     }
     /// Returns true if `transparencyProofs` has been explicitly set.
-    public var hasTransparencyProofs: Bool {return self._transparencyProofs != nil}
+    public var hasTransparencyProofs: Bool {self._transparencyProofs != nil}
     /// Clears the value of `transparencyProofs`. Subsequent reads from it will return its default value.
     public mutating func clearTransparencyProofs() {self._transparencyProofs = nil}
 
@@ -370,16 +374,7 @@ fileprivate let _protobuf_package = "PrivateCloudCompute"
 
 extension PrivateCloudCompute_ReleaseMetadata: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".ReleaseMetadata"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "schema_version"),
-    2: .standard(proto: "release_creation"),
-    3: .standard(proto: "release_digest"),
-    4: .same(proto: "assets"),
-    5: .standard(proto: "darwin_init"),
-    6: .same(proto: "requirements"),
-    7: .same(proto: "application"),
-    8: .standard(proto: "build_version"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}schema_version\0\u{3}release_creation\0\u{3}release_digest\0\u{1}assets\0\u{3}darwin_init\0\u{1}requirements\0\u{1}application\0\u{3}build_version\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -447,46 +442,24 @@ extension PrivateCloudCompute_ReleaseMetadata: InternalSwiftProtobuf.Message, In
 }
 
 extension PrivateCloudCompute_ReleaseMetadata.SchemaVersion: InternalSwiftProtobuf._ProtoNameProviding {
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "SCHEMA_VERSION_UNSPECIFIED"),
-    1: .same(proto: "SCHEMA_VERSION_V1"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0SCHEMA_VERSION_UNSPECIFIED\0\u{1}SCHEMA_VERSION_V1\0")
 }
 
 extension PrivateCloudCompute_ReleaseMetadata.AssetType: InternalSwiftProtobuf._ProtoNameProviding {
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "ASSET_TYPE_UNSPECIFIED"),
-    1: .same(proto: "ASSET_TYPE_OS"),
-    2: .same(proto: "ASSET_TYPE_PCS"),
-    3: .same(proto: "ASSET_TYPE_MODEL"),
-    4: .same(proto: "ASSET_TYPE_HOST_TOOLS"),
-    5: .same(proto: "ASSET_TYPE_DEBUG_SHELL"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0ASSET_TYPE_UNSPECIFIED\0\u{1}ASSET_TYPE_OS\0\u{1}ASSET_TYPE_PCS\0\u{1}ASSET_TYPE_MODEL\0\u{1}ASSET_TYPE_HOST_TOOLS\0\u{1}ASSET_TYPE_DEBUG_SHELL\0\u{1}ASSET_TYPE_CRYPTEX\0")
 }
 
 extension PrivateCloudCompute_ReleaseMetadata.FileType: InternalSwiftProtobuf._ProtoNameProviding {
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "FILE_TYPE_UNSPECIFIED"),
-    1: .same(proto: "FILE_TYPE_IPSW"),
-    2: .same(proto: "FILE_TYPE_DISKIMAGE"),
-    3: .same(proto: "FILE_TYPE_APPLEARCHIVE"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0FILE_TYPE_UNSPECIFIED\0\u{1}FILE_TYPE_IPSW\0\u{1}FILE_TYPE_DISKIMAGE\0\u{1}FILE_TYPE_APPLEARCHIVE\0")
 }
 
 extension PrivateCloudCompute_ReleaseMetadata.DigestAlg: InternalSwiftProtobuf._ProtoNameProviding {
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "DIGEST_ALG_UNSPECIFIED"),
-    1: .same(proto: "DIGEST_ALG_SHA256"),
-    2: .same(proto: "DIGEST_ALG_SHA384"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0DIGEST_ALG_UNSPECIFIED\0\u{1}DIGEST_ALG_SHA256\0\u{1}DIGEST_ALG_SHA384\0")
 }
 
 extension PrivateCloudCompute_ReleaseMetadata.Digest: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = PrivateCloudCompute_ReleaseMetadata.protoMessageName + ".Digest"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "digest_alg"),
-    2: .same(proto: "value"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}digest_alg\0\u{1}value\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -521,14 +494,7 @@ extension PrivateCloudCompute_ReleaseMetadata.Digest: InternalSwiftProtobuf.Mess
 
 extension PrivateCloudCompute_ReleaseMetadata.Asset: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = PrivateCloudCompute_ReleaseMetadata.protoMessageName + ".Asset"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "type"),
-    2: .same(proto: "url"),
-    3: .same(proto: "digest"),
-    4: .same(proto: "variant"),
-    5: .same(proto: "ticket"),
-    6: .standard(proto: "file_type"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}url\0\u{1}digest\0\u{1}variant\0\u{1}ticket\0\u{3}file_type\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -587,10 +553,7 @@ extension PrivateCloudCompute_ReleaseMetadata.Asset: InternalSwiftProtobuf.Messa
 
 extension PrivateCloudCompute_ReleaseMetadata.ToolRequirement: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = PrivateCloudCompute_ReleaseMetadata.protoMessageName + ".ToolRequirement"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "feature"),
-    2: .same(proto: "availability"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}feature\0\u{1}availability\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -625,9 +588,7 @@ extension PrivateCloudCompute_ReleaseMetadata.ToolRequirement: InternalSwiftProt
 
 extension PrivateCloudCompute_ReleaseMetadata.Application: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = PrivateCloudCompute_ReleaseMetadata.protoMessageName + ".Application"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "name"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -657,9 +618,7 @@ extension PrivateCloudCompute_ReleaseMetadata.Application: InternalSwiftProtobuf
 
 extension PrivateCloudCompute_ProxyNodeMetadata: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".ProxyNodeMetadata"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "proxied_release"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}proxied_release\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -689,10 +648,7 @@ extension PrivateCloudCompute_ProxyNodeMetadata: InternalSwiftProtobuf.Message, 
 
 extension PrivateCloudCompute_ProxyNodeMetadata.ProxiedRelease: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = PrivateCloudCompute_ProxyNodeMetadata.protoMessageName + ".ProxiedRelease"
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "digest"),
-    2: .standard(proto: "transparency_proofs"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}digest\0\u{3}transparency_proofs\0")
 
   public mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {

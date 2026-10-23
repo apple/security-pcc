@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,6 +23,8 @@ import CoreServices_Private
 import Foundation
 import PrivateCloudCompute
 import os.log
+
+private let logger = Logger(for: .daemon)
 
 /// context for TTR
 package struct TapToRadarContext: Sendable {
@@ -69,8 +71,6 @@ actor TapToRadarController<Store: TapToRadarControllerStore> {
     /// default store
     private let store: Store
 
-    let logger = tc2Logger(forCategory: .daemon)
-
     init(store: Store = TapToRadarControllerUserDefaultsStore()) {
         self.store = store
         self.lastTTRFiredTime = self.store.getLastTTRFiredTime()
@@ -82,7 +82,7 @@ actor TapToRadarController<Store: TapToRadarControllerStore> {
 
         // rate limit, 1 TRR max per 24 hours
         guard self.lastTTRFiredTime.addingTimeInterval(.hours(24)) <= now else {
-            self.logger.log("Ignoring TTR indication due to rate limit (1 per 24 hours), last report time \(self.lastTTRFiredTime).")
+            logger.log("Ignoring TTR indication due to rate limit (1 per 24 hours), last report time \(self.lastTTRFiredTime).")
             return false
         }
 
@@ -103,10 +103,10 @@ actor TapToRadarController<Store: TapToRadarControllerStore> {
 
         let urlString: String = "tap-to-radar://new?Title=\(title)&ComponentID=\(componentID)&ComponentName=\(componentName)&ComponentVersion=\(componentVersion)&Classification=Serious Bug&Description=\(description)&Reproducibility=I Didn't Try"
         do {
-            self.logger.log("TTR: \(urlString)")
+            logger.log("TTR: \(urlString)")
             try LSApplicationWorkspace.default().open(.init(string: urlString), configuration: nil)
         } catch {
-            self.logger.error("Failed to TTR, error: \(error)")
+            logger.error("Failed to TTR, error: \(error)")
             return false
         }
         return true

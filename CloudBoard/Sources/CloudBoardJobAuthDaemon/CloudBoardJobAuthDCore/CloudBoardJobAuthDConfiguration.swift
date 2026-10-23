@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -33,24 +33,24 @@ enum CloudBoardJobAuthDConfigurationError: Swift.Error {
 struct CloudBoardJobAuthDConfiguration: Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case keyRotationService = "KeyRotationService"
-        case _staticPublicSigningKeys = "StaticPublicSigningKeys"
+        case _staticSigningKeys = "StaticSigningKeys"
     }
 
-    /// Configuration of the key rotation service endpoint that provides public Token Granting Token (TGT) and One Time
-    /// Token (OTT) signing keys used by cb_jobhelper for TGT validation.
+    /// Configuration of the key rotation service endpoint that provides the cost token key pair used by cb_jobhelper
+    /// for cost token signature.
     public var keyRotationService: CloudBoardJobAuthDConfiguration.KeyRotationService?
-    private var _staticPublicSigningKeys: CloudBoardJobAuthDConfiguration.StaticPublicSigningKeys?
+    private var _staticSigningKeys: CloudBoardJobAuthDConfiguration.StaticSigningKeys?
     /// Static public signing keys to use if no key rotation service configuration is provided
-    public var staticPublicSigningKeys: CloudBoardJobAuthDConfiguration.StaticPublicSigningKeys {
-        self._staticPublicSigningKeys ?? .init(tgtPublicSigningDERKeys: [], ottPublicSigningDERKeys: [])
+    public var staticSigningKeys: CloudBoardJobAuthDConfiguration.StaticSigningKeys {
+        self._staticSigningKeys ?? .init(costTokenSigningKey: nil)
     }
 
     init(
         keyRotationService: KeyRotationService?,
-        staticPublicSigningKeys: StaticPublicSigningKeys?
+        staticSigningKeys: StaticSigningKeys?
     ) {
         self.keyRotationService = keyRotationService
-        self._staticPublicSigningKeys = staticPublicSigningKeys
+        self._staticSigningKeys = staticSigningKeys
     }
 
     static func fromFile(
@@ -150,12 +150,12 @@ extension CloudBoardJobAuthDConfiguration {
         private var _jitter: Double?
         private var _backoffConfig: ConnectionBackoff?
 
-        /// Interval of requests to Key Rotation Service to update TGT and OTT signing key sets
+        /// Interval of requests to Key Rotation Service to update the cost token key
         public var pollPeriod: Duration {
             self._pollPeriodSeconds.map { .seconds($0) } ?? .seconds(60 * 15)
         }
 
-        /// TGT and OTT signing keys validity grace period
+        /// Cost token signing key validity grace period
         public var signingKeysGracePeriodSeconds: TimeInterval {
             TimeInterval(integerLiteral: self._signingKeysGracePeriodSeconds ?? 0)
         }
@@ -214,6 +214,7 @@ extension CloudBoardJobAuthDConfiguration.KeyRotationService {
         if var _tlsConfig {
             _tlsConfig._enable = true
             _tlsConfig._enablemTLS = true
+            self._tlsConfig = _tlsConfig
         } else {
             _tlsConfig = .init(enable: true, enablemTLS: true)
         }
@@ -221,13 +222,24 @@ extension CloudBoardJobAuthDConfiguration.KeyRotationService {
 }
 
 extension CloudBoardJobAuthDConfiguration {
-    struct StaticPublicSigningKeys: Codable, Hashable {
+    struct StaticSigningKeys: Codable, Hashable {
         enum CodingKeys: String, CodingKey {
-            case tgtPublicSigningDERKeys = "TGTPublicSigningDERKeys"
-            case ottPublicSigningDERKeys = "OTTPublicSigningDERKeys"
+            case costTokenSigningKey = "CostTokenSigningKey"
         }
 
-        public var tgtPublicSigningDERKeys: [String]
-        public var ottPublicSigningDERKeys: [String]
+        /// Base64-encoded DER ECDSA P-256 key pair for cost token signing (for testing only)
+        public var costTokenSigningKey: StaticCostTokenSigningKey?
+    }
+
+    struct StaticCostTokenSigningKey: Codable, Hashable {
+        enum CodingKeys: String, CodingKey {
+            case privateKeyDER = "PrivateKeyDER"
+            case publicKeyDER = "PublicKeyDER"
+        }
+
+        /// Base64-encoded DER ECDSA P-256 private key
+        public var privateKeyDER: String
+        /// Base64-encoded DER ECDSA P-256 public key
+        public var publicKeyDER: String
     }
 }

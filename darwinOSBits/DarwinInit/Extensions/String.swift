@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -54,5 +54,14 @@ extension String {
         }
         
         return bytes
+    }
+}
+
+extension String {
+    func dropPrefix(_ prefix: String) -> String {
+        guard self.hasPrefix(prefix) else {
+            return self
+        }
+        return String(self.dropFirst(prefix.count))
     }
 }

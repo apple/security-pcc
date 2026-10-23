@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,6 +24,7 @@
 package import Foundation
 private import OSLog
 
+// rdar://143946273 (Conform EnsemblerSession to the Sendable protocol)
 extension EnsemblerSession: @unchecked @retroactive Sendable {}
 
 /// Wrapper around `EnsemblerSession` that conforms to `EnsembleTransponder`.
@@ -43,14 +44,14 @@ package final class EnsembledTransponder: EnsembleTransponder {
         self.session = try EnsemblerSession()
     }
 
-    package func registerMessageHandler(appID: String, handler: @escaping @Sendable (Int, Data) -> Data) throws {
+    package func registerMessageHandler(appID: String, handler: @escaping @Sendable (Int, Data) async throws -> Data) async throws {
         Self.logger.debug("Registering message handler for ensembled messages. appID=\(appID, privacy: .public)")
-        try self.session.registerDataCallback(appID: appID) { rank, data in
+        try await self.session.registerDataCallback(appID: appID) { rank, data in
             Self.logger.log("""
                 Received message from ensembled. \
                 sender=\(rank)
                 """)
-            return handler(rank, data)
+            return try await handler(rank, data)
         }
     }
 
@@ -66,16 +67,44 @@ package final class EnsembledTransponder: EnsembleTransponder {
         return peers.map { EnsemblePeerInfo(rank: $0.rank) }
     }
 
-    package func sendData(appID: String, data: Data, destination: Int, timeout: TimeInterval = 2.0) async throws -> Data {
-        let tracingContext = EnsembleTracingContext(name: nil,
-                                                    requestID: PrismTracing.requestID,
-                                                    spanID: PrismTracing.spanID,
-                                                    parentSpanID: nil)
-        return try await self.session.sendDataToFollowerNode(appID: appID,
-                                                     data: data,
-                                                     destination: destination,
-                                                     timeout: timeout,
-                                                     tracingContext: tracingContext)
+    package func sendData(appID: String, data: Data, destination: Int, timeout: TimeInterval = 2.0, includeTracingContext: Bool) async throws -> Data {
+        let tracingContext: EnsembleTracingContext? = includeTracingContext
+            ? EnsembleTracingContext(name: nil,
+                                     requestID: PrismTracing.requestID,
+                                     spanID: PrismTracing.spanID,
+                                     parentSpanID: nil)
+            : nil
+        do {
+            return try await self.session.sendDataToFollowerNode(appID: appID,
+                                                         data: data,
+                                                         destination: destination,
+                                                         timeout: timeout,
+                                                         tracingContext: tracingContext)
+        } catch let error as DataMessageError {
+            // Re-throw as a ReportableError so the heartbeat-failure log line carries
+            // the actual failure mode (case + appID + reason) instead of the bare
+            // type name "DataMessageError". (rdar://179694486)
+            throw EnsemblePorterError(error)
+        }
+    }
+}
+
+extension EnsemblePorterError {
+    fileprivate init(_ error: DataMessageError) {
+        switch error {
+        case .noRegisteredHandler(let appID):
+            self = .dataMessageNoRegisteredHandler(appID: appID)
+        case .timeoutOnPeerHandler(let appID):
+            self = .dataMessageTimeoutOnPeer(appID: appID)
+        case .noResponseReceived(let appID):
+            self = .dataMessageNoResponseReceived(appID: appID)
+        case .internalError(let appID, let reason):
+            self = .dataMessageInternalError(appID: appID, reason: reason)
+        case .notReady(let appID, let currentStatus):
+            self = .dataMessageNotReady(appID: appID, currentStatus: currentStatus)
+        @unknown default:
+            self = .ensembledError
+        }
     }
 }
 

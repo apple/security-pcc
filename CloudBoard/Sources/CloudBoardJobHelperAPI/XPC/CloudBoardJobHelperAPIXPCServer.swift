@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -44,7 +44,8 @@ extension CloudBoardJobHelperAPIXPCServer {
         self.init(
             listener: CloudBoardAsyncXPCListener(
                 localService: kCloudBoardJobHelperAPIXPCLocalServiceName,
-                entitlement: kCloudBoardJobHelperAPIXPCLocalServiceEntitlement
+                entitlement: kCloudBoardJobHelperAPIXPCLocalServiceEntitlement,
+                singleClient: false
             ),
             delegate: nil
         )
@@ -68,7 +69,7 @@ extension CloudBoardJobHelperAPIXPCServer: CloudBoardJobHelperAPIServerProtocol 
         await self.listener.listen(buildMessageHandlerStore: self.configureHandlers)
     }
 
-    internal func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
+    internal nonisolated func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
         handlers.register(CloudBoardJobHelperAPIXPCClientToServerMessages.InvokeWorkload.self) { request in
             Self.logger.debug("Received InvokeWorkload XPC message in helper")
             let delegate = try await self.ensureDelegate()
@@ -133,6 +134,19 @@ extension CloudBoardJobHelperAPIXPCServer: CloudBoardJobHelperAPIServerProtocol 
                     .unexpectedReportableError(String(reportable: error))
             }
             return ExplicitSuccess()
+        }
+        handlers.register(CloudBoardJobHelperAPIXPCClientToServerMessages.QueryProxyRequestsStatusOnTimeout.self) { _ in
+            Self.logger.debug("Received QueryProxyRequestsStatusOnTimeout XPC message")
+            let delegate = try await self.ensureDelegate()
+            do {
+                return try await delegate.queryProxyRequestStatus()
+            } catch let error as CloudBoardJobHelperAPIXPCClientToServerMessages.QueryProxyRequestsStatusOnTimeout
+                .Failure {
+                throw error
+            } catch {
+                throw CloudBoardJobHelperAPIXPCClientToServerMessages.QueryProxyRequestsStatusOnTimeout.Failure
+                    .unexpectedReportableError(String(reportable: error))
+            }
         }
     }
 

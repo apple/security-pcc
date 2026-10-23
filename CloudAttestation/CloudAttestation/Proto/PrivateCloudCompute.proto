@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -34,6 +34,7 @@ message ReleaseMetadata {
         ASSET_TYPE_MODEL = 3;
         ASSET_TYPE_HOST_TOOLS = 4;
         ASSET_TYPE_DEBUG_SHELL = 5;
+        ASSET_TYPE_CRYPTEX = 6;
     }
 
     enum FileType {

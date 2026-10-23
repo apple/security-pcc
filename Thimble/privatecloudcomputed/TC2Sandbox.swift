@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,6 +25,8 @@ import SandboxPrivate
 private import TC2DaemonDependencies.DirHelperPrivate
 import os.log
 
+private let logger = Logger(for: .sandbox)
+
 protocol TC2Sandbox {
 
 }
@@ -32,7 +34,6 @@ protocol TC2Sandbox {
 extension TC2Sandbox {
     #if os(macOS)
     static var sandboxParameters: [String: String] {
-        let logger = tc2Logger(forCategory: .sandbox)
 
         let homeDirectory: String
         if let home = NSHomeDirectory().realpath {
@@ -62,7 +63,6 @@ extension TC2Sandbox {
     }
 
     private static func _sandboxInit(profile: String, parameters: [String: String]) {
-        let logger = tc2Logger(forCategory: .sandbox)
 
         var sbError: UnsafeMutablePointer<Int8>?
         let flatParameters = flatten(parameters)

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,6 +24,30 @@ import os
 extension CFPreferences {
     public static var cloudboardPreferencesDomain: String {
         "com.apple.cloudos.cloudboardd"
+    }
+
+    static var cloudmetricsdPreferencesDomain: String {
+        "com.apple.acdc.cloudmetricsd"
+    }
+}
+
+public struct GlobalLabelsConfiguration: Codable, Hashable, Sendable {
+    enum CodingKeys: String, CodingKey {
+        case globalLabels = "GlobalLabels"
+    }
+
+    public var globalLabels: GlobalLabels?
+
+    public typealias GlobalLabels = [String: String]
+
+    public init(globalLabels: GlobalLabels? = nil) {
+        self.globalLabels = globalLabels
+    }
+
+    public static func fromPreferences() throws -> GlobalLabelsConfiguration {
+        let preferences = CFPreferences(domain: CFPreferences.cloudmetricsdPreferencesDomain)
+        let decoder = CFPreferenceDecoder()
+        return try decoder.decode(GlobalLabelsConfiguration.self, from: preferences)
     }
 }
 
@@ -313,6 +337,7 @@ extension CloudBoardDConfiguration {
             case backoffConfig = "BackoffConfig"
             case keepalive = "Keepalive"
             case cellID = "CellID"
+            case _namespace = "Namespace"
         }
 
         /// Service discovery host address
@@ -335,6 +360,13 @@ extension CloudBoardDConfiguration {
         /// Cell ID to include in service discovery as "cellId" subfield value under "description" field. Used by PCC
         /// Gateway.
         public var cellID: String?
+        /// Service Discover namespace
+        /// Mandatory field for registration and deregistration in V2
+        public var _namespace: String?
+
+        public var namespace: String {
+            self._namespace ?? "private-cloud-compute"
+        }
 
         internal init(
             targetHost: String,
@@ -345,7 +377,8 @@ extension CloudBoardDConfiguration {
             tlsConfig: GRPCClientConfiguration.TLSConfiguration? = nil,
             backoffConfig: GRPCClientConfiguration.ConnectionBackoff? = nil,
             keepalive: CloudBoardDConfiguration.Keepalive? = nil,
-            cellID: String?
+            cellID: String?,
+            namespace: String? = nil
         ) {
             self.targetHost = targetHost
             self.targetPort = targetPort
@@ -356,6 +389,7 @@ extension CloudBoardDConfiguration {
             self.backoffConfig = backoffConfig
             self.keepalive = keepalive
             self.cellID = cellID
+            self._namespace = namespace
         }
     }
 }
@@ -393,25 +427,42 @@ extension CloudBoardDConfiguration {
     public struct SystemServiceMonitorConfiguration: Codable, Hashable, Sendable {
         enum CodingKeys: String, CodingKey {
             case _enableSSMStatusReporting = "EnableSSMStatusReporting"
+            case _enableControlPlaneHealthDWaitForHealthyState = "EnableControlPlaneHealthDWaitForHealthyState"
         }
 
         // flag to enable SSM status reporting
         private var _enableSSMStatusReporting: Bool?
+        private var _enableControlPlaneHealthDWaitForHealthyState: Bool?
 
-        public init(_enableSSMStatusReporting: Bool? = nil) {
+        public init(
+            _enableSSMStatusReporting: Bool? = nil,
+            _enableControlPlaneHealthDWaitForHealthyState: Bool? = nil
+        ) {
             self._enableSSMStatusReporting = _enableSSMStatusReporting
+            self._enableControlPlaneHealthDWaitForHealthyState = _enableControlPlaneHealthDWaitForHealthyState
         }
 
         // Disabling SSM reporting by default. Once available broadly, we can change the default.
         public var enableSSMStatusReporting: Bool {
-            get { self._enableSSMStatusReporting ?? false }
+            get { self._enableSSMStatusReporting ?? true }
             set { self._enableSSMStatusReporting = newValue }
+        }
+
+        /// The following flag is used only when enableSSMStatusReporting is true:
+        /// - flag = false, cloudboard will silently monitor controlplanehealthd status and emit metrics on it until
+        /// controlplanehealthd is healthy
+        /// - flag = true, cloudboard waits for controlplanehealthd to get in ready state before reporting itself as
+        /// ready to Service Discovery.
+        public var enableControlPlaneHealthDWaitForHealthyState: Bool {
+            get { self._enableControlPlaneHealthDWaitForHealthyState ?? false }
+            set { self._enableControlPlaneHealthDWaitForHealthyState = newValue }
         }
 
         public var description: String {
             """
             SystemServiceMonitorConfiguration(\
             enableSSMStatusReporting: \(self.enableSSMStatusReporting) \
+            enableControlPlaneHealthDWaitForHealthyState: \(self.enableControlPlaneHealthDWaitForHealthyState)
             )
             """
         }
@@ -696,8 +747,9 @@ extension CloudBoardDConfiguration {
         }
 
         /// Maximum number of request bytes across chunks. When reached, cloudboardd aborts the request.
-        public var maxCumulativeRequestBytes: Int {
-            self._maxCumulativeRequestBytes ?? 10_485_760 // 10 MiB
+        /// `nil` means no limit is enforced from the static configuration.
+        public var maxCumulativeRequestBytes: Int? {
+            self._maxCumulativeRequestBytes
         }
 
         init(
@@ -707,7 +759,10 @@ extension CloudBoardDConfiguration {
         ) {
             self._enforceConcurrentRequestLimit = enforceConcurrentRequestLimit
             self._overrideCloudAppConcurrentRequests = overrideCloudAppConcurrentRequests
-            self._maxCumulativeRequestBytes = maxCumulativeRequestBytes
+            if let maxCumulativeRequestBytes, maxCumulativeRequestBytes <= 0 {
+                logger.warning("Ignoring non-positive maxCumulativeRequestBytes (\(maxCumulativeRequestBytes))")
+            }
+            self._maxCumulativeRequestBytes = maxCumulativeRequestBytes.flatMap { $0 > 0 ? $0 : nil }
         }
 
         public var description: String {
@@ -715,7 +770,7 @@ extension CloudBoardDConfiguration {
             LoadConfiguration(\
             enforceConcurrentRequestLimit: \(self.enforceConcurrentRequestLimit) \
             overrideCloudAppConcurrentRequests: \(self.overrideCloudAppConcurrentRequests) \
-            maxCumulativeRequestBytes: \(self.maxCumulativeRequestBytes) \
+            maxCumulativeRequestBytes: \(self.maxCumulativeRequestBytes.map(String.init) ?? "nil") \
             )
             """
         }

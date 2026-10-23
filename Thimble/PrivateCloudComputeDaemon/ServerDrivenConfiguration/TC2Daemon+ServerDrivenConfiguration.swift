@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,10 +24,12 @@ import Foundation_Private.NSXPCConnection
 import PrivateCloudCompute
 import os.log
 
+private let logger = Logger(for: .daemon)
+
 extension TC2Daemon {
     func fetchServerDrivenConfigurationIfAllowed() async {
         guard await self.fetchServerDrivenConfigurationValve.allow() else {
-            self.logger.debug("received a request to fetch server driven configuration but it is too soon")
+            logger.debug("received a request to fetch server driven configuration but it is too soon")
             return
         }
 
@@ -44,9 +46,9 @@ extension TC2Daemon {
 
         do {
             try await request.sendRequest()
-            self.logger.debug("UpdateServerDrivenConfigurationRequest send succeeded")
+            logger.debug("UpdateServerDrivenConfigurationRequest send succeeded")
         } catch {
-            self.logger.error("failure to process UpdateServerDrivenConfigurationRequest send, error=\(error)")
+            logger.error("failure to process UpdateServerDrivenConfigurationRequest send, error=\(error)")
         }
 
         let encoder = tc2JSONEncoder()
@@ -54,7 +56,7 @@ extension TC2Daemon {
         do {
             return try encoder.encode(model)
         } catch {
-            self.logger.error("failure to encode server driven config for display, error=\(error)")
+            logger.error("failure to encode server driven config for display, error=\(error)")
         }
 
         return Data()
@@ -66,7 +68,7 @@ extension TC2Daemon {
         do {
             return try encoder.encode(model)
         } catch {
-            self.logger.error("failure to encode server driven config for display, error=\(error)")
+            logger.error("failure to encode server driven config for display, error=\(error)")
         }
 
         return Data()
@@ -84,7 +86,7 @@ extension TC2Daemon {
         do {
             return try encoder.encode(model)
         } catch {
-            self.logger.error("failure to encode server driven config for display, error=\(error)")
+            logger.error("failure to encode server driven config for display, error=\(error)")
         }
 
         return Data()

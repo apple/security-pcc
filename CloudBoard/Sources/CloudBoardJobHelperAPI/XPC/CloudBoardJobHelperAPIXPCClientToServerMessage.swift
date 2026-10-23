@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -45,6 +45,11 @@ internal enum CloudBoardJobHelperAPIXPCClientToServerMessages {
         internal typealias Success = ExplicitSuccess
         internal typealias Failure = CloudBoardJobHelperAPIError
     }
+
+    internal struct QueryProxyRequestsStatusOnTimeout: CloudBoardAsyncXPCByteBufferMessage, Equatable {
+        internal typealias Success = ProxyRequestStatus
+        internal typealias Failure = CloudBoardJobHelperAPIError
+    }
 }
 
 extension CloudBoardJobHelperAPIXPCClientToServerMessages.Teardown: ByteBufferCodable {
@@ -60,6 +65,12 @@ extension CloudBoardJobHelperAPIXPCClientToServerMessages.Abandon: ByteBufferCod
 }
 
 extension CloudBoardJobHelperAPIXPCClientToServerMessages.AssignLAContext: ByteBufferCodable {
+    func encode(to _: inout ByteBuffer) throws {}
+
+    init(from _: inout ByteBuffer) throws {}
+}
+
+extension CloudBoardJobHelperAPIXPCClientToServerMessages.QueryProxyRequestsStatusOnTimeout: ByteBufferCodable {
     func encode(to _: inout ByteBuffer) throws {}
 
     init(from _: inout ByteBuffer) throws {}

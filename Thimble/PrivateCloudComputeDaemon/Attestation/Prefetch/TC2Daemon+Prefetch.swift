@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,116 +21,63 @@
 
 import Foundation
 import Foundation_Private.NSXPCConnection
+import Network
 import PrivateCloudCompute
 import os.log
 
+private let logger = Logger(for: .daemon)
+
 extension TC2Daemon {
-    func eventStreamPrewarmRequest(workloadType: String, workloadParameters: [String: String], bundleIdentifier: String, featureIdentifier: String) {
-        // This prefetch call is from the SPI, so we will need to get out of the way for any subsequent invoke requests
-        logger.log("event stream prewarm workloadType=\(workloadType) workloadParameters=\(workloadParameters)")
-        self.thimbledEventContinuation.yield(
-            .prewarmAttestations(
-                workloadType: workloadType,
-                workloadParameters: workloadParameters,
-                bundleIdentifier: bundleIdentifier,
-                featureIdentifier: featureIdentifier
-            )
-        )
-        return
-    }
+    /// Prepares the device for a request for the given workload. Does a few things:
+    /// 1. prewarms token provider to make sure it has a cached token needed to later run the request for the given workload.
+    /// 2. triggers attestation prefetch which will fetch attestations for the given workload if we don't have enough cached already.
+    /// - Returns: JSON-encoded `Prefetch.Response` or `nil` if attestation prefetch fails.
+    func prewarmRequest(
+        workloadType: String,
+        workloadParameters: [String: String],
+        bundleIdentifier: BundleIdentifier,
+        featureIdentifier: String,
+        serviceClass: NWParameters.ServiceClass?
+    ) async -> Data? {
+        logger.log("prewarm: workloadType=\(workloadType), workloadParameters=\(workloadParameters), bundleIdentifier=\(bundleIdentifier.rawValue), featureIdentifier=\(featureIdentifier), serviceClass=\(String(describing: serviceClass))")
 
-    func prewarmRequest(workloadType: String, workloadParameters: [String: String], bundleIdentifier: String, featureIdentifier: String) async -> Data? {
-        logger.log("prewarm workloadType=\(workloadType) workloadParameters=\(workloadParameters)")
-
-        // The token fetch prewarm is done simultaneously with the prefetch
-        // of attestations. This is usually local and fast.
-        async let tokenPrewarm: () = {
-            if self.featureFlagChecker.isEnabled(.fetchAuthTokenOnPrewarm) {
-                logger.debug("running token fetch during prewarm")
-                let tokenProvider = NSPTokenProvider(fetcher: PrivateAccessTokenFetcher(config: self.config))
-                try await tokenProvider.prewarm()
-            }
-        }()
-
-        let result = await self.handlePrefetchRequest(
-            workloadType: workloadType,
-            workloadParameters: workloadParameters,
-            prewarm: true,
-            fetchType: .fetchAllBatches,
-            bundleIdentifier: bundleIdentifier,
-            featureIdentifier: featureIdentifier
-        )
-
-        do {
-            _ = try await tokenPrewarm
-        } catch {
-            logger.error("token fetch prewarm failed, error=\(error)")
+        guard self.osEligibility.deviceEligibleForPCC else {
+            logger.info("request blocked due to eligibility failure")
+            return nil
         }
 
-        return result
+        let request = PrewarmRequest(
+            featureFlagChecker: self.featureFlagChecker,
+            prefetchRequestHandler: self.prefetchRequestHandler,
+            tokenProviderFactory: self.tokenProviderFactory,
+            serverDrivenConfig: self.serverDrivenConfig,
+            rateLimiter: self.rateLimiter
+        )
+        return await request.run(
+            workload: Workload(type: workloadType, parameters: workloadParameters),
+            bundleIdentifier: bundleIdentifier,
+            featureIdentifier: featureIdentifier,
+            serviceClass: serviceClass
+        )
     }
 
+    /// - Returns: JSON-encoded `Prefetch.Response` or `nil` if attestation prefetch fails.
     func prefetchRequest(workloadType: String, workloadParameters: [String: String]) async -> Data? {
         // thtool prefetch hits this path, run a prefetch and get results right away
         logger.log("prefetch workloadType=\(workloadType) workloadParameters=\(workloadParameters)")
-        return await self.handlePrefetchRequest(
-            workloadType: workloadType,
-            workloadParameters: workloadParameters,
+
+        guard self.osEligibility.deviceEligibleForPCC else {
+            logger.info("request blocked due to eligibility failure")
+            return nil
+        }
+
+        return await self.prefetchRequestHandler.run(
+            workload: .init(type: workloadType, parameters: workloadParameters),
             prewarm: false,
             fetchType: .fetchAllBatches,
             bundleIdentifier: nil,
-            featureIdentifier: nil
+            featureIdentifier: nil,
+            serviceClass: nil
         )
-    }
-
-    func handlePrefetchRequest(
-        workloadType: String,
-        workloadParameters: [String: String],
-        prewarm: Bool,
-        fetchType: TC2FetchType,
-        bundleIdentifier: String?,
-        featureIdentifier: String?
-    ) async -> Data? {
-        let jsonEncoder = tc2JSONEncoder()
-        guard let attestationStore = self.attestationStore else {
-            logger.log("store unavailable")
-            return nil
-        }
-        do {
-            let parameters = Workload(
-                type: workloadType,
-                parameters: workloadParameters
-            )
-            return try await self.prefetchTracker.ensuringOnlyASinglePrefetchIsRunningForParameters(parameters) {
-                let prefetchRequest = BatchedPrefetch(
-                    connectionFactory: NWAsyncConnection(),
-                    attestationStore: attestationStore,
-                    rateLimiter: rateLimiter,
-                    attestationVerifier: self.attestationVerifier,
-                    config: self.config,
-                    serverDrivenConfig: self.serverDrivenConfig,
-                    systemInfo: systemInfo,
-                    featureFlagChecker: self.featureFlagChecker,
-                    parameters: parameters,
-                    eventStreamContinuation: self.thimbledEventContinuation,
-                    prewarm: prewarm,
-                    fetchType: fetchType,
-                    bundleIdentifier: bundleIdentifier,
-                    featureIdentifier: featureIdentifier
-                )
-                let response = try await prefetchRequest.sendRequest()
-
-                for batchResponse in response {
-                    for node in batchResponse.nodes {
-                        logger.log("\(batchResponse.id) \(node.identifier) saved: \(node.savedToCache)")
-                    }
-                }
-
-                return try jsonEncoder.encode(response)
-            }
-        } catch {
-            logger.log("failed prefetch attestations: \(error)")
-            return nil
-        }
     }
 }

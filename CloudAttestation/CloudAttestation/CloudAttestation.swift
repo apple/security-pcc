@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -208,7 +208,7 @@ extension Attestor {
             logger.log("Successfully created attestation for key: \(SHA256.hash(data: fingerprint as Data), privacy: .public)")
             return bundle
         } catch {
-            logger.error("attestation creation failed: \(error)")
+            logger.error("Attestation creation failed: \(error, privacy: .public)")
             throw error
         }
     }
@@ -352,7 +352,7 @@ extension Validator {
                 throw CloudAttestationError.unexpected(reason: "Unknown public key type")
             }
 
-            logger.log("AttestationBundle passed validation for public key: \(keyData.fingerprint())")
+            logger.log("AttestationBundle passed validation for public key: \(keyData.fingerprint(), privacy: .public)")
 
             if !bundle.proto.appData.isEmpty {
                 guard let nonce = attestation.nonce else {
@@ -377,11 +377,13 @@ extension Validator {
                     bundle: bundle,
                     udid: attestation.identity?.udid,
                     routingHint: context.validatedRoutingHint,
-                    releaseDigest: context.releaseDigest
+                    releaseDigest: context.releaseDigest,
+                    appIdentifiers: context.appIdentifiers,
+                    context: context
                 )
             )
         } catch {
-            logger.error("AttestationBundle validation failed: \(error)")
+            logger.error("AttestationBundle validation failed: \(error, privacy: .public)")
             throw error
         }
     }
@@ -454,6 +456,18 @@ public enum Validated {
     public struct AttestationBundle: Equatable, Sendable {
         static let logger = Logger(subsystem: "com.apple.CloudAttestation", category: "Validated.AttestationBundle")
 
+        internal let context: AttestationPolicyContext?
+
+        public static func == (lhs: Self, rhs: Self) -> Bool {
+            // AttestationPolicyContext stores `any Sendable` values and is not Equatable so
+            // we intentionally exclude `context` here.
+            lhs.bundle == rhs.bundle
+                && lhs._udid == rhs._udid
+                && lhs.routingHint == rhs.routingHint
+                && lhs.releaseDigest == rhs.releaseDigest
+                && lhs.appIdentifiers == rhs.appIdentifiers
+        }
+
         @_spi(Private)
         public let bundle: CloudAttestation.AttestationBundle
 
@@ -499,14 +513,19 @@ public enum Validated {
         /// The sha256 release digest of the bundle
         public let releaseDigest: Data?
 
+        /// The app identifiers provided by `secure-config`
+        public let appIdentifiers: [String]?
+
         @available(*, deprecated)
         public let ensembleUDIDs: [String]? = nil
 
-        init(bundle: CloudAttestation.AttestationBundle, udid: String?, routingHint: String?, releaseDigest: Data?) {
+        init(bundle: CloudAttestation.AttestationBundle, udid: String?, routingHint: String?, releaseDigest: Data?, appIdentifiers: [String]?, context: AttestationPolicyContext? = nil) {
             self.bundle = bundle
             self._udid = udid
             self.routingHint = routingHint
             self.releaseDigest = releaseDigest
+            self.appIdentifiers = appIdentifiers
+            self.context = context
         }
 
         public init(bundle: CloudAttestation.AttestationBundle, sepAttestation: SEP.Attestation? = nil) {
@@ -517,6 +536,8 @@ public enum Validated {
             self._udid = sepAttestation?.identity?.udid
             self.routingHint = nil
             self.releaseDigest = release.map { Data($0) }
+            self.appIdentifiers = nil
+            self.context = nil
         }
     }
 }
@@ -549,6 +570,17 @@ public enum PublicKeyData: Sendable, Equatable {
 }
 
 // MARK: - Serialization
+
+extension AttestationBundle {
+    var attestedEnvironment: Environment? {
+        guard let configs = proto.secureConfigs,
+            let darwinInit = try? configs.darwinInit
+        else {
+            return nil
+        }
+        return darwinInit.environment
+    }
+}
 
 extension AttestationBundle {
     /// Returns the bundle as protobuf encoded bytes.
@@ -628,13 +660,28 @@ extension CloudAttestationError: CustomNSError {
     }
 }
 
-// MARK: - Transparency Auditor API
+// MARK: - Transparency APIs
 
 extension AttestationBundle {
     @_spi(TransparencyAuditor)
     public var atLogProofs: Data {
         get throws {
             try self.proto.transparencyProofs.proofs.serializedData()
+        }
+    }
+}
+
+extension AttestationBundle {
+    public var transparencyLogRevision: TransparencyLogRevision? {
+        get throws {
+            guard self.proto.transparencyProofs.proofs.hasInclusionProof || self.proto.certificateTransparencyProofs.proofs.hasInclusionProof else {
+                return nil
+            }
+
+            let releaseRevision = try self.proto.transparencyProofs.proofs.inclusionProof.logRevision
+            let certificateRevision = try self.proto.certificateTransparencyProofs.proofs.inclusionProof.logRevision
+
+            return max(certificateRevision, releaseRevision)
         }
     }
 }

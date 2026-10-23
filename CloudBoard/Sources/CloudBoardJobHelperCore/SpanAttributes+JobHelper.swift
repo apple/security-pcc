@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,10 +17,10 @@ import NIOHPACK
 import Tracing
 
 struct RequestExecutionSpanError: Sendable, CustomStringConvertible {
-    let subrequestID: UInt32?
+    let subrequestID: UInt64?
     let errorMessage: String
 
-    init(subrequestID: UInt32? = nil, errorMessage: String) {
+    init(subrequestID: UInt64? = nil, errorMessage: String) {
         self.subrequestID = subrequestID
         self.errorMessage = errorMessage
     }

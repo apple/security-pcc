@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -41,10 +41,10 @@ extension PCCHarness {
 
     /// Subrequest open message
     package struct SubrequestOpen: Sendable {
-        package let subrequestID: UInt32
+        package let subrequestID: UInt64
         package let metadata: SubrequestMetadata
 
-        package init(subrequestID: UInt32, metadata: SubrequestMetadata) {
+        package init(subrequestID: UInt64, metadata: SubrequestMetadata) {
             self.subrequestID = subrequestID
             self.metadata = metadata
         }
@@ -52,10 +52,10 @@ extension PCCHarness {
 
     /// Subrequest payload chunk
     package struct SubrequestPayload: Sendable {
-        package let subrequestID: UInt32
+        package let subrequestID: UInt64
         package let data: Data
 
-        package init(subrequestID: UInt32, data: Data) {
+        package init(subrequestID: UInt64, data: Data) {
             self.subrequestID = subrequestID
             self.data = data
         }
@@ -63,37 +63,37 @@ extension PCCHarness {
 
     /// Subrequest close message
     package struct SubrequestClose: Sendable {
-        package let subrequestID: UInt32
+        package let subrequestID: UInt64
 
-        package init(subrequestID: UInt32) {
+        package init(subrequestID: UInt64) {
             self.subrequestID = subrequestID
         }
     }
 
     /// Subrequest cancellation event
     package struct SubrequestCancellation: Sendable {
-        package let subrequestID: UInt32
+        package let subrequestID: UInt64
 
-        package init(subrequestID: UInt32) {
+        package init(subrequestID: UInt64) {
             self.subrequestID = subrequestID
         }
     }
 
     /// Subresponse open message
     public struct SubresponseOpen: Sendable {
-        public let subrequestID: UInt32
+        public let subrequestID: UInt64
 
-        package init(subrequestID: UInt32) {
+        package init(subrequestID: UInt64) {
             self.subrequestID = subrequestID
         }
     }
 
     /// Subresponse payload chunk
     public struct SubresponsePayload: Sendable {
-        public let subrequestID: UInt32
+        public let subrequestID: UInt64
         public let data: Data
 
-        package init(subrequestID: UInt32, data: Data) {
+        package init(subrequestID: UInt64, data: Data) {
             self.subrequestID = subrequestID
             self.data = data
         }
@@ -120,10 +120,10 @@ extension PCCHarness {
             }
         }
 
-        public let subrequestID: UInt32
+        public let subrequestID: UInt64
         public let responseStatus: Status
 
-        package init(subrequestID: UInt32, responseStatus: Status) {
+        package init(subrequestID: UInt64, responseStatus: Status) {
             self.subrequestID = subrequestID
             self.responseStatus = responseStatus
         }
@@ -141,6 +141,8 @@ extension PCCHarness {
         case payloadChunk(SubresponsePayload)
         case subresponseOpen(SubresponseOpen)
         case subresponseClose(SubresponseClose)
+        case componentTimeMeasurement(ComponentTimeMeasurement)
+        case costToken(CostToken)
         case unknown
     }
 
@@ -148,7 +150,7 @@ extension PCCHarness {
     /// Maps 1:1 to ProtoPrivateCloudComputeRequest message types
     package enum PrivateCloudComputeProtocolRequest: Sendable {
         /// Open message with authentication token
-        case open(tokenGrantingToken: Data, ottSalt: Data, version: UInt32 = 0)
+        case open(version: UInt32 = 0)
         /// Application payload data
         case applicationPayload(Data)
         /// Final message indicating request completion
@@ -165,10 +167,8 @@ extension PCCHarness {
         /// Convert to protobuf OneOf_Type for serialization
         internal func toProtoType() -> ProtoPrivateCloudComputeRequest.OneOf_Type {
             switch self {
-            case .open(let tokenGrantingToken, let ottSalt, let version):
+            case .open(let version):
                 return .open(.with {
-                    $0.tokenGrantingToken = tokenGrantingToken
-                    $0.ottSalt = ottSalt
                     $0.version = version
                 })
             case .applicationPayload(let data):
@@ -206,17 +206,41 @@ extension PCCHarness {
     /// Response summary from PCC layer
     public struct ResponseSummary: Sendable, CustomStringConvertible {
         public var responseStatus: ResponseStatus
+        public var errorDescription: String?
 
-        internal init(responseStatus: ResponseStatus) {
+        internal init(responseStatus: ResponseStatus, errorDescription: String? = nil) {
             self.responseStatus = responseStatus
+            self.errorDescription = errorDescription
         }
 
         init(from proto: ProtoPrivateCloudComputeResponse.CloseResponsePayload) {
             self.responseStatus = .init(from: proto.responseStatus)
+            self.errorDescription = proto.hasErrorDescription ? proto.errorDescription : nil
         }
 
         public var description: String {
-            "\(self.responseStatus)"
+            if let errorDescription {
+                return "\(self.responseStatus) (\(errorDescription))"
+            }
+            return "\(self.responseStatus)"
+        }
+    }
+
+    /// Cost token from PCC layer - contains signed JWT with bucketized cost
+    public struct CostToken: Sendable, CustomStringConvertible {
+        /// Signed JWT containing bucketized cost
+        public var jwt: Data
+
+        internal init(jwt: Data) {
+            self.jwt = jwt
+        }
+
+        init(from proto: ProtoPrivateCloudComputeResponse.CostToken) {
+            self.jwt = proto.jwt
+        }
+
+        public var description: String {
+            "CostToken(jwt: \(self.jwt.count) bytes)"
         }
     }
 
@@ -263,6 +287,7 @@ extension PCCHarness {
         // Note: Not exposing nodeID since we use endpoints directly
         public var trustedProxyAttestationBundle: LocalCloudBoardAttestationBundle
         public var computeNodeAttestationBundle: LocalCloudBoardAttestationBundle?
+        public var outboundCallContext: OutboundCallContext?
 
         init(
             isNack: Bool,
@@ -276,6 +301,92 @@ extension PCCHarness {
             self.endpoint = endpoint
             self.trustedProxyAttestationBundle = trustedProxyAttestationBundle
             self.computeNodeAttestationBundle = computeNodeAttestationBundle
+            self.outboundCallContext = nil
+        }
+
+        init(
+            isNack: Bool,
+            isFinal: Bool,
+            endpoint: any CloudAppEndpoint,
+            trustedProxyAttestationBundle: LocalCloudBoardAttestationBundle,
+            computeNodeAttestationBundle: LocalCloudBoardAttestationBundle?,
+            outboundCallContext: OutboundCallContext?
+        ) {
+            self.isNack = isNack
+            self.isFinal = isFinal
+            self.endpoint = endpoint
+            self.trustedProxyAttestationBundle = trustedProxyAttestationBundle
+            self.computeNodeAttestationBundle = computeNodeAttestationBundle
+            self.outboundCallContext = outboundCallContext
+        }
+    }
+
+    public struct ComponentTimeMeasurement: Sendable, CustomStringConvertible {
+        public var component: String
+        public var operation: String
+        public var identifier: String?
+        public var subIdentifier: String?
+        public var startTimeMsSinceEpoch: Int64
+        public var endTimeMsSinceEpoch: Int64
+
+        /// Initialize with all parameters
+        public init(
+            component: String,
+            operation: String,
+            identifier: String? = nil,
+            subIdentifier: String? = nil,
+            startTimeMsSinceEpoch: Int64,
+            endTimeMsSinceEpoch: Int64
+        ) {
+            self.component = component
+            self.operation = operation
+            self.identifier = identifier
+            self.subIdentifier = subIdentifier
+            self.startTimeMsSinceEpoch = startTimeMsSinceEpoch
+            self.endTimeMsSinceEpoch = endTimeMsSinceEpoch
+        }
+
+        /// Initialize with Date objects (converted to milliseconds since epoch)
+        public init(
+            component: String,
+            operation: String,
+            identifier: String? = nil,
+            subIdentifier: String? = nil,
+            startTime: Date,
+            endTime: Date
+        ) {
+            self.component = component
+            self.operation = operation
+            self.identifier = identifier
+            self.subIdentifier = subIdentifier
+            self.startTimeMsSinceEpoch = Int64(startTime.timeIntervalSince1970 * 1000)
+            self.endTimeMsSinceEpoch = Int64(endTime.timeIntervalSince1970 * 1000)
+        }
+
+        init(from proto: Proto_PrivateCloudCompute_ComponentTimeMeasurement) {
+            self.component = proto.componentName
+            self.operation = proto.operation
+            self.identifier = proto.identifier
+            self.subIdentifier = proto.subIdentifier
+            self.startTimeMsSinceEpoch = proto.startTime
+            self.endTimeMsSinceEpoch = proto.endTime
+        }
+
+        public var description: String {
+            var parts = ["\(component).\(operation)"]
+
+            if let identifier {
+                parts.append("id:\(identifier)")
+            }
+
+            if let subIdentifier {
+                parts.append("subId:\(subIdentifier)")
+            }
+
+            parts.append("startTimeEpoch:\(self.startTimeMsSinceEpoch)")
+            parts.append("endTimeEpoch:\(self.endTimeMsSinceEpoch)")
+
+            return parts.joined(separator: " ")
         }
     }
 
@@ -555,7 +666,7 @@ extension PCCHarness {
     }
 
     /// Wrapper for observed InvokeProxyDialBackResponse proto messages
-    package enum ObservedInvokeProxyDialBackResponse: Sendable {
+    package enum ObservedInvokeProxyDialBackResponse: Sendable, CustomStringConvertible {
         case decryptionKey(keyID: Data, encryptedPayload: Data)
         case requestChunk(data: Data, isFinal: Bool)
         case selectableEnsembles(ensembles: [EnsembleInstanceId])
@@ -579,6 +690,21 @@ extension PCCHarness {
                 self = .close
             case .none:
                 self = .unknown
+            }
+        }
+
+        package var description: String {
+            switch self {
+            case .decryptionKey(let keyID, _):
+                return "decryptionKey(keyID: \(keyID.base64EncodedString()))"
+            case .requestChunk(let data, let isFinal):
+                return "requestChunk(data: \(data.count) bytes, isFinal: \(isFinal))"
+            case .selectableEnsembles(let ensembles):
+                return "selectableEnsembles(ensembles: \(ensembles.count) items)"
+            case .close:
+                return "close"
+            case .unknown:
+                return "unknown"
             }
         }
     }

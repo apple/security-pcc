@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,7 +23,7 @@ import Foundation
 import OSLog
 
 extension Logger {
-    nonisolated(nonsending) func logLifetime<T>(
+    package nonisolated(nonsending) func logLifetime<T>(
         level: OSLogType = .debug,
         _ operation: StaticString,
         logPrefix: String = "",

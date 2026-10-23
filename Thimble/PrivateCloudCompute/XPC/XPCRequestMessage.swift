@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,12 +22,12 @@
 /// The server supports two types of communication:
 /// 1. Regular or single request. Example:
 ///     ```swift
-///     .data(data, true)
+///     .data(.init(data: data, isComplete: true))
 ///     ```
 ///     or if adopter uses streaming API
 ///     ```swift
-///     .data(chunk1, false)
-///     .data(chunk2, false)
+///     .data(.init(data: chunk1, isComplete: false))
+///     .data(.init(data: chunk2, isComplete: false))
 ///     .final
 ///     ```
 /// 2. Multi-turn requests where we open a connection to the server and use it
@@ -35,36 +35,84 @@
 ///   operating in this mode, we need to send additional delimiters to the
 ///   server to indicate beginning and end of a subrequest. Example:
 ///     ```swift
-///     .openSubrequest(subrequestId1)
-///     .subrequestData(subrequestId1, chunk1)
-///     .subrequestData(subrequestId1, chunk2)
-///     .closeSubrequest(subrequestId1)
-///     .openSubrequest(subrequestId2)
-///     .subrequestData(subrequestId2, chunk)
-///     .closeSubrequest(subrequestId2)
+///     .openSubrequest(.init(subrequestId: subrequestId1, ...))
+///     .subrequestData(.init(subrequestId: subrequestId1, data: chunk1))
+///     .subrequestData(.init(subrequestId: subrequestId1, data: chunk2))
+///     .closeSubrequest(.init(subrequestId: subrequestId1))
+///     .openSubrequest(.init(subrequestId: subrequestId2, ...))
+///     .subrequestData(.init(subrequestId: subrequestId2, data: chunk))
+///     .closeSubrequest(.init(subrequestId: subrequestId2))
 ///     .final
 ///     ```
 package enum XPCRequestMessage: Codable, Equatable, Sendable, TC2JSON {
     /// Represents encoded `XPCRequestMessage`.  Use `XPCRequestMessage(json:)` to convert.
     package typealias Data = Foundation.Data
 
-    /// Used for non multi-turn request. Bool value indicates whether it `isComplete`.
-    case data(Data, Bool)
+    package struct OpenSubrequestPayload: Codable, Equatable, Sendable {
+        package var subrequestId: UInt64
+        package var priority: PrivateCloudComputeConnection.Request.Priority
+        package var opaqueCryptoMaterial: [PrivateCloudComputeConnection.Request.OpaqueCryptoMaterial]
+
+        package init(
+            subrequestId: UInt64,
+            priority: PrivateCloudComputeConnection.Request.Priority,
+            opaqueCryptoMaterial: [PrivateCloudComputeConnection.Request.OpaqueCryptoMaterial]
+        ) {
+            self.subrequestId = subrequestId
+            self.priority = priority
+            self.opaqueCryptoMaterial = opaqueCryptoMaterial
+        }
+    }
+
+    package struct DataPayload: Codable, Equatable, Sendable {
+        package var data: Data
+        package var isComplete: Bool
+
+        package init(data: Data, isComplete: Bool) {
+            self.data = data
+            self.isComplete = isComplete
+        }
+    }
+
+    package struct SubrequestDataPayload: Codable, Equatable, Sendable {
+        package var subrequestId: UInt64
+        package var data: Data
+
+        package init(subrequestId: UInt64, data: Data) {
+            self.subrequestId = subrequestId
+            self.data = data
+        }
+    }
+
+    package struct CloseSubrequestPayload: Codable, Equatable, Sendable {
+        package var subrequestId: UInt64
+
+        package init(subrequestId: UInt64) {
+            self.subrequestId = subrequestId
+        }
+    }
+
+    package struct CancelSubrequestPayload: Codable, Equatable, Sendable {
+        package var subrequestId: UInt64
+
+        package init(subrequestId: UInt64) {
+            self.subrequestId = subrequestId
+        }
+    }
+
+    /// Used for non multi-turn request.
+    case data(DataPayload)
 
     // MARK: - Multi-turn requests.
 
-    /// Used in multi-turn requests to mark the beginning of a new subrequest. UInt64 is subrequest's id.
-    case openSubrequest(
-        UInt64,
-        PrivateCloudComputeConnection.Request.Priority,
-        [PrivateCloudComputeConnection.Request.OpaqueCryptoMaterial]
-    )
-    /// Used in multi-turn requests for the actual subrequest's data. UInt64 is subrequest's id.
-    case subrequestData(UInt64, Data)
-    /// Used in multi-turn requests to mark the end of a new subrequest. UInt64 is subrequest's id.
-    case closeSubrequest(UInt64)
+    /// Used in multi-turn requests to mark the beginning of a new subrequest.
+    case openSubrequest(OpenSubrequestPayload)
+    /// Used in multi-turn requests for the actual subrequest's data.
+    case subrequestData(SubrequestDataPayload)
+    /// Used in multi-turn requests to mark the end of a new subrequest.
+    case closeSubrequest(CloseSubrequestPayload)
     /// Used in multi-turn requests to signal a cancellation of subrequest to the server.
-    case cancelSubrequest(UInt64)
+    case cancelSubrequest(CancelSubrequestPayload)
 
     /// Used in multi-turn requests to indicate completion of the outer request. Means there will
     /// be no new subrequests after this point.

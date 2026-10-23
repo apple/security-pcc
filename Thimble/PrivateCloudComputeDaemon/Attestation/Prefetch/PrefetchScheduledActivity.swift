@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,9 +24,12 @@ import Foundation_Private.NSBackgroundActivityScheduler
 import OSLog
 import PrivateCloudCompute
 
+private let logger = Logger(for: .prefetchRequest)
+
 /// Prefetches attestations for previously used workloads.
 final class PrefetchScheduledActivity<
     RateLimiter: RateLimiterProtocol,
+    LegacyAttestationStore: LegacyAttestationStoreProtocol,
     AttestationStore: AttestationStoreProtocol,
     AttestationVerifier: AttestationVerifierProtocol,
     ServerDrivenConfiguration: ServerDrivenConfigurationProtocol,
@@ -37,10 +40,9 @@ final class PrefetchScheduledActivity<
     PrefetchTracker: PrefetchTrackerProtocol
 >: Sendable, ScheduledActivity {
     let config: Configuration
-    let logger = tc2Logger(forCategory: .prefetchRequest)
     let parametersCache: WorkloadLRUCache
     let rateLimiter: RateLimiter
-    let attestationStore: AttestationStore?
+    let attestationStoreOrLegacyStore: AttestationStoreOrLegacyStore<LegacyAttestationStore, AttestationStore>
     let attestationVerifier: AttestationVerifier
     let eventStreamContinuation: AsyncStream<ThimbledEvent>.Continuation
     let serverDrivenConfig: ServerDrivenConfiguration
@@ -51,7 +53,7 @@ final class PrefetchScheduledActivity<
 
     init(
         rateLimiter: RateLimiter,
-        attestationStore: AttestationStore?,
+        attestationStoreOrLegacyStore: AttestationStoreOrLegacyStore<LegacyAttestationStore, AttestationStore>,
         attestationVerifier: AttestationVerifier,
         config: Configuration,
         daemonDirectoryPath: URL,
@@ -63,7 +65,7 @@ final class PrefetchScheduledActivity<
         prefetchTracker: PrefetchTracker
     ) {
         self.rateLimiter = rateLimiter
-        self.attestationStore = attestationStore
+        self.attestationStoreOrLegacyStore = attestationStoreOrLegacyStore
         self.attestationVerifier = attestationVerifier
         self.config = config
         self.eventStreamContinuation = eventStreamContinuation
@@ -91,10 +93,6 @@ final class PrefetchScheduledActivity<
             logger.log("Finished prefetchAttestations activity")
         }
 
-        guard let attestationStore = self.attestationStore else {
-            return
-        }
-
         let cachedParameters = parametersCache.getCachedEntries().reversed()
 
         for parameters in cachedParameters {
@@ -105,20 +103,39 @@ final class PrefetchScheduledActivity<
             do {
                 logger.log("fetching attestations for pipeline: \(parameters.type) args: \(parameters.parameters)")
                 try await self.prefetchTracker.ensuringOnlyASinglePrefetchIsRunningForParameters(parameters) {
-                    let prefetchRequest = BatchedPrefetch(
-                        connectionFactory: self.connectionFactory,
-                        attestationStore: attestationStore,
-                        rateLimiter: self.rateLimiter,
-                        attestationVerifier: self.attestationVerifier,
-                        config: self.config,
-                        serverDrivenConfig: self.serverDrivenConfig,
-                        systemInfo: systemInfo,
-                        featureFlagChecker: self.featureFlagChecker,
-                        parameters: parameters,
-                        eventStreamContinuation: self.eventStreamContinuation,
-                        prewarm: false,
-                        fetchType: .fetchAllBatches
-                    )
+                    let prefetchRequest: any PrefetchProtocol
+                    switch attestationStoreOrLegacyStore {
+                    case .legacyStore(let legacyAttestationStore):
+                        logger.log("using legacy attestation store")
+                        prefetchRequest = BatchedPrefetch(
+                            connectionFactory: self.connectionFactory,
+                            attestationStore: legacyAttestationStore,
+                            rateLimiter: self.rateLimiter,
+                            attestationVerifier: self.attestationVerifier,
+                            config: self.config,
+                            serverDrivenConfig: self.serverDrivenConfig,
+                            systemInfo: systemInfo,
+                            featureFlagChecker: self.featureFlagChecker,
+                            parameters: parameters,
+                            eventStreamContinuation: self.eventStreamContinuation,
+                            prewarm: false,
+                            fetchType: .fetchAllBatches
+                        )
+                    case .attestationStore(let attestationStore):
+                        prefetchRequest = AttestationStorePrefetch(
+                            connectionFactory: self.connectionFactory,
+                            attestationStore: attestationStore,
+                            rateLimiter: self.rateLimiter,
+                            attestationVerifier: self.attestationVerifier,
+                            config: self.config,
+                            serverDrivenConfig: self.serverDrivenConfig,
+                            systemInfo: systemInfo,
+                            featureFlagChecker: self.featureFlagChecker,
+                            parameters: parameters,
+                            eventStreamContinuation: self.eventStreamContinuation,
+                            prewarm: false
+                        )
+                    }
 
                     _ = try await prefetchRequest.sendRequest()
                 }
@@ -127,7 +144,16 @@ final class PrefetchScheduledActivity<
             }
         }
 
-        // Clean up older attestations while we are here
-        await attestationStore.deleteEntriesWithExpiredAttestationBundles()
+        do {
+            // Clean up older attestations while we are here
+            switch attestationStoreOrLegacyStore {
+            case .legacyStore(let legacyAttestationStore):
+                await legacyAttestationStore.deleteEntriesWithExpiredAttestationBundles()
+            case .attestationStore(let attestationStore):
+                try await attestationStore.deleteEntriesWithExpiredAttestationBundles(now: .now)
+            }
+        } catch {
+            logger.error("failed to clean up expired attestation bundles: \(error)")
+        }
     }
 }

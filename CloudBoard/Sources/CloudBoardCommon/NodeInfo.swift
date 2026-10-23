@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,12 +12,20 @@
 // EA1937
 // 10/02/2024
 
-#if canImport(AppleComputeEnsembler)
+#if RC_IS_CLOUDOS_ENABLED && os(iOS)
+import AppleComputeEnsembler
+#elseif canImport(AppleComputeEnsembler)
 @_weakLinked import AppleComputeEnsembler
+#else
+#warning("AppleComputeEnsembler not available at compile time")
 #endif
 
-#if canImport(cloudOSInfo)
+#if RC_IS_CLOUDOS_ENABLED && os(iOS)
+import cloudOSInfo
+#elseif canImport(cloudOSInfo)
 @_weakLinked import cloudOSInfo
+#else
+#warning("cloudOSInfo not available at compile time")
 #endif
 
 import CloudBoardLogging
@@ -70,14 +78,21 @@ public struct NodeInfo: Sendable {
     }
 
     /// The rack location.
-    public var rackID: String? {
-        self.cloudOSNodeInfo?.rackID
-    }
+    public var rackID: String?
 
     /// If the node is a leader in an ensemble.
     public var isLeader: Bool? {
         self.ensembleNodeInfo?.isLeader
     }
+
+    public var cloudOSDevice: String? {
+        self.cloudOSNodeInfo?.cloudOSDevice
+    }
+
+    /// Exposed to allow testing - changing this has no impact on customer paths.
+    /// Force in memory (test only) attestations to use this as their hardware identifier
+    /// Ignored on all cutomer paths
+    package let testOnlyHardwareID: String
 
     /// Creates a new node info.
     /// - Parameters:
@@ -89,6 +104,7 @@ public struct NodeInfo: Sendable {
     ///   - machineName: The local host/machine name.
     ///   - ensembleID: The local ensemble ID.
     ///   - isLeader: If the node is a leader in an ensemble.
+    ///   - cloudOSDevice: The local hardware type.
     public init(
         cloudOSBuildVersion: String,
         cloudOSReleaseType: String,
@@ -98,7 +114,9 @@ public struct NodeInfo: Sendable {
         workloadEnabled: Bool,
         machineName: String,
         ensembleID: String,
-        isLeader: Bool
+        isLeader: Bool,
+        cloudOSDevice: String,
+        testOnlyHardwareID: String? = nil
     ) {
         self.cloudOSNodeInfo = .init(
             cloudOSBuildVersion: cloudOSBuildVersion,
@@ -106,21 +124,27 @@ public struct NodeInfo: Sendable {
             serverOSReleaseType: serverOSReleaseType,
             serverOSBuildVersion: serverOSBuildVersion,
             workloadEnabled: workloadEnabled,
-            rackID: rackID
+            cloudOSDevice: cloudOSDevice
         )
         self.ensembleNodeInfo = .init(
             machineName: machineName,
             ensembleID: ensembleID,
             isLeader: isLeader
         )
+        self.rackID = rackID
+        self.testOnlyHardwareID = testOnlyHardwareID ?? UUID().uuidString
     }
 
     init(
         cloudOSNodeInfo: CloudOSNodeInfo?,
-        ensembleNodeInfo: EnsembleNodeInfo?
+        ensembleNodeInfo: EnsembleNodeInfo?,
+        rackID: String?,
+        testOnlyHardwareID: String? = nil
     ) {
         self.cloudOSNodeInfo = cloudOSNodeInfo
         self.ensembleNodeInfo = ensembleNodeInfo
+        self.rackID = rackID
+        self.testOnlyHardwareID = testOnlyHardwareID ?? UUID().uuidString
     }
 }
 
@@ -140,13 +164,13 @@ struct CloudOSNodeInfo {
     /// Whether the workload is enabled.
     let workloadEnabled: Bool
 
-    /// The rack location.
-    let rackID: String?
+    /// The local hardware type.
+    let cloudOSDevice: String
 }
 
 extension CloudOSNodeInfo: CustomStringConvertible {
     public var description: String {
-        "cloudOSBuildVersion: \(self.cloudOSBuildVersion), cloudOSReleaseType: \(self.cloudOSReleaseType), serverOSBuildVersion: \(self.serverOSBuildVersion), serverOSReleaseType: \(self.serverOSReleaseType), workloadEnabled: \(self.workloadEnabled), rackID: \(String(describing: self.rackID))"
+        "cloudOSBuildVersion: \(self.cloudOSBuildVersion), cloudOSReleaseType: \(self.cloudOSReleaseType), serverOSBuildVersion: \(self.serverOSBuildVersion), serverOSReleaseType: \(self.serverOSReleaseType), workloadEnabled: \(self.workloadEnabled), cloudOSDevice: \(self.cloudOSDevice)"
     }
 }
 
@@ -175,16 +199,14 @@ extension EnsembleNodeInfo: CustomStringConvertible {
 
 extension NodeInfo: CustomStringConvertible {
     public var description: String {
-        if let cloudOSNodeInfoDescription = self.cloudOSNodeInfo?.description,
-           let ensembleNodeInfoDescription = self.ensembleNodeInfo?.description {
-            cloudOSNodeInfoDescription + ", " + ensembleNodeInfoDescription
-        } else if let cloudOSNodeInfoDescription = self.cloudOSNodeInfo?.description {
-            cloudOSNodeInfoDescription
-        } else if let ensembleNodeInfoDescription = self.ensembleNodeInfo?.description {
-            ensembleNodeInfoDescription
-        } else {
-            "<empty>"
+        var result = "rackID: \(String(describing: self.rackID))"
+        if let details = self.cloudOSNodeInfo?.description {
+            result = "\(result), " + details
         }
+        if let details = self.ensembleNodeInfo?.description {
+            result = "\(result), " + details
+        }
+        return result
     }
 }
 
@@ -193,12 +215,14 @@ extension NodeInfo {
     ///
     /// Load this once at process start, the info does not change.
     public static func load(secureConfig: SecureConfig) -> NodeInfo {
-        let cloudOSNodeInfo = Self.loadCloudOSConfiguration(secureConfig: secureConfig)
+        let cloudOSNodeInfo = Self.loadCloudOSConfiguration()
         let ensembleNodeInfo = Self.loadEnsembleNodeInfo()
 
         return NodeInfo(
             cloudOSNodeInfo: cloudOSNodeInfo,
-            ensembleNodeInfo: ensembleNodeInfo
+            ensembleNodeInfo: ensembleNodeInfo,
+            // RackID comes from an attested secure config key even if other places expose it
+            rackID: secureConfig.parameters.rackID
         )
     }
 
@@ -210,9 +234,7 @@ extension NodeInfo {
     /// Returns the node info loaded from CloudOSInfoProvider.
     ///
     /// Load this once at process start, the info does not change.
-    private static func loadCloudOSConfiguration(secureConfig: SecureConfig) -> CloudOSNodeInfo? {
-        // RackID comes from an attested secure config key
-        let rackID = secureConfig.parameters.rackID
+    private static func loadCloudOSConfiguration() -> CloudOSNodeInfo? {
         #if canImport(cloudOSInfo)
         if #_hasSymbol(CloudOSInfoProvider.self) {
             do {
@@ -223,7 +245,7 @@ extension NodeInfo {
                     serverOSReleaseType: cloudOSConfiguration.serverOSReleaseType,
                     serverOSBuildVersion: cloudOSConfiguration.serverOSBuildVersion,
                     workloadEnabled: cloudOSConfiguration.tieEnabled,
-                    rackID: rackID
+                    cloudOSDevice: cloudOSConfiguration.cloudOSDevice
                 )
                 self.logger.debug("""
                 Successfully loaded cloudOS node info: \

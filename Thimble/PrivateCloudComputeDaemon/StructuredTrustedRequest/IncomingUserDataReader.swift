@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,16 +23,19 @@ internal import CollectionsInternal
 import Foundation
 import PrivateCloudCompute
 import Synchronization
+import os.log
+
+private let logger = Logger(for: .trustedRequest)
 
 enum IncomingUserData: Equatable {
     /// Used in non multi-turn requests.
-    case data(Data)
-    /// UInt64 - subrequest id
-    case openSubresponse(UInt64)
-    /// UInt64 - subrequest id
-    case subresponseData(UInt64, Data)
-    /// UInt64 - subrequest id
-    case closeSubresponse(UInt64, PrivateCloudCompute.XPCResponseMessage.SubresponseStatus)
+    case data(XPCResponseMessage.DataPayload)
+    /// Used in multi-turn requests to mark the beginning of a new subresponse.
+    case openSubresponse(XPCResponseMessage.OpenSubresponsePayload)
+    /// Used in multi-turn requests for the actual subresponse's data.
+    case subresponseData(XPCResponseMessage.SubresponseDataPayload)
+    /// Used in multi-turn requests to mark the end of a subresponse.
+    case closeSubresponse(XPCResponseMessage.CloseSubresponsePayload)
 }
 
 /// "Incoming" meaning from the server.
@@ -41,6 +44,10 @@ final class IncomingUserDataReader: Sendable, IncomingUserDataReaderProtocol {
         case waitingForData(Deque<IncomingUserData>, CheckedContinuation<IncomingUserData?, any Error>)
         case waitingForDemand(Deque<IncomingUserData>, finished: Bool, CheckedContinuation<Void, any Error>?)
         case failed(any Error)
+        /// When in this state:
+        /// * an attempt from the adopter to read `next()`, will throw an error.
+        /// * calls to `forwardData()` will be just ignored and forwarded data will be just dropped allowing the daemon to drain responses to completion.
+        case shutdown(any Error)
         case finished
     }
 
@@ -59,6 +66,8 @@ final class IncomingUserDataReader: Sendable, IncomingUserDataReaderProtocol {
         case succeedForwardContinuation(CheckedContinuation<Void, any Error>)
     }
 
+    /// Note: this may be in a "draining/shutdown" state in which case it will
+    /// just ignore the data it receives.
     func forwardData(_ data: IncomingUserData) async throws {
         try await withCheckedThrowingContinuation { (forwardContinuation: CheckedContinuation<Void, any Error>) in
             let action = self.stateLock.withLock { state -> ForwardDataAction? in
@@ -84,6 +93,10 @@ final class IncomingUserDataReader: Sendable, IncomingUserDataReaderProtocol {
                 case .waitingForDemand(_, finished: true, _):
                     fatalError("Sending data after the stream was marked as finished.")
 
+                case .shutdown(let error):
+                    logger.log("IncomingUserDataReader is in shutdown mode. `forwardData` is ignored. reason=\(error)")
+                    return .succeedForwardContinuation(forwardContinuation)
+
                 case .failed(let error):
                     return .failForwardContinuation(forwardContinuation, error)
                 case .finished:
@@ -104,6 +117,41 @@ final class IncomingUserDataReader: Sendable, IncomingUserDataReaderProtocol {
             case .succeedForwardContinuation(let continuation):
                 continuation.resume()
             }
+        }
+    }
+
+    private enum ShutdownAction {
+        case failNextContinuation(CheckedContinuation<IncomingUserData?, any Error>, any Error)
+        case succeedForwardContinuation(CheckedContinuation<Void, any Error>)
+    }
+
+    func shutdown(error: any Error) {
+        let action = self.stateLock.withLock { state -> ShutdownAction? in
+            switch state {
+            case .waitingForData(_, let nextContinuation):
+                logger.log("IncomingUserDataReader transitions from waitingForData to shutdown state")
+                state = .shutdown(error)
+                return .failNextContinuation(nextContinuation, error)
+
+            case .waitingForDemand(_, finished: _, let forwardContinuation):
+                logger.log("IncomingUserDataReader transitions from waitingForDemand to shutdown state")
+                state = .shutdown(error)
+                if let forwardContinuation {
+                    return .succeedForwardContinuation(forwardContinuation)
+                }
+                return nil
+
+            case .failed, .shutdown, .finished:
+                return nil
+            }
+        }
+        switch action {
+        case .none:
+            break
+        case .failNextContinuation(let continuation, let error):
+            continuation.resume(throwing: error)
+        case .succeedForwardContinuation(let continuation):
+            continuation.resume()
         }
     }
 
@@ -131,6 +179,16 @@ final class IncomingUserDataReader: Sendable, IncomingUserDataReaderProtocol {
                 return nil
 
             case .failed:
+                return nil
+
+            case .shutdown(let shutdownReason):
+                if let error {
+                    logger.log("IncomingUserDataReader transitions from shutdown to failed state. shutdownReason=\(shutdownReason), error=\(error)")
+                    state = .failed(error)
+                } else {
+                    logger.log("IncomingUserDataReader transitions from shutdown to finish state. shutdownReason=\(shutdownReason)")
+                    state = .finished
+                }
                 return nil
 
             case .finished, .waitingForDemand(_, finished: true, _):
@@ -175,6 +233,9 @@ final class IncomingUserDataReader: Sendable, IncomingUserDataReaderProtocol {
                     return .succeedNextContinuation(nextContinuation, next, unblockUpstream: nil)
 
                 case .failed(let error):
+                    return .failNextContinuation(nextContinuation, error)
+
+                case .shutdown(let error):
                     return .failNextContinuation(nextContinuation, error)
 
                 case .finished:

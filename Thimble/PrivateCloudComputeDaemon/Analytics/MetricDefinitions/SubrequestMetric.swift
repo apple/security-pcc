@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -36,8 +36,6 @@ struct SubrequestMetric: CloudTelemetryReportable {
         case clientInfo = "appleClientInfo"
         case featureID = "appleFeatureid"
         case bundleID = "appleBundleid"
-        case originatingBundleID = "originatingBundleID"
-        case locale = "appleLocale"
 
         // MARK: - Request Identification Fields
         case clientRequestId = "clientRequestId"
@@ -47,14 +45,10 @@ struct SubrequestMetric: CloudTelemetryReportable {
         // MARK: - Error Fields
         case remoteResponseStatus = "remoteResponseStatus"
         case subrequestError = "subrequestError"
-        case authTokenFetchSuccess = "authTokenFetchSuccess"
-        case authTokenFetchError = "authTokenFetchError"
 
         // MARK: - Sub-Request Timing Fields (ms relative to subrequestTimebaseMs)
         case subrequestTimebaseMs = "subrequestTimebaseMs"
         case openSubrequestEnqueuedTimeMs = "openSubrequestEnqueuedTimeMs"
-        case authTokenFetchStartTimeMs = "authTokenFetchStartTimeMs"
-        case authTokenFetchFinishTimeMs = "authTokenFetchFinishTimeMs"
         case openSubrequestWrittenTimeMs = "openSubrequestWrittenTimeMs"
         case writeExceededInitialBudget = "writeExceededInitialBudget"
         case firstSubrequestDataEnqueuedTimeMs = "firstSubrequestDataEnqueuedTimeMs"
@@ -71,6 +65,7 @@ struct SubrequestMetric: CloudTelemetryReportable {
 
     init<
         Clock: _Concurrency.Clock,
+        LegacyAttestationStore: LegacyAttestationStoreProtocol,
         AttestationStore: AttestationStoreProtocol,
         SystemInfo: SystemInfoProtocol,
         BiomeReporter: BiomeReporterProtocol
@@ -80,17 +75,14 @@ struct SubrequestMetric: CloudTelemetryReportable {
         environment: String,
         systemInfo: SystemInfo,
         featureID: String?,
-        originatingBundleID: String?,
-        locale: Locale,
         clientRequestId: UUID,
-        subrequestState: RequestMetrics<Clock, AttestationStore, SystemInfo, BiomeReporter>.State.SubrequestState
+        subrequestState: RequestMetrics<Clock, LegacyAttestationStore, AttestationStore, SystemInfo, BiomeReporter>.State.SubrequestState
     ) {
         var fields: [EventName: EventValue] = [
             .eventTime: .int(Int64(eventTime.timeIntervalSince1970)),
             .bundleID: .string(bundleID),
             .environment: .string(environment),
             .clientInfo: .string(systemInfo.osInfoWithDeviceModel),
-            .locale: .string(locale.identifier),
             .subrequestId: .string(subrequestState.subrequestIdForEventReporting.description),
             .clientRequestId: .string(clientRequestId.uuidString),
         ]
@@ -98,34 +90,12 @@ struct SubrequestMetric: CloudTelemetryReportable {
         if let featureID {
             fields[.featureID] = .string(featureID)
         }
-        if let originatingBundleID {
-            fields[.originatingBundleID] = .string(originatingBundleID)
-        }
-
         if let priority = subrequestState.priority {
             fields[.requestPriority] = priority.telemetryString
         }
 
         // Emit the timebase (relative to TrustedRequest start)
         fields[.subrequestTimebaseMs] = .milliseconds(subrequestState.durationFromStartUntilTimebase)
-
-        // Auth token fetch timing (relative to timebase)
-        // Only populated for consecutive subrequests, since first subrequest reuses connection-level token.
-        switch subrequestState.authTokenFetchState {
-        case .notStarted:
-            fields[.authTokenFetchStartTimeMs] = nil
-            fields[.authTokenFetchFinishTimeMs] = nil
-            fields[.authTokenFetchSuccess] = nil
-        case .succeeded(let startTime, let finishTime):
-            fields[.authTokenFetchStartTimeMs] = .milliseconds(startTime)
-            fields[.authTokenFetchFinishTimeMs] = .milliseconds(finishTime)
-            fields[.authTokenFetchSuccess] = .bool(true)
-        case .failed(let startTime, let finishTime, let error):
-            fields[.authTokenFetchStartTimeMs] = .milliseconds(startTime)
-            fields[.authTokenFetchFinishTimeMs] = .milliseconds(finishTime)
-            fields[.authTokenFetchSuccess] = .bool(false)
-            fields[.authTokenFetchError] = .string(error.telemetryString)
-        }
 
         // Outgoing message timings (relative to timebase)
         if let duration = subrequestState.durationFromTimebaseUntilOpenEnqueued {

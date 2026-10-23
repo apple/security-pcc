@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -73,7 +73,7 @@ extension VMBundle {
         }
 
         VMBundle.logger.debug("create library folder: \(self.libraryBase.path, privacy: .public)")
-        try FileManager.default.createDirectory(at: self.libraryBase, withIntermediateDirectories: true)
+        try Globals.computer.fileSystem.createDirectory(at: self.libraryBase, withIntermediateDirectories: true)
     }
 
     // createVMDir creates VM guest directory; throws error if already exists
@@ -83,7 +83,7 @@ extension VMBundle {
         }
 
         VMBundle.logger.debug("create VM bundle folder: \(self.bundlePath.path, privacy: .public)")
-        try FileManager.default.createDirectory(at: self.bundlePath, withIntermediateDirectories: false)
+        try Globals.computer.fileSystem.createDirectory(at: self.bundlePath, withIntermediateDirectories: false)
     }
 
     // createDiskImage creates a (sparse) file to provide backing store as primary VM guest storage
@@ -109,8 +109,9 @@ extension VMBundle {
         }
 
         VMBundle.logger.debug("create VM SEP storage container: \(self.sepStoragePath.path, privacy: .public)")
-        guard FileManager.default.createFile(atPath: self.sepStoragePath.path,
-                                             contents: Data(count: Int(size)))
+        guard Globals.computer.fileSystem.createFile(atPath: self.sepStoragePath.path,
+                                             contents: Data(count: Int(size)),
+                                             attributes: nil)
         else {
             throw VMBundleError("create SEP storage (\(self.sepStoragePath.path))")
         }

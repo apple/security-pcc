@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,7 +23,7 @@ import Foundation
 import Synchronization
 import os.log
 
-private let logger = tc2Logger(forCategory: .client)
+private let logger = Logger(for: .client)
 
 /// A continuation that adds a `cancel()` functionality.
 ///

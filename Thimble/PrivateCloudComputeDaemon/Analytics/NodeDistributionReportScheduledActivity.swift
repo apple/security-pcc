@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,10 +24,11 @@ import Foundation_Private.NSBackgroundActivityScheduler
 import OSLog
 import PrivateCloudCompute
 
+private let logger = Logger(for: .metricReporter)
+
 final class NodeDistributionReportScheduledActivity<
     SystemInfo: SystemInfoProtocol
 >: Sendable, ScheduledActivity {
-    let logger = tc2Logger(forCategory: .metricReporter)
     let eventStreamContinuation: AsyncStream<ThimbledEvent>.Continuation
     let nodeDistributionAnalyzer: NodeDistributionAnalyzer<SystemInfo>
 

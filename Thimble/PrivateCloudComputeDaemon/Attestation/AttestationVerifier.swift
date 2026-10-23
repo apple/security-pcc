@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -26,12 +26,12 @@ import os.log
 
 private let unreasonableDelay: Duration = .seconds(20)
 private let maximumConcurrency: Int = 4
+private let logger = Logger(for: .attestationVerifier)
 
 struct AttestationVerifier<
     FeatureFlagChecker: FeatureFlagCheckerProtocol,
     Validator: ValidatorProtocol
 >: AttestationVerifierProtocol, Sendable {
-    private let logger = tc2Logger(forCategory: .attestationVerifier)
     private let environment: TC2Environment
     private let featureFlagChecker: FeatureFlagChecker
     private let validator: Validator
@@ -100,26 +100,31 @@ struct AttestationVerifier<
         logger.log("verified attestation bundle environment=\(self.environment.name, privacy: .public) publicKey=\(String(describing: publicKeyData)) keyExpiration=\(validatedAttestation.keyExpiration) attestationExpiry=\(attestationExpiry)")
 
         let publicKey = gatewayConfig(publicKeyData: publicKeyData)
+        guard let udid = validatedAttestation.udid else {
+            throw TrustedRequestError(code: .missingAttestationUDID)
+        }
 
         return .init(
             attestation: attestation,
             nodeKind: expectedNodeKind,
             publicKey: publicKey,
             attestationExpiry: attestationExpiry,
-            udid: validatedAttestation.udid,
+            udid: udid,
             validatedCellID: validatedAttestation.routingHint
         )
     }
 
-    func udid(attestation: Attestation) async throws -> String? {
+    func udid(attestation: Attestation) async throws -> String {
         guard let unvalidatedBundle = attestation.attestationBundle else {
             throw TrustedRequestError(code: .missingAttestationBundle)
         }
 
         let bundle = try AttestationBundle(data: unvalidatedBundle)
-        return bundle.withUnvalidatedAttestationBundle { bundle in
-            bundle.udid
+        let udid = bundle.withUnvalidatedAttestationBundle(\.udid)
+        guard let udid else {
+            throw TrustedRequestError(code: .missingAttestationUDID)
         }
+        return udid
     }
 
     private func gatewayConfig(publicKeyData: PublicKeyData) -> Data {

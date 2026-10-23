@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -141,7 +141,7 @@ extension CLI.CryptexCmd {
         }
 
         func run() async throws {
-            guard FileManager.default.fileExists(atPath: cryptexCtlPath) else {
+            guard Globals.computer.fileSystem.fileExists(atPath: cryptexCtlPath) else {
                 throw CLIError("Unable to find \(cryptexCtlPath)).")
             }
 
@@ -151,7 +151,7 @@ extension CLI.CryptexCmd {
                 subPath: applicationName, UUID().uuidString
             ).path(percentEncoded: false)
             defer {
-                try? FileManager.default.removeItem(atPath: tempDir)
+                try? Globals.computer.fileSystem.removeItem(atPath: tempDir)
             }
 
             let diskImagePath = try createDiskImage(sourceDirectory: source.string, queue: queue, tempDirPath: tempDir)

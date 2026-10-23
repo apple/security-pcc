@@ -1,0 +1,307 @@
+// Copyright © 2026 Apple Inc. All Rights Reserved.
+
+// APPLE INC.
+// PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
+// PLEASE READ THE FOLLOWING PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT (“AGREEMENT”) CAREFULLY BEFORE DOWNLOADING OR USING THE APPLE SOFTWARE ACCOMPANYING THIS AGREEMENT(AS DEFINED BELOW). BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT, DO NOT DOWNLOAD OR USE THE APPLE SOFTWARE. THESE TERMS AND CONDITIONS CONSTITUTE A LEGAL AGREEMENT BETWEEN YOU AND APPLE.
+// IMPORTANT NOTE: BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING ON YOUR OWN BEHALF AND/OR ON BEHALF OF YOUR COMPANY OR ORGANIZATION TO THE TERMS OF THIS AGREEMENT.
+// 1. As used in this Agreement, the term “Apple Software” collectively means and includes all of the Apple Private Cloud Compute materials provided by Apple here, including but not limited to the Apple Private Cloud Compute software, tools, data, files, frameworks, libraries, documentation, logs and other Apple-created materials. In consideration for your agreement to abide by the following terms, conditioned upon your compliance with these terms and subject to these terms, Apple grants you, for a period of ninety (90) days from the date you download the Apple Software, a limited, non-exclusive, non-sublicensable license under Apple’s copyrights in the Apple Software to download, install, compile and run the Apple Software internally within your organization only on a single Apple-branded computer you own or control, for the sole purpose of verifying the security and privacy characteristics of Apple Private Cloud Compute. This Agreement does not allow the Apple Software to exist on more than one Apple-branded computer at a time, and you may not distribute or make the Apple Software available over a network where it could be used by multiple devices at the same time. You may not, directly or indirectly, redistribute the Apple Software or any portions thereof. The Apple Software is only licensed and intended for use as expressly stated above and may not be used for other purposes or in other contexts without Apple's prior written permission. Except as expressly stated in this notice, no other rights or licenses, express or implied, are granted by Apple herein.
+// 2. The Apple Software is provided by Apple on an "AS IS" basis. APPLE MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS, SYSTEMS, OR SERVICES. APPLE DOES NOT WARRANT THAT THE APPLE SOFTWARE WILL MEET YOUR REQUIREMENTS, THAT THE OPERATION OF THE APPLE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, THAT DEFECTS IN THE APPLE SOFTWARE WILL BE CORRECTED, OR THAT THE APPLE SOFTWARE WILL BE COMPATIBLE WITH FUTURE APPLE PRODUCTS, SOFTWARE OR SERVICES. NO ORAL OR WRITTEN INFORMATION OR ADVICE GIVEN BY APPLE OR AN APPLE AUTHORIZED REPRESENTATIVE WILL CREATE A WARRANTY.
+// 3. IN NO EVENT SHALL APPLE BE LIABLE FOR ANY DIRECT, SPECIAL, INDIRECT, INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE, REPRODUCTION, COMPILATION OR OPERATION OF THE APPLE SOFTWARE, HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// 4. This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from Apple if you fail to comply with any term(s) of this Agreement. Upon termination, you agree to cease all use of the Apple Software and destroy all copies, full or partial, of the Apple Software. This Agreement constitutes the entire understanding of the parties with respect to the subject matter contained herein, and supersedes all prior negotiations, representations, or understandings, written or oral. This Agreement will be governed and construed in accordance with the laws of the State of California, without regard to its choice of law rules.
+// You may report security issues about Apple products to product-security@apple.com, as described here: https://www.apple.com/support/security/. Non-security bugs and enhancement requests can be made via https://bugreport.apple.com as described here: https://developer.apple.com/bug-reporting/
+// EA1937
+// 10/02/2024
+
+internal import CloudBoardCommon
+internal import CloudBoardLogging
+import os
+
+public actor CloudBoardWorkloadController {
+    static let log: Logger = .init(
+        subsystem: "com.apple.cloudos.cloudboard",
+        category: "CloudBoardWorkloadController"
+    )
+
+    public struct ActorDropped: Error {}
+
+    enum Client {
+        case connected(CloudBoardControllerAPIXPCClient)
+        case waitingForConnection([Promise<CloudBoardControllerAPIXPCClient, any Error>])
+    }
+
+    private var client: Client
+    public let prefs: CloudBoardWorkloadControllerPrefs
+    /// The persistent service identifier this controller drives, if it was created for one. Used to attribute a
+    /// terminal-failure report to the right persistent service on cloudboardd. `nil` for compute/proxy controllers.
+    private let persistentServiceID: String?
+    private var shutdownHandler: (() async throws -> Void)?
+    private var disconnectHandler: (() async throws -> Void)?
+
+    private var persistentServiceListeners: [String: PersistentServiceXPCListener] = [:]
+
+    private var isConnected: Bool {
+        switch self.client {
+        case .connected:
+            return true
+        case .waitingForConnection:
+            return false
+        }
+    }
+
+    public init() async throws {
+        self.prefs = try CloudBoardWorkloadControllerPrefs.fromPreferences()
+        self.persistentServiceID = nil
+        self.client = .waitingForConnection([])
+    }
+
+    /// Initializes from SecureConfig for persistent services that don't depend on CFPrefs.
+    public init(
+        persistentServiceID: String
+    ) async throws {
+        self.prefs = try CloudBoardWorkloadControllerPrefs.persistentServiceFromSecureConfig(
+            persistentServiceID: persistentServiceID
+        )
+        self.persistentServiceID = persistentServiceID
+        self.client = .waitingForConnection([])
+    }
+
+    deinit {
+        if case .waitingForConnection(let waiters) = self.client {
+            for waiter in waiters {
+                waiter.fail(with: ActorDropped())
+            }
+        }
+        let listeners = self.persistentServiceListeners.values
+        for listener in listeners {
+            // PersistentServiceXPCListener.cancel() is async (actor-isolated).
+            // Schedule cancellation from deinit since we can't await here.
+            Task { await listener.cancel() }
+        }
+    }
+
+    public func connect() async {
+        if self.isConnected {
+            Self.log.warning("Rejecting duplicate connection")
+            return
+        }
+
+        Self.log.log("Connecting to cloudboardd")
+        let client = await CloudBoardControllerAPIXPCClient.localConnection()
+        await client.connect(delegate: self)
+        guard case .waitingForConnection(let waiters) = self.client else {
+            Self.log.warning("Duplicate connection created, closing")
+            await client.disconnect()
+            return
+        }
+
+        self.client = .connected(client)
+        for waiter in waiters {
+            waiter.succeed(with: client)
+        }
+        Self.log.log("Connected to cloudboardd")
+    }
+
+    @available(*, deprecated, message: "Deprecated flow. Remove all usages of this method")
+    public func onUpdateConfiguration(handler _: @escaping (_ config: WorkloadConfig) async throws -> Void) {}
+
+    public func onShutdown(handler: @escaping () async throws -> Void) {
+        self.shutdownHandler = handler
+    }
+
+    public func onDisconnect(handler: @escaping () async throws -> Void) {
+        self.disconnectHandler = handler
+    }
+
+    @available(*, deprecated, message: "Use registerComputeWorkload or registerProxyWorkload instead")
+    public func registerWorkload(config: WorkloadConfig, properties: WorkloadProperties) async throws {
+        switch config.workloadType {
+        case .worker:
+            try await self.registerComputeWorkload(
+                config: .init(
+                    maxBatchSize: config.maxBatchSize,
+                    optimalBatchSize: config.optimalBatchSize,
+                    currentBatchSize: config.currentBatchSize,
+                    workloadTags: .init(config.workloadTags),
+                    appRoutingKeys: []
+                ),
+                properties: properties
+            )
+        case .proxy:
+            // There was never support for providing more than "services" and "routingGroupAliases" proxy metadata this
+            // way, so we can safely move other fields under the new "workload" field for proxy announcements.
+            var workloadTags = config.workloadTags
+
+            let services: [String] = if let serviceTags = workloadTags["services"] {
+                switch serviceTags {
+                case .string(let value):
+                    [value]
+                case .stringList(let list):
+                    list
+                }
+            } else {
+                []
+            }
+
+            // We only check for "routingGroupAliases" tags for backward compatibility. Adopters of
+            // registerProxyWorkload will not be able to provide routing group aliases themselves. Instead, cloudboardd
+            // directly obtains them from secure-config and advertises them accordingly.
+            let routingGroupAliasOverrides: [String]? = if let rgaTags = workloadTags["routingGroupAliases"] {
+                switch rgaTags {
+                case .string(let value):
+                    [value]
+                case .stringList(let list):
+                    list
+                }
+            } else {
+                nil
+            }
+
+            workloadTags.removeValue(forKey: "services")
+            workloadTags.removeValue(forKey: "routingGroupAliases")
+
+            try await self.registerProxyWorkload(
+                config: .init(
+                    maxBatchSize: config.maxBatchSize,
+                    optimalBatchSize: config.optimalBatchSize,
+                    currentBatchSize: config.currentBatchSize,
+                    metadata: .init(services: services, routingGroupAliasOverrides: routingGroupAliasOverrides),
+                    workloadTags: .init(workloadTags),
+                ),
+                properties: properties
+            )
+        }
+    }
+
+    public func registerComputeWorkload(config: ComputeWorkloadConfig, properties: WorkloadProperties) async throws {
+        try await self.waitForClient().registerWorkload(config: .compute(config), properties: properties)
+    }
+
+    public func registerProxyWorkload(config: ProxyWorkloadConfig, properties: WorkloadProperties) async throws {
+        try await self.waitForClient().registerWorkload(config: .proxy(config), properties: properties)
+    }
+
+    /// Registers a persistent service with the given implementation.
+    ///
+    /// This creates an XPC listener that `cb_pserverhelper` connects to for forwarding
+    /// plaintext data, starts it, and then registers the workload with cloudboardd.
+    ///
+    /// Safe to call repeatedly for the same serviceID — the XPC listener is created once
+    /// and reused, while the workload registration is re-sent to update metadata
+    /// (e.g. service discovery tags) without disrupting existing connections.
+    package func registerPersistentService(
+        config: PersistentServiceConfig,
+        implementation: any PersistentServiceImplementationProtocol
+    ) async throws {
+        if self.persistentServiceListeners[config.serviceId] == nil {
+            let listener = PersistentServiceXPCListener(
+                serviceID: config.machServiceName,
+                implementation: implementation
+            )
+            await listener.start()
+            self.persistentServiceListeners[config.serviceId] = listener
+        }
+        try await self.waitForClient().registerWorkload(
+            config: .persistentService(config),
+            properties: WorkloadProperties(workloadName: config.serviceId, cloudAppName: "")
+        )
+    }
+
+    public func updateHealthStatus(status: WorkloadControllerStatus) async throws {
+        try await self.waitForClient().updateHealthStatus(status: status)
+    }
+
+    /// Reports that this persistent service has failed terminally and cannot recover without external
+    /// re-convergence. cloudboardd transitions the service's health to a terminal state, which surfaces the node
+    /// as unhealthy so convergence fails fast instead of waiting out the convergence timeout.
+    ///
+    /// Only valid for controllers created with `init(persistentServiceID:)`; a no-op otherwise.
+    public func reportTerminalFailure(reason: String) async throws {
+        guard let persistentServiceID = self.persistentServiceID else {
+            Self.log.error("reportTerminalFailure called on a controller with no persistent service ID; ignoring")
+            return
+        }
+        try await self.waitForClient().reportPersistentServiceTerminalFailure(
+            serviceId: persistentServiceID,
+            reason: reason
+        )
+    }
+
+    public func restartPrewarmedInstances() async throws {
+        try await self.waitForClient().restartPrewarmedInstances()
+    }
+
+    private func waitForClient(
+        function: String = #function
+    ) async throws -> CloudBoardControllerAPIXPCClient {
+        switch self.client {
+        case .connected(let client):
+            Self.log.debug("Function \(function, privacy: .public) immediately found a client")
+            return client
+        case .waitingForConnection(var waiters):
+            Self.log.debug("Function \(function, privacy: .public) waiting for a client.")
+            let promise = Promise<CloudBoardControllerAPIXPCClient, any Error>()
+            waiters.append(promise)
+            self.client = .waitingForConnection(waiters)
+            defer {
+                Self.log.debug("Function \(function, privacy: .public) has now found a client")
+            }
+            return try await Future(promise).valueWithCancellation
+        }
+    }
+
+    private func cancelAllPersistentServiceListeners() async {
+        for (_, listener) in self.persistentServiceListeners {
+            await listener.cancel()
+        }
+        self.persistentServiceListeners.removeAll()
+    }
+}
+
+extension CloudBoardWorkloadController: CloudBoardControllerAPIClientDelegateProtocol {
+    public func disconnected() async {
+        Self.log.log("Received 'Disconnected' from cloudboardd")
+        await self.cancelAllPersistentServiceListeners()
+        self.client = .waitingForConnection([])
+        guard let handler = self.disconnectHandler else {
+            Self.log.error("No handler registered for '\(#function, privacy: .public)'")
+            return
+        }
+
+        do {
+            try await handler()
+        } catch {
+            Self.log.error(
+                "Failed to invoke \(#function, privacy: .public) handler: \(String(reportable: error), privacy: .public) (\(error))"
+            )
+        }
+    }
+
+    public func shutdown() async throws {
+        Self.log.log("Received 'Shutdown' from cloudboardd")
+        guard let handler = self.shutdownHandler else {
+            Self.log.error("No handler registered for '\(#function, privacy: .public)'")
+            return
+        }
+
+        do {
+            try await handler()
+        } catch {
+            Self.log.error(
+                "Failed to invoke \(#function, privacy: .public) handler: \(String(reportable: error), privacy: .public) (\(error))"
+            )
+        }
+    }
+}
+
+extension [String: RoutingTagValue] {
+    fileprivate init(_ tags: [String: WorkloadConfig.RoutingTagValue]) {
+        self = tags.mapValues { tagValue in
+            switch tagValue {
+            case .string(let value):
+                .string(value)
+            case .stringList(let list):
+                .stringList(list)
+            }
+        }
+    }
+}

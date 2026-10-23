@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,12 +20,16 @@ public final class PrintlnTransform: EHTransform {
         case log_println
     }
     public init() {}
-    let encoder = JSONEncoder()
+    let encoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.outputFormatting = [.withoutEscapingSlashes]
+        return e
+    }()
     public func process(_ event: any EHUEFEvent) async -> EHTransformReturn {
         print(event.jsonString)
         return (.proceed, nil, nil, nil)
     }
 
-    public func configure() throws {
+    public func configure() async throws {
     }
 }

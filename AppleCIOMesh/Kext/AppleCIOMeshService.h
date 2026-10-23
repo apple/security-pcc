@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -322,7 +322,7 @@ class AppleCIOMeshService : public IOService
 	AppleCIOMeshSharedMemory * _commandeerSMSend;
 	int64_t _commandeerSMSendOffset;
 	uint64_t _commanderSMSendStart;
-	char * _commandeerSendTag;
+	char _commandeerSendTag[kTagSize];
 	size_t _commandeerSendTagSz;
 	uint64_t _commanderSMSendCounter;
 	// Commandeer Drip Prepare

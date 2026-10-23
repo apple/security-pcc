@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,10 +12,16 @@
 // EA1937
 // 10/02/2024
 
-#if canImport(SystemServiceMonitor)
+#if RC_IS_CLOUDOS_ENABLED && os(iOS)
+import SystemServiceMonitor
+#elseif canImport(SystemServiceMonitor)
 @_weakLinked import SystemServiceMonitor
+#else
+#warning("SystemServiceMonitor not available at compile time")
 #endif
+
 import CloudBoardLogging
+import CloudBoardMetrics
 import Foundation
 import OSLog
 import Synchronization
@@ -24,6 +30,7 @@ import Synchronization
 
 public protocol ServiceDependencyHealthChecker: Sendable {
     func waitForHealthyState() async throws
+    func isWaitForHealthyStateRequired() -> Bool
 }
 
 // MARK: - Error Types
@@ -35,84 +42,151 @@ public enum ServiceDependencyHealthCheckerError: Error, CustomStringConvertible 
     public var description: String {
         switch self {
         case .serviceNotFound(let service):
-            return "SSM service \(service) not found"
+            "SSM service \(service) not found"
         case .errorFetchingServiceStatus:
-            return "Error fetching service status"
+            "Error fetching service status"
         }
     }
 }
 
-// MARK: - Service Status Reader
+// MARK: - Service State
+
+enum ServiceState: String, Sendable {
+    case invalid, unavailable, notPresented, presented, ready, failed
+
+    init(from state: Service.State) {
+        self = switch state {
+        case .failed: .failed
+        case .presented: .presented
+        case .ready: .ready
+        default: .invalid
+        }
+    }
+
+    var statusCode: Int {
+        switch self {
+        case .invalid: 0
+        case .unavailable: 1
+        case .notPresented: 2
+        case .failed: 3
+        case .presented: 4
+        case .ready: 5
+        }
+    }
+}
+
+// MARK: - Health Checker Implementation
 
 #if canImport(SystemServiceMonitor)
 @available(iOS 26.0, macOS 15.6, *)
 public struct ControlPlaneHealthDHealthChecker: ServiceDependencyHealthChecker {
-    // MARK: Constants
-
     private enum Constants {
-        static let controlPlaneHealthDIdentifier = "com.apple.cloudos.controlplanehealthd"
-        static let systemServiceMonitorClientName = "com.apple.cloudos.cloudboardd"
-        static let serviceWaitTimeout: Double = 5
+        static let serviceIdentifier = "com.apple.cloudos.controlplanehealthd"
+        static let clientName = "com.apple.cloudos.cloudboardd"
+        static let serviceWaitTimeout = 5.0
         static let healthCheckInterval: Duration = .seconds(1)
+        static let metricsInterval: Duration = .minutes(1)
     }
 
-    // MARK: Properties
-
     private let requestClient: RequestClient
+    private let metrics: MetricsSystem
+    private let waitForHealthyState: Bool
 
-    private static let log = Logger(
+    private static let logger = Logger(
         subsystem: "com.apple.cloudos.cloudboard",
         category: "ControlPlaneHealthDHealthChecker"
     )
 
-    // MARK: Initialization
+    // MARK: - Initialization
 
-    public init() {
-        self.requestClient = RequestClient(identifier: Constants.systemServiceMonitorClientName)
-        Self.log.info("ControlPlaneHealthDHealthChecker requestClient initialized")
+    public init(metrics: MetricsSystem, waitForHealthyState: Bool) {
+        self.metrics = metrics
+        self.waitForHealthyState = waitForHealthyState
+        self.requestClient = RequestClient(identifier: Constants.clientName)
+        Self.logger.log("ControlPlaneHealthDHealthChecker requestClient initialized")
     }
 
-    // MARK: Public Methods
+    // MARK: - Public Methods
+
+    public func isWaitForHealthyStateRequired() -> Bool {
+        self.waitForHealthyState
+    }
 
     public func waitForHealthyState() async throws {
-        let service: Service
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            // Health check task
+            group.addTask {
+                let service = try await self.obtainService()
+                try await self.monitorServiceState(service)
+            }
+
+            // Metrics emission
+            group.addTask {
+                while true {
+                    Self.logger
+                        .debug("Waiting for \(Constants.serviceIdentifier, privacy: .public) to switch to ready state")
+                    self.metrics.emit(
+                        Metrics.ControlPlaneHealthDHealthChecker
+                            .CloudBoardWaitingForControlPlaneHealthDReadyStatus(value: 1)
+                    )
+                    try await Task.sleep(for: Constants.metricsInterval)
+                }
+            }
+
+            // Wait for first task to complete
+            _ = try await group.next()!
+            group.cancelAll()
+        }
+        self.metrics.emit(
+            Metrics.ControlPlaneHealthDHealthChecker.CloudBoardWaitingForControlPlaneHealthDReadyStatus(value: 0)
+        )
+    }
+
+    // MARK: - Private Methods
+
+    private func obtainService() async throws -> Service {
+        Self.logger.log("""
+        Waiting for service (\(Constants.serviceIdentifier, privacy: .public)) to present
+        """)
         do {
-            Self.log
-                .info(
-                    "Waiting for service to present. service_name=\(Constants.controlPlaneHealthDIdentifier, privacy: .public)"
-                )
-            service = try await self.requestClient.waitUntilServicePresented(
-                identifiedBy: Constants.controlPlaneHealthDIdentifier,
+            let service = try await self.requestClient.waitUntilServicePresented(
+                identifiedBy: Constants.serviceIdentifier,
                 within: Constants.serviceWaitTimeout
             )
-            Self.log
-                .info("Service presented. service_name=\(Constants.controlPlaneHealthDIdentifier, privacy: .public)")
+            self.emitControlPlaneHealthDStatusMetric(state: .presented)
+            Self.logger.log("Service presented: \(Constants.serviceIdentifier, privacy: .public)")
+            return service
         } catch {
-            Self.log.error("Failed to monitor service health: \(String(unredacted: error), privacy: .public)")
-            throw ServiceDependencyHealthCheckerError.serviceNotFound(Constants.controlPlaneHealthDIdentifier)
+            Self.logger.error("Service not presented: \(String(unredacted: error), privacy: .public)")
+            self.emitControlPlaneHealthDStatusMetric(state: .notPresented)
+            throw ServiceDependencyHealthCheckerError.serviceNotFound(Constants.serviceIdentifier)
         }
+    }
 
+    private func monitorServiceState(
+        _ service: Service,
+    ) async throws {
         let isContinuationResumed = Mutex(false)
         var serviceMonitor: ServiceMonitor?
 
-        defer {
-            serviceMonitor = nil
-        }
+        defer { serviceMonitor = nil }
 
         try await withCheckedThrowingContinuation { continuation in
             do {
                 serviceMonitor = try Service.createMonitor(
                     service,
                     onUnavailable: {
-                        Self.log
-                            .warning(
-                                "Service became unavailable. service_name=\(Constants.controlPlaneHealthDIdentifier, privacy: .public)"
-                            )
+                        self.emitControlPlaneHealthDStatusMetric(state: .unavailable)
+                        Self.logger.warning("""
+                        Service (\(Constants.serviceIdentifier, privacy: .public)) became unavailable
+                        """)
                     },
                     onStateChange: { state in
-                        Self.log.log(
-                            "Service state changed. service_name=\(Constants.controlPlaneHealthDIdentifier, privacy: .public) state=\(String(describing: state), privacy: .public)"
-                        )
+                        Self.logger.log("""
+                        Service (\(Constants.serviceIdentifier, privacy: .public)) state changed
+                        to: \(String(describing: state), privacy: .public)
+                        """)
+                        self.emitControlPlaneHealthDStatusMetric(state: .init(from: state))
 
                         // Return success when BMC node is healthy
                         if case .ready = state {
@@ -126,14 +200,24 @@ public struct ControlPlaneHealthDHealthChecker: ServiceDependencyHealthChecker {
                     }
                 )
             } catch {
-                Self.log
-                    .error(
-                        "Error fetching service(\(Constants.controlPlaneHealthDIdentifier, privacy: .public)) status \(error, privacy: .public)."
-                    )
+                Self.logger.error("""
+                Error fetching service (\(Constants.serviceIdentifier, privacy: .public)) status 
+                error: \(error, privacy: .public).
+                """)
+                self.emitControlPlaneHealthDStatusMetric(state: .failed)
                 continuation.resume(throwing: ServiceDependencyHealthCheckerError.errorFetchingServiceStatus)
             }
         }
-        Self.log.info("Service(\(Constants.controlPlaneHealthDIdentifier, privacy: .public)) healthy!!")
+
+        Self.logger.info("Service (\(Constants.serviceIdentifier, privacy: .public)) healthy!")
+    }
+
+    private func emitControlPlaneHealthDStatusMetric(state: ServiceState) {
+        self.metrics.emit(
+            Metrics.ControlPlaneHealthDHealthChecker.ControlPlaneHealthdStatus(
+                value: state.statusCode
+            )
+        )
     }
 }
 #endif

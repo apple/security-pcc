@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -87,8 +87,6 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
     fileprivate static let log: Logger = .init(
         subsystem: "com.apple.cloudos.cloudboard", category: "JobHelperInstance"
     )
-    static let cloudBoardLaunchdManagerName = "com.apple.cloudos.cloudboardd"
-
     private var stateMachine: JobHelperInstanceStateMachine
 
     public var canBeReturnedToPool: Bool {
@@ -126,13 +124,16 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
         _ jobHelperLaunchdJob: any LaunchdJobDefinitionProtocol,
         cloudAppName: String,
         supportAppNames: [String],
+        isTrampolineProxy: Bool,
         withLAContext: Bool,
         assetsMetadata: [AssetConsumer: [AssetMetadata]],
         maxApplicationLayerMessageSize: Int,
+        maxToolInvocationsPerRequest: Int,
         jobHelperXPCClientFactory: any CloudBoardJobHelperAPIClientFactoryProtocol,
         delegate: CloudBoardJobHelperAPIClientDelegateProtocol,
         metrics: MetricsSystem,
-        tracer: any Tracer
+        tracer: any Tracer,
+        teardownTimeout: Duration
     ) {
         self.job = jobHelperLaunchdJob.createInstance(uuid: UUID())
         self.cloudAppName = cloudAppName
@@ -142,14 +143,17 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
         self.stateMachine = JobHelperInstanceStateMachine(
             cloudAppName: self.cloudAppName,
             supportAppNames: self.supportAppNames,
+            isTrampolineProxy: isTrampolineProxy,
             withLAContext: withLAContext,
             assetsMetadata: assetsMetadata,
             maxApplicationLayerMessageSize: maxApplicationLayerMessageSize,
+            maxToolInvocationsPerRequest: maxToolInvocationsPerRequest,
             jobHelperJobInstance: self.job,
             jobHelperXPCClientFactory: self.jobHelperXPCClientFactory,
             delegate: delegate,
             metrics: metrics,
-            tracer: self.tracer
+            tracer: self.tracer,
+            teardownTimeout: teardownTimeout
         )
         self.metrics = metrics
         self.warmupCompletePromise = Promise()
@@ -262,8 +266,13 @@ public actor JobHelperInstance: CloudBoardJobHelperInstanceProtocol, Equatable {
         try await self.stateMachine.laContextUsed()
     }
 
-    /// Tears down the JobHelperInstance, awaiting on trigger first
-    public func teardownOnTrigger() async {
+    /// Waits for the teardown trigger to fire, then performs teardown and waits for it to complete.
+    ///
+    /// This is the preferred way to manage instance lifecycle because it ensures the caller
+    /// does not return until the helper process has been fully torn down (XPC teardown command
+    /// sent and launchd job removed). Returning early — e.g. on cancellation — would leak the
+    /// helper instance and its associated system resources.
+    public func awaitTeardownTriggerAndComplete() async {
         // This promise should always be fulfilled, even if things are cancelled. If
         // we don't wait for this and instead return on cancellation, we leak a JobHelperInstance.
         do {
@@ -297,6 +306,10 @@ extension JobHelperInstance {
     public func abandon() async throws {
         try await self.stateMachine.abandon()
     }
+
+    package func queryProxyRequestStatus() async throws -> ProxyRequestStatus {
+        try await self.stateMachine.queryProxyRequestStatus()
+    }
 }
 
 internal actor JobHelperInstanceStateMachine {
@@ -326,6 +339,7 @@ internal actor JobHelperInstanceStateMachine {
 
     private let cloudAppName: String
     private let supportAppNames: [String]
+    private let isTrampolineProxy: Bool
     private let assetsMetadata: [AssetConsumer: [AssetMetadata]]
     private let jobHelperJobInstance: any LaunchdJobInstanceInitiatorProtocol
     private let jobHelperXPCClientFactory: any CloudBoardJobHelperAPIClientFactoryProtocol
@@ -342,6 +356,7 @@ internal actor JobHelperInstanceStateMachine {
 
     var laContextAssigned: Bool
     private let maxApplicationLayerMessageSize: Int
+    private let maxToolInvocationsPerRequest: Int
 
     var usedForClientRequest: Bool {
         switch self.state {
@@ -359,23 +374,29 @@ internal actor JobHelperInstanceStateMachine {
 
     private let terminationPromise = Promise<Void, Error>()
     private var terminationRequested: Bool = false
+    private let teardownTimeout: Duration
 
     init(
         cloudAppName: String,
         supportAppNames: [String],
+        isTrampolineProxy: Bool,
         withLAContext: Bool,
         assetsMetadata: [AssetConsumer: [AssetMetadata]],
         maxApplicationLayerMessageSize: Int,
+        maxToolInvocationsPerRequest: Int,
         jobHelperJobInstance: any LaunchdJobInstanceInitiatorProtocol,
         jobHelperXPCClientFactory: any CloudBoardJobHelperAPIClientFactoryProtocol,
         delegate: CloudBoardJobHelperAPIClientDelegateProtocol,
         metrics: any MetricsSystem,
-        tracer: any Tracer
+        tracer: any Tracer,
+        teardownTimeout: Duration
     ) {
         self.cloudAppName = cloudAppName
         self.supportAppNames = supportAppNames
+        self.isTrampolineProxy = isTrampolineProxy
         self.assetsMetadata = assetsMetadata
         self.maxApplicationLayerMessageSize = maxApplicationLayerMessageSize
+        self.maxToolInvocationsPerRequest = maxToolInvocationsPerRequest
         self.state = .awaitingJobHelperConnection
         self.laContextAssigned = withLAContext
         self.jobHelperJobInstance = jobHelperJobInstance
@@ -383,6 +404,7 @@ internal actor JobHelperInstanceStateMachine {
         self.delegate = delegate
         self.tracer = tracer
         self.metrics = metrics
+        self.teardownTimeout = teardownTimeout
     }
 
     func set(
@@ -468,6 +490,16 @@ internal actor JobHelperInstanceStateMachine {
         }
     }
 
+    func queryProxyRequestStatus() async throws -> ProxyRequestStatus {
+        switch self.state {
+        case .connected(let client, _):
+            return try await client.queryProxyRequestStatus()
+        case .awaitingJobHelperConnection, .connecting,
+             .terminating, .abandoning, .terminated, .monitoringCompleted:
+            return ProxyRequestStatus(subrequestsStatus: .unavailable, workersStatus: .unavailable)
+        }
+    }
+
     func clientIsRunning(pid: Int?) async throws {
         self.remotePID = pid
         // Notice-/default-level log to ensure that we have the
@@ -544,7 +576,9 @@ internal actor JobHelperInstanceStateMachine {
                         supportAppNames: self.supportAppNames,
                         assignLAContext: self.laContextAssigned,
                         assetsMetadata: self.assetsMetadata,
-                        maxApplicationLayerMessageSize: self.maxApplicationLayerMessageSize
+                        maxApplicationLayerMessageSize: self.maxApplicationLayerMessageSize,
+                        maxToolInvocationsPerRequest: self.maxToolInvocationsPerRequest,
+                        isTrampolineProxy: self.isTrampolineProxy
                     )
                 )
             }
@@ -652,7 +686,7 @@ internal actor JobHelperInstanceStateMachine {
         Teardown timeout task started
         """)
         do {
-            try await Task.sleep(for: .seconds(10))
+            try await Task.sleep(for: self.teardownTimeout)
         } catch is CancellationError {
             JobHelperInstance.log.info("Teardown timeout cancelled")
             throw CancellationError()
@@ -688,6 +722,16 @@ internal actor JobHelperInstanceStateMachine {
                     cloudApp: self.cloudAppName
                 )
                 name = "cb_jobhelper"
+            case .cbPServerHelper:
+                metric = Metrics.JobHelperInstance.CBPServerHelperTerminateFailureCounter(
+                    action: .increment
+                )
+                name = "cb_pserverhelper"
+            case .cbPClientHelper:
+                metric = Metrics.JobHelperInstance.CBPClientHelperTerminateFailureCounter(
+                    action: .increment
+                )
+                name = "cb_pclienthelper"
             }
             JobHelperInstance.log.error("""
             \(self.logMetadata(), privacy: .public) \

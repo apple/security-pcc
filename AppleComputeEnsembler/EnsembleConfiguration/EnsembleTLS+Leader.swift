@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -83,7 +83,7 @@ extension EnsemblerTLS {
 		var ranksNotFound: [Int] = []
 		for node in self.nodeMap.values {
 			if node.found != true {
-				EnsemblerTLS.logger.info(
+				EnsemblerTLS.logger.warning(
 					"""
 					EnsemblerTLS.checkAllNodesFoundStatus(): \
 					node \(node.rank, privacy: .public) NOT yet found: \
@@ -101,7 +101,7 @@ extension EnsemblerTLS {
 	func checkAllNodesFoundStatus() -> Bool {
 		for node in self.nodeMap.values {
 			if node.found != true {
-				EnsemblerTLS.logger.info(
+				EnsemblerTLS.logger.warning(
 					"""
 					EnsemblerTLS.checkAllNodesFoundStatus(): \
 					node \(node.rank, privacy: .public) NOT yet found: \
@@ -174,7 +174,7 @@ extension EnsemblerTLS {
 				continue
 			}
 			if node.keyShared != true {
-				EnsemblerTLS.logger.info(
+				EnsemblerTLS.logger.warning(
 					"""
 					EnsemblerTLS.checkEnsembleForKeyDistribution(): \
 					node \(node.rank, privacy: .public): keyShared is `false`: \
@@ -228,7 +228,7 @@ extension EnsemblerTLS {
 				continue
 			}
 			if node.nodeReady != true {
-				EnsemblerTLS.logger.info(
+				EnsemblerTLS.logger.warning(
 					"""
 					EnsemblerTLS.checkEnsembleForEnsembleReady(): \
 					node \(node.rank, privacy: .public): nodeReady is `false`: \
@@ -278,7 +278,7 @@ extension EnsemblerTLS {
 			}
 
 			if node.activated != true {
-				EnsemblerTLS.logger.info(
+				EnsemblerTLS.logger.warning(
 					"""
 					EnsemblerTLS.checkEnsembleForActivationCompletion(): \
 					node \(node.rank, privacy: .public): activated is `false`: \
@@ -519,42 +519,40 @@ extension EnsemblerTLS {
 	}
 
 	func checkFollowerConnectionsNotReady() -> [Int] {
-		var followerConnectionsNotReady: [Int] = []
-
-		for follower in 1 ..< self.nodeMap.count {
-			if self.clientConnections[follower] != .ready {
-				followerConnectionsNotReady.append(follower)
-			}
+		clientConnectionsLock.withLock { connections in
+			(1 ..< self.nodeMap.count).filter { connections[$0] != .ready }
 		}
-
-		return followerConnectionsNotReady
 	}
 
 	func resetFollowerConnectionStatus() {
-		for node in 1 ..< self.nodeMap.count {
-			self.clientConnections[node] = .none
+		clientConnectionsLock.withLock { connections in
+			for node in 1 ..< self.nodeMap.count {
+				connections[node] = .none
+			}
 		}
 	}
 
 	func resetLeaderConnectionStatus() {
-		self.clientConnections[0] = .none
+		clientConnectionsLock.withLock { $0[0] = .none }
 	}
 
 	func isAllFollowerConnectionsReady() -> Bool {
-		EnsemblerTLS.logger.info(
+		EnsemblerTLS.logger.debug(
 			"EnsemblerTLS.isAllFollowerConnectionsReady(): Waiting for all follower connections to become ready."
 		)
 
-		for follower in 1 ..< self.nodeMap.count {
-			if self.clientConnections[follower] != .ready {
-				EnsemblerTLS.logger.info(
-					"EnsemblerTLS.isAllFollowerConnectionsReady(): Node \(follower) connection state is \(self.clientConnections[follower].debugDescription) and is not .ready ."
-				)
-				return false
+		return clientConnectionsLock.withLock { connections in
+			for follower in 1 ..< self.nodeMap.count {
+				guard connections[follower] == .ready else {
+					let state = connections[follower].debugDescription
+					EnsemblerTLS.logger.warning(
+						"EnsemblerTLS.isAllFollowerConnectionsReady(): Node \(follower) connection state is \(state) and is not .ready ."
+					)
+					return false
+				}
 			}
+			return true
 		}
-
-		return true
 	}
 
 	func waitForAllFollowerConnectionsReady() -> Bool {
@@ -570,11 +568,7 @@ extension EnsemblerTLS {
 		dispatchGroup.enter()
 
 		DispatchQueue.global().async {
-			repeat {
-				// Simulate a small delay before rechecking
-				Thread.sleep(forTimeInterval: 1)
-			} while self.isAllFollowerConnectionsReady() == false
-
+			_ = self.allFollowersReadySemaphore.wait(timeout: .now() + .seconds(kEnsemblerTimeout))
 			dispatchGroup.leave()
 		}
 
@@ -647,7 +641,7 @@ extension EnsemblerTLS {
 
 			self.dumpEnsembleDebugMap()
 
-			if !self.setStatus(.distributingCIOKey) {
+			if !self.setStatus(.distributingKey) {
 				return
 			}
 
@@ -659,7 +653,7 @@ extension EnsemblerTLS {
 	internal func distributeKey() {
 		do {
 			EnsemblerTLS.logger.info(
-				"EnsemblerTLS.distributeKey(): broadcast .ensembleAcceptAndshareCIOKey message"
+                "EnsemblerTLS.distributeKey(): broadcast .ensembleAcceptAndshareCIOKey message"
 			)
 
 			guard let keyData = sharedKey?.getKeyDataWrapper().data else {
@@ -675,6 +669,10 @@ extension EnsemblerTLS {
 				)
 			}
 
+            EnsemblerTLS.logger.info(
+                "EnsemblerTLS.distributeKey(): distributing key of size \(keyData.count)"
+            )
+            
 			try self.broadcastMessage(
 				msg: EnsembleControlMessage.ensembleAcceptAndshareCIOKey(sharedKey: keyData)
 			)

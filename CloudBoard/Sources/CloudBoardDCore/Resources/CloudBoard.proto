@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -68,6 +68,15 @@ message UUID {
     fixed64 least_sig_bits = 2;
 }
 
+message AffinityKey {
+    enum Category {
+        CATEGORY_UNSPECIFIED = 0;
+        CATEGORY_INFERENCE_ID = 1;
+    }
+    Category category = 1;
+    fixed64 data = 2;
+}
+
 // When using InvokeProxyInitiate to request a compute ensemble
 // this indicates what sort of reponse bypass should be used (if any)
 // the mode should be passed along unmodified in all InvokeWorkloadRequest
@@ -130,6 +139,15 @@ message InvokeWorkloadRequest {
           TraceContextV1 trace_context_v1 = 10;
           TraceContext trace_context = 11;
         }
+        
+        // Resource pool identifier for cost token generation
+        optional string pat_issuer = 12;
+        
+        // Opaque hints used by ROPES to implement affinity.
+        // ROPES prefers nodes that are already handling a request with the same affinity_keys.
+        // CloudBoard treats this value as opaque and echoes the set of affinity_keys of all
+        // pending inference requests back to ROPES via LoadResponse.affinity_keys_in_progress.
+        repeated AffinityKey affinity_key = 13;
     }
 
     oneof type {
@@ -219,6 +237,11 @@ message LoadResponse {
     uint32 current_batch_size                            = 2;
     uint32 optimal_batch_size                            = 3;
     optional com.apple.ropes.common.v1.Workload workload = 4 [deprecated = true];
+
+    // Affinity keys of requests in progress on this node, as provided by clients via
+    // InvokeWorkloadRequest.Parameters.affinity_key. These values are opaque to CloudBoard,
+    // but CloudBoard must remove duplicate affinity keys.
+    repeated AffinityKey affinity_keys_in_progress       = 5;
 }
 
 // During the Pick negotiating cycles the set of possible ensembles is presented
@@ -280,6 +303,14 @@ message InvokeProxyInitiate {
             // available (for example trusted_ensembles) ROPES may simply reserve one of them
             // instead and communicate that as the chosen ensemble as normal
             uint32 num_selected_choices = 2;
+
+            // The maximum integer factor by which ROPES may scale the offered ratio.
+            // ROPES may instead provide num_provided_choices * s ensembles for any integer s
+            // in [1, ratio_can_scale_to]; the proxy then accepts num_selected_choices * s of
+            // them, preserving the ratio (e.g. 15:1 may become 30:2 or 45:3).
+            // The proxy always sets this to a value >= 1; an unset/zero value is treated
+            // the same as 1 (no scaling).
+            uint32 ratio_can_scale_to = 3;
         }
 
         // ROPES may choose any of these ensembles, reserve it, and hand it to the proxy
@@ -402,6 +433,10 @@ message InvokeProxyInitiate {
     // Most other non-retryable failures would still be fatal
     // ROPES can reject the request even when the capacity is not full
     bool is_discardable = 12;
+    
+    // client passes subrequest_id in encrypted envelope to CloudBoard,
+    // have CloudBoard pass it to ROPES for reporting purpose.
+    optional fixed64 subrequest_id = 13;
 }
 
 message InvokeProxyDialBackRequest {
@@ -505,6 +540,10 @@ message WatchAttestationResponse {
         // The attestation hard expires at this point
         // there is no point passing a request using it to this node
         google.protobuf.Timestamp expires_after = 3;
+        // Transparency log tree ID from the attestation bundle's transparency proof
+        optional uint64 transparency_tree_id = 4;
+        // Transparency log revision number from the attestation bundle's transparency proof
+        optional uint64 transparency_revision = 5;
     }
 
     // Represents an attestation/key to be published to clients

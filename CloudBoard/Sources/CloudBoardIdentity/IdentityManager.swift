@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,6 +24,34 @@ import Security
 import Security_Private.SecCertificatePriv
 import Synchronization
 
+public struct NarrativeBackendConfig: Sendable {
+    let domain: NarrativeDomain
+    let identityType: NarrativeIdentityType
+    let aprn: String?
+    let sanDNS: String?
+    let tag: String?
+
+    public init(
+        domain: NarrativeDomain = .acdc,
+        identityType: NarrativeIdentityType = .actor,
+        aprn: String? = nil,
+        sanDNS: String? = nil,
+        tag: String? = nil
+    ) {
+        self.domain = domain
+        self.identityType = identityType
+        self.aprn = aprn
+        self.sanDNS = sanDNS
+        self.tag = tag
+    }
+}
+
+public enum IdentityBackendType: Sendable {
+    case selfsigned
+    case narrative(config: NarrativeBackendConfig? = nil)
+    case custom(backend: any IdentityBackend)
+}
+
 public final class IdentityManager: Sendable {
     public static let logger: os.Logger = .init(
         subsystem: "com.apple.cloudos.cloudboardIdentity",
@@ -31,7 +59,6 @@ public final class IdentityManager: Sendable {
     )
 
     private static let metricsRecordingInterval: Duration = .seconds(60)
-
     private let cached: Mutex<ResolvedIdentity?>
     private let updatedLoopStarted: Mutex<Bool>
     private let metricsSystem: any MetricsSystem
@@ -39,17 +66,17 @@ public final class IdentityManager: Sendable {
     private let backend: any IdentityBackend
 
     public init(
-        useSelfSignedCert: Bool,
         metricsSystem: any MetricsSystem,
         metricProcess: String,
-        backendOverride: (any IdentityBackend)? = nil
+        identityBackendType: IdentityBackendType,
     ) {
-        let backend = if let backendOverride {
-            backendOverride
-        } else if useSelfSignedCert {
+        let backend = switch identityBackendType {
+        case .custom(let backend):
+            backend
+        case .narrative(let config):
+            LibnarrativecertIdentityBackend(config: config)
+        case .selfsigned:
             SelfSignedBackend()
-        } else {
-            LibnarrativecertIdentityBackend()
         }
 
         let initialIdentity = try? Self._recordLoad(metricsSystem: metricsSystem, metricProcess: metricProcess) {
@@ -83,6 +110,25 @@ public final class IdentityManager: Sendable {
         }
     }
 
+    public func waitForInitialIdentity(
+        backoffStrategy: ExponentialBackoffStrategy
+    ) async throws {
+        guard self.identity == nil else { return }
+        Self.logger.log("Initial identity not loaded; attempting to load with exponential backoff")
+        let retryStrategy = RetryWithBackoff(
+            backoffStrategy: backoffStrategy,
+            deadline: .noDeadline,
+            logger: Self.logger
+        ) { _ in .continue }
+        let identity = try await executeWithRetries(retryStrategy: retryStrategy) {
+            try Self._recordLoad(metricsSystem: self.metricsSystem, metricProcess: self.metricProcess) {
+                try self.backend.fetchInitialIdentity()
+            }
+        }
+        self.cached.withLock { $0 = identity }
+        Self.logger.log("Successfully loaded identity")
+    }
+
     private func runIdentityUpdateLoop() async {
         let initialIdentity = self.identity
         self.updatedLoopStarted.withLock { $0 = true }
@@ -93,10 +139,16 @@ public final class IdentityManager: Sendable {
             do {
                 // Force-unwrap here is safe: we can only reload if we know
                 // the identity details.
+                let domain = initialIdentity!.details!.domain
+                let identityType = initialIdentity!.details!.type
+                Self.logger.info("""
+                Attempting to reload identity 
+                \(domain.rawValue, privacy: .public) (\(identityType.rawValue, privacy: .public))
+                """)
                 identity = try Self._recordLoad(metricsSystem: self.metricsSystem, metricProcess: self.metricProcess) {
                     try self.backend.fetchSpecificIdentity(
-                        domain: initialIdentity!.details!.domain,
-                        identityType: initialIdentity!.details!.type
+                        domain: domain,
+                        identityType: identityType
                     )
                 }
             } catch {
@@ -287,26 +339,64 @@ public protocol IdentityBackend: Sendable {
 }
 
 struct LibnarrativecertIdentityBackend: IdentityBackend {
+    let domain: NarrativeDomain
+    let identityType: NarrativeIdentityType
+    let aprn: String?
+    let sanDNS: String?
+    let tag: String?
+
+    init(config: NarrativeBackendConfig?) {
+        if let config {
+            self.domain = config.domain
+            self.identityType = config.identityType
+            self.aprn = config.aprn
+            self.sanDNS = config.sanDNS
+            self.tag = config.tag
+        } else {
+            self.domain = .acdc
+            self.identityType = .actor
+            self.aprn = nil
+            self.sanDNS = nil
+            self.tag = nil
+        }
+    }
+
     func fetchInitialIdentity() throws -> IdentityManager.ResolvedIdentity {
         guard #_hasSymbol(NarrativeCert.self) else {
             IdentityManager.logger.warning("Narrative cert framework unavailable, proceeding without credentials")
             throw IdentityManagerError.unableToRunSecureService
         }
 
+        try self.configureIdentity()
+
         do {
-            IdentityManager.logger.log("Attempting to load narrative identity: attempting ACDC actor identity")
-            return try self.fetchSpecificIdentity(domain: .acdc, identityType: .actor)
+            let domain = self.domain.rawValue
+            let identityType = self.identityType.rawValue
+            IdentityManager.logger.log("""
+            Attempting to load narrative identity: 
+            attempting \(domain, privacy: .public) \(identityType, privacy: .public) identity"
+            """)
+            return try self.fetchSpecificIdentity(domain: self.domain, identityType: self.identityType)
         } catch {
-            IdentityManager.logger.warning(
-                "Unable to load ACDC actor identity: \(String(unredacted: error), privacy: .public). Falling back to ADB host identity."
-            )
-            // Fallthrough here is deliberate.
+            if self.domain == .aquaria {
+                // Aquaria identity is independent of adb
+                IdentityManager.logger.warning(
+                    "Unable to load \(self.domain.rawValue, privacy: .public) actor identity: \(String(unredacted: error), privacy: .public)."
+                )
+                throw error
+            } else {
+                IdentityManager.logger.warning(
+                    "Unable to load \(self.domain.rawValue, privacy: .public) actor identity: \(String(unredacted: error), privacy: .public). Falling back to ADB host identity."
+                )
+                // Fallthrough here is deliberate.
+            }
         }
 
         do {
+            IdentityManager.logger.info("Attempting to load narrative identity: attempting adb host identity")
             return try self.fetchSpecificIdentity(domain: .adb, identityType: .host)
         } catch {
-            IdentityManager.logger.warning(
+            IdentityManager.logger.error(
                 "Unable to load ADB platform identity: \(String(unredacted: error), privacy: .public). Proceeding without credentials."
             )
             throw error
@@ -317,7 +407,11 @@ struct LibnarrativecertIdentityBackend: IdentityBackend {
         domain: NarrativeDomain,
         identityType: NarrativeIdentityType
     ) throws -> IdentityManager.ResolvedIdentity {
-        let cert = NarrativeCert(domain: domain, identityType: identityType)
+        let cert = if let tag = self.tag {
+            NarrativeCert(domain: domain, identityType: identityType, tag: tag)
+        } else {
+            NarrativeCert(domain: domain, identityType: identityType)
+        }
         let refs = cert.fetchSecRefsFromKeychain()
         guard let certRef = refs?.certRef,
               let keyRef = refs?.keyRef else {
@@ -360,6 +454,43 @@ struct LibnarrativecertIdentityBackend: IdentityBackend {
             ),
             credential: credential
         )
+    }
+
+    private func configureIdentity() throws {
+        guard let aprn = self.aprn, let sanDNS = self.sanDNS, let tag = self.tag else {
+            return
+        }
+        let options = [
+            NarrativeCertOptions.aprn: aprn,
+            NarrativeCertOptions.sanDNS: sanDNS,
+            NarrativeCertOptions.tag: tag,
+        ]
+        let client = NarrativeXPCClient()
+        let domain = self.domain
+        let identityType = self.identityType
+        do {
+            IdentityManager.logger.log("""
+            Configure identity for 
+            \(domain.rawValue, privacy: .public) with \(identityType.rawValue, privacy: .public).
+            """)
+
+            /// First time ConfigureIdentity is called it downloads the cert for the specified domain and identityType
+            /// pair
+            /// Any request after that returns immediately
+            /// So, its safe to call ConfigureIdentity multiple times during a process lifecycle or across multiple
+            /// processes as well.
+            try client.ConfigureIdentity(
+                narrativeDomain: domain,
+                narrativeIdentityType: identityType,
+                options: options
+            )
+        } catch {
+            IdentityManager.logger.error("""
+            Unable to configure identity for 
+            \(domain.rawValue, privacy: .public): \(String(unredacted: error), privacy: .public)."
+            """)
+            throw error
+        }
     }
 }
 

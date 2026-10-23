@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -51,6 +51,8 @@ struct InternalAttestedKey: Sendable {
     var expiry: Date
     var appData: [String: Data]
     var availableOnNodeOnly: Bool = false
+    var transparencyTreeID: UInt64? = nil
+    var transparencyRevision: UInt64? = nil
 }
 
 extension InternalAttestedKey {

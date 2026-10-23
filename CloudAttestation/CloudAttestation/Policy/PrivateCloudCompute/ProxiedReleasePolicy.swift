@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -65,7 +65,7 @@ public struct ProxiedReleasePolicy: AttestationPolicy {
             throw Self.Error.notCovered
         }
 
-        Self.logger.log("release sha256:\(digestData.hexString) is covered by proxy node attestation")
+        Self.logger.log("Release sha256:\(digestData.hexString, privacy: .public) is covered by proxy node attestation")
     }
 }
 

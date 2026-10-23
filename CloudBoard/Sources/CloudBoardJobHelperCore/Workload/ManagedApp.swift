@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -39,6 +39,22 @@ enum ManagedAppError: ReportableError {
     case warmupFailed(Error)
     case tornDownBeforeWarmupFinished
 
+    /// Whether this error represents a benign teardown race condition rather than a real failure.
+    ///
+    /// These errors occur when a cloud app or support app exits before CloudBoard finishes
+    /// cleanup, and should not be logged at error level since they cause other teams to
+    /// misdiagnose successful requests as CloudBoard failures.
+    var isBenignTeardownError: Bool {
+        switch self {
+        case .alreadyTerminated, .tornDownBeforeRunning,
+             .tornDownBeforeWarmupFinished, .appUnavailable,
+             .monitoringCompletedEarly:
+            return true
+        default:
+            return false
+        }
+    }
+
     var publicDescription: String {
         let errorType = switch self {
         case .tornDownBeforeRunning: "tornDownBeforeRunning"
@@ -62,6 +78,25 @@ enum ManagedAppError: ReportableError {
         }
         return "ManagedAppError.\(errorType)"
     }
+}
+
+/// Checks whether an error represents a benign teardown race condition.
+///
+/// Covers `ManagedAppError` benign cases, `CancellationError`, and XPC connection-loss
+/// errors (`CloudBoardAsyncXPCError`), which all occur normally when cloud apps exit
+/// before CloudBoard finishes cleanup.
+func isBenignTeardownError(_ error: any Error) -> Bool {
+    if error is CancellationError { return true }
+    if let managedAppError = error as? ManagedAppError { return managedAppError.isBenignTeardownError }
+    if let xpcError = error as? CloudBoardAsyncXPCError {
+        switch xpcError {
+        case .connectionInterrupted, .connectionInvalid, .noConnection, .terminationImminent:
+            return true
+        default:
+            return false
+        }
+    }
+    return false
 }
 
 /// CloudBoardJobHelper-end of the XPC protocol.

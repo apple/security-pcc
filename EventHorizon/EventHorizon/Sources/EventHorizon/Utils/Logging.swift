@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,7 +12,94 @@
 // EA1937
 // 10/02/2024
 
+#if canImport(ArgumentParserInternal)
+import ArgumentParserInternal
+#elseif canImport(ArgumentParser)
+import ArgumentParser
+#endif
+#if os(Linux)
+import Foundation
+import Logging
+
+public enum LogPrivacy: String, CaseIterable {
+    case `public`
+    case `private`
+    case sensitive
+}
+extension DefaultStringInterpolation {
+    mutating func appendInterpolation<T>(_ literal: T, privacy logPrivacy: LogPrivacy) {
+        appendInterpolation(literal)
+    }
+}
+
+public struct EHGlobalLogLevel: Sendable {
+    nonisolated(unsafe) public static var shared: EHGlobalLogLevel = .init()
+    public var level: Level = .info
+}
+
+public final class EHLogger: Sendable {
+    let logger: Logger
+    init(subsystem: String, category: String) {
+        var l = Logger(label: "\(subsystem).\(category)")
+        switch EHGlobalLogLevel.shared.level {
+        case .debug:
+            l.logLevel = .debug
+        case .info:
+            l.logLevel = .info
+        case .error:
+            l.logLevel = .error
+        }
+        self.logger = l
+    }
+    public func log(_ level: Level, _ message: @autoclosure () -> String) {
+        switch level {
+        case .debug:
+            guard self.logger.logLevel <= .debug else {
+                return
+            }
+            self.logger.debug(Logger.Message(stringLiteral: message()))
+        case .info:
+            guard self.logger.logLevel <= .info else {
+                return
+            }
+            self.logger.info(Logger.Message(stringLiteral: message()))
+        case .error:
+            self.logger.error(Logger.Message(stringLiteral: message()))
+        }
+    }
+
+    public func isEnabled(type level: Level) -> Bool {
+        switch level {
+        case .debug:
+            return logger.logLevel <= .debug
+        case .info:
+            return logger.logLevel <= .info
+        case .error:
+            return true
+        }
+    }
+}
+extension String {
+    func oslogStripped() -> String {
+        return self.replacingOccurrences(of: "%{public}", with: "%").replacingOccurrences(of: "%s", with: "%@")
+    }
+}
+public func os_log(_ log: EHLog.EHLoggerType, message: String, _ args: CVarArg...) {
+    log.log(.info, "\(String(format: message.oslogStripped(), arguments: args))")
+}
+
+public func os_log(_ level: Level, log: EHLog.EHLoggerType, _ message: String, _ args: CVarArg...) {
+    log.log(level, "\(String(format: message.oslogStripped(), arguments: args))")
+}
+
+#else
+#if canImport(LoggingSupport)
 import LoggingSupport
+#endif
+#if canImport(os)
+import os
+#endif
+#endif
 public enum EHLog {
     #if canImport(os)
     public typealias EHLoggerType = OSLog
@@ -25,4 +112,17 @@ public enum EHLog {
     public static func withCategory(_ category: Any.Type) -> EHLoggerType {
         return EHLoggerType(subsystem: EventHorizonKit.framework_name, category: String(describing: category))
     }
+
+    public static func isDebugEnabled(_ log: EHLoggerType) -> Bool {
+        #if canImport(os)
+        return log.isEnabled(type: .debug)
+        #else
+        return log.isEnabled(type: .debug)
+        #endif
+    }
+}
+public enum Level: String, ExpressibleByArgument, RawRepresentable, Sendable, Codable {
+    case debug
+    case info
+    case error
 }

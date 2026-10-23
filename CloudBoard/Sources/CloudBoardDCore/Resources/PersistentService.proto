@@ -1,0 +1,211 @@
+// Copyright © 2026 Apple Inc. All Rights Reserved.
+
+// APPLE INC.
+// PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
+// PLEASE READ THE FOLLOWING PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT (“AGREEMENT”) CAREFULLY BEFORE DOWNLOADING OR USING THE APPLE SOFTWARE ACCOMPANYING THIS AGREEMENT(AS DEFINED BELOW). BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT, DO NOT DOWNLOAD OR USE THE APPLE SOFTWARE. THESE TERMS AND CONDITIONS CONSTITUTE A LEGAL AGREEMENT BETWEEN YOU AND APPLE.
+// IMPORTANT NOTE: BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING ON YOUR OWN BEHALF AND/OR ON BEHALF OF YOUR COMPANY OR ORGANIZATION TO THE TERMS OF THIS AGREEMENT.
+// 1. As used in this Agreement, the term “Apple Software” collectively means and includes all of the Apple Private Cloud Compute materials provided by Apple here, including but not limited to the Apple Private Cloud Compute software, tools, data, files, frameworks, libraries, documentation, logs and other Apple-created materials. In consideration for your agreement to abide by the following terms, conditioned upon your compliance with these terms and subject to these terms, Apple grants you, for a period of ninety (90) days from the date you download the Apple Software, a limited, non-exclusive, non-sublicensable license under Apple’s copyrights in the Apple Software to download, install, compile and run the Apple Software internally within your organization only on a single Apple-branded computer you own or control, for the sole purpose of verifying the security and privacy characteristics of Apple Private Cloud Compute. This Agreement does not allow the Apple Software to exist on more than one Apple-branded computer at a time, and you may not distribute or make the Apple Software available over a network where it could be used by multiple devices at the same time. You may not, directly or indirectly, redistribute the Apple Software or any portions thereof. The Apple Software is only licensed and intended for use as expressly stated above and may not be used for other purposes or in other contexts without Apple's prior written permission. Except as expressly stated in this notice, no other rights or licenses, express or implied, are granted by Apple herein.
+// 2. The Apple Software is provided by Apple on an "AS IS" basis. APPLE MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS, SYSTEMS, OR SERVICES. APPLE DOES NOT WARRANT THAT THE APPLE SOFTWARE WILL MEET YOUR REQUIREMENTS, THAT THE OPERATION OF THE APPLE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, THAT DEFECTS IN THE APPLE SOFTWARE WILL BE CORRECTED, OR THAT THE APPLE SOFTWARE WILL BE COMPATIBLE WITH FUTURE APPLE PRODUCTS, SOFTWARE OR SERVICES. NO ORAL OR WRITTEN INFORMATION OR ADVICE GIVEN BY APPLE OR AN APPLE AUTHORIZED REPRESENTATIVE WILL CREATE A WARRANTY.
+// 3. IN NO EVENT SHALL APPLE BE LIABLE FOR ANY DIRECT, SPECIAL, INDIRECT, INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE, REPRODUCTION, COMPILATION OR OPERATION OF THE APPLE SOFTWARE, HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// 4. This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from Apple if you fail to comply with any term(s) of this Agreement. Upon termination, you agree to cease all use of the Apple Software and destroy all copies, full or partial, of the Apple Software. This Agreement constitutes the entire understanding of the parties with respect to the subject matter contained herein, and supersedes all prior negotiations, representations, or understandings, written or oral. This Agreement will be governed and construed in accordance with the laws of the State of California, without regard to its choice of law rules.
+// You may report security issues about Apple products to product-security@apple.com, as described here: https://www.apple.com/support/security/. Non-security bugs and enhancement requests can be made via https://bugreport.apple.com as described here: https://developer.apple.com/bug-reporting/
+// EA1937
+// 10/02/2024
+
+/**
+ * PersistentService API
+ *
+ * A long-lived, persistent, bidirectional gRPC streaming endpoint.
+ *
+ * Unlike InvokeWorkload (one-request-one-response mediated by ROPES), a PersistentService
+ * maintains a continuous bidirectional stream between client and server. It is:
+ *  - NOT mediated by ROPES — the client connects directly to CloudBoard.
+ *  - Served on its own dedicated gRPC port (separate from the main CloudBoard service port).
+ *  - Not subject to concurrent connection limits, but participates in draining for graceful shutdown.
+ *
+ * This is an internal API, not for external consumption.
+ * Compatibility requirements are CloudBoard's responsibility since it will be CloudBoard to CloudBoard.
+ */
+syntax = "proto3";
+
+package com.apple.cloudboard.api.v1;
+
+option java_multiple_files = true;
+option java_package = "com.apple.cloudboard.api.v1";
+
+// for consistency, not because we talk to ROPES
+import "RopesCommon.proto";
+import "google/protobuf/timestamp.proto";
+
+service PersistentService {
+    rpc InvokePersistentService (stream InvokePersistentServiceRequest)
+        returns (stream InvokePersistentServiceResponse);
+}
+
+// Terminology: to avoid confusion with the term "request" which has a very specific meaning within PCC
+// The many individual 'items of work which are sent as messages and replies over the stream' are called
+// "Queries" A query may encompass several such messages but a well behaved query is:
+// ## Small
+// Both in terms of the size and count of messages needed to encode it and decode it
+// ## Short
+// Temporally speaking a query is expected to last for no more than a few seconds, normally much faster
+//
+// Crucially this then means we dno't have to worry about trying to handle a query transitioning a HPKE
+// renegotiation. This is dealt with by the client simply creating a new gRPC and (once established)
+// switching new traffic to the newly established one, whilst waiting for the drain of any outstanding
+// queries on the original to be complete (or it being temrinated, in which case it might retry then on the
+// new one)
+
+// Represents an attestation/key to be used for any future gRPC requests
+// It's much more limited than what is presented in WatchAttestation as it can always simply state the
+// ideal one to use
+message SuggestedAttestation {
+    bytes key_id = 1;
+    bytes attestation_bundle = 2;
+    // The attestation hard expires at this point
+    google.protobuf.Timestamp expires_after = 3;
+}
+
+// no-op messages that keep the connection alive
+message KeepAlive {
+}
+
+// Expected flow is:
+// 1. client sends AnnounceConnection (MUST be first message)
+// 2 and 3 are Optional - if the right attestation is unknown:
+// 2. client sends AttestationQuery
+// 3. server sends ConnectionLifecycleMessage(RESPONSE_TO_QUERY, SuggestedAttestation(...))
+// 4. client sends Setup
+// 5. server sends SetupAck
+// 6. client sends Chunk messages as needed
+// 7. server sends Chunk messages as needed
+// eventually either:
+// Client decides to recycle the connection (it may briefly hold two open gRPC streams to do this)
+// Server decides the client needs to recycle the connection and informs it via ConnectionLifecycleMessage
+//
+// terminal errors are largely dealt with at the gRPC layer
+//
+// Privacy note: Trace context (e.g. TraceContext/TraceContextV1) is intentionally omitted from this
+// protocol to avoid leaking information about the source of activity. Observability for persistent
+// service connections relies on aggregated metrics rather than per-connection tracing. Logging should
+// be kept to a minimum (errors only).
+message InvokePersistentServiceRequest {
+
+    // A request for a ConnectionLifecycleMessage with the Attestation to use
+    message AttestationQuery {
+    }
+    
+    // One and only one of these is sent, and no request_chunk can be sent before it
+    // There is no part of the protocol that allows for chnaging the key used,
+    // When the this long term connection has to end (e.g. decryption_key is expiring, or it has sent
+    // too much data to be allowed to continue) then a separate gRPC is created (in paralllel is fine)
+    // and the old one is dropped
+    message Setup {
+        // unique identifier for the sort of service this is trying to establish a connection to
+        string service_id                                      = 1;
+        // The means to establish a HPKE stream for subsequent request_chunk messages
+        com.apple.ropes.common.v1.DecryptionKey decryption_key = 2;
+        // Field 3 was connection_id, now sent via AnnounceConnection
+        reserved 3;
+        reserved "connection_id";
+    }
+
+    // MUST be the first message sent on the stream.
+    // Establishes the connection identifier used for logging correlation.
+    message AnnounceConnection {
+        string connection_id = 1;
+    }
+
+    // Reason for the client terminating the stream, informational only
+    message Terminate {
+        enum Code {
+            UNDEFINED = 0;
+            CLEAN     = 1;
+            ERROR     = 2;
+        }
+        Code code = 1;
+        optional string reason = 2;
+    }
+
+    oneof type {
+        AttestationQuery attestation_query            = 1;
+        // may be sent whenever the client wishes
+        KeepAlive keep_alive                          = 2;
+        Setup setup                                   = 3;
+        // HPKE data stream
+        com.apple.ropes.common.v1.Chunk request_chunk = 4;
+        Terminate terminate                           = 5;
+        AnnounceConnection announce_connection        = 6;
+    }
+}
+
+message InvokePersistentServiceResponse {
+
+    // Sent immediately on Setup connecting and the secure connection being established
+    message SetupAck {
+    }
+        
+    // Messages about the health of the connection
+    // Any event that indicates reconnection is needed should have been proceeded by
+    // a very recent SuggestedAttestation
+    message ConnectionLifecycleMessage {
+        enum EventType{
+            UNDEFINED = 0;
+            // The server is responding to a client's AttestationQuery with the suggested attestation to use
+            RESPONSE_TO_QUERY = 1;
+            // The initiatior should recreate a new gRPC with fresh key material, and possibly a new key
+            // The server has decided this connection is near some limit in data/time such that
+            // it is not reasonable to use it much longer.
+            // While the new gRPC is being established queries may still be sent on the current one
+            // and should have time to complete
+            CONNECTION_SHOULD_BE_RECREATED = 2;
+            // The initiatior MUST recreate a new gRPC with fresh key material urgently
+            // The server has decided this connection is very close to exceeding some limit in data/time
+            // such that it is not reasonable to use it.
+            // Sending new queries will almost certainly fail, there is still a chance prior queries
+            // will complete
+            CONNECTION_MUST_BE_RECREATED = 3;
+            // The initiatior MUST recreate a new gRPC with fresh key material.
+            // The server has decided this connection has exceeded some limit in data/time
+            // it is not reasonable to use it.
+            // The server will terminate the gRPC itself after this message, inflight queries will be lost
+            CONNECTION_RECREATION_FORCED = 4;
+        }
+        EventType event_type                       = 1;
+        SuggestedAttestation suggested_attestation = 2;
+    }
+    
+    // Messages about the state of the server itself
+    message ServerLifecycleMessage {
+        enum EventType{
+            UNDEFINED = 0;
+            // The server is draining in preparation for a restart, clients MAY send new queries
+            // but new connections will not be allowed.
+            // Clients are expected to immediately source a different instance.
+            DRAINING_STARTED = 1;
+            // The server is draining and will imminently restart, clients MUST NOT send new queries
+            // new connections will not be allowed.
+            // Clients are expected to immediately source a different instance and should consider this node
+            // to no longer count towards quorum.
+            DRAINING_CRITICAL = 2;
+        }
+        EventType event_type = 1;
+    }
+
+    oneof type {
+        // Sent in response to Setup once the connection is established and it is reasonable to
+        // send request_chunk messages
+        SetupAck setup_ack                              = 1;
+        // may be sent whenever the server wishes
+        KeepAlive keep_alive                            = 2;
+        // Sent in response to an AttestationQuery, or may be auto generated if the server thinks it is
+        // relevant. Examples include key rotation events, before sending CONNECTION_MUST_BE_RECREATED
+        // or similar are examples)
+        ConnectionLifecycleMessage connection_lifecycle = 3;
+        // Sent when the server state is chaning in a way existing clients should know about,
+        // for example draining
+        ServerLifecycleMessage     server_life_cycle    = 4;
+        // HPKE responses
+        com.apple.ropes.common.v1.Chunk response_chunk  = 5;
+    }
+}

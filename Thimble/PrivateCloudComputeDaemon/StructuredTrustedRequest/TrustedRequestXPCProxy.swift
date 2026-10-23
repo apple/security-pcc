@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,47 +24,66 @@ import PrivateCloudCompute
 import Synchronization
 import os.log
 
+private let logger = Logger(for: .trustedRequestXPCProxy)
+
 final class TrustedRequestXPCProxy {
-    private let logger = tc2Logger(forCategory: .trustedRequestXPCProxy)
-    let logPrefix: String
+    private let logPrefix: String
 
-    let outgoingUserDataWriter: OutgoingUserDataWriter
+    private let outgoingUserDataWriter: OutgoingUserDataWriter
 
-    let incomingUserDataReader: IncomingUserDataReader
-    let progressReader: TrustedRequestProgressReader
-    let task: Task<Void, any Error>
-    let jsonEncoder = JSONEncoder()
-    let callIDs = IdentifierSequence()
-    let xpcEventsObserver: any TrustedRequestXPCEventsObserver
+    private let incomingUserDataReader: IncomingUserDataReader
+    private let progressReader: TrustedRequestProgressReader
+    private let task: Task<Void, any Error>
+    private let jsonEncoder = JSONEncoder()
+    private let callIDs = IdentifierSequence()
+    private let xpcEventsObserver: any TrustedRequestXPCEventsObserver
+    private let featureFlagChecker: any FeatureFlagCheckerProtocol
+    private let waitForRequestCompletionTimeout: Duration
 
-    let shouldDiscardConsecutiveDiscardableSubrequests = Atomic(false)
+    private let shouldDiscardConsecutiveDiscardableSubrequests = Atomic(false)
+
+    /// The effective chunk size for this request, computed by the daemon from config +
+    /// feature flags. `nil` means chunking is disabled.
+    let chunkSize: Int?
 
     init(
         requestID: UUID,
+        chunkSize: Int?,
         outgoingUserDataWriter: OutgoingUserDataWriter,
         incomingUserDataReader: IncomingUserDataReader,
         progressReader: TrustedRequestProgressReader,
         task: Task<Void, any Error>,
-        xpcEventsObserver: any TrustedRequestXPCEventsObserver
+        xpcEventsObserver: any TrustedRequestXPCEventsObserver,
+        featureFlagChecker: any FeatureFlagCheckerProtocol,
+        waitForRequestCompletionTimeout: Duration = .seconds(20)
     ) {
+        self.chunkSize = chunkSize
         self.outgoingUserDataWriter = outgoingUserDataWriter
         self.incomingUserDataReader = incomingUserDataReader
         self.progressReader = progressReader
         self.task = task
         self.xpcEventsObserver = xpcEventsObserver
         self.logPrefix = "\(requestID):"
+        self.featureFlagChecker = featureFlagChecker
+        self.waitForRequestCompletionTimeout = waitForRequestCompletionTimeout
     }
 
     package func cancelRequestTask(reason: TrustedRequestCancellationReason) {
-        self.logger.log("\(self.logPrefix) request task cancelled reason=\(String(describing: reason))")
-        self.xpcEventsObserver.willCancel(reason: reason)
+        // Note: with `requestCancellationV2` feature flag on, this is only called in response to xpc invalidation.
+        logger.log("\(self.logPrefix) request task cancelled reason=\(String(describing: reason))")
+        self.xpcEventsObserver.cancel(reason: reason)
         self.task.cancel()
     }
 }
 
 extension TrustedRequestXPCProxy: TC2XPCTrustedRequestProtocol {
+    func prepare(completion: @escaping @Sendable (Data?) -> Void) {
+        logger.log("\(self.logPrefix) xpc.prepare received, chunkSize=\(String(describing: self.chunkSize))")
+        completion(RequestSetupConfiguration(chunkSize: self.chunkSize).json)
+    }
+
     func send(data: XPCRequestMessage.Data, completion: @escaping @Sendable (Data?) -> Void) {
-        self.logger.log("\(self.logPrefix) xpc.send received data.count=\(data.count)")
+        logger.log("\(self.logPrefix) xpc.send received data.count=\(data.count)")
         Task {
             do {
                 try await self._send(data: data)
@@ -79,38 +98,63 @@ extension TrustedRequestXPCProxy: TC2XPCTrustedRequestProtocol {
     }
 
     func cancel(completion: @escaping @Sendable () -> Void) {
-        self.logger.log("\(self.logPrefix) xpc.cancel received")
-        self.cancelRequestTask(reason: .frameworkCancellation)
+        logger.log("\(self.logPrefix) xpc.cancel received")
+        if self.featureFlagChecker.isEnabled(.requestCancellationV2) {
+            self.xpcEventsObserver.cancel(reason: .frameworkCancellation)
+        } else {
+            self.cancelRequestTask(reason: .frameworkCancellation)
+        }
         completion()
     }
 
     func close(completion: @escaping @Sendable () -> Void) {
-        self.logger.log("\(self.logPrefix) xpc.close received (no-op)")
+        logger.log("\(self.logPrefix) xpc.close received (no-op)")
         completion()
+    }
+
+    /// Called from the framework as part of the cleanup work after adopter exits the closure we gave them. The request could have been finished or canceled,
+    /// either way this is called and our framework making adopter to wait for this to finish. This is our chance to wrap things up.
+    func waitForRequestCompletion(completion: @escaping @Sendable () -> Void) {
+        logger.log("\(self.logPrefix) waitForRequestCompletion received")
+
+        Task {
+            await logger.logLifetime("waitForRequestCompletion task", logPrefix: self.logPrefix) {
+                let timeout = self.waitForRequestCompletionTimeout
+                // Cancel the task if wrapping up takes too long.
+                await withDelayAction(duration: timeout) {
+                    try? await self.task.value
+                } onDelay: {
+                    logger.warning("\(self.logPrefix) waitForRequestCompletion task is running for \(timeout). Cancelling request task.")
+                    self.task.cancel()
+                }
+
+                completion()
+            }
+        }
     }
 
     func next(completion: @escaping @Sendable (XPCResponseMessage.Data?, Data?) -> Void) {
         let callID = self.callIDs.nextIdentifier()
-        self.logger.log("\(self.logPrefix) xpc.next received callID=\(callID)")
+        logger.log("\(self.logPrefix) xpc.next received callID=\(callID)")
         Task {
             do {
                 let message = try await self._next()
                 switch message {
-                case .data(let data):
-                    self.logger.log("\(self.logPrefix) xpc.next responding callID=\(callID) count=\(data.count)")
-                case .openSubresponse(let subrequestId):
-                    self.logger.log("\(self.logPrefix) xpc.next responding openSubresponse callID=\(callID) subrequestId=\(subrequestId)")
-                case .subresponseData(let subrequestId, let data):
-                    self.logger.log("\(self.logPrefix) xpc.next responding callID=\(callID) count=\(data.count) subrequestId=\(subrequestId)")
-                case .closeSubresponse(let subrequestId, let status):
-                    self.checkForDiscarding(subrequestId: subrequestId, status: status)
-                    self.logger.log("\(self.logPrefix) xpc.next responding closeSubresponse callID=\(callID) subrequestId=\(subrequestId) status=\(String(describing: status))")
+                case .data(let payload):
+                    logger.log("\(self.logPrefix) xpc.next responding callID=\(callID) count=\(payload.data.count)")
+                case .openSubresponse(let payload):
+                    logger.log("\(self.logPrefix) xpc.next responding openSubresponse callID=\(callID) subrequestId=\(payload.subrequestId)")
+                case .subresponseData(let payload):
+                    logger.log("\(self.logPrefix) xpc.next responding callID=\(callID) count=\(payload.data.count) subrequestId=\(payload.subrequestId)")
+                case .closeSubresponse(let payload):
+                    self.checkForDiscarding(payload: payload)
+                    logger.log("\(self.logPrefix) xpc.next responding closeSubresponse callID=\(callID) subrequestId=\(payload.subrequestId) status=\(String(describing: payload.status))")
                 case nil:
-                    self.logger.log("\(self.logPrefix) xpc.next responding nil callID=\(callID)")
+                    logger.log("\(self.logPrefix) xpc.next responding nil callID=\(callID)")
                 }
                 completion(message?.json, nil)
             } catch let error as PrivateCloudComputeError {
-                self.logger.error("\(self.logPrefix) xpc.next responding callID=\(callID) error=\(error)")
+                logger.error("\(self.logPrefix) xpc.next responding callID=\(callID) error=\(error)")
                 completion(nil, error.json)
             } catch {
                 // Note, _next throws(PrivateCloudComputeError)
@@ -120,7 +164,7 @@ extension TrustedRequestXPCProxy: TC2XPCTrustedRequestProtocol {
     }
 
     func createSubrequest(request: PrivateCloudCompute.XPCSubrequest.Data, completion: @escaping @Sendable (Data?) -> Void) {
-        self.logger.log("\(self.logPrefix) xpc.createSubrequest received data.count=\(request.count)")
+        logger.log("\(self.logPrefix) xpc.createSubrequest received data.count=\(request.count)")
         do {
             try self._createSubrequest(request: request)
             completion(nil)
@@ -131,10 +175,10 @@ extension TrustedRequestXPCProxy: TC2XPCTrustedRequestProtocol {
 
     /// Returns `nil` in the completion if there will be no more progress updates.
     func nextProgress(completion: @escaping @Sendable (PrivateCloudCompute.PrivateCloudComputeConnection.Progress.Data?) -> Void) {
-        self.logger.log("\(self.logPrefix) xpc.nextProgress received")
+        logger.log("\(self.logPrefix) xpc.nextProgress received")
         Task {
             let progress = await self.progressReader.next()
-            self.logger.log("\(self.logPrefix) xpc.nextProgress responding progress=\(String(describing: progress), privacy: .public)")
+            logger.log("\(self.logPrefix) xpc.nextProgress responding progress=\(String(describing: progress), privacy: .public)")
             completion(progress?.json)
         }
     }
@@ -187,15 +231,15 @@ extension TrustedRequestXPCProxy: TC2XPCTrustedRequestProtocol {
         }
 
         if shouldDiscardConsecutiveDiscardableSubrequests.load(ordering: .acquiring) {
-            self.logger.warning("\(self.logPrefix) Discarding a discardable subrequest without sending it to the server due to an earlier discardable subrequest being discarded by the server.")
+            logger.warning("\(self.logPrefix) Discarding a discardable subrequest without sending it to the server due to an earlier discardable subrequest being discarded by the server.")
             throw PrivateCloudComputeError(code: .subrequestDiscardedDueToEarlierDiscard)
         }
     }
 
     /// Remembers the fact the subrequest has been discarded if it is.
-    private func checkForDiscarding(subrequestId: UInt64, status: XPCResponseMessage.SubresponseStatus) {
-        if status == .discarded {
-            self.logger.warning("\(self.logPrefix) Subrequest has been discarded by the server, subrequestId=\(subrequestId)")
+    private func checkForDiscarding(payload: XPCResponseMessage.CloseSubresponsePayload) {
+        if payload.status == .discarded {
+            logger.warning("\(self.logPrefix) Subrequest has been discarded by the server, subrequestId=\(payload.subrequestId)")
             // Remember the fact, so we know to discard consecutive "discardable" subrequests without even talking to the server.
             self.shouldDiscardConsecutiveDiscardableSubrequests.store(true, ordering: .releasing)
         }
@@ -205,16 +249,16 @@ extension TrustedRequestXPCProxy: TC2XPCTrustedRequestProtocol {
 extension OutgoingUserData {
     init(_ message: XPCRequestMessage) {
         switch message {
-        case .data(let data, let isComplete):
-            self = .data(data, isComplete)
-        case .openSubrequest(let subrequestId, let priority, let opaqueCryptoMaterials):
-            self = .openSubrequest(subrequestId, priority, opaqueCryptoMaterials)
-        case .subrequestData(let subrequestId, let data):
-            self = .subrequestData(subrequestId, data)
-        case .closeSubrequest(let subrequestId):
-            self = .closeSubrequest(subrequestId)
-        case .cancelSubrequest(let subrequestId):
-            self = .cancelSubrequest(subrequestId)
+        case .data(let payload):
+            self = .data(payload)
+        case .openSubrequest(let payload):
+            self = .openSubrequest(payload)
+        case .subrequestData(let payload):
+            self = .subrequestData(payload)
+        case .closeSubrequest(let payload):
+            self = .closeSubrequest(payload)
+        case .cancelSubrequest(let payload):
+            self = .cancelSubrequest(payload)
         case .final:
             self = .final
         }
@@ -224,14 +268,14 @@ extension OutgoingUserData {
 extension XPCResponseMessage {
     init(_ incomingUserData: IncomingUserData) {
         switch incomingUserData {
-        case .data(let data):
-            self = .data(data)
-        case .openSubresponse(let subrequestId):
-            self = .openSubresponse(subrequestId)
-        case .subresponseData(let subrequestId, let data):
-            self = .subresponseData(subrequestId, data)
-        case .closeSubresponse(let subrequestId, let status):
-            self = .closeSubresponse(subrequestId, status)
+        case .data(let payload):
+            self = .data(payload)
+        case .openSubresponse(let payload):
+            self = .openSubresponse(payload)
+        case .subresponseData(let payload):
+            self = .subresponseData(payload)
+        case .closeSubresponse(let payload):
+            self = .closeSubresponse(payload)
         }
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -38,6 +38,7 @@ struct UserManager {
 
         var esc: EngineeringSSHCA.Config?
         var memento: MementoSSH.Config?
+        var ca: SSHCA.Config?
     }
 
     let computer: any Computer
@@ -202,6 +203,13 @@ struct UserManager {
                     groups: memento.groups,
                     ldapServer: memento.ldapServer) else {
                 logger.error("failed to setup memento ssh")
+                return false
+            }
+        }
+
+        if let ca = user.ca {
+            guard SSHCA.authorizePrincipals(config: ca, for: user.name, on: computer) else {
+                logger.error("failed to setup SSH CA")
                 return false
             }
         }

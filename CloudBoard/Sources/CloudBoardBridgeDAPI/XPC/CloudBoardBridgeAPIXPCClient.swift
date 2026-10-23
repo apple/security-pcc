@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -15,20 +15,98 @@
 internal import CloudBoardAsyncXPC
 package import CloudBoardDomain
 import Foundation
+import os
 
 public actor CloudBoardBridgeAPIXPCClient {
-    private let connection: CloudBoardAsyncXPCConnection
+    private let logger: Logger
+    /// Creates a fresh, unactivated XPC connection to cb_bridged. Invoked lazily the first
+    /// time a request needs a connection, and again after a disconnect.
+    private let connectionFactory: @Sendable () async -> CloudBoardAsyncXPCConnection
 
-    internal init(connection: CloudBoardAsyncXPCConnection) {
-        self.connection = connection
+    /// The connection lifecycle.
+    private enum State {
+        /// No connection: the next request establishes one.
+        case notConnected
+        /// A current connection, represented as a *future* that resolves to the fully
+        /// **activated** connection. In-flight establishment and an established connection
+        /// are the same case: callers `await` the task, which both coalesces concurrent
+        /// callers onto a single establishment and ensures no caller ever observes an
+        /// un-activated connection (the task activates before it resolves).
+        case connection(Task<CloudBoardAsyncXPCConnection, Never>)
+    }
+
+    private var state: State = .notConnected
+    /// Advanced on every teardown. The drop handlers capture the generation in effect
+    /// when the connection was established and are ignored once it advances, so a stale
+    /// event — including the invalidated+interrupted pair that can both fire for one
+    /// connection — can't tear down a newer connection. Mirrors the pattern used by
+    /// `PersistentServiceClientRouterAPIXPCClient`.
+    private var generation: UInt64 = 0
+
+    internal init(
+        logger: Logger,
+        connectionFactory: @escaping @Sendable () async -> CloudBoardAsyncXPCConnection
+    ) {
+        self.logger = logger
+        self.connectionFactory = connectionFactory
     }
 }
 
 extension CloudBoardBridgeAPIXPCClient {
-    public static func localConnection() async -> CloudBoardBridgeAPIXPCClient {
-        await self.init(
-            connection: .connect(to: kCloudBoardBridgeAPIXPCLocalServiceName),
+    public static func localConnection(logger: Logger) async -> CloudBoardBridgeAPIXPCClient {
+        self.init(
+            logger: logger,
+            connectionFactory: { await .connect(to: kCloudBoardBridgeAPIXPCLocalServiceName) }
         )
+    }
+}
+
+extension CloudBoardBridgeAPIXPCClient {
+    /// Returns a live, activated connection to cb_bridged, establishing one on demand.
+    ///
+    /// The connection is created lazily on first use, so a process that never makes a
+    /// bridge request never connects — and a process that isn't permitted to reach
+    /// cb_bridged never triggers a reconnect loop.
+    private func liveConnection() async -> CloudBoardAsyncXPCConnection {
+        switch self.state {
+        case .connection(let task):
+            return await task.value
+        case .notConnected:
+            let generation = self.generation
+            let factory = self.connectionFactory
+            let task = Task { () async -> CloudBoardAsyncXPCConnection in
+                let connection = await factory()
+                // Install the drop handlers before activating so no event is missed,
+                // and activate before returning so the future only resolves once the
+                // connection is usable.
+                let activated = await connection
+                    .handleConnectionInvalidated { [weak self] conn in
+                        await self?.connectionDropped(conn, generation: generation)
+                    }
+                    .handleConnectionInterrupted { [weak self] conn in
+                        await self?.connectionDropped(conn, generation: generation)
+                    }
+                await activated.activate()
+                return activated
+            }
+            self.state = .connection(task)
+            return await task.value
+        }
+    }
+
+    /// Handles a dropped connection (invalidated or interrupted). Unlike a background
+    /// auto-reconnect, this simply returns to `.notConnected`; the next request
+    /// re-establishes a connection via `liveConnection()`. Reconnection is therefore bounded
+    /// by the rate of actual requests, so an unreachable service can't loop forever.
+    private func connectionDropped(_ connection: CloudBoardAsyncXPCConnection, generation: UInt64) async {
+        // Ignore stale events from a superseded connection.
+        guard generation == self.generation else { return }
+        self.generation &+= 1
+        self.state = .notConnected
+        self.logger.log("XPC connection to cb_bridged dropped; will reconnect on the next request.")
+        await connection.handleConnectionInvalidated(handler: nil)
+        await connection.handleConnectionInterrupted(handler: nil)
+        await connection.cancel()
     }
 }
 
@@ -37,9 +115,54 @@ extension CloudBoardBridgeAPIXPCClient: CloudBoardBridgeAPIClientToServerProtoco
         _ encryptedRequest: PIREncryptedRequest,
         traceContext: PIREncryptedRequestTraceContext
     ) async throws -> PIREncryptedResponse {
-        return try await self.connection.send(
+        let connection = await self.liveConnection()
+        return try await connection.send(
             CloudBoardBridgeAPIXPCClientToServerMessage.MakeEncryptedPIRRequest(
                 encryptedRequest: encryptedRequest,
+                traceContext: traceContext
+            )
+        )
+    }
+
+    package func makeToolInvocationRequest(
+        _ request: PCCToolInvocationRequest
+    ) async throws -> PCCToolInvocationResponse {
+        let connection = await self.liveConnection()
+        return try await connection.send(
+            PCCToolInvocationMessage(request: request)
+        )
+    }
+
+    package func makeAppleSigningServiceSignRequest(
+        _ request: AppleSigningServiceSignRequest,
+        traceContext: AppleSigningServiceTraceContext
+    ) async throws -> InternalAppleSigningServiceSignResponse {
+        let connection = await self.liveConnection()
+        return try await connection.send(
+            InternalAppleSigningServiceSignMessage(
+                request: request,
+                traceContext: traceContext
+            )
+        )
+    }
+
+    package func makeAppleSigningServiceGetKeyVersionsRequest(
+        traceContext: AppleSigningServiceTraceContext
+    ) async throws -> InternalAppleSigningServiceGetKeyVersionsResponse {
+        let connection = await self.liveConnection()
+        return try await connection.send(
+            InternalAppleSigningServiceGetKeyVersionsMessage(traceContext: traceContext)
+        )
+    }
+
+    package func makeCIPCompanionServiceVerifyImageRequest(
+        _ request: CIPCompanionServiceVerifyImageRequest,
+        traceContext: CIPCompanionServiceTraceContext,
+    ) async throws -> InternalCIPCompanionServiceImageVerificationResponse {
+        let connection = await self.liveConnection()
+        return try await connection.send(
+            InternalCIPCompanionServiceVerifyImageMessage(
+                request: request,
                 traceContext: traceContext
             )
         )
@@ -48,6 +171,14 @@ extension CloudBoardBridgeAPIXPCClient: CloudBoardBridgeAPIClientToServerProtoco
 
 extension CloudBoardBridgeAPIXPCClient: CloudBoardBridgeAPIClientProtocol {
     package func connect() async {
-        await self.connection.activate()
+        // The connection is established lazily on the first request; this is an optional
+        // eager warm-up for callers that want to pre-connect. Callers that never make a
+        // request never connect.
+        _ = await self.liveConnection()
+    }
+
+    package func ping() async throws {
+        let connection = await self.liveConnection()
+        _ = try await connection.send(CloudBoardBridgeAPIXPCClientToServerMessage.Ping())
     }
 }

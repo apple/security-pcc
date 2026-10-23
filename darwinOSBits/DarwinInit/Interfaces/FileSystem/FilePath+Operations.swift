@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -90,7 +90,7 @@ extension FilePath {
     func copy(to path: FilePath) throws {
         logger.debug("Copying file from \(self) to \(path)")
         try nothingOrErrno(retryOnInterrupt: true) {
-            copyfile(
+            Darwin.copyfile(
                 self.description,
                 path.description,
                 nil,

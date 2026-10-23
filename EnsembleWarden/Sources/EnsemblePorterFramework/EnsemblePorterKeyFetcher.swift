@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -38,6 +38,33 @@ package final class EnsemblePorterKeyFetcher: Sendable {
         self.impl = EnsemblePorterKeyFetcherImpl(client: client)
     }
 
+    package init(endpoint: XPCEndpoint) {
+        let client = EnsemblePorterXPCSessionClient(endpoint: endpoint)
+        self.impl = EnsemblePorterKeyFetcherImpl(client: client)
+    }
+
+    /// Fetches a turn key from EnsemblePorter.
+    ///
+    /// - Parameters:
+    ///   - forTurnNumber: The turn number for the key to fetch
+    ///   - requestID: Unique identifier for tracking this request
+    ///   - spanID: Span identifier for distributed tracing
+    /// - Returns: The retrieved cryptographic data
+    /// - Throws: EnsemblePorterError if the operation fails
+    package func fetchKey(forTurnNumber: Int, requestID: UUID, spanID: UInt64) async throws -> SymmetricKey {
+        return try await impl.fetchKey(forTurnNumber: forTurnNumber, requestID: requestID, spanID: spanID)
+    }
+
+    /// Gets the number of available turn keys.
+    ///
+    /// - Parameters:
+    ///   - requestID: Unique identifier for tracking this request
+    ///   - spanID: Span identifier for distributed tracing
+    /// - Returns: The number of available turn keys
+    /// - Throws: EnsemblePorterError if the operation fails
+    package func getNumberOfTurnKeys(requestID: UUID, spanID: UInt64) async throws -> Int {
+        return try await impl.getNumberOfTurnKeys(requestID: requestID, spanID: spanID)
+    }
 
     /// Fetches the per-process tokens that were generated for follower nodes.
     ///
@@ -87,6 +114,46 @@ final package class EnsemblePorterKeyFetcherImpl<Client: EnsemblePorterClient>: 
         self.client = client
     }
 
+    /// Fetches cryptographic data using the configured client.
+    ///
+    /// - Parameter forTurnNumber: The turn number for the key to fetch
+    /// - Returns: The retrieved cryptographic data
+    /// - Throws: Any client-related errors that occur
+    package func fetchKey(forTurnNumber turnNumber: Int, requestID: UUID, spanID: UInt64) async throws -> SymmetricKey {
+        do {
+            return try await self.client.fetchKey(forTurnNumber: turnNumber, requestID: requestID, spanID: spanID)
+        } catch {
+            logger.error("""
+                Error fetchingKey. \
+                error=\(String(reportable: error), privacy: .public) \
+                turn_number=\(turnNumber, privacy: .public) \
+                request_id=\(requestID, privacy: .public) \
+                span_id=\(spanID, privacy: .public)
+                """)
+            throw error
+        }
+    }
+
+    /// Gets the number of available turn keys.
+    ///
+    /// - Parameters:
+    ///   - requestID: Unique identifier for tracking this request
+    ///   - spanID: Span identifier for distributed tracing
+    /// - Returns: The number of available turn keys
+    /// - Throws: Any client-related errors that occur
+    package func getNumberOfTurnKeys(requestID: UUID, spanID: UInt64) async throws -> Int {
+        do {
+            return try await self.client.getNumberOfTurnKeys(requestID: requestID, spanID: spanID)
+        } catch {
+            logger.error("""
+                Error getting number of turn keys. \
+                error=\(String(reportable: error), privacy: .public) \
+                request_id=\(requestID, privacy: .public) \
+                span_id=\(spanID, privacy: .public)
+                """)
+            throw error
+        }
+    }
 
     /// Fetches the per-process tokens that were generated for follower nodes.
     ///

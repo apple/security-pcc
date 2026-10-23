@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,6 +24,8 @@ import PrivateCloudCompute
 import Synchronization
 import os.log
 
+private let logger = Logger(for: .metricReporter)
+
 final class NodeDistributionAnalyzerStoreHelper: Sendable {
     /// file for storing the nodes received
     static let filename = "nodesReceived.log"
@@ -31,8 +33,6 @@ final class NodeDistributionAnalyzerStoreHelper: Sendable {
     /// this is the fileHandle for write
     /// It is only being modified or used on tasks we put on a sequential queue
     private let fileHandle: Mutex<FileHandle?>
-
-    let logger = tc2Logger(forCategory: .metricReporter)
 
     /// sequential queue for executing file IO tasks
     private let queue = DispatchSerialQueue(label: "com.apple.privatecloudcompute.nodedistributionanalyzer.blockingio", target: blockingIOQueue)
@@ -51,12 +51,6 @@ final class NodeDistributionAnalyzerStoreHelper: Sendable {
         }
     }
 
-    static func migrate(from source: URL, to destination: URL) {
-        let sourceFile = source.appending(path: Self.filename)
-        let destinationFile = destination.appending(path: Self.filename)
-        moveDaemonStateFile(from: sourceFile, to: destinationFile)
-    }
-
     /// write lines
     /// create file if it does not exist
     func writeToFile(lines: [String]) async throws {
@@ -64,8 +58,9 @@ final class NodeDistributionAnalyzerStoreHelper: Sendable {
             try self.fileHandle.withLock {
                 if $0 == nil {
                     // create file if it doesn't exist
-                    if !FileManager.default.fileExists(atPath: self.storeURL.path()) {
-                        FileManager.default.createFile(atPath: self.storeURL.path(), contents: nil)
+                    let path = self.storeURL.path(percentEncoded: false)
+                    if !FileManager.default.fileExists(atPath: path) {
+                        FileManager.default.createFile(atPath: path, contents: nil)
                     }
                     let fileHandle = try FileHandle(forWritingTo: self.storeURL)
                     try fileHandle.seekToEnd()
@@ -96,17 +91,16 @@ final class NodeDistributionAnalyzerStoreHelper: Sendable {
                 }
 
                 // if there's no such file
-                if !FileManager.default.fileExists(atPath: self.storeURL.path()) {
+                let path = self.storeURL.path(percentEncoded: false)
+                if !FileManager.default.fileExists(atPath: path) {
                     return Data()
                 }
 
                 // mmap file into data
-                // note that Data(contentsOf: only accept URL created with URL(filePath:
-                // which is adding "file://" prefix to the URL
-                let data = try Data(contentsOf: .init(filePath: self.storeURL.path()), options: .mappedIfSafe)
+                let data = try Data(contentsOf: self.storeURL, options: .mappedIfSafe)
 
                 // remove file
-                try FileManager.default.removeItem(atPath: self.storeURL.path())
+                try FileManager.default.removeItem(at: self.storeURL)
                 return data
             }
         }

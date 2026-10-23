@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,6 +25,7 @@ import Foundation
 public enum BackendType: String, CustomStringConvertible, Decodable {
 	case None
 	case CIOBackend
+	case CIOFusionBackend
 	case StubBackend
 
 	public var description: String {
@@ -33,6 +34,8 @@ public enum BackendType: String, CustomStringConvertible, Decodable {
 			return "None"
 		case .CIOBackend:
 			return "CIOBackend"
+		case .CIOFusionBackend:
+			return "CIOFusionBackend"
 		case .StubBackend:
 			return "StubBackend"
 		}
@@ -82,13 +85,13 @@ struct BackendConfiguration {
 	let ensemble: EnsembleConfiguration
 
 	/// The delegate all backend callbacks will be sent to.
-	let delegate: BackendDelegate
+	let delegate: BackendDelegate?
 
 	init(
 		queue: DispatchQueue,
 		node: NodeConfiguration,
 		ensemble: EnsembleConfiguration,
-		delegate: BackendDelegate
+		delegate: BackendDelegate?
 	) {
 		self.queue = queue
 		self.node = node
@@ -97,53 +100,65 @@ struct BackendConfiguration {
 	}
 }
 
+/// Common interface implemented by every backend.
 protocol Backend {
 	/// Protocol initializer
 	init(configuration: BackendConfiguration) throws
 
-	/// Activates the backend
+	/// Activates the backend.
 	func activate() throws
 
-	/// Turns of the CIO backend.
+	/// Deactivates the backend.
 	func deactivate() throws
 
 	/// Set a flag within the backend to indicate that the backend has been activated (e.g., after
 	/// restarting the mesh).
 	func setActivatedFlag()
 
+	/// Is the ensemble locked?
+	func isLocked() -> Bool
+
+	/// Locks the backend if applicable. Backends that lock implicitly on activation implement this
+	/// as a no-op.
+	func lock() throws
+
+	/// Set the crypto key.
+	func setCryptoKey(key: Data, flags: UInt32) throws
+}
+
+/// Extended interface for the CIO Fusion backend.
+/// Conformed to by CIOFusionBackend.
+protocol CIOFusionBackendProtocol: Backend {
+	// CIOFusion-specific operations — to be defined as the backend matures.
+}
+
+/// Extended interface for backends that use the CIO physical mesh.
+/// Conformed to by CIOBackend and StubBackend.
+protocol CIOBackendProtocol: Backend {
 	/// Disconnects a single CIO channel.
 	func disconnectCIO(channel: Int) throws
 
 	/// Sends a control message to a node in the mesh.
 	func sendControlMessage(node: Int, message: Data) throws
 
-	/// Makes a TX connection to a node
+	/// Makes a TX connection to a node.
 	func establishTXConnection(node: Int, cioChannelIndex: Int) throws
 
-	/// Locks CIO
-	func lock() throws
-
-	/// Is the ensemble locked?
-	func isLocked() -> Bool
-
-	/// Returns a list of all connected nodes rank
+	/// Returns a list of all connected nodes by rank.
 	func getConnectedNodes() throws -> [[String: AnyObject]]
 
-	/// Returns a dictionary of the ACIO connectivity state
+	/// Returns a dictionary of the ACIO connectivity state.
 	func getCIOCableState() throws -> [[String: AnyObject]]
 
-	/// set the crypto key
-	func setCryptoKey(key: Data, flags: UInt32) throws
-
-	/// get the crypto key
+	/// Get the crypto key. Only for use on the test path.
 	func getCryptoKey() throws -> Data
 
-	/// gets the number of buffers that can be allocated per Crypto Key.
+	/// Gets the number of buffers that can be allocated per crypto key.
 	func getMaxBuffersPerKey() throws -> UInt64
 
-	/// gets the number of seconds that can be used for a crypto key
+	/// Gets the number of seconds that can be used for a crypto key.
 	func getMaxSecondsPerKey() throws -> UInt64
 
-	// add peer hostnames
+	/// Add peer hostnames.
 	func addPeerHostname(hostname: String, node: Int) throws -> Bool
 }

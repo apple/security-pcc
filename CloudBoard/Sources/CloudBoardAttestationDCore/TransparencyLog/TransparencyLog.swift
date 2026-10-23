@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -77,8 +77,8 @@ final class SWTransparencyLog: TransparencyLog {
 
         ) {
             return try await self.metrics.withStatusMetrics(
-                total: Metrics.TransparencyLog.TransparencyLogCounter(action: .increment(by: 1)),
-                error: Metrics.TransparencyLog.TransparencyLogErrorCounter.Factory()
+                total: CloudBoardAttestationMetrics.TransparencyLog.TransparencyLogCounter(action: .increment(by: 1)),
+                error: CloudBoardAttestationMetrics.TransparencyLog.TransparencyLogErrorCounter.Factory()
             ) {
                 return try await withErrorLogging(
                     operation: "get_active_release_set",
@@ -220,7 +220,10 @@ final class SWTransparencyLog: TransparencyLog {
                     switch tlError {
                     case .httpError, .internalError:
                         self.metrics
-                            .emit(Metrics.TransparencyLog.TransparencyLogRetryCounter(action: .increment(by: 1)))
+                            .emit(
+                                CloudBoardAttestationMetrics.TransparencyLog
+                                    .TransparencyLogRetryCounter(action: .increment(by: 1))
+                            )
                         Self.logger.error(
                             "Failed to fetch transparency log active records with error: \(String(unredacted: tlError), privacy: .public). Retrying with backoff."
                         )
@@ -232,7 +235,11 @@ final class SWTransparencyLog: TransparencyLog {
                         return .stop
                     }
                 } else {
-                    self.metrics.emit(Metrics.TransparencyLog.TransparencyLogRetryCounter(action: .increment(by: 1)))
+                    self.metrics
+                        .emit(
+                            CloudBoardAttestationMetrics.TransparencyLog
+                                .TransparencyLogRetryCounter(action: .increment(by: 1))
+                        )
                     Self.logger.error(
                         "Failed to fetch transparency log active records with error: \(String(unredacted: error), privacy: .public). Retrying with backoff."
                     )

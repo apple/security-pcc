@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,6 +24,7 @@ struct PCCVREHelper: ParsableCommand {
         commandName: "pccvre-helper",
         abstract: "pccvre helper compatible with a matching guest PCC release.",
         subcommands: [
+            AssetsCommand.self,
             DarwinInitCommand.self,
             HelperFeaturesCommand.self,
             InstanceCommand.self,

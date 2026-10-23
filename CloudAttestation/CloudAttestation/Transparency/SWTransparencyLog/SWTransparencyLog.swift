@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -26,10 +26,12 @@ import CryptoKit
 import Security
 import InternalSwiftProtobuf
 
-typealias ATLogProofs = PrivateCloudCompute_TransparencyLog_ATLogProofs
+public typealias ATLogProofs = PrivateCloudCompute_TransparencyLog_ATLogProofs
 typealias ATLogProofRequest = PrivateCloudCompute_TransparencyLog_ATLogProofRequest
 typealias ATLogProofBatchResponse = PrivateCloudCompute_TransparencyLog_ATLogProofBatchResponse
-typealias LogConsistency = PrivateCloudCompute_TransparencyLog_LogConsistency
+public typealias ATLogDataType = PrivateCloudCompute_TransparencyLog_ATLogDataType
+public typealias LogConsistency = PrivateCloudCompute_TransparencyLog_LogConsistency
+public typealias ATReleaseType = PrivateCloudCompute_TransparencyLog_ATReleaseType
 
 public struct SWTransparencyLog: TransparencyLog {
     static let logger = Logger(subsystem: "com.apple.CloudAttestation", category: "SWTransparencyLog")
@@ -42,70 +44,51 @@ public struct SWTransparencyLog: TransparencyLog {
         self.verifier = SWTransparencyVerifier()
     }
 
-    public func proveInclusion(of digests: [Data]) async throws -> [TransparencyLogProofs] {
+    public func proveInclusion(
+        of digests: [Data],
+        at revision: TransparencyLogRevision?,
+        coveringAll: ATLogDataType?,
+        preferOldest: Bool,
+        releaseType: ATReleaseType
+    ) async throws -> [TransparencyLogProofs] {
         guard digests.count > 0 else {
             return []
         }
 
         Self.logger.log("Fetching inclusion proofs for digests \(digests.map { $0.hexString }, privacy: .public)")
-
-        let url: URL
-        let urlSessionDelegate: URLSessionDelegate?
-
-        if let credential = try? self.loadNarrativeCredential() {
-            final class Delegate: NSObject, URLSessionDelegate {
-                let credential: URLCredential
-
-                public init(credential: URLCredential) {
-                    self.credential = credential
-                }
-
-                func urlSession(
-                    _ session: URLSession,
-                    didReceive challenge: URLAuthenticationChallenge,
-                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-                ) {
-                    completionHandler(.useCredential, credential)
-                }
-            }
-
-            url = environment.authenticatingTransparencyURL
-            urlSessionDelegate = Delegate(credential: credential)
-            Self.logger.log("Using authenticating transparency log url: \(url, privacy: .public)")
-        } else {
-            url = environment.transparencyURL
-            urlSessionDelegate = nil
-            Self.logger.log("Using non-authenticating transparency log url: \(url, privacy: .public)")
+        let connection = SWTransparencyLogConnection(environment: environment)
+        defer {
+            connection.close()
         }
 
-        var req = URLRequest(url: url.appending(path: "/at/atl_inclusion"))
+        var req = URLRequest(url: connection.url.appending(path: "/at/atl_inclusion"))
         req.httpMethod = "POST"
         req.setValue("application/protobuf", forHTTPHeaderField: "Content-Type")
         let proofReq = ATLogProofRequest.with { builder in
             builder.version = .v3
             builder.dataHashes = digests
             builder.application = self.environment.transparencyPrimaryTree ? .privateCloudCompute : .privateCloudComputeInternal
+
+            if let revision {
+                builder.treeID = revision.treeID
+                builder.revision = revision.revision
+            }
+
+            if let coveringAll {
+                builder.coveringAll = coveringAll
+            }
+
+            builder.preferOldest = preferOldest
+            builder.releaseType = releaseType
         }
         req.httpBody = try proofReq.serializedData()
 
-        let urlSession: URLSession
-        if let urlSessionDelegate {
-            urlSession = URLSession(configuration: .default, delegate: urlSessionDelegate, delegateQueue: nil)
-        } else {
-            urlSession = URLSession.shared
-        }
-        defer {
-            if urlSessionDelegate != nil {
-                urlSession.finishTasksAndInvalidate()
-            }
-        }
-
-        let (data, response) = try await urlSession.data(for: req)
+        let (data, response) = try await connection.urlSession.data(for: req)
 
         let httpResponse = response as! HTTPURLResponse
         if let serverHint = httpResponse.value(forHTTPHeaderField: "x-apple-server-hint") {
             Self.logger.log(
-                "Transparency server \(url, privacy: .public) responded with status \(httpResponse.statusCode, privacy: .public), server hint \(serverHint, privacy: .public)"
+                "Transparency server \(connection.url, privacy: .public) responded with status \(httpResponse.statusCode, privacy: .public), server hint \(serverHint, privacy: .public)"
             )
         }
 
@@ -140,33 +123,6 @@ public struct SWTransparencyLog: TransparencyLog {
     public func verifyExpiringInclusion(of digest: Data, proofs: TransparencyLogProofs) async throws -> Date {
         return try await self.verifier.verifyExpiringInclusion(of: digest, proofs: proofs)
     }
-
-    func loadNarrativeCredential() throws -> URLCredential {
-        #if canImport(libnarrativecert)
-        guard #_hasSymbol(NarrativeCert.self) else {
-            Self.logger.error("Narrative is not available on this OS")
-            throw TransparencyLogError.clientError(Error.narrativeUnsupported)
-        }
-
-        // first try and get the acdc domain identity
-        let acdc = NarrativeCert(domain: .acdc, identityType: .actor)
-        if let credential = acdc.getCredential() {
-            return credential
-        }
-
-        // fallback to adb
-        let adb = NarrativeCert(domain: .adb, identityType: .actor)
-        if let credential = adb.getCredential() {
-            return credential
-        }
-
-        Self.logger.error("Unable to load acdc or adb narrative identity")
-        throw TransparencyLogError.clientError(Error.noAvailableNarrativeIdentities)
-        #else
-        Self.logger.error("Narrative is not available on SDK")
-        throw TransparencyLogError.clientError(Error.narrativeUnsupported)
-        #endif
-    }
 }
 
 extension Status {
@@ -188,6 +144,96 @@ extension Status {
             return .notFound
         case .UNRECOGNIZED(let int):
             return .unrecognized(status: int)
+        }
+    }
+}
+
+public struct SWTransparencyLogConnection {
+    static let logger = Logger(subsystem: "com.apple.CloudAttestation", category: "SWTransparencyLogConnection")
+
+    let url: URL
+    let urlSession: URLSession
+    private let urlSessionDelegate: URLSessionDelegate?
+
+    init(environment: Environment) {
+        let url: URL
+        let urlSession: URLSession
+
+        if let credential = try? Self.narrativeCredential {
+            final class Delegate: NSObject, URLSessionDelegate {
+                let credential: URLCredential
+
+                public init(credential: URLCredential) {
+                    self.credential = credential
+                }
+
+                func urlSession(
+                    _ session: URLSession,
+                    didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+                ) {
+                    guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate else {
+                        completionHandler(.performDefaultHandling, nil)
+                        return
+                    }
+
+                    completionHandler(.useCredential, credential)
+                }
+            }
+
+            url = environment.authenticatingTransparencyURL
+            urlSessionDelegate = Delegate(credential: credential)
+            Self.logger.log("Using authenticating transparency log url: \(url, privacy: .public)")
+        } else {
+            url = environment.transparencyURL
+            urlSessionDelegate = nil
+            Self.logger.log("Using non-authenticating transparency log url: \(url, privacy: .public)")
+        }
+
+        if let urlSessionDelegate {
+            urlSession = URLSession(configuration: .default, delegate: urlSessionDelegate, delegateQueue: nil)
+        } else {
+            urlSession = URLSession.shared
+        }
+
+        self.url = url
+        self.urlSession = urlSession
+    }
+
+    func close() {
+        if urlSessionDelegate != nil {
+            urlSession.finishTasksAndInvalidate()
+        }
+    }
+
+    private static var narrativeCredential: URLCredential {
+        get throws {
+            #if canImport(libnarrativecert)
+            guard #_hasSymbol(NarrativeCert.self) else {
+                Self.logger.error("Narrative is not available on this OS")
+                throw TransparencyLogError.clientError(Error.narrativeUnsupported)
+            }
+
+            // first try and get the acdc domain identity
+            let acdc = NarrativeCert(domain: .acdc, identityType: .actor)
+            if let credential = acdc.getCredential() {
+                Self.logger.log("Using acdc Narrative identity")
+                return credential
+            }
+
+            // fallback to adb
+            let adb = NarrativeCert(domain: .adb, identityType: .actor)
+            if let credential = adb.getCredential() {
+                Self.logger.log("Using adb Narrative identity")
+                return credential
+            }
+
+            Self.logger.error("Unable to load acdc or adb Narrative identity")
+            throw TransparencyLogError.clientError(Error.noAvailableNarrativeIdentities)
+            #else
+            Self.logger.error("Narrative is not available on SDK")
+            throw TransparencyLogError.clientError(Error.narrativeUnsupported)
+            #endif
         }
     }
 }

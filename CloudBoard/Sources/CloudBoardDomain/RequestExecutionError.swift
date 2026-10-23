@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -32,6 +32,7 @@ package enum RequestExecutionErrorSource: Int, ByteBufferCodable, Sendable, Cust
     case cloudApp
     case cloudAppFramework
     case jobHelper
+    case bridged
     case undefined
 
     public var description: String {
@@ -39,6 +40,7 @@ package enum RequestExecutionErrorSource: Int, ByteBufferCodable, Sendable, Cust
         case .cloudApp: "cloudApp"
         case .cloudAppFramework: "cloudAppFramework"
         case .jobHelper: "jobHelper"
+        case .bridged: "bridged"
         case .undefined: "undefined"
         }
     }

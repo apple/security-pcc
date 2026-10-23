@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Apple Inc. All Rights Reserved. -->
+<!-- Copyright © 2026 Apple Inc. All Rights Reserved. -->
 
 <!-- APPLE INC. -->
 <!-- PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT -->
@@ -66,5 +66,14 @@
 		<string>com.apple.acec</string>
 		<string>com.apple.privateCloudCompute</string>
 	</array>
+	<key>keychain-access-groups</key>
+    <array>
+		<string>com.apple.narrativecertd</string>
+		<string>com.apple.acdc</string>
+    </array>
+	<key>com.apple.private.system-keychain</key>
+    <true/>
+    <key>com.apple.private.logging.stream.darwinos</key>
+	<true/>
 </dict>
 </plist>

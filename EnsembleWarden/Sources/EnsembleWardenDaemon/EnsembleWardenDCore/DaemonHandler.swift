@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,20 +22,269 @@
 internal import CryptoKit
 internal import EnsemblePorter
 #if canImport(EnsembleTransport)
-@preconcurrency @_weakLinked private import EnsembleTransport
+@preconcurrency @_weakLinked package import EnsembleTransport
 #endif
 #if canImport(AppleComputeEnsembler)
 @_weakLinked private import AppleComputeEnsembler
 #endif
 private import EnsembleWardenCommon
 package import EnsembleWardenServer
-private import EnsembleWardenXPCAPI
+package import EnsembleWardenXPC
 package import Foundation
 package import IOSurface
-internal import os
+package import os
 private import Synchronization
-@preconcurrency private import XPC
+@preconcurrency package import XPC
 
+
+package protocol EnsembleTransportProviding: Sendable {
+    func publish(_ identifier: String, data: IOSurface, timeout: Int) async throws
+    func fetch(_ identifier: String, fromHost host: String) async throws -> EnsembleWardenFetchedData
+    func delete(_ identifier: String) async throws
+    func remoteDelete(_ identifier: String, onHost host: String) async throws
+    func dropCache() async throws
+}
+
+/// In-memory transport used for testing. Stores IOSurfaces in a dictionary.
+package struct NullTransport: EnsembleTransportProviding {
+    package enum TransportError: Swift.Error {
+        case noEntry
+    }
+
+    private final class Storage: Sendable {
+        let mutex: Mutex<[String: IOSurface]> = .init([:])
+    }
+
+    private let storage: Storage = .init()
+
+    package init() {}
+
+    package func publish(_ identifier: String, data: IOSurface, timeout: Int) async throws {
+        self.storage.mutex.withLock { $0[identifier] = data }
+    }
+
+    package func fetch(
+        _ identifier: String, fromHost host: String
+    ) async throws -> EnsembleWardenFetchedData {
+        try self.storage.mutex.withLock { store in
+            guard let surface = store[identifier] else {
+                throw TransportError.noEntry
+            }
+            return EnsembleWardenFetchedData(
+                ioSurface: surface,
+                source: EnsembleWardenFetchedData.Source.localDRAM)
+        }
+    }
+
+    package func delete(_ identifier: String) async throws {
+        self.storage.mutex.withLock { _ = $0.removeValue(forKey: identifier) }
+    }
+
+    package func remoteDelete(_ identifier: String, onHost host: String) async throws {
+        self.storage.mutex.withLock { _ = $0.removeValue(forKey: identifier) }
+    }
+
+    package func dropCache() async throws {
+        self.storage.mutex.withLock { $0.removeAll() }
+    }
+
+    package func corruptCiphertext() {
+        self.storage.mutex.withLock { store in
+            for surface in store.values {
+                let corruption: [UInt8] = [0x00, 0x11, 0x22]
+                (surface.baseAddress + 30).copyMemory(from: corruption, byteCount: corruption.count)
+            }
+        }
+    }
+}
+
+/// Production transport backend that wraps `EnsembleTransport` framework calls.
+package struct EnsembleTransportBackend: EnsembleTransportProviding {
+    private let logger = Logger(subsystem: "com.apple.cloudos.ensemblewardend", category: "EnsembleTransportBackend")
+    private let signposter: OSSignposter
+
+#if canImport(EnsembleTransport)
+    private let client: EnsembleTransportClient?
+
+    package init(client: EnsembleTransportClient?) {
+        self.signposter = OSSignposter(logger: self.logger)
+        self.client = client
+    }
+#else
+    package init() {
+        self.signposter = OSSignposter(logger: self.logger)
+    }
+#endif
+
+#if canImport(EnsembleTransport)
+    /// Translates `EnsembleTransportError` into ``EnsembleWardenError/ensembleTransportError(_:)``
+    /// so the failure reason survives into logs and the `error_category` metric dimension.
+    ///
+    /// Without this the raw framework error escapes EnsembleWarden untyped: the metrics layer
+    /// buckets it as `other` and `String(reportable:)` prints only the type name, because
+    /// `EnsembleTransportError` is not a `ReportableError`. Any other error is rethrown
+    /// unchanged.
+    private func translatingTransportErrors<T>(_ fn: () async throws -> T) async throws -> T {
+        do {
+            return try await fn()
+        } catch let error as EnsembleTransportError {
+            let failure: EnsembleTransportFailure
+            switch error {
+            case .disconnected: failure = .disconnected
+            case .publishFailed: failure = .publishFailed
+            case .duplicateObject: failure = .duplicateObject
+            case .invalidSurface: failure = .invalidSurface
+            case .tooLarge: failure = .tooLarge
+            case .deleteFailed: failure = .deleteFailed
+            case .unexpectedResponse: failure = .unexpectedResponse
+            case .unknown: failure = .unknown
+            }
+            self.logger.error("""
+                EnsembleTransport call failed. \
+                failure=\(failure.rawValue, privacy: .public) \
+                description=\(error.description, privacy: .public)
+                """)
+            throw EnsembleWardenError.ensembleTransportError(failure)
+        }
+    }
+#endif
+
+    package func publish(_ identifier: String, data: IOSurface, timeout: Int) async throws {
+#if canImport(EnsembleTransport)
+        guard let client = self.client else {
+            self.logger.log("""
+                EnsembleTransportClient not available at runtime
+                """)
+            throw EnsembleWardenError.ensembleTransportUnavailable
+        }
+        try await self.translatingTransportErrors {
+            try await client.publish(
+                identifier, data: data, timeout: timeout)
+        }
+#else
+        self.logger.log("""
+            EnsembleTransportClient not available at build time
+            """)
+        throw EnsembleWardenError.ensembleTransportUnavailable
+#endif
+    }
+
+    package func fetch(
+        _ identifier: String, fromHost host: String
+    ) async throws -> EnsembleWardenFetchedData {
+#if canImport(EnsembleTransport)
+        guard let client = self.client else {
+            self.logger.log("""
+                EnsembleTransportClient not available at runtime
+                """)
+            throw EnsembleWardenError.ensembleTransportUnavailable
+        }
+        self.logger.log("""
+            \(#function, privacy: .public): \
+            identifier=\(identifier, privacy: .public) \
+            host=\(host, privacy: .public)
+            """)
+        return try await self.translatingTransportErrors {
+            // fetchPrepareWithSurface gives us back an IOSurface that doesn't yet have the
+            // relevant data written to it.
+            let surfaceHint : IOSurface = try await client.fetchPrepareWithSurface(identifier, fromHost: host)
+            return try await withThrowingTaskGroup(of: Optional<EnsembleWardenFetchedData>.self) { group in
+                // We can begin prefaulting it in before it's ready to read from.
+                // Background task to minimise impact on other threads.
+                group.addTask(priority: .background) {
+                    let prefaultInterval = self.signposter.beginInterval("EW.prefault_ciphertext.signpost")
+                    defer {
+                        self.signposter.endInterval("EW.prefault_ciphertext.signpost", prefaultInterval)
+                    }
+                    try surfaceHint.prefault()
+                    return nil
+                }
+                group.addTask { @Sendable in
+                    let fetchInterval = self.signposter.beginInterval("EW.fetch_ciphertext.signpost")
+                    defer {
+                        self.signposter.endInterval("EW.fetch_ciphertext.signpost", fetchInterval)
+                    }
+                    let (fetchedSurface, fetchedSurfaceSource) =
+                        try await client.fetchBlobWithAnalytics(identifier)
+                    if fetchedSurface.baseAddress != surfaceHint.baseAddress {
+                        self.logger.warning("fetchPrepareWithSurface returned a different surface to fetch")
+                    }
+                    return EnsembleWardenFetchedData(
+                        ioSurface: fetchedSurface, source: fetchedSurfaceSource)
+                }
+                for try await surface in group {
+                    if let surface {
+                        return surface
+                    }
+                }
+                throw EnsembleWardenError.failedToGenerateIOSurface
+            }
+        }
+#else
+        self.logger.log("""
+            EnsembleTransportClient not available at build time
+            """)
+        throw EnsembleWardenError.ensembleTransportUnavailable
+#endif
+    }
+
+    package func delete(_ identifier: String) async throws {
+#if canImport(EnsembleTransport)
+        guard let client = self.client else {
+            self.logger.log("""
+                EnsembleTransportClient not available at runtime
+                """)
+            throw EnsembleWardenError.ensembleTransportUnavailable
+        }
+        try await self.translatingTransportErrors {
+            try await client.delete(identifier)
+        }
+#else
+        self.logger.log("""
+            EnsembleTransportClient not available at build time
+            """)
+        throw EnsembleWardenError.ensembleTransportUnavailable
+#endif
+    }
+
+    package func remoteDelete(_ identifier: String, onHost host: String) async throws {
+#if canImport(EnsembleTransport)
+        guard let client = self.client else {
+            self.logger.log("""
+                EnsembleTransportClient not available at runtime
+                """)
+            throw EnsembleWardenError.ensembleTransportUnavailable
+        }
+        try await self.translatingTransportErrors {
+            try await client.remoteDelete(identifier, onHost: host)
+        }
+#else
+        self.logger.log("""
+            EnsembleTransportClient not available at build time
+            """)
+        throw EnsembleWardenError.ensembleTransportUnavailable
+#endif
+    }
+
+    package func dropCache() async throws {
+#if canImport(EnsembleTransport)
+        guard let client = self.client else {
+            self.logger.log("""
+                EnsembleTransportClient not available at runtime
+                """)
+            throw EnsembleWardenError.ensembleTransportUnavailable
+        }
+        try await self.translatingTransportErrors {
+            try await client.dropCache()
+        }
+#else
+        self.logger.log("""
+            EnsembleTransportClient not available at build time
+            """)
+        throw EnsembleWardenError.ensembleTransportUnavailable
+#endif
+    }
+}
 
 /// DaemonHandler receives plaintext ioSurfaces, encrypts them and then publishes them over XPC.
 ///
@@ -47,19 +296,19 @@ private import Synchronization
 /// Overall flow will look like:
 ///
 /// Application -> EnsembleWardenFramework -> DaemonHandler (EnsembleWardenDaemon) -> EnsembleWardenServer (DownstreamApplication)
-package final class DaemonHandler: Sendable {
+package final class DaemonHandler<Transport: EnsembleTransportProviding, Factory: MetricsFactory>: Sendable {
 
     private enum State: Sendable {
         case cryptoHandlesNotYetReceived
         case cryptoHandlesReceived(CryptoHandlesState)
-        case connectedToDownstream(CryptoHandlesState, XPCSession)
     }
 
     internal enum KeyType: Sendable {
         case ftET
+        case latestTurnKey
+        case specificTurnKey(Int)
     }
 
-    private let downstreamXPCService: String
     /// Continuation that we yield to when we want the daemon to tear itself down
     private let shutdownInitiateContinuation: AsyncStream<Void>.Continuation
     internal let logger = Logger(subsystem: "com.apple.cloudos.ensemblewardend", category: "DaemonHandler")
@@ -67,56 +316,14 @@ package final class DaemonHandler: Sendable {
     private let signposter: OSSignposter
     /// Storage for prefaulted IOSurfaces to maintain references and prevent unmapping
     private let prefaultedSurfaces: Mutex<[IOSurface]> = .init([])
+    private let transportProvider: Transport
+    internal let metrics: EnsembleWardenMetrics<Factory>
 
-    package init(downstreamXPCService: String, shutdownInitiateContinuation: AsyncStream<Void>.Continuation) {
-        self.downstreamXPCService = downstreamXPCService
+    package init(shutdownInitiateContinuation: AsyncStream<Void>.Continuation, transportProvider: Transport, metrics: EnsembleWardenMetrics<Factory>) {
         self.shutdownInitiateContinuation = shutdownInitiateContinuation
         self.signposter = OSSignposter(logger: self.logger)
-    }
-
-    private func sendToKVCacheTransfer(downstreamRequest:EnsembleWardenDaemonXPC.Request, requestID: UUID, spanID: UInt64) async throws {
-        return try await withCheckedThrowingContinuation { continuation in
-            do {
-                let downstreamSession = try self.getDownstreamXPCSession()
-                try downstreamSession.send(downstreamRequest) { response in
-                    do {
-                        _ = try response.get()
-                    } catch {
-                        continuation.resume(throwing: error)
-                        return
-                    }
-                    continuation.resume()
-                }
-            } catch {
-                logger.error("""
-                    Error sending encrypted surface to tie-kvcache-transfer. \
-                    error=\(String(reportable: error), privacy: .public) \
-                    request_id=\(PrismTracing.requestID, privacy: .public) \
-                    span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
-                    """)
-                continuation.resume(throwing: EnsembleWardenError.kvCacheTransferFetchFailed)
-            }
-        }
-    }
-
-    private func getDownstreamXPCSession() throws -> XPCSession {
-        try self.state.withLock { state in
-            switch state {
-            case .cryptoHandlesNotYetReceived:
-                logger.error("""
-                            Tried to connect to downstream before receiving a key. \
-                            request_id=\(PrismTracing.requestID, privacy: .public) \
-                            span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
-                            """)
-                throw EnsembleWardenError.keyIDNotSupplied
-            case .cryptoHandlesReceived(let cryptoHandles):
-                let session = try XPCSession(machService: downstreamXPCService)
-                state = .connectedToDownstream(cryptoHandles, session)
-                return session
-            case .connectedToDownstream(_, let session):
-                return session
-            }
-        }
+        self.transportProvider = transportProvider
+        self.metrics = metrics
     }
 
     internal func getKey(keyType: KeyType) async throws -> (key: SymmetricKey, turnNumber: Int?) {
@@ -130,8 +337,6 @@ package final class DaemonHandler: Sendable {
                          """)
                 throw EnsembleWardenError.keyIDNotSupplied
             case .cryptoHandlesReceived(let cryptoHandles):
-                return cryptoHandles
-            case .connectedToDownstream(let cryptoHandles, _):
                 return cryptoHandles
             }
         }
@@ -157,6 +362,61 @@ package final class DaemonHandler: Sendable {
                 logger.error("""
                     Error getting FT/ET key from ensembleporter. \
                     error=\(String(reportable: error), privacy: .public) \
+                    request_id=\(PrismTracing.requestID, privacy: .public) \
+                    span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
+                    """)
+                throw error
+            }
+        case .latestTurnKey:
+            guard let ensemblePorterClient = cryptoState.ensemblePorterClient else {
+                logger.warning("""
+                    No ensembleporter client for request. \
+                    request_id=\(PrismTracing.requestID, privacy: .public) \
+                    span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
+                    """)
+                throw EnsembleWardenError.ensemblePorterHandleNotSupplied
+            }
+
+            do {
+
+                let lastTurnKeyIndex = try await ensemblePorterClient.getNumberOfTurnKeys(
+                    requestID: PrismTracing.requestID, spanID: PrismTracing.spanID) - 1
+                assert(lastTurnKeyIndex >= 0)
+                let turnKey = try await ensemblePorterClient.fetchKey(
+                    forTurnNumber: lastTurnKeyIndex,
+                    requestID: PrismTracing.requestID,
+                    spanID: PrismTracing.spanID)
+                return (turnKey, lastTurnKeyIndex)
+            } catch {
+                logger.error("""
+                    Error getting latest turn key from ensembleporter. \
+                    error=\(String(reportable: error), privacy: .public) \
+                    request_id=\(PrismTracing.requestID, privacy: .public) \
+                    span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
+                    """)
+                throw error
+            }
+        case .specificTurnKey(let turnNumber):
+            guard let ensemblePorterClient = cryptoState.ensemblePorterClient else {
+                logger.error("""
+                    No ensemblePorterClient supplied. \
+                    turn_number=\(turnNumber) \
+                    request_id=\(PrismTracing.requestID, privacy: .public) \
+                    span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
+                    """)
+                throw EnsembleWardenError.ensemblePorterHandleNotSupplied
+            }
+            do {
+                let turnKey = try await ensemblePorterClient.fetchKey(
+                    forTurnNumber: turnNumber,
+                    requestID: PrismTracing.requestID,
+                    spanID: PrismTracing.spanID)
+                return (turnKey, turnNumber)
+            } catch {
+                logger.error("""
+                    Error getting turn key from ensembleporter. \
+                    error=\(String(reportable: error), privacy: .public) \
+                    turn_number=\(turnNumber) \
                     request_id=\(PrismTracing.requestID, privacy: .public) \
                     span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
                     """)
@@ -190,51 +450,66 @@ extension DaemonHandler: EnsembleWardenServerHandler {
                 }
                 switch state {
                     case .cryptoHandlesNotYetReceived:
-                        let porterConnection: xpc_connection_t?
-                        switch ensembleWardenCryptoHandles.ensemblePorterIdentifier {
-                        case .ensemblePorterHandle(let existingConnection):
-                            self.logger.log("""
-                                Using an existing XPC connection. \
-                                request_id=\(PrismTracing.requestID, privacy: .public) \
-                                span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
-                                """)
-                            porterConnection = existingConnection
-                        case .followerToken(let followerToken):
-                            self.logger.log("""
-                                Using a token to create a fresh XPC connection. \
-                                request_id=\(PrismTracing.requestID, privacy: .public) \
-                                span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
-                                """)
-                            let connection = XPCHelpers.fromFollowerToken(followerToken, leader: isLeader,
-                                                                          requestID: PrismTracing.requestID, spanID: PrismTracing.spanID)
-                            porterConnection = connection
-                        case .none:
-                            self.logger.log("""
-                                No handle to a porter. \
-                                request_id=\(PrismTracing.requestID, privacy: .public) \
-                                span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
-                                """)
-                            porterConnection = nil
-                        }
-
                         let cryptoHandles: CryptoHandlesState
-                        do {
-                            cryptoHandles = try CryptoHandlesState(ensemblePorterXPCConnection: porterConnection,
-                                                                   requestID: PrismTracing.requestID, spanID: PrismTracing.spanID)
-                        } catch {
-                            if let porterConnection {
-                                // Libxpc will crash if you create a connection and then release its final
-                                // reference before activating it.
-                                // If ensembled doesn't have keys for us then we will throw above and
-                                // release our porterConnection without having activated it and thus crash.
-                                //
-                                // These two lines make us activate the connection before we throw it away,
-                                // avoiding the crash. When FT/ET keys become part of ensembleporter this
-                                // should go away.
-                                xpc_connection_set_event_handler(porterConnection) {_ in }
-                                xpc_connection_activate(porterConnection)
+                        if case .ensemblePorterEndpoint(let endpoint) = ensembleWardenCryptoHandles.ensemblePorterIdentifier {
+                            self.logger.log("""
+                                Using an XPC endpoint. \
+                                request_id=\(PrismTracing.requestID, privacy: .public) \
+                                span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
+                                """)
+                            cryptoHandles = CryptoHandlesState(ensemblePorterEndpoint: endpoint,
+                                                               isMultiTurn: ensembleWardenCryptoHandles.isMultiTurn,
+                                                               requestID: PrismTracing.requestID, spanID: PrismTracing.spanID)
+                        } else {
+                            // TODO: porterConnection can become non-optional when TIE/CB land their corresponding changes.
+                            let porterConnection: xpc_connection_t?
+                            switch ensembleWardenCryptoHandles.ensemblePorterIdentifier {
+                            case .ensemblePorterHandle(let existingConnection):
+                                self.logger.log("""
+                                    Using an existing XPC connection. \
+                                    request_id=\(PrismTracing.requestID, privacy: .public) \
+                                    span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
+                                    """)
+                                porterConnection = existingConnection
+                            case .followerToken(let followerToken):
+                                self.logger.log("""
+                                    Using a token to create a fresh XPC connection. \
+                                    request_id=\(PrismTracing.requestID, privacy: .public) \
+                                    span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
+                                    """)
+                                let connection = XPCHelpers.fromFollowerToken(followerToken, leader: isLeader,
+                                                                              requestID: PrismTracing.requestID, spanID: PrismTracing.spanID)
+                                porterConnection = connection
+                            case .ensemblePorterEndpoint:
+                                fatalError("Handled above")
+                            case .none:
+                                self.logger.log("""
+                                    No handle to a porter. \
+                                    request_id=\(PrismTracing.requestID, privacy: .public) \
+                                    span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
+                                    """)
+                                porterConnection = nil
                             }
-                            throw error
+
+                            do {
+                                cryptoHandles = try CryptoHandlesState(ensemblePorterXPCConnection: porterConnection,
+                                                                       isMultiTurn: ensembleWardenCryptoHandles.isMultiTurn,
+                                                                       requestID: PrismTracing.requestID, spanID: PrismTracing.spanID)
+                            } catch {
+                                if let porterConnection {
+                                    // Libxpc will crash if you create a connection and then release its final
+                                    // reference before activating it.
+                                    // If ensembled doesn't have keys for us then we will throw above and
+                                    // release our porterConnection without having activated it and thus crash.
+                                    //
+                                    // These two lines make us activate the connection before we throw it away,
+                                    // avoiding the crash. When FT/ET keys become part of ensembleporter this
+                                    // should go away.
+                                    xpc_connection_set_event_handler(porterConnection) {_ in }
+                                    xpc_connection_activate(porterConnection)
+                                }
+                                throw error
+                            }
                         }
 
                         state = .cryptoHandlesReceived(cryptoHandles)
@@ -267,8 +542,6 @@ extension DaemonHandler: EnsembleWardenServerHandler {
                throw EnsembleWardenError.keyIDNotSupplied
            case .cryptoHandlesReceived(let cryptoHandles):
                return cryptoHandles.ensemblePorterClient
-           case .connectedToDownstream(let cryptoHandles, _):
-               return cryptoHandles.ensemblePorterClient
            }
         }
         guard let ensemblePorterClient else {
@@ -281,12 +554,31 @@ extension DaemonHandler: EnsembleWardenServerHandler {
             return .init(nodeRanks: [])
         }
 
-        logger.log("""
-            Calling ftETOnlyTurn. \
-            request_id=\(requestID, privacy: .public) \
-            span_id=\(spanID.hexEncoded, privacy: .public)
-            """)
-        try await ensemblePorterClient.ftETOnlyTurn(requestID: requestID, spanID: spanID)
+        // For non-multi-turn requests, notify EnsemblePorter to signal non-multi-turn mode
+        let isMultiTurn = try self.state.withLock { state -> Bool in
+            switch state {
+            case .cryptoHandlesReceived(let cryptoHandles):
+                return cryptoHandles.isMultiTurn
+            case .cryptoHandlesNotYetReceived:
+                throw EnsembleWardenError.keyIDNotSupplied
+            }
+        }
+
+        // If not multi-turn, call ftETOnlyTurn to signal EnsemblePorter
+        if !isMultiTurn {
+            logger.log("""
+                Calling ftETOnlyTurn for non-multi-turn request. \
+                request_id=\(requestID, privacy: .public) \
+                span_id=\(spanID.hexEncoded, privacy: .public)
+                """)
+            try await ensemblePorterClient.ftETOnlyTurn(requestID: requestID, spanID: spanID)
+        } else {
+            logger.log("""
+                Multi-turn request - EnsemblePorter will wait for CloudBoard crypto material. \
+                request_id=\(requestID, privacy: .public) \
+                span_id=\(spanID.hexEncoded, privacy: .public)
+                """)
+        }
 
         logger.log("""
             Fetching follower tokens. \
@@ -338,120 +630,18 @@ extension DaemonHandler: EnsembleWardenServerHandler {
         }
     }
 
-    /// Encrypts ioSurfaces using a key from ensembled and publishes the resulting ciphertext.
-    /// - Parameters:
-    ///   - serializedXPCRequest: The serialized XPC request that contains the ioSurface
-    ///   - privateData: The data to encrypt and then publish.
-    ///   - purpose: The purpose of the KV$ transfer that we're about to initiate. Eg is it for FT/ET?
-    package func onPublish(serializedXPCRequest: Data, privateData decryptedSurfaces: [IOSurface], purpose: KVCacheTransferPurpose,
-                           requestID: UUID, spanID: UInt64) async throws {
-        try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
-            PrismTracing.logCheckpoint(name: "EnsembleWardenPublishDaemon")
-            try await self.doPublish(serializedXPCRequest: serializedXPCRequest,
-                                    decryptedSurfaces: decryptedSurfaces,
-                                    purpose: purpose)
-        }
-    }
-
-    private func doPublish(serializedXPCRequest: Data, decryptedSurfaces: [IOSurface], purpose: KVCacheTransferPurpose) async throws {
-        PrismTracing.logCheckpoint(name: "EnsembleWardenEncryptionStart")
-        let encryptedSurfaces = try await self.encrypt(decryptedSurfaces: decryptedSurfaces, purpose: purpose)
-        PrismTracing.logCheckpoint(name: "EnsembleWardenEncryptionEnd")
-        let transferPurpose: EnsembleWardenDaemonXPC.TransferPurpose
-        switch purpose {
-        case .ftET:
-            transferPurpose = .ftET
-        }
-
-        let downstreamRequest = EnsembleWardenDaemonXPC.Request.publish(.init(
-            serializedXPCRequest: serializedXPCRequest,
-            ioSurfaces: encryptedSurfaces,
-            purpose: transferPurpose,
-            requestID: PrismTracing.requestID,
-            spanID: PrismTracing.spanID))
-        let publishInterval = self.signposter.beginInterval("EW.publish_to_kvcache_transfer.signpost")
-        defer {
-            self.signposter.endInterval("EW.publish_to_kvcache_transfer.signpost", publishInterval)
-        }
-        try await sendToKVCacheTransfer(downstreamRequest: downstreamRequest, requestID: PrismTracing.requestID, spanID: PrismTracing.spanID)
-    }
-
-    /// Fetches ioSurfaces from the downstream EnsembleWardenServer, decrypts them, and then returns the plaintext.
-    /// - Parameter serializedXPCRequest: The serialized XPC request that contains the ioSurface...
-    package func onFetch(serializedXPCRequest: Data, requestID: UUID, spanID: UUID) async throws -> [IOSurface] {
-        try await PrismTracing.withResumed(requestID: requestID, spanID: UInt64(uuid: spanID)) {
-            return try await self.doFetch(serializedXPCRequest: serializedXPCRequest)
-        }
-    }
-
-    private func doFetch(serializedXPCRequest: Data) async throws -> [IOSurface] {
-        let fetchInterval = self.signposter.beginInterval("EW.fetch_from_kvcache.signpost")
-        defer {
-            self.signposter.endInterval("EW.fetch_from_kvcache.signpost", fetchInterval)
-        }
-        let encryptedSurfaces = try await fetchEncryptedSurfaces(serializedXPCRequest: serializedXPCRequest)
-        let final = try await self.decrypt(encryptedSurfaces: encryptedSurfaces)
-        return final
-    }
-
-
-    private func fetchEncryptedSurfaces(serializedXPCRequest: Data) async throws -> [IOSurface] {
-        do {
-            let downstreamRequest = EnsembleWardenDaemonXPC.Fetch(
-                serializedXPCRequest: serializedXPCRequest,
-                requestID: PrismTracing.requestID,
-                spanID: PrismTracing.spanID
-            )
-            let downstreamSession = try self.getDownstreamXPCSession()
-            let response = try await downstreamSession.sendXPC(request: downstreamRequest)
-            switch response {
-            case .success(let ioSurfaces): return ioSurfaces
-            case .failure(let error): throw error
-            }
-        } catch {
-            logger.error("""
-                Failed to fetch from tie-kv$-transfer. \
-                error=\(String(reportable: error), privacy: .public) \
-                request_id=\(PrismTracing.requestID, privacy: .public) \
-                span_id=\(PrismTracing.spanID.hexEncoded, privacy: .public)
-                """)
-            throw EnsembleWardenError.kvCacheTransferFetchFailed
-        }
-    }
-
-    internal func getEnsemblePorterClient() throws -> EnsemblePorterKeyFetcher {
-        let cryptoState = try self.state.withLock { state in
-            switch state {
-            case .cryptoHandlesNotYetReceived:
-                throw EnsembleWardenError.keyIDNotSupplied
-            case .cryptoHandlesReceived(let cryptoHandles):
-                return cryptoHandles
-            case .connectedToDownstream(let cryptoHandles, _):
-                return cryptoHandles
-            }
-        }
-        guard let ensemblePorterClient = cryptoState.ensemblePorterClient else {
-            throw EnsembleWardenError.keyIDNotSupplied
-        }
-        return ensemblePorterClient
-    }
-
-    private func shutdownSessionAndInitiateShutdown() {
-        self.state.withLock { state in
-            switch state {
-            case .connectedToDownstream(_, let session): session.cancel(reason: "Finished")
-            default: break
-            }
-        }
-        self.shutdownInitiateContinuation.yield()
-    }
-
     package func onFinish() async throws {
         self.shutdownSessionAndInitiateShutdown()
     }
 
     package func onCancellation() throws {
         self.shutdownSessionAndInitiateShutdown()
+    }
+}
+
+extension DaemonHandler {
+    private func shutdownSessionAndInitiateShutdown() {
+        self.shutdownInitiateContinuation.yield()
     }
 }
 
@@ -466,7 +656,7 @@ extension DaemonHandler {
         spanID: UInt64
     ) async throws {
         try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
-            PrismTracing.logCheckpoint(name: "Daemon onPublish2")
+            PrismTracing.logCheckpoint(name: "Daemon onPublish2", level: .debug)
             let encryptedSurface = try await self.encrypt(
                 decryptedSurfaces: [privateData],
                 purpose: purpose).first!
@@ -478,7 +668,7 @@ extension DaemonHandler {
             } else {
                 nil
             }
-            PrismTracing.logCheckpoint(name: "EnsembleWardenEncryptionEnd")
+            PrismTracing.logCheckpoint(name: "EnsembleWardenEncryptionEnd", level: .debug)
             let publishInterval = self.signposter.beginInterval(
                 "EW.publish_to_ensembletransport.signpost")
             defer {
@@ -487,24 +677,16 @@ extension DaemonHandler {
                     publishInterval)
             }
             PrismTracing.logCheckpoint(name: "EnsembleWardenTransportPublishStart")
-#if canImport(EnsembleTransport)
-            if #_hasSymbol(EnsembleTransport.EnsembleTransportClient.self) {
+            try await self.ensembleTransportPublish(
+                identifier: identifier,
+                data: encryptedSurface,
+                timeout: ttl)
+            if let encryptedSurfaceMetadata {
                 try await self.ensembleTransportPublish(
-                    identifier: identifier,
-                    data: encryptedSurface,
+                    identifier: self.metadataIdentifier(identifier),
+                    data: encryptedSurfaceMetadata,
                     timeout: ttl)
-                if let encryptedSurfaceMetadata {
-                    try await self.ensembleTransportPublish(
-                        identifier: self.metadataIdentifier(identifier),
-                        data: encryptedSurfaceMetadata,
-                        timeout: ttl)
-                }
-            } else {
-                self.logger.log("EnsembleTransport not available at runtime, skipping publish")
             }
-#else
-            self.logger.log("EnsembleTransport not available at build time, skipping publish")
-#endif
             PrismTracing.logCheckpoint(name: "EnsembleWardenTransportPublishCompleted")
         }
     }
@@ -515,8 +697,13 @@ extension DaemonHandler {
         host: String,
         requestID: UUID,
         spanID: UInt64
-    ) async throws -> IOSurface {
+    ) async throws -> EnsembleWardenFetchedData {
         try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
+            logger.log("""
+                \(#function, privacy: .public): \
+                identifier=\(identifier, privacy: .public) \
+                host=\(host, privacy: .public)
+                """)
             PrismTracing.logCheckpoint(name: "EnsembleWardenOnFetch2Daemon")
             let fetchInterval = self.signposter.beginInterval(
                 "EW.fetch_from_ensembletransport.signpost")
@@ -524,23 +711,27 @@ extension DaemonHandler {
                 self.signposter.endInterval(
                     "EW.fetch_from_ensembletransport.signpost", fetchInterval)
             }
-#if canImport(EnsembleTransport)
-            if #_hasSymbol(EnsembleTransport.EnsembleTransportClient.self) {
-                let encryptedSurface = try await self.ensembleTransportFetch(
-                    identifier: identifier, host: host)
-                PrismTracing.logCheckpoint(name: "EnsembleWardenDecryptionStart")
-                let plaintextSurfaces = try await self.decrypt(
-                    encryptedSurfaces: [encryptedSurface])
-                PrismTracing.logCheckpoint(name: "EnsembleWardenDecryptionEnd")
-                return plaintextSurfaces.first!
-            } else {
-                self.logger.log("EnsembleTransport not available at runtime, returning empty IOSurface")
-                return IOSurface()
+            let fetched = try await self.ensembleTransportFetch(
+                identifier: identifier, host: host)
+            PrismTracing.logCheckpoint(name: "EnsembleWardenDecryptionStart")
+            let plaintextSurfaces = try await self.decrypt(
+                encryptedSurfaces: [fetched.ioSurface])
+            PrismTracing.logCheckpoint(name: "EnsembleWardenDecryptionEnd")
+            let fullSurface = plaintextSurfaces.first!
+            // Need MetalLM change before we can return trimmed surface:
+            // rdar://172750120
+            #if false
+            if let range {
+                guard let subSurface = try IOSurface(from: fullSurface, at: range) else {
+                    throw EnsembleWardenError.failedToCreateIOSurface
+                }
+                return EnsembleWardenFetchedData(
+                    ioSurface: subSurface, source: fetched.source)
+
             }
-#else
-            self.logger.log("EnsembleTransport not available at build time, returning empty IOSurface")
-            return IOSurface()
-#endif
+            #endif
+            return EnsembleWardenFetchedData(
+                ioSurface: fullSurface, source: fetched.source)
         }
     }
 
@@ -551,6 +742,11 @@ extension DaemonHandler {
         spanID: UInt64
     ) async throws -> IOSurface? {
         try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
+            logger.log("""
+                \(#function, privacy: .public): \
+                identifier=\(identifier, privacy: .public) \
+                host=\(host, privacy: .public)
+                """)
             PrismTracing.logCheckpoint(name: "EnsembleWardenOnFetchMetadataDaemon")
             let fetchInterval = self.signposter.beginInterval(
                 "EW.fetchmetadata_from_ensembletransport.signpost")
@@ -558,23 +754,13 @@ extension DaemonHandler {
                 self.signposter.endInterval(
                     "EW.fetchmetadata_from_ensembletransport.signpost", fetchInterval)
             }
-#if canImport(EnsembleTransport)
-            if #_hasSymbol(EnsembleTransport.EnsembleTransportClient.self) {
-                let encryptedSurface = try await self.ensembleTransportFetch(
-                    identifier: self.metadataIdentifier(identifier), host: host)
-                PrismTracing.logCheckpoint(name: "EnsembleWardenDecryptionStart")
-                let plaintextSurfaces = try await self.decrypt(
-                    encryptedSurfaces: [encryptedSurface])
-                PrismTracing.logCheckpoint(name: "EnsembleWardenDecryptionEnd")
-                return plaintextSurfaces.first!
-            } else {
-                self.logger.log("EnsembleTransport not available at runtime, returning nil for metadata")
-                return nil
-            }
-#else
-            self.logger.log("EnsembleTransport not available at build time, returning nil for metadata")
-            return nil
-#endif
+            let fetched = try await self.ensembleTransportFetch(
+                identifier: self.metadataIdentifier(identifier), host: host)
+            PrismTracing.logCheckpoint(name: "EnsembleWardenDecryptionStart")
+            let plaintextSurfaces = try await self.decrypt(
+                encryptedSurfaces: [fetched.ioSurface])
+            PrismTracing.logCheckpoint(name: "EnsembleWardenDecryptionEnd")
+            return plaintextSurfaces.first!
         }
     }
 
@@ -592,23 +778,9 @@ extension DaemonHandler {
                 self.signposter.endInterval(
                     "EW.delete_with_ensembletransport.signpost", publishInterval)
             }
-#if canImport(EnsembleTransport)
-            if #_hasSymbol(EnsembleTransport.EnsembleTransportClient.self) {
-                try await self.ensembleTransportDelete(
-                    identifier: identifier,
-                    host: host)
-            } else {
-                self.logger.log("""
-                    EnsembleTransportClient not available at runtime, \
-                    ignoring delete
-                    """)
-            }
-#else
-            self.logger.log("""
-                EnsembleTransportClient not available at build time, \
-                ignoring delete
-                """)
-#endif
+            try await self.ensembleTransportDelete(
+                identifier: identifier,
+                host: host)
         }
 
     }
@@ -620,22 +792,7 @@ extension DaemonHandler {
         }
 
         logger.log("Dropping all cached data")
-
-#if canImport(EnsembleTransport)
-        if #_hasSymbol(EnsembleTransport.EnsembleTransportClient.self) {
-            try await self.ensembleTransportDropCache()
-        } else {
-            self.logger.log("""
-                EnsembleTransportClient not available at runtime, \
-                ignoring dropAll
-                """)
-        }
-#else
-        self.logger.log("""
-            EnsembleTransportClient not available at build time, \
-            ignoring dropAll
-            """)
-#endif
+        try await self.ensembleTransportDropCache()
     }
 }
 
@@ -645,124 +802,30 @@ extension DaemonHandler {
         data: IOSurface,
         timeout: Duration
     ) async throws {
-#if canImport(EnsembleTransport)
-        if #_hasSymbol(EnsembleTransport.EnsembleTransportClient.self) {
-            let client = try EnsembleTransportClient()
-            try await client.publish(
-                identifier, data: data, timeout: Int(timeout.components.seconds))
-        } else {
-            self.logger.log("""
-                EnsembleTransportClient not available at runtime, \
-                ignoring publish
-                """)
-        }
-#else
-        self.logger.log("""
-            EnsembleTransportClient not available at build time, \
-            ignoring publish
-            """)
-#endif
+        try await self.transportProvider.publish(
+            identifier, data: data, timeout: Int(timeout.components.seconds))
     }
 
     private func ensembleTransportFetch(
         identifier: String,
         host: String
-    ) async throws -> IOSurface {
-#if canImport(EnsembleTransport)
-        if #_hasSymbol(EnsembleTransport.EnsembleTransportClient.self) {
-            let client = try EnsembleTransportClient()
-            // fetchPreparwWithSurface gives us back an IOSurface that doesn't yet have the
-            // relevant data written to it.
-            let surfaceHint = try await client.fetchPrepareWithSurface(identifier, fromHost: host)
-            return try await withThrowingTaskGroup(of: Optional<IOSurface>.self) { group in
-                // We can begin prefaulting it in before it's ready to read from.
-                // Background task to minimise impact on other threads.
-                group.addTask(priority: .background) {
-                    let prefaultInterval = self.signposter.beginInterval("EW.prefault_ciphertext.signpost")
-                    defer {
-                        self.signposter.endInterval("EW.prefault_ciphertext.signpost", prefaultInterval)
-                    }
-                    try surfaceHint.prefault()
-                    return nil
-                }
-                group.addTask { @Sendable in
-                    let fetchInterval = self.signposter.beginInterval("EW.fetch_ciphertext.signpost")
-                    defer {
-                        self.signposter.endInterval("EW.fetch_ciphertext.signpost", fetchInterval)
-                    }
-                    let fetchedSurface = try await client.fetch(identifier)
-                    if fetchedSurface.baseAddress != surfaceHint.baseAddress {
-                        self.logger.warning("fetchPrepareWithSurface returned a different surface to fetch")
-                    }
-                    return fetchedSurface
-                }
-                for try await surface in group {
-                    if let surface {
-                        return surface
-                    }
-                }
-                throw EnsembleWardenError.failedToGenerateIOSurface
-            }
-
-        } else {
-            self.logger.log("""
-                EnsembleTransportClient not available at runtime, \
-                ignoring fetch and returning empty IOSurface
-                """)
-            return IOSurface()
-        }
-#else
-        self.logger.log("""
-            EnsembleTransportClient not available at build time, \
-            ignoring fetch and returning empty IOSurface
-            """)
-        return IOSurface()
-#endif
+    ) async throws -> EnsembleWardenFetchedData {
+        try await self.transportProvider.fetch(identifier, fromHost: host)
     }
 
     private func ensembleTransportDelete(
         identifier: String,
         host: String?
     ) async throws {
-#if canImport(EnsembleTransport)
-        if #_hasSymbol(EnsembleTransport.EnsembleTransportClient.self) {
-            let client = try EnsembleTransportClient()
-            if let host {
-                try await client.remoteDelete(identifier, onHost: host)
-            } else {
-                try await client.delete(identifier)
-            }
+        if let host {
+            try await self.transportProvider.remoteDelete(identifier, onHost: host)
         } else {
-            self.logger.log("""
-                EnsembleTransportClient not available at runtime, \
-                ignoring delete
-                """)
+            try await self.transportProvider.delete(identifier)
         }
-#else
-        self.logger.log("""
-            EnsembleTransportClient not available at build time, \
-            ignoring delete
-            """)
-#endif
     }
 
     private func ensembleTransportDropCache() async throws {
-#if canImport(EnsembleTransport)
-        if #_hasSymbol(EnsembleTransport.EnsembleTransportClient.self) {
-            let client = try EnsembleTransportClient()
-            try await client.dropCache()
-        } else {
-            self.logger.log("""
-                EnsembleTransportClient not available at runtime, \
-                ignoring dropCache
-                """)
-        }
-#else
-        self.logger.log("""
-            EnsembleTransportClient not available at build time, \
-            ignoring dropCache
-            """)
-#endif
+        try await self.transportProvider.dropCache()
     }
 
     private func metadataIdentifier(_ identifier: String) -> String {
@@ -770,3 +833,27 @@ extension DaemonHandler {
     }
 }
 
+#if canImport(EnsembleTransport)
+extension EnsembleWardenFetchedData {
+    internal init(ioSurface: IOSurface, source: EnsembleTransportDataSource) {
+        self.init(ioSurface: ioSurface, source: Self.Source(source))
+    }
+}
+
+extension EnsembleWardenFetchedData.Source {
+    internal init(_ source: EnsembleTransportDataSource) {
+        switch source {
+        case .localDRAM:
+            self = .localDRAM
+        case .localNAND:
+            self = .localNAND
+        case .remoteDRAM:
+            self = .remoteDRAM
+        case .remoteNAND:
+            self = .remoteNAND
+        @unknown default:
+            fatalError("Unknown transport source: \(source)")
+        }
+    }
+}
+#endif

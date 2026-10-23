@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -49,18 +49,29 @@ extension FileManager {
     //  optional subPath items may be provided to create underneath (e.g. Application name, uuid).
     // The directory is created as necessary is not an error if already exists
     static func tempDirectory(subPath: String...) throws -> URL {
-        var tmpdir = FileManager.fileURL(NSTemporaryDirectory())
+        var tmpdir = Globals.computer.fileSystem.temporaryDirectory
         for sub in subPath {
             tmpdir.append(path: sub)
         }
 
-        try FileManager.default.createDirectory(
+        try Globals.computer.fileSystem.createDirectory(
             at: tmpdir,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o0700]
         )
 
         return tmpdir
+    }
+
+    // spillToTempFile writes `data` to a UUID-named file under the application
+    // temp directory and returns its URL. Callers are responsible for cleanup.
+    // Consolidates the open-coded `tempDirectory(...).appendingPathComponent(UUID())`
+    // + `data.write` pattern used by the helper subprocess wrappers.
+    static func spillToTempFile(_ data: Data, prefix: String = "input") throws -> URL {
+        let url = try tempDirectory(subPath: applicationName)
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)")
+        try data.write(to: url)
+        return url
     }
 
     // isExist returns true/false whether path exists on filesystem;
@@ -72,7 +83,7 @@ extension FileManager {
                 pathURL = try _resolveSymlinks(pathURL)
             }
 
-            return FileManager.default.fileExists(atPath: pathURL.path)
+            return Globals.computer.fileSystem.fileExists(atPath: pathURL.path)
         } catch {
             return false
         }
@@ -86,7 +97,7 @@ extension FileManager {
             if resolve {
                 pathURL = try _resolveSymlinks(pathURL)
             }
-            return try pathURL.resourceValues(forKeys: [URLResourceKey.isRegularFileKey]).isRegularFile!
+            return Globals.computer.fileSystem.isRegularFile(at: pathURL)
         } catch {
             return false
         }
@@ -101,7 +112,7 @@ extension FileManager {
             if resolve {
                 pathURL = try _resolveSymlinks(pathURL)
             }
-            return try pathURL.resourceValues(forKeys: [URLResourceKey.isDirectoryKey]).isDirectory!
+            return Globals.computer.fileSystem.isDirectory(at: pathURL)
         } catch {
             return false
         }
@@ -110,14 +121,14 @@ extension FileManager {
     // isExecutable returns true if path appears to be executable
     static func isExecutable<T: Path>(_ path: T) -> Bool {
         let path = fileURL(path)
-        return FileManager.default.isExecutableFile(atPath: path.path)
+        return Globals.computer.fileSystem.isExecutableFile(atPath: path.path)
     }
 
     // isWritableDirectory returns true if path exists as directory and is writable by caller
     static func isWritableDirectory<T: Path>(_ path: T) -> Bool {
         let path = fileURL(path)
         if isDirectory(path.path) {
-            return FileManager.default.isWritableFile(atPath: path.path)
+            return Globals.computer.fileSystem.isWritableFile(atPath: path.path)
         }
 
         return false
@@ -126,11 +137,7 @@ extension FileManager {
     // isSymlink returns true/false whether path exists and as a symlink
     static func isSymlink<T: Path>(_ path: T) -> Bool {
         let pathURL = fileURL(path)
-        do {
-            return try pathURL.resourceValues(forKeys: [URLResourceKey.isSymbolicLinkKey]).isSymbolicLink!
-        } catch {
-            return false
-        }
+        return Globals.computer.fileSystem.isSymbolicLink(at: pathURL)
     }
 
     // copyFile copies src to dest
@@ -138,7 +145,7 @@ extension FileManager {
     @discardableResult
     static func copyFile<T: Path>(_ src: T, _ dest: T) throws -> URL {
         let dest = fileURL(_destPath(src, dest))
-        try FileManager.default.copyItem(at: resolveSymlinks(src), to: dest)
+        try Globals.computer.fileSystem.copyItem(at: resolveSymlinks(src), to: dest)
         return fileURL(dest)
     }
 
@@ -149,9 +156,9 @@ extension FileManager {
     static func linkFile<T: Path>(_ src: T, _ dest: T) throws -> URL {
         let dest = fileURL(_destPath(src, dest))
         do {
-            try FileManager.default.linkItem(at: resolveSymlinks(src), to: dest)
+            try Globals.computer.fileSystem.linkItem(at: resolveSymlinks(src), to: dest)
         } catch {
-            try FileManager.default.copyItem(at: resolveSymlinks(src), to: dest)
+            try Globals.computer.fileSystem.copyItem(at: resolveSymlinks(src), to: dest)
         }
 
         return fileURL(dest)
@@ -164,9 +171,9 @@ extension FileManager {
     static func moveFile<T: Path>(_ src: T, _ dest: T) throws -> URL {
         let dest = fileURL(_destPath(src, dest))
 
-        try? FileManager.default.removeItem(at: dest) // remove dest; ignore errors
+        try? Globals.computer.fileSystem.removeItem(at: dest) // remove dest; ignore errors
 
-        try FileManager.default.moveItem(at: fileURL(src), to: dest)
+        try Globals.computer.fileSystem.moveItem(at: fileURL(src), to: dest)
         return fileURL(dest)
     }
 

@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Apple Inc. All Rights Reserved. -->
+<!-- Copyright © 2026 Apple Inc. All Rights Reserved. -->
 
 <!-- APPLE INC. -->
 <!-- PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT -->
@@ -27,6 +27,9 @@
 
     <key>ProcessType</key>
     <string>Interactive</string>
+
+    <key>UserName</key>
+    <string>mobile</string>
 
     <key>ProgramArguments</key>
     <array>

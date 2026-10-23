@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -15,6 +15,8 @@
 import ArgumentParserInternal
 import Darwin
 import Foundation
+import Foundation_Private.NSTask
+import os
 
 enum OutputFormat: String, ExpressibleByArgument, CaseIterable {
     case text
@@ -37,23 +39,142 @@ final class Status: AsyncParsableCommand {
     @Option(name: [.short, .long], help: "Output format: text (default) or json")
     var format: OutputFormat = .text
 
+    @Flag(
+        name: .shortAndLong, help: "Watch log output if status is in-progress, exit when status changes"
+    )
+    var watch: Bool = false
+
+    @Flag(
+        name: .shortAndLong,
+        help: "Display debug messages when watching (passes '--info' and '--debug' to log stream)"
+    )
+    var debug: Bool = false
+
     func run() async throws {
         let status = try DarwinInitApplyStatus.loadBootStatus()
 
+        // If --watch is enabled and status is in-progress, stream logs
+        if watch, case .progress = status {
+            try await followLogs()
+            return
+        }
+
+        try printStatusAndExit(status)
+    }
+
+    private func printStatusAndExit(_ status: DarwinInitApplyStatus, prefix: String = "") throws {
         switch format {
         case .text:
-            print("Status: \(status)")
+            print("\(prefix)Status: \(status)")
         case .json:
             let statusOutput = try status.toJSON()
 
             guard let jsonString = String(data: statusOutput, encoding: .utf8) else {
                 throw Failure("Unable to convert status data to UTF-8 format")
             }
-            print(jsonString)
+            print("\(prefix)\(jsonString)")
         }
 
         guard case .success = status else {
             Darwin.exit(2)
         }
+    }
+
+    private func followLogs() async throws {
+        // Start log streaming subprocess
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/log")
+
+        var arguments = [
+            "stream",
+            "--predicate", "subsystem == '\(Logger.subsystem)'",
+        ]
+
+        // Add debug flags if requested
+        if debug {
+            arguments.append(contentsOf: ["--info", "--debug"])
+        }
+
+        process.arguments = arguments
+
+        // Inherit stdout/stderr so logs appear in real-time
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+
+        try process.run()
+
+        // Set signals to SIG_IGN so dispatch sources can handle them
+        signal(SIGINT, SIG_IGN)
+        signal(SIGTERM, SIG_IGN)
+
+        let intSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        let termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+
+        intSource.setEventHandler {
+            process.terminate()
+            Darwin.exit(130)
+        }
+        termSource.setEventHandler {
+            process.terminate()
+            Darwin.exit(143)
+        }
+
+        intSource.resume()
+        termSource.resume()
+
+        // Watch status file for changes
+        guard let statusURL = URL(filePath: kDInitStatusFilepath) else {
+            throw Failure("Invalid status file path")
+        }
+
+        let fileDescriptor = open((statusURL as NSURL).fileSystemRepresentation, O_EVTONLY)
+        guard fileDescriptor >= 0 else {
+            throw Failure("Failed to open status file for monitoring")
+        }
+
+        defer {
+            close(fileDescriptor)
+            intSource.cancel()
+            termSource.cancel()
+            signal(SIGINT, SIG_DFL)
+            signal(SIGTERM, SIG_DFL)
+        }
+
+        var finalStatus = DarwinInitApplyStatus.progress(tracker: nil)
+        let statusFileSource = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fileDescriptor,
+            eventMask: [.write, .attrib],
+            queue: .main
+        )
+
+        statusFileSource.setEventHandler {
+            do {
+                // Read status file directly to avoid debug logging noise
+                let data = try Data(contentsOf: statusURL)
+                let currentStatus = try JSONDecoder().decode(DarwinInitApplyStatus.self, from: data)
+
+                // Check if status has changed from in-progress
+                if case .progress = currentStatus {
+                    // Still in progress, continue watching
+                    return
+                } else {
+                    // Status changed, capture it and terminate
+                    finalStatus = currentStatus
+                    statusFileSource.cancel()
+                    process.terminate()
+                }
+            } catch {
+                logger.error("Failed to read status: \(error)")
+                statusFileSource.cancel()
+                process.terminate()
+            }
+        }
+
+        statusFileSource.resume()
+
+        // Wait for process to exit
+        process.waitUntilExit()
+
+        try printStatusAndExit(finalStatus, prefix: "\n")
     }
 }

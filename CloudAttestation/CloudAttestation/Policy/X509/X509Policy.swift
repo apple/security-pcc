@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -75,7 +75,7 @@ public struct X509Policy: AttestationPolicy {
         self.roots = roots
         self.clock = clock
         self.body = nil
-        self.revocation = nil
+        self.revocation = revocation
     }
 
     /// Provides a chainining ``PolicyBuilder`` which will have access to a signature verified ``ProvisioningCertificate`` which represents a domain specific validated X.509 Certificate.

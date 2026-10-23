@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -31,7 +31,6 @@ extension EHMetrics {
             case pipeline_event_ingest_drop_count
             case pipeline_transform_count
             case pipeline_transform_created_event_count
-            case alertengine_hit_count
             case httpposter_post_success_count
             case httpposter_post_failure_count
             case httpposter_post_drop_count
@@ -40,41 +39,39 @@ extension EHMetrics {
             case cryptex_upgrade
             case pipeline_floodprotection_drop_count
 
+            public var batchSize: UInt64? {
+                switch self {
+                case .pipeline_floodprotection_drop_count:
+                    return 100
+                case .pipeline_event_ingest_count:
+                    return 100
+                case .pipeline_transform_count:
+                    return 100
+                default:
+                    return nil
+                }
+            }
+
             public var possibleDimensionsForPCC: [String: [String]]? {
                 switch self {
                 case .pipeline_event_ingest_count, .pipeline_event_ingest_drop_count, .pipeline_floodprotection_drop_count:
                     return [
-                        EHMetrics.Labels.Dimensions.event_type.rawValue: [
-                            EventNormalizer.NormalizedProcess().event_type,
-                            ESClient.ESClientProcExecEvent().event_type,
-                            ESClient.ESClientProcExitEvent().event_type,
-                            ESClient.ESClientSSHLoginEvent().event_type,
-                            ESClient.ESClientSSHLogoutEvent().event_type,
-                            ESClient.ESClientIOKitOpenEvent().event_type,
-                            NStatClient.NStatClientNWEvent().event_type,
-                            SandboxViolation.Event().event_type,
-                            CryptexGenerator.CryptexInstallEvent().event_type,
-                            CryptexGenerator.CryptexUninstallEvent().event_type,
-                            CryptexGenerator.CryptexUpgradedEvent().event_type,
-                            RestrictedExecutionModeViolation.Event().event_type,
-                            MDNSResponderQueries.Event().event_type,
-                            HeartbeatGenerator.HeartbeatEvent().event_type
-                        ]
+                        EHMetrics.Labels.Dimensions.event_type.rawValue: Self.allEventTypes
                     ]
                 case .pipeline_transform_count:
                     return [
                         EHMetrics.Labels.Dimensions.transform_result.rawValue: EHTransformResult.allCases.map(\.rawValue),
                         EHMetrics.Labels.Dimensions.transform_id.rawValue: Array(Set(PCCFrontend().pipeline.transforms.map(\.name)))
                     ].merging(Counters.pipeline_event_ingest_count.possibleDimensionsForPCC ?? [:]) { current, _ in current }
-                case .alertengine_hit_count:
-                    return [
-                        EHMetrics.Labels.Dimensions.alert_id.rawValue: PCCFrontend().pipeline.transforms.compactMap { $0 as? AlertEngine }.flatMap { $0.alerts.map(\.value.id).sorted()
-                        }
-                    ]
                 default:
                     return nil
                 }
             }
+
+            private static let allEventTypes: [String] =
+                EHDaemon.defaultAllEventsIterable
+                    .flatMap { $0.allEvents }
+                    .map { $0.init().event_type }
         }
         public enum Gauges: String, EHMetricDefinitionGaugeProtocol {
             case pipeline_queue_depth
@@ -83,6 +80,19 @@ extension EHMetrics {
             case httpposter_size_bytes
             case heartbeat_virtual_size
             case heartbeat_resident_size
+
+            public var sampleRate: UInt64? {
+                switch self {
+                case .pipeline_event_latency:
+                    return 100
+                case .pipeline_transform_latency:
+                    return 100
+                case .pipeline_queue_depth:
+                    return 100
+                default:
+                    return nil
+                }
+            }
 
             public var possibleDimensionsForPCC: [String: [String]]? {
                 switch self {

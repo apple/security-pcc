@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -91,6 +91,7 @@ extension ThrowingTaskGroup {
         sensitiveError: Bool = true,
         metrics: OperationMetrics,
         logger: Logger? = nil,
+        level: OSLogType = .debug,
         _ body: @Sendable @escaping () async throws -> ChildTaskResult
     ) {
         let taskLogger = logger ?? defaultLogger
@@ -101,6 +102,7 @@ extension ThrowingTaskGroup {
                 sensitiveError: sensitiveError,
                 metrics: metrics,
                 logger: taskLogger,
+                level: level,
                 body
             )
         }
@@ -111,6 +113,7 @@ extension ThrowingTaskGroup {
         sensitiveError: Bool = true,
         metrics: OperationMetrics,
         logger: Logger? = nil,
+        level: OSLogType = .debug,
         _ body: @Sendable @escaping () async throws -> ChildTaskResult
     ) {
         self.addTaskWithLogging(
@@ -119,6 +122,7 @@ extension ThrowingTaskGroup {
             sensitiveError: sensitiveError,
             metrics: metrics,
             logger: logger,
+            level: level,
             body
         )
     }
@@ -130,6 +134,7 @@ public func withErrorLogging<ReturnType>(
     sensitiveError: Bool = true,
     metrics: OperationMetrics,
     logger: Logger? = nil,
+    level: OSLogType = .debug,
     _ body: @Sendable () async throws -> ReturnType
 ) async rethrows -> ReturnType {
     let errorLogger = logger ?? defaultLogger
@@ -140,9 +145,12 @@ public func withErrorLogging<ReturnType>(
     }
 
     do {
-        errorLogger.debug("\(diagnosticKeys, privacy: .public)[\(operation, privacy: .public)] beginning")
+        errorLogger.log(level: level, "\(diagnosticKeys, privacy: .public)[\(operation, privacy: .public)] beginning")
         defer {
-            errorLogger.debug("\(diagnosticKeys, privacy: .public)[\(operation, privacy: .public)] completing")
+            errorLogger.log(
+                level: level,
+                "\(diagnosticKeys, privacy: .public)[\(operation, privacy: .public)] completing"
+            )
             metrics.durationFactory.map { metrics.metricsSystem.emit($0.make(operationTimeMeasurement.duration)) }
         }
 

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -26,7 +26,7 @@ import OSLog
 
 fileprivate let logger = Logger(subsystem: kEnsemblerPrefix, category: "CIOBackend")
 
-final class CIOBackend: Backend {
+final class CIOBackend: CIOBackendProtocol {
 	let configuration: BackendConfiguration
 	let meshService: AppleCIOMeshConfigServiceRef
 	let _activatedLockQueue = DispatchQueue(label: "activated.lock.queue")
@@ -90,7 +90,7 @@ final class CIOBackend: Backend {
 					meshService.disconnectCIOChannel(channel)
 					return
 				}
-				self.configuration.delegate.channelChange(
+				self.configuration.delegate?.channelChange(
 					node: Int(node),
 					chassis: chassis,
 					channelIndex: Int(channel),
@@ -100,7 +100,7 @@ final class CIOBackend: Backend {
 
 			meshService.onNodeConnectionChange { direction, channel, node, connected in
 				let backendDirection: BackendConnectionDirection = direction == TX ? .tx : .rx
-				self.configuration.delegate.connectionChange(
+				self.configuration.delegate?.connectionChange(
 					direction: backendDirection,
 					node: Int(node),
 					channelIndex: Int(channel),
@@ -109,7 +109,7 @@ final class CIOBackend: Backend {
 			}
 
 			meshService.onNodeNetworkConnectionChange { node, connected in
-				self.configuration.delegate.networkConnectionChange(node: Int(node), connected: connected)
+				self.configuration.delegate?.networkConnectionChange(node: Int(node), connected: connected)
 			}
 
 			meshService.onNodeMessage { node, message in
@@ -117,7 +117,7 @@ final class CIOBackend: Backend {
 					logger.warning("Received a nil message from node\(node, privacy: .public)")
 					return
 				}
-				self.configuration.delegate.incomingMessage(node: Int(node), message: message)
+				self.configuration.delegate?.incomingMessage(node: Int(node), message: message)
 			}
 		} else {
 			throw "AppleCIOMeshConfigSupport not available"

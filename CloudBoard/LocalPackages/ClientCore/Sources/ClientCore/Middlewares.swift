@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,6 +20,70 @@ import OpenAPIRuntime
 import OSLog
 
 // Some of the middlewares below are based on https://github.com/apple/swift-openapi-generator/tree/main/Examples.
+
+// MARK: - mTLS Auth Delegate
+
+/// A delegate that handles mTLS and self-signed server certificates.
+public actor AuthDelegate: NSObject, URLSessionDelegate {
+    /// The logger used by the auth delegate.
+    private static let logger: Logger = .init(
+        subsystem: "com.apple.cloudos.cloudboard",
+        category: "AuthDelegate"
+    )
+
+    /// Whether to allow self-signed server certificates.
+    private let allowSelfSignedCertificates: Bool
+
+    /// The underlying credential provider, which is invoked on every client certificate challenge.
+    private var credentialProvider: @Sendable () async -> URLCredential?
+
+    /// Creates a new delegate.
+    /// - Parameter allowSelfSignedCertificates: Whether to allow self-signed server certificates.
+    public init(allowSelfSignedCertificates: Bool) {
+        self.allowSelfSignedCertificates = allowSelfSignedCertificates
+        self.credentialProvider = { nil }
+    }
+
+    /// Updates the current credential provider.
+    /// - Parameter provider: The provider closure to be invoked to fetch the credential.
+    public func updateCredentialProvider(_ provider: @escaping @Sendable () async -> URLCredential?) {
+        self.credentialProvider = provider
+    }
+
+    public func urlSession(
+        _: URLSession,
+        didReceive challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        Self.logger.debug("AuthDelegate received challenge: \(challenge.protectionSpace.authenticationMethod)")
+
+        switch challenge.protectionSpace.authenticationMethod {
+        case NSURLAuthenticationMethodClientCertificate:
+            if let credential = await credentialProvider() {
+                Self.logger.debug("mTLS credential provided")
+                return (.useCredential, credential)
+            } else {
+                Self.logger.warning("mTLS credential provider returned nil.")
+                return (.cancelAuthenticationChallenge, nil)
+            }
+        case NSURLAuthenticationMethodServerTrust where self.allowSelfSignedCertificates:
+            Self.logger
+                .warning(
+                    "Encountered a self-signed certificate and allowSelfSignedCertificates == true, allowing the connection to proceed."
+                )
+            guard let trust = challenge.protectionSpace.serverTrust else {
+                return (.performDefaultHandling, nil)
+            }
+            let credential = URLCredential(trust: trust)
+            return (.useCredential, credential)
+        default:
+            Self.logger
+                .debug(
+                    "Unhandled authentication method: \(challenge.protectionSpace.authenticationMethod), using default handling"
+                )
+            return (.performDefaultHandling, nil)
+        }
+    }
+}
 
 // MARK: - Request ID
 
@@ -102,7 +166,7 @@ extension LoggingMiddleware: ClientMiddleware {
             let (response, responseBody) = try await next(request, body, baseURL)
             self.logger
                 .debug(
-                    "Response [\(id, privacy: .public)]: \(request.method, privacy: .public) \(request.path ?? "<nil>", privacy: .public) \(response.status, privacy: .public)"
+                    "Response id=[\(id, privacy: .public)]: method=\(request.method, privacy: .public) path=\(request.path ?? "<nil>", privacy: .public) status=\(response.status, privacy: .public)"
                 )
             return (response, responseBody)
         } catch {
@@ -331,5 +395,47 @@ extension Duration {
         case .constant(let seconds):
             self = .seconds(seconds)
         }
+    }
+}
+
+// MARK: - Task Local Headers
+
+/// A middleware that injects caller-supplied HTTP headers via a task local.
+///
+/// Set `TaskLocalHeaderMiddleware.headers` as a task local before invoking the client to have
+/// the key-value pairs injected into outgoing requests. When the task local is empty the request
+/// is passed through unchanged.
+///
+/// Example:
+/// ```swift
+/// try await TaskLocalHeaderMiddleware.$headers.withValue(
+///     ["x-apple-request-uuid": requestID]
+/// ) {
+///     try await client.someOperation()
+/// }
+/// ```
+public struct TaskLocalHeaderMiddleware {
+    /// A task local dictionary of header name → value pairs to inject (defaults to empty).
+    @TaskLocal public static var headers: [String: String] = [:]
+
+    /// Creates a new middleware.
+    public init() {}
+}
+
+extension TaskLocalHeaderMiddleware: ClientMiddleware {
+    public func intercept(
+        _ request: HTTPRequest,
+        body: HTTPBody?,
+        baseURL: URL,
+        operationID _: String,
+        next: (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?)
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        var request = request
+        for (name, value) in Self.headers {
+            if let fieldName = HTTPField.Name(name) {
+                request.headerFields[fieldName] = value
+            }
+        }
+        return try await next(request, body, baseURL)
     }
 }

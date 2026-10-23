@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -28,7 +28,8 @@ message AttestationBundle {
     repeated bytes provisioning_certificate_chain = 4; // DCIK certificate for Private Cloud Compute
     bytes app_data = 5; // Use-case specific data. sha256 digest of this is included in the nonce
     google.protobuf.Timestamp key_expiration = 6; // Unix timestamp of the key's expiration, as hinted by the attested device
-    TransparencyProofs transparency_proofs = 8;
+    TransparencyProofs certificate_transparency_proofs = 7; // Transparency proofs of the identifying certificate.
+    TransparencyProofs transparency_proofs = 8; // Transparency proofs of the running software
     LocalPolicy local_policy = 9; // Local boot policy used on macOS
     bytes sfr_manifest = 10; // System, firmware & restore manifest used on macOS
 }

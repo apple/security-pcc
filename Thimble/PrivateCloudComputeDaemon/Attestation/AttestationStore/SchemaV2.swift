@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,7 @@
 import Foundation
 import SwiftData
 
-extension AttestationStore {
+extension LegacyAttestationStore {
     /// **Note:** technically we had a few iterations on the schema. But when we needed to make some changes, we were
     /// also given an opportunity to discard old data which allowed us to have "v1" schema without any migrations.
     enum SchemaV2: VersionedSchema {

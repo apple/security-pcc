@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,6 +21,8 @@
 
 import Foundation
 import os.log
+
+private let logger = Logger(for: .client)
 
 package protocol TC2JSON {
     var json: Data { get }
@@ -47,7 +49,6 @@ extension TC2JSON where Self: Codable {
         if let decoded = try? JSONDecoder().decode(Self.self, from: json) {
             self = decoded
         } else {
-            let logger = tc2Logger(forCategory: .client)
             logger.error("Unable to decode JSON/XPC bytes, count=\(json.count)")
             return nil
         }

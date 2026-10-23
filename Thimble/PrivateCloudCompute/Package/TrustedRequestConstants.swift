@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,6 +20,5 @@
 //
 
 package enum TrustedRequestConstants {
-    package static let maxDataToSendBeforeReadyForMoreChunksReceived = 65536
-    package static let maxApplicationDataSizeBeforeChunking = 61440
+    package static let maxDataToSendBeforeReadyForMoreChunksReceived = 131072
 }

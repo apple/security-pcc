@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -39,9 +39,11 @@ enum JobHelperInvokeProxyDialBackResponse {
 protocol JobHelperResponseDelegateProtocol: CloudBoardJobHelperAPIClientDelegateProtocol {
     func registerWorker(
         uuid: UUID,
-        responseContinuation: AsyncStream<JobHelperInvokeProxyDialBackResponse>.Continuation
+        responseContinuation: AsyncThrowingStream<JobHelperInvokeProxyDialBackResponse, Error>.Continuation
     )
     func waitForLAContextUsedNotification() async throws
+    /// Terminates all registered worker dialback streams with the given error.
+    func finishAllWorkerContinuations(throwing error: Error)
 }
 
 // Delegate to handle messages from cb_jobhelper
@@ -56,7 +58,8 @@ final class JobHelperResponseDelegate: JobHelperResponseDelegateProtocol {
     }
 
     private let invokeWorkloadResponseContinuation: AsyncStream<JobHelperInvokeWorkloadResponse>.Continuation
-    typealias ProxyDialbackResponseContinuation = AsyncStream<JobHelperInvokeProxyDialBackResponse>.Continuation
+    typealias ProxyDialbackResponseContinuation = AsyncThrowingStream<JobHelperInvokeProxyDialBackResponse, Error>
+        .Continuation
     private let workerContinuations: Mutex<[UUID: ProxyDialbackResponseContinuation]> = .init([:])
 
     private let laContextUsedPromise: Promise<Void, Error> =
@@ -71,7 +74,7 @@ final class JobHelperResponseDelegate: JobHelperResponseDelegateProtocol {
         self.invokeWorkloadResponseContinuation.finish()
         self.workerContinuations.withLock {
             for workerContinuation in $0.values {
-                workerContinuation.finish()
+                workerContinuation.finish(throwing: InvokeProxyDialBackError.invokeWorkloadTerminated)
             }
             $0.removeAll()
         }
@@ -156,6 +159,15 @@ final class JobHelperResponseDelegate: JobHelperResponseDelegateProtocol {
                 return
             }
             workerContinuations[uuid] = responseContinuation
+        }
+    }
+
+    func finishAllWorkerContinuations(throwing error: Error) {
+        self.workerContinuations.withLock {
+            for workerContinuation in $0.values {
+                workerContinuation.finish(throwing: error)
+            }
+            $0.removeAll()
         }
     }
 }

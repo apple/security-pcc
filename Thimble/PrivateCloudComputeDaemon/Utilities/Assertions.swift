@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,8 +24,9 @@ import IOKit.pwr_mgt
 import PrivateCloudCompute
 import os.log
 
+private let logger = Logger(for: .daemon)
+
 struct PowerAssertion: Sendable {
-    let logger = tc2Logger(forCategory: .daemon)
     var assertionName: String
     var assertionId: IOPMAssertionID
 

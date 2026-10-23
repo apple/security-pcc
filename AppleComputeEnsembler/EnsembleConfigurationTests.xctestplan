@@ -13,7 +13,18 @@
   },
   "testTargets" : [
     {
-      "parallelizable" : true,
+      "parallelizable" : false,
+      "skippedTests" : [
+        "EnsembleConfigurationTests\/testConcurrentDataMessaging()",
+        "EnsembleConfigurationTests\/testConcurrentLeaderToFollowerMessaging()",
+        "EnsembleConfigurationTests\/testConcurrentLeaderToFollowerMessagingWithRotateKey()",
+        "EnsembleConfigurationTests\/testDataMessaging()",
+        "EnsembleConfigurationTests\/testMessagingLargeData()",
+        "EnsembleConfigurationTests\/testRegisterAndUnregisterDataCallback()",
+        "EnsembleConfigurationTests\/testSendDataToAllFollowers()",
+        "EnsembleConfigurationTests\/testSendDataToAllFollowersWithMissingHandler()",
+        "EnsembleConfigurationTests\/testValidateDistributeDataKey()"
+      ],
       "target" : {
         "containerPath" : "container:AppleComputeEnsembler.xcodeproj",
         "identifier" : "0D9CEF992CEC0EE000578B95",

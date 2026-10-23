@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,7 +23,7 @@ private import DarwinPrivate.os.variant
 import Foundation
 import os.log
 
-private let logger = tc2Logger(forCategory: .configuration)
+private let logger = Logger(for: .configuration)
 
 @objc @implementation extension ServerEnvironment {
     public override init() {

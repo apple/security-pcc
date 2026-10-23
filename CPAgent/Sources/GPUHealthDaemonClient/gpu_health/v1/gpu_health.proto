@@ -1,0 +1,487 @@
+// Copyright © 2026 Apple Inc. All Rights Reserved.
+
+// APPLE INC.
+// PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
+// PLEASE READ THE FOLLOWING PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT (“AGREEMENT”) CAREFULLY BEFORE DOWNLOADING OR USING THE APPLE SOFTWARE ACCOMPANYING THIS AGREEMENT(AS DEFINED BELOW). BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT, DO NOT DOWNLOAD OR USE THE APPLE SOFTWARE. THESE TERMS AND CONDITIONS CONSTITUTE A LEGAL AGREEMENT BETWEEN YOU AND APPLE.
+// IMPORTANT NOTE: BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING ON YOUR OWN BEHALF AND/OR ON BEHALF OF YOUR COMPANY OR ORGANIZATION TO THE TERMS OF THIS AGREEMENT.
+// 1. As used in this Agreement, the term “Apple Software” collectively means and includes all of the Apple Private Cloud Compute materials provided by Apple here, including but not limited to the Apple Private Cloud Compute software, tools, data, files, frameworks, libraries, documentation, logs and other Apple-created materials. In consideration for your agreement to abide by the following terms, conditioned upon your compliance with these terms and subject to these terms, Apple grants you, for a period of ninety (90) days from the date you download the Apple Software, a limited, non-exclusive, non-sublicensable license under Apple’s copyrights in the Apple Software to download, install, compile and run the Apple Software internally within your organization only on a single Apple-branded computer you own or control, for the sole purpose of verifying the security and privacy characteristics of Apple Private Cloud Compute. This Agreement does not allow the Apple Software to exist on more than one Apple-branded computer at a time, and you may not distribute or make the Apple Software available over a network where it could be used by multiple devices at the same time. You may not, directly or indirectly, redistribute the Apple Software or any portions thereof. The Apple Software is only licensed and intended for use as expressly stated above and may not be used for other purposes or in other contexts without Apple's prior written permission. Except as expressly stated in this notice, no other rights or licenses, express or implied, are granted by Apple herein.
+// 2. The Apple Software is provided by Apple on an "AS IS" basis. APPLE MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS, SYSTEMS, OR SERVICES. APPLE DOES NOT WARRANT THAT THE APPLE SOFTWARE WILL MEET YOUR REQUIREMENTS, THAT THE OPERATION OF THE APPLE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, THAT DEFECTS IN THE APPLE SOFTWARE WILL BE CORRECTED, OR THAT THE APPLE SOFTWARE WILL BE COMPATIBLE WITH FUTURE APPLE PRODUCTS, SOFTWARE OR SERVICES. NO ORAL OR WRITTEN INFORMATION OR ADVICE GIVEN BY APPLE OR AN APPLE AUTHORIZED REPRESENTATIVE WILL CREATE A WARRANTY.
+// 3. IN NO EVENT SHALL APPLE BE LIABLE FOR ANY DIRECT, SPECIAL, INDIRECT, INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE, REPRODUCTION, COMPILATION OR OPERATION OF THE APPLE SOFTWARE, HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// 4. This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from Apple if you fail to comply with any term(s) of this Agreement. Upon termination, you agree to cease all use of the Apple Software and destroy all copies, full or partial, of the Apple Software. This Agreement constitutes the entire understanding of the parties with respect to the subject matter contained herein, and supersedes all prior negotiations, representations, or understandings, written or oral. This Agreement will be governed and construed in accordance with the laws of the State of California, without regard to its choice of law rules.
+// You may report security issues about Apple products to product-security@apple.com, as described here: https://www.apple.com/support/security/. Non-security bugs and enhancement requests can be made via https://bugreport.apple.com as described here: https://developer.apple.com/bug-reporting/
+// EA1937
+// 10/02/2024
+
+syntax = "proto3";
+
+package gpu_health.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "nvidia/v1/nvidia.proto";
+
+// GpuHealthService exposes instance health and per-GPU telemetry.
+// For daemon liveness, use the standard gRPC health checking protocol
+// (grpc.health.v1.Health).
+//
+// The surface is split along the four consumer questions:
+//
+//   GetHealth        — verdict: is this instance usable right now?
+//   GetActiveFaults  — what is wrong right now?
+//   GetFaultLog  — what happened across recoveries?
+//   GetXidLog    — raw XID audit stream (every XID, severity-agnostic).
+//   GetTelemetry     — continuous per-GPU measurements.
+service GpuHealthService {
+  // Verdict probe. Returns the current instance status only.
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+
+  // Currently active faults, deduplicated by fault_key.
+  rpc GetActiveFaults(GetActiveFaultsRequest) returns (GetActiveFaultsResponse);
+
+  // Time-ordered fault log (promote/clear/status events). Survives
+  // instance recovery; in-memory only (resets on daemon restart).
+  rpc GetFaultLog(GetFaultLogRequest) returns (GetFaultLogResponse);
+
+  // Raw XID event stream. Includes every XID regardless of severity.
+  rpc GetXidLog(GetXidLogRequest) returns (GetXidLogResponse);
+
+  // Detailed per-GPU telemetry.
+  rpc GetTelemetry(GetTelemetryRequest) returns (GetTelemetryResponse);
+}
+
+// ---------------------------------------------------------------------------
+// GetHealth — verdict
+// ---------------------------------------------------------------------------
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  InstanceStatus status = 1;
+
+  // When the current status began.
+  google.protobuf.Timestamp changed_at = 2;
+
+  // How long the instance has been in the current status.
+  google.protobuf.Duration time_in_status = 3;
+
+  // Lightweight per-GPU status. For full telemetry, use GetTelemetry;
+  // for active fault detail, use GetActiveFaults.
+  repeated GpuHealthStatusEntry gpu_status = 4;
+}
+
+message GpuHealthStatusEntry {
+  string uuid = 1;
+  optional uint32 index = 2;
+  GpuHealthStatus status = 3;
+}
+
+// Instance health state machine:
+//
+//   HEALTHY ──► UNHEALTHY ──► HEALTHY      (recoverable conditions)
+//     │              │
+//     └──────┬───────┘
+//            ▼
+//   TERMINAL                                (stays in this state until the
+//                                            daemon is restarted)
+//
+enum InstanceStatus {
+  INSTANCE_STATUS_UNSPECIFIED = 0;
+  INSTANCE_STATUS_HEALTHY = 1;
+  INSTANCE_STATUS_UNHEALTHY = 2;
+  INSTANCE_STATUS_TERMINAL = 3;
+}
+
+// ---------------------------------------------------------------------------
+// GetActiveFaults — what is wrong right now
+// ---------------------------------------------------------------------------
+
+message GetActiveFaultsRequest {}
+
+message GetActiveFaultsResponse {
+  // One entry per unique fault_key. Order is unspecified.
+  repeated Fault faults = 1;
+}
+
+// ---------------------------------------------------------------------------
+// GetFaultLog — timeline across recoveries
+// ---------------------------------------------------------------------------
+
+message GetFaultLogRequest {
+  // Optional. If set and the server's epoch differs (the daemon has
+  // restarted since the client last polled), the call fails with
+  // FailedPrecondition; the client should treat all prior offsets as
+  // invalid and re-read from scratch. Empty means "no expectation."
+  string epoch = 1;
+}
+
+message GetFaultLogResponse {
+  // Full retained log, time-ordered ascending by offset.
+  repeated FaultLogEntry entries = 1;
+
+  // Smallest / largest offset present in entries. Both 0 if empty.
+  uint64 min_offset = 2;
+  uint64 max_offset = 3;
+
+  // Opaque token identifying the daemon process; changes on restart.
+  string epoch = 4;
+}
+
+message FaultLogEntry {
+  // Monotonic per daemon process. Resets on daemon restart.
+  uint64 offset = 1;
+
+  google.protobuf.Timestamp at = 2;
+
+  oneof event {
+    FaultPromoted promoted = 3;
+    FaultCleared cleared = 4;
+    StatusChanged status = 5;
+  }
+}
+
+message FaultPromoted {
+  // Full fault payload at the time of promotion (carries fault_key).
+  Fault fault = 1;
+}
+
+message FaultCleared {
+  // Same fault_key as the corresponding FaultPromoted entry.
+  string fault_key = 1;
+
+  ClearReason reason = 2;
+
+  // Wall-clock time the fault was active.
+  google.protobuf.Duration active_for = 3;
+}
+
+message StatusChanged {
+  InstanceStatus from = 1;
+  InstanceStatus to = 2;
+
+  // The fault_key of the fault that drove this transition. Empty for
+  // recovery and force-reset transitions.
+  string driver_fault_key = 3;
+}
+
+enum ClearReason {
+  CLEAR_REASON_UNSPECIFIED = 0;
+  // Underlying condition cleared on its own (e.g. supervisor declared
+  // a UUID present again, dedupe key was retracted).
+  CLEAR_REASON_RECOVERED = 1;
+  // Replaced by a stronger fault for the same fault_key.
+  CLEAR_REASON_SUPERSEDED = 2;
+  // Wiped as part of a HEALTHY recovery.
+  CLEAR_REASON_INSTANCE_RESET = 3;
+  // Cleared explicitly by a force-reset escape hatch (fault injection /
+  // operator override).
+  CLEAR_REASON_OPERATOR = 4;
+}
+
+// ---------------------------------------------------------------------------
+// GetXidLog — raw audit stream
+// ---------------------------------------------------------------------------
+
+message GetXidLogRequest {
+  // Optional. Same semantics as GetFaultLogRequest.epoch.
+  string epoch = 1;
+}
+
+message GetXidLogResponse {
+  repeated XidEvent events = 1;
+  uint64 min_offset = 2;
+  uint64 max_offset = 3;
+  string epoch = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Fault and detail variants
+// ---------------------------------------------------------------------------
+
+message Fault {
+  google.protobuf.Timestamp detected_at = 1;
+  string uuid = 2;
+  optional uint32 index = 3;
+
+  oneof detail {
+    GpuLoss gpu_loss = 5;
+    HealthSignal signal = 6;
+    SystemFault system = 7;
+    XidFault xid_fault = 8;
+  }
+
+  // Stable identity for promote↔clear pairing across the fault history.
+  // Canonical form:
+  //   "<uuid|\"system\">:<oneof_case>:<subtype|producer_id>"
+  // Examples:
+  //   "GPU-1234...:xid_fault:79"
+  //   "GPU-1234...:gpu_loss"
+  //   "GPU-1234...:signal:HW_THERMAL_SLOWDOWN"
+  //   "system:min"
+  //   "system:producer:device_registry"
+  // At most one fault per fault_key is active at any time.
+  string fault_key = 9;
+}
+
+message XidEvent {
+  google.protobuf.Timestamp detected_at = 1;
+  string uuid = 2;
+  uint32 index = 3;
+  uint32 xid = 4;
+  nvidia.v1.XidSeverity severity = 5;
+  nvidia.v1.XidAction action = 6;
+
+  // Monotonic per daemon process. Resets on daemon restart.
+  uint64 offset = 7;
+}
+
+// XidFault is the fault-shaped projection of a critical XidEvent. The
+// parent Fault carries detected_at / uuid / index; this payload carries
+// only the XID-specific classification result.
+message XidFault {
+  uint32 xid = 1;
+  nvidia.v1.XidSeverity severity = 2;
+  nvidia.v1.XidAction action = 3;
+}
+
+message GpuLoss {
+  google.protobuf.Timestamp detected_at = 1;
+  string uuid = 2;
+  uint32 index = 3;
+}
+
+message HealthSignal {
+  google.protobuf.Timestamp detected_at = 1;
+  string uuid = 2;
+  uint32 index = 3;
+  HealthSignalType type = 4;
+}
+
+enum HealthSignalType {
+  HEALTH_SIGNAL_TYPE_UNSPECIFIED = 0;
+
+  // GPU temperature is at or above the NVML slowdown threshold, sustained
+  // over multiple polls. Degraded.
+  HEALTH_SIGNAL_TYPE_TEMPERATURE_ABOVE_SLOWDOWN = 1;
+
+  // GPU temperature is at or above the NVML shutdown threshold. Fatal.
+  HEALTH_SIGNAL_TYPE_TEMPERATURE_ABOVE_SHUTDOWN = 2;
+
+  // GPU has memory pages pending retirement; a reboot is required to
+  // apply the retirement. Degraded.
+  HEALTH_SIGNAL_TYPE_PAGES_PENDING_RETIREMENT = 3;
+
+  // NVML reports HW_THERMAL_SLOWDOWN as a current clock-throttle reason,
+  // sustained over multiple polls. Degraded.
+  HEALTH_SIGNAL_TYPE_HW_THERMAL_SLOWDOWN = 4;
+
+  // NVML reports HW_POWER_BRAKE_SLOWDOWN as a current clock-throttle
+  // reason. Fatal.
+  HEALTH_SIGNAL_TYPE_HW_POWER_BRAKE_SLOWDOWN = 5;
+
+  // At least one memory bank has exhausted its pool of spare rows.
+  // From nvmlDeviceGetRowRemapperHistogram (banks_none > 0). Degraded.
+  HEALTH_SIGNAL_TYPE_ROW_REMAPPER_EXHAUSTED = 6;
+
+  // The daemon has not received a fresh telemetry sample for this GPU
+  // within the staleness window (default 3 x poll-interval). Indicates
+  // the per-GPU poller is wedged, the driver has stopped responding for
+  // this device, or readers are otherwise blocked. The per-GPU
+  // HealthStatus also reports DEGRADED. Degraded.
+  HEALTH_SIGNAL_TYPE_STALE_TELEMETRY = 7;
+}
+
+message SystemFault {
+  string message = 1;
+}
+
+// ---------------------------------------------------------------------------
+// GetTelemetry
+// ---------------------------------------------------------------------------
+
+message GetTelemetryRequest {}
+
+message GetTelemetryResponse {
+  // Daemon process uptime.
+  google.protobuf.Duration uptime = 1;
+
+  // When the telemetry data was last refreshed.
+  google.protobuf.Timestamp updated_at = 2;
+
+  // Deprecated: superseded by the min-available / max-unavailable
+  // threshold model. The daemon does not act on a single "expected"
+  // count any more; operators configure MinAvailableGpus and/or
+  // MaxUnavailableGpus directly. Will be removed in a future release.
+  uint32 expected_gpus = 3 [deprecated = true];
+
+  // Number of GPUs currently reachable via NVML.
+  uint32 available_gpus = 4;
+
+  // Per-GPU telemetry. One entry per GPU the daemon is tracking
+  // (reachable + lost). Lost GPUs have health_status = LOST with
+  // zero telemetry fields.
+  repeated GpuTelemetry gpus = 5;
+}
+
+message GpuTelemetry {
+  // Optional scalar fields below are unset when no valid recent reading is
+  // available (e.g. NVML reported the call as not supported, or the read
+  // failed). Consumers should distinguish absence from a literal zero
+  // reading via the generated has_<field> accessors.
+
+  // GPU UUID — stable identifier across reboots.
+  // Unit: none (identifier).
+  string uuid = 1;
+
+  // GPU index (0-based).
+  // Unit: none (ordinal).
+  uint32 index = 2;
+
+  // Per-GPU health as determined by the state manager.
+  // Unit: none (enum).
+  GpuHealthStatus health_status = 3;
+
+  // Current GPU temperature.
+  // Unit: °C (degrees Celsius).
+  optional uint32 temperature_c = 4;
+
+  // Hardware slowdown threshold.
+  // Unit: °C (degrees Celsius).
+  optional uint32 slowdown_threshold_c = 5;
+
+  // Hardware shutdown threshold.
+  // Unit: °C (degrees Celsius).
+  optional uint32 shutdown_threshold_c = 6;
+
+  // Active clock throttle reasons (bitmask decoded).
+  // Unit: none (enum set).
+  repeated nvidia.v1.ThrottleReason throttle_reasons = 7;
+
+  // Whether GPU memory pages are pending retirement (reboot required).
+  // Unit: none (boolean).
+  optional bool pages_pending_retirement = 8;
+
+  // Volatile single-bit ECC error count (since driver load).
+  // Unit: errors (cumulative count).
+  optional uint64 sbe_volatile_count = 9;
+
+  // Per-NVLink status.
+  // Unit: none (message).
+  repeated NvLinkStatus nvlinks = 10;
+
+  // GPU power usage. From nvmlDeviceGetPowerUsage.
+  // Unit: mW (milliwatts).
+  optional uint32 power_usage_mw = 11;
+
+  // GPU power management limit. From nvmlDeviceGetPowerManagementLimit.
+  // Unit: mW (milliwatts).
+  optional uint32 power_limit_mw = 12;
+
+  // GPU compute utilization. From nvmlDeviceGetUtilizationRates.
+  // Unit: percent (0-100).
+  optional uint32 gpu_utilization_percent = 13;
+
+  // GPU memory controller utilization. From nvmlDeviceGetUtilizationRates.
+  // Unit: percent (0-100).
+  optional uint32 memory_utilization_percent = 14;
+
+  // Total GPU memory. From nvmlDeviceGetMemoryInfo.
+  // Unit: bytes.
+  optional uint64 memory_total_bytes = 15;
+
+  // Used GPU memory. From nvmlDeviceGetMemoryInfo.
+  // Unit: bytes.
+  optional uint64 memory_used_bytes = 16;
+
+  // When this GPU's telemetry was last successfully refreshed. A device wedged
+  // behind NVML timeouts is neither refreshed nor reported as a fatal loss, so
+  // this lags while the response-level updated_at keeps advancing; consumers
+  // compute freshness as (now - updated_at).
+  // Unit: none (timestamp).
+  google.protobuf.Timestamp updated_at = 17;
+
+  // Cumulative GPU energy consumption since the driver was last reloaded.
+  // From nvmlDeviceGetTotalEnergyConsumption.
+  // Unit: mJ (millijoules).
+  optional uint64 total_energy_consumption_mj = 18;
+
+  // Distribution of GPU memory banks by remaining spare-row availability.
+  // From nvmlDeviceGetRowRemapperHistogram.
+  // Unit: none (message).
+  optional RowRemapperHistogram row_remapper_histogram = 19;
+
+  // Cumulative remapped row counts and pending/failure flags.
+  // From nvmlDeviceGetRemappedRows.
+  // Unit: none (message).
+  optional RemappedRows remapped_rows = 20;
+}
+
+// Histogram of GPU memory banks grouped by remaining spare-row availability,
+// reported by nvmlDeviceGetRowRemapperHistogram. The five buckets sum to the
+// total bank count on the device. Banks in `none` have exhausted their pool
+// of spare rows; banks in `max` have all spares remaining. Field numbers are
+// ordered from most-spares to fewest-spares (max=1 … none=5) to match how
+// the histogram reads visually, not by severity.
+message RowRemapperHistogram {
+  // Banks with the maximum spare-row availability.
+  uint32 max = 1;
+  // Banks with high spare-row availability.
+  uint32 high = 2;
+  // Banks with partial spare-row availability.
+  uint32 partial = 3;
+  // Banks with low spare-row availability.
+  uint32 low = 4;
+  // Banks that have exhausted their pool of spare rows. Non-zero values
+  // signal HEALTH_SIGNAL_TYPE_ROW_REMAPPER_EXHAUSTED.
+  uint32 none = 5;
+}
+
+// Remapped row counts and remap status, reported by
+// nvmlDeviceGetRemappedRows.
+message RemappedRows {
+  // Cumulative rows remapped due to correctable errors.
+  uint64 correctable = 1;
+  // Cumulative rows remapped due to uncorrectable errors.
+  uint64 uncorrectable = 2;
+  // A row remap is pending; a GPU reset is required to apply it.
+  bool pending = 3;
+  // A row remap failure has occurred (no spares left or hardware fault).
+  bool failure_occurred = 4;
+}
+
+enum GpuHealthStatus {
+  GPU_HEALTH_STATUS_UNSPECIFIED = 0;
+  GPU_HEALTH_STATUS_HEALTHY = 1;
+  GPU_HEALTH_STATUS_DEGRADED = 2;
+  GPU_HEALTH_STATUS_FAILED = 3;
+  GPU_HEALTH_STATUS_LOST = 4;
+}
+
+// Per-link NVLink interconnect status.
+// From nvmlDeviceGetNvLinkState and nvmlDeviceGetNvLinkErrorCounter.
+message NvLinkStatus {
+  // Optional scalar fields below are unset when no valid recent reading is
+  // available (e.g. NVML reported the call as not supported, or the read
+  // failed). Consumers should distinguish absence from a literal zero
+  // reading via the generated has_<field> accessors.
+
+  // NVLink index on this GPU (0-based).
+  uint32 link = 1;
+
+  // Whether the link is enabled (admin state).
+  // From nvmlDeviceGetNvLinkState (returns NVML_FEATURE_ENABLED/DISABLED);
+  // distinct from operational up/down, which would come from
+  // nvmlDeviceGetNvLinkStatus.
+  bool enabled = 2;
+
+  // Cumulative data link replay errors.
+  optional uint64 replay_errors = 3;
+
+  // Cumulative data link recovery errors.
+  optional uint64 recovery_errors = 4;
+
+  // Cumulative CRC flit errors.
+  optional uint64 crc_flit_errors = 5;
+
+  // Cumulative CRC data errors.
+  optional uint64 crc_data_errors = 6;
+}

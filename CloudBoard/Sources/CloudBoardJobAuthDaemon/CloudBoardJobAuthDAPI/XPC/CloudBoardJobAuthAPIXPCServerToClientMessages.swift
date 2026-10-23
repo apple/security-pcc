@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -15,10 +15,10 @@
 internal import CloudBoardAsyncXPC
 
 internal enum CloudBoardJobAuthAPIXPCServerToClientMessages {
-    internal struct AuthKeysUpdated: CloudBoardAsyncXPCCodableMessage {
+    internal struct CostTokenKeyUpdated: CloudBoardAsyncXPCCodableMessage {
         internal typealias Success = ExplicitSuccess
         internal typealias Failure = CloudBoardJobAuthAPIError
 
-        var newKeySet: AuthTokenKeySet
+        var newKeyPair: CostTokenSigningKeyPair
     }
 }

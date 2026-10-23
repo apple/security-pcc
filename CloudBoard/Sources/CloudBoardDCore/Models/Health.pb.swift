@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -114,9 +114,7 @@ fileprivate let _protobuf_package = "grpc.health.v1"
 
 extension Grpc_Health_V1_HealthCheckRequest: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".HealthCheckRequest"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "service"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}service\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -146,9 +144,7 @@ extension Grpc_Health_V1_HealthCheckRequest: InternalSwiftProtobuf.Message, Inte
 
 extension Grpc_Health_V1_HealthCheckResponse: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".HealthCheckResponse"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "status"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}status\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -177,10 +173,5 @@ extension Grpc_Health_V1_HealthCheckResponse: InternalSwiftProtobuf.Message, Int
 }
 
 extension Grpc_Health_V1_HealthCheckResponse.ServingStatus: InternalSwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "UNKNOWN"),
-    1: .same(proto: "SERVING"),
-    2: .same(proto: "NOT_SERVING"),
-    3: .same(proto: "SERVICE_UNKNOWN"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0UNKNOWN\0\u{1}SERVING\0\u{1}NOT_SERVING\0\u{1}SERVICE_UNKNOWN\0")
 }

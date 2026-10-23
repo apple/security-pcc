@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,7 +18,6 @@
 //
 
 #include "BridgingHeader.h"
-#include "SecureConfigDB/secureconfig.h"
 
 #import <os/log.h>
 #import <Foundation/Foundation.h>
@@ -33,10 +32,6 @@ SOFT_LINK_FUNCTION(libcryptex, cryptex_lockdown, cryptex_lockdown, errno_t, (voi
 
 bool shim_check_tailspin(void) {
 	return libtailspinLibrary();
-}
-
-bool shim_allows_internal_security_policies(void) {
-    return os_variant_allows_internal_security_policies(NULL);
 }
 
 bool shim_WIFSIGNALED(int32_t status) {
@@ -61,115 +56,6 @@ int shim_reboot3(uint64_t flag) {
 
 int shim_reboot3_with_purpose(uint64_t flag, rb3_userreboot_purpose_t_t purpose) {
     return reboot3(flag, purpose);
-}
-
-int64_t shim_MGQUniqueChipID(void) {
-    return MGGetSInt64Answer(kMGQUniqueChipID, -1);
-}
-
-NSString *shim_MGQSerialNumber(void) {
-    return (__bridge_transfer NSString *)MGGetStringAnswer(kMGQSerialNumber);
-}
-
-NSNumber *shim_MGQOceanComputeCarrierID(void) {
-    return (__bridge_transfer NSNumber *)MGCopyAnswer(kMGQOceanComputeCarrierID, NULL);
-}
-
-NSNumber *shim_MGQOceanComputeCarrierSlot(void) {
-    return (__bridge_transfer NSNumber *)MGCopyAnswer(kMGQOceanComputeCarrierSlot, NULL);
-}
-
-int64_t shim_MGQChipID(void) {
-    return MGGetSInt64Answer(kMGQChipID, -1);
-}
-
-int64_t shim_MGQBoardID(void) {
-    return MGGetSInt64Answer(kMGQBoardId, -1);
-}
-
-int64_t shim_MGQSecurityDomain(void) {
-    return MGGetSInt64Answer(kMGQSecurityDomain, -1);
-}
-
-uint8_t* shim_MGPROD_E126B(void) {
-    static typeof(MGPROD_E126B) result = MGPROD_E126B;
-    return result;
-}
-
-uint8_t* shim_MGPROD_E126T(void) {
-    static typeof(MGPROD_E126T) result = MGPROD_E126T;
-    return result;
-}
-
-uint8_t* shim_MGPROD_E130(void) {
-    static typeof(MGPROD_E130) result = MGPROD_E130;
-    return result;
-}
-
-bool shim_TMSetupTime(void) {
-#define QUEUE_NAME "com.apple.darwinit-time-sync"
-    __block bool time_ready = false;
-    NSInteger timeout = 60;
-    dispatch_queue_t q = dispatch_queue_create(QUEUE_NAME, NULL);
-
-    dispatch_group_t dg = dispatch_group_create();
-    dispatch_group_enter(dg);
-
-    TMSetupTime(q, timeout, ^(CFErrorRef error) {
-        if (error) {
-            os_log_fault(OS_LOG_DEFAULT, "Failed time sync with error %@",
-                   error);
-        } else {
-            time_ready = true;
-        }
-        dispatch_group_leave(dg);
-    });
-
-    dispatch_group_wait(dg, dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC));
-
-    return time_ready;
-#undef QUEUE_NAME
-}
-
-#if TARGET_OS_OSX
-bool support_package_install(void) {
-	return [PKPackage class] != nil && [PKDistributionController class] != nil;
-}
-#endif
-
-int shim_register_config(NSData *data) {
-    int ret = register_config_from_buffer(data.bytes, data.length, "darwin-init", "application/json");
-
-    if (ret) {
-        os_log_error(OS_LOG_DEFAULT,
-                "Failed to register_config_from_buffer with error %d", ret);
-    }
-
-    return ret;
-}
-
-int shim_register_secureconfig_parameters(NSData *data,
-		NSString *securityPolicy) {
-	int ret = register_config_parameters(data.bytes, data.length,
-			securityPolicy.UTF8String);
-
-	if (ret) {
-		os_log_error(OS_LOG_DEFAULT, "register_config_parameters() failed with error %d", ret);
-	}
-
-	return ret;
-}
-
-int shim_kIOReturnNoResources(void) {
-    return kIOReturnNoResources;
-}
-
-NSString *shim_automatedDeviceGroup(void) {
-	return [OSASystemConfiguration automatedDeviceGroup];
-}
-
-void shim_setAutomatedDeviceGroup(NSString *automatedDeviceGroup) {
-	[OSASystemConfiguration setAutomatedDeviceGroup:automatedDeviceGroup];
 }
 
 errno_t shim_cryptex_lockdown(void) {

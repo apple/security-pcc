@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,12 +19,12 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
-import AppleIntelligenceReporting
+internal import AsyncAlgorithmsInternal
 private import AtomicsInternal
 import Foundation
 import OSLog
 
-private let logger = tc2Logger(forCategory: .client)
+private let logger = Logger(for: .client)
 
 /// A struct representing a single trusted cloud compute request.
 public struct TrustedRequest: Sendable {
@@ -33,19 +33,20 @@ public struct TrustedRequest: Sendable {
         // The underlying trusted request.
         private let id: UUID
         private let xpcRequestProxy: any XPCRequestProxyProtocol
-        private let telemetryEventID: EventIdentifier?
-        private let isChunkingEnabled: Bool
+        private let step: AppleIntelligenceStep
+        /// The chunk size to use. `nil` means chunking is disabled.
+        private let chunkSize: Int?
 
         init<XPCRequestProxy: XPCRequestProxyProtocol>(
             id: UUID,
             xpcRequestProxy: XPCRequestProxy,
-            telemetryEventID: EventIdentifier? = nil,
-            isChunkingEnabled: Bool
+            step: AppleIntelligenceStep,
+            chunkSize: Int?
         ) {
             self.id = id
             self.xpcRequestProxy = xpcRequestProxy
-            self.telemetryEventID = telemetryEventID
-            self.isChunkingEnabled = isChunkingEnabled
+            self.step = step
+            self.chunkSize = chunkSize
         }
 
         /// Writes the contents of the sequence to the request.
@@ -65,26 +66,16 @@ public struct TrustedRequest: Sendable {
         ///
         /// - Parameter data: The data to write to the request.
         @concurrent public func write(data: Data) async throws {
+            let pipeline = self.buildPipeline(CollectionOfOne(data).async)
+
             try await withTaskCancellationHandler {
                 do {
-                    if self.isChunkingEnabled {
-                        var iterator = try DataChunker(data: data).makeIterator()
-                        var current = iterator.next()
-
-                        while let chunk = current {
-                            let next = iterator.next()
-                            try await self.xpcRequestProxy.send(data: chunk, isComplete: next == nil)
-                            current = next
-                        }
-                    } else {
-                        // No chunking: use legacy behavior
-                        return try await self.xpcRequestProxy.send(data: data, isComplete: true)
+                    for try await (chunk, next) in pipeline.lookAhead() {
+                        let isComplete = if case .success(nil) = next { true } else { false }
+                        try await self.xpcRequestProxy.send(data: chunk, isComplete: isComplete)
                     }
                 } catch {
-                    try? EventReporter().emitAppleIntelligenceEndEvent(
-                        eventInfo: trustedRequestEventInfo(step: .privateCloudComputeRequestInProcess, errors: [error]),
-                        startEventIdentifier: telemetryEventID
-                    )
+                    self.step.fail(error: error)
 
                     throw error
                 }
@@ -100,40 +91,16 @@ public struct TrustedRequest: Sendable {
         ///
         /// - Parameter contentsOf: The asynchronous sequence of data to write to the request.
         @concurrent public func write<AS: AsyncSequence>(contentsOf sequence: AS) async throws where AS.Element == Data {
-            var it = sequence.makeAsyncIterator()
-
-            // if the provided AsyncSequence throws, we cancel. We will
-            // step through the iterator by hand because if the send throws,
-            // we do not want to cancel.
-            func nextWithCancel(_ it: inout AS.AsyncIterator) async throws -> Data? {
-                do {
-                    return try await it.next()
-                } catch {
-                    logger.error("\(self.id) Writer write cancelled due to iterator throw")
-                    self.xpcRequestProxy.cancel()
-                    throw error
-                }
-            }
+            let pipeline = self.buildPipeline(sequence)
 
             try await withTaskCancellationHandler {
                 do {
-                    while let element = try await nextWithCancel(&it) {
-                        if self.isChunkingEnabled {
-                            let chunker = try DataChunker(data: element)
-                            for chunk in chunker {
-                                try await self.xpcRequestProxy.send(data: chunk, isComplete: false)
-                            }
-                        } else {
-                            // No chunking: use legacy behavior
-                            try await self.xpcRequestProxy.send(data: element, isComplete: false)
-                        }
+                    for try await chunk in pipeline {
+                        try await self.xpcRequestProxy.send(data: chunk, isComplete: false)
                     }
                     try await self.xpcRequestProxy.send(message: .final)
                 } catch {
-                    try? EventReporter().emitAppleIntelligenceEndEvent(
-                        eventInfo: trustedRequestEventInfo(step: .privateCloudComputeRequestInProcess, errors: [error]),
-                        startEventIdentifier: telemetryEventID
-                    )
+                    self.step.fail(error: error)
 
                     throw error
                 }
@@ -141,6 +108,22 @@ public struct TrustedRequest: Sendable {
                 logger.error("\(id) Writer write cancelled due to Task cancellation")
                 xpcRequestProxy.cancel()
             }
+        }
+
+        private func buildPipeline<S: AsyncSequence>(
+            _ sequence: S
+        ) -> any AsyncSequence<Data, any Error> where S.Element == Data {
+            var pipeline: any AsyncSequence<Data, any Error> =
+                sequence
+                .mapError { [id, xpcRequestProxy] error in
+                    logger.error("\(id) Writer write cancelled due to iterator throw")
+                    xpcRequestProxy.cancel()
+                    return error
+                }
+            if let chunkSize = self.chunkSize {
+                pipeline = pipeline.chunked(chunkSize: chunkSize)
+            }
+            return pipeline
         }
     }
 
@@ -151,20 +134,21 @@ public struct TrustedRequest: Sendable {
         // The underlying trusted request.
         private let id: UUID
         private let xpcRequestProxy: any XPCRequestProxyProtocol
-        private let telemetryEventID: EventIdentifier?
-        private let isChunkingEnabled: Bool
+        private let step: AppleIntelligenceStep
+        /// The chunk size to use. `nil` means chunking is disabled.
+        private let chunkSize: Int?
         private let madeAsyncIteratorAtomic = ManagedAtomic(false)
 
         init<XPCRequestProxy: XPCRequestProxyProtocol>(
             id: UUID,
             xpcRequestProxy: XPCRequestProxy,
-            telemetryEventID: EventIdentifier? = nil,
-            isChunkingEnabled: Bool
+            step: AppleIntelligenceStep,
+            chunkSize: Int?
         ) {
             self.id = id
             self.xpcRequestProxy = xpcRequestProxy
-            self.telemetryEventID = telemetryEventID
-            self.isChunkingEnabled = isChunkingEnabled
+            self.step = step
+            self.chunkSize = chunkSize
         }
 
         public func makeAsyncIterator() -> AsyncIterator {
@@ -187,34 +171,34 @@ public struct TrustedRequest: Sendable {
             return AsyncIterator(
                 id: self.id,
                 xpcRequestProxy: self.xpcRequestProxy,
-                telemetryEventID: self.telemetryEventID,
-                isChunkingEnabled: self.isChunkingEnabled)
+                step: self.step,
+                chunking: self.chunkSize != nil)
         }
 
         public struct AsyncIterator: AsyncIteratorProtocol {
             // For chunking mode
-            private var assemblerIterator: DataAssembler<AsyncSequenceFromClosure<Data>>.AsyncIterator?
+            private var assemblerIterator: DataAssembler<AsyncThrowingStream<Data, any Error>>.AsyncIterator?
 
             private let id: UUID
             private let xpcRequestProxy: any XPCRequestProxyProtocol
-            private let telemetryEventID: EventIdentifier?
+            private let step: AppleIntelligenceStep
             private let concurrentNextCallsAtomic = ManagedAtomic(false)
 
             fileprivate init<XPCRequestProxy: XPCRequestProxyProtocol>(
                 id: UUID,
                 xpcRequestProxy: XPCRequestProxy,
-                telemetryEventID: EventIdentifier?,
-                isChunkingEnabled: Bool
+                step: AppleIntelligenceStep,
+                chunking: Bool
             ) {
                 self.id = id
                 self.xpcRequestProxy = xpcRequestProxy
-                self.telemetryEventID = telemetryEventID
+                self.step = step
 
-                if isChunkingEnabled {
-                    let xpcStream = AsyncSequenceFromClosure { [xpcRequestProxy] in
+                if chunking {
+                    let xpcStream = AsyncThrowingStream { [xpcRequestProxy] in
                         try await xpcRequestProxy.next() as Data?
                     }
-                    let assembler = DataAssembler(xpcStream)
+                    let assembler = xpcStream.assembledChunkedPayloadData()
                     self.assemblerIterator = assembler.makeAsyncIterator()
                 } else {
                     self.assemblerIterator = nil
@@ -241,24 +225,18 @@ public struct TrustedRequest: Sendable {
                     do {
                         let result: Data?
                         if self.assemblerIterator != nil {
-                            result = try await self.assemblerIterator?.next()
+                            result = try await self.assemblerIterator?.next(isolation: #isolation)
                         } else {
                             result = try await self.xpcRequestProxy.next()
                         }
 
                         if result == nil {
-                            try? EventReporter().emitAppleIntelligenceEndEvent(
-                                eventInfo: trustedRequestEventInfo(step: .privateCloudComputeRequestInProcess),
-                                startEventIdentifier: telemetryEventID
-                            )
+                            self.step.succeed()
                         }
 
                         return result
                     } catch {
-                        try? EventReporter().emitAppleIntelligenceEndEvent(
-                            eventInfo: trustedRequestEventInfo(step: .privateCloudComputeRequestInProcess, errors: [error]),
-                            startEventIdentifier: telemetryEventID
-                        )
+                        self.step.fail(error: error)
 
                         throw error
                     }
@@ -289,33 +267,6 @@ public struct TrustedRequest: Sendable {
 
     /// Optional session identifier used for rate limiting and analytics.
     public var sessionIdentifier: UUID?
-
-    /// Creates a new ``TrustedRequest``.
-    /// - Parameters:
-    ///   - id: The request's ID. Defaults to a newly generated one.
-    ///   - workloadType: The request's workload type.
-    ///   - workloadParameters: The request's workload parameters.
-    ///   - featureIdentifier: The request's feature ID.
-    ///   - sessionIdentifier: The request's session ID.
-    ///   - bundleIdentifierOverride: An override for the originating bundle ID.
-    ///   - originatingBundleIdentifier: The bundleID that hosted the root interaction.
-    public init(
-        id: UUID = .init(),
-        workloadType: String,
-        workloadParameters: [String: String],
-        featureIdentifier: String,
-        sessionIdentifier: UUID,
-        bundleIdentifierOverride: String? = nil,
-        originatingBundleIdentifier: String? = nil
-    ) {
-        self.id = id
-        self.workloadType = workloadType
-        self.workloadParameters = workloadParameters
-        self.bundleIdentifier = bundleIdentifierOverride
-        self.featureIdentifier = featureIdentifier
-        self.sessionIdentifier = sessionIdentifier
-        self.originatingBundleIdentifier = originatingBundleIdentifier
-    }
 
     // This is internal, because we don't want the public interface to expose the
     // optional nature of some of these fields. Everyone should provide a feature id,

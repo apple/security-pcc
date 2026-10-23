@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -99,12 +99,12 @@ class BaseStateMachine {
 class LeaderStateMachineTLS: BaseStateMachine, StateMachine {
 	override func isAllowedTransition(targetState: EnsemblerStatus) -> Bool {
 		let allowedTransitions: [EnsemblerStatus: [EnsemblerStatus]] = [
-			.distributingCIOKey: [.coordinating],
-			.distributedCIOKey: [.distributingCIOKey, .reDistributingCIOKey],
+			.distributingKey: [.coordinating],
+			.distributedCIOKey: [.distributingKey, .redistributingKey],
 			.activating: [.distributedCIOKey],
 			.activated: [.activating],
 			.ready: [.activated, .distributedCIOKey],
-			.reDistributingCIOKey: [.ready],
+			.redistributingKey: [.ready],
 		]
 		if let statesAllowed = allowedTransitions[targetState] {
 			return statesAllowed.contains(self.state)
@@ -170,3 +170,5 @@ class FollowerStateMachineTLS: BaseStateMachine, StateMachine {
 		self.state = targetState
 	}
 }
+
+

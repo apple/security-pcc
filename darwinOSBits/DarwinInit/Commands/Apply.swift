@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,9 +18,10 @@
 //
 
 import ArgumentParserInternal
+import DarwinInitConfig
+import os
 internal import OSPrivate_os_log
 internal import OSPrivate.os.transactionPrivate
-import os
 import RemoteServiceDiscovery
 import System
 
@@ -78,7 +79,7 @@ final class Apply: AsyncParsableCommand {
 			The default is exit unless this machine is a BMC, and then the default failure action is "reboot". \
 			This CLI option is overridden by NVRAM arguments or failureActions set from darwin-init config.
 			"""))
-	var failureAction: DInitFailureAction?
+	var failureAction: Config.Finish.FailureAction?
 
 	@Flag(name: [.short, .long], help: .init("Suppress logging output to stdout/console",
 		discussion: """
@@ -102,9 +103,11 @@ final class Apply: AsyncParsableCommand {
     static func validateConfigs(
         policyString: String,
         configs: [Config],
-        on computer: some Computer
+        on computer: some Computer,
+        regoBundlePath: String? = nil
     ) async throws {
-        let validator = PCCRegoValidator(configs: configs, bundlePath: computer.regoBundle)
+        let bundlePath = regoBundlePath ?? computer.regoBundle
+        let validator = PCCRegoValidator(configs: configs, bundlePath: bundlePath)
         let result = try await validator.validate()
 
         // Report any warnings even if valid
@@ -294,7 +297,7 @@ final class Apply: AsyncParsableCommand {
         }
         logger.log("Successfully enforced that cryptex cache only contains contents accessible to current workload")
 
-        if globals.retainCachedCryptexes == false {
+        if system && globals.retainCachedCryptexes == false {
             let cacheDelegate = CryptexCacheDelegate()
 
             logger.info("Purge cache entries from previous workload")
@@ -341,6 +344,31 @@ final class Apply: AsyncParsableCommand {
         // Initial pass over the configurations
         let globals = try await prepare(configs: configs, on: computer)
 
+        // Write in-progress status after validation
+        if system {
+            let status = DarwinInitApplyStatus.progress(tracker: nil)
+            try computer.fileSystem.write(json: status, to: kDInitStatusFilepath)
+        }
+
+        // Apply globals that need to happen before any configs
+        // Only do this on BMC until the compute node side of the SRS change land rdar://165856856
+        if system && computer.shouldInstallBuiltinCryptex {
+            for builtinCryptexId in kBuiltinCryptexIdentifiers {
+                if let overriddenCryptex = globals.builtinCryptexOverride[builtinCryptexId] {
+                    logger.log("Not installing builtin cryptex \(builtinCryptexId) as it's overridden by config \(overriddenCryptex.jsonPointer)")
+                } else {
+                    // Install the builtin cryptex persistently, so that it works for non ephemeral environments
+                    do {
+                        logger.log("Installing builtin cryptex \(builtinCryptexId)...")
+                        try await LibCryptex.installBuiltinCryptex(id: builtinCryptexId, ephemeral: false)
+                        logger.log("Builtin cryptex \(builtinCryptexId) installed successfully")
+                    } catch {
+                        throw Failure("Failed to bootstrap builtin cryptex: \(error)")
+                    }
+                }
+            }
+        }
+
         var errorReports: [ErrorReport] = []
 
         let writer = ResultWriter(fileSystem: computer.fileSystem)
@@ -355,45 +383,63 @@ final class Apply: AsyncParsableCommand {
             }
         }
 
-        for config in configs {
-            // Config timeout takes precedence over --timeout CLI argument
-            let timeout = config.applyTimeout ?? timeout ?? kDefaultApplyTimeout
+        var configApplyError: (any Error)? = nil
+        do {
+            for config in configs {
+                // Config timeout takes precedence over --timeout CLI argument
+                let timeout = config.applyTimeout ?? timeout ?? kDefaultApplyTimeout
 
-            logger.info("Effective timeout is \(timeout)")
-            let errorReportsSnapshot = errorReports
-            errorReports = try await withDeadline(.now + timeout, clock: .continuous) { [writer] in
-                var errorReports = errorReportsSnapshot
+                logger.info("Effective timeout is \(timeout)")
+                let errorReportsSnapshot = errorReports
+                errorReports = try await withDeadline(.now + timeout, clock: .continuous) { [writer] in
+                    var errorReports = errorReportsSnapshot
 
-                // Actually apply the individual config
-                let result: Config
-                let errorReporter = ErrorReporter()
-                result = try await self.apply(config, on: computer, env: globals, reporter: errorReporter)
-                try await writer.add(result)
+                    // Actually apply the individual config
+                    let result: Config
+                    let errorReporter = ErrorReporter()
+                    result = try await self.apply(config, on: computer, env: globals, reporter: errorReporter)
+                    try await writer.add(result)
 
-                let errorReport: ErrorReport
-                if let origin = config.origin, origin.isV1 {
-                    errorReport = ErrorReport(inputConfig: config, errors: errorReporter.errors, originalJson: origin.source)
-                } else {
-                    errorReport = ErrorReport(inputConfig: config, errors: errorReporter.errors)
+                    let errorReport: ErrorReport
+                    if let origin = config.origin, origin.isV1 {
+                        errorReport = ErrorReport(inputConfig: config, errors: errorReporter.errors, originalJson: origin.source)
+                    } else {
+                        errorReport = ErrorReport(inputConfig: config, errors: errorReporter.errors)
+                    }
+                    errorReports.append(errorReport)
+
+                    // Check if applied config matches expected config
+                    let fullyApplied = result == config
+                    if !fullyApplied {
+                        let errorReportJson = try errorReport.jsonString()
+                        logger.error("Failed to fully apply config. Error report below:\n\(errorReportJson)\n")
+                    }
+
+                    if system {
+                        try computer.fileSystem.write(json: errorReports, to: kDInitErrorReportFilepath, redacted: false)
+                    }
+
+                    return errorReports
                 }
-                errorReports.append(errorReport)
-
-                // Check if applied config matches expected config
-                let fullyApplied = result == config
-                if !fullyApplied {
-                    let errorReportJson = try errorReport.jsonString()
-                    logger.error("Failed to fully apply config. Error report below:\n\(errorReportJson)\n")
-                }
-
-                if system {
-                    // Write what we have applied so far to the cookie file
-                    try await writer.write(to: kDInitDoneFilepath)
-
-                    try computer.fileSystem.write(json: errorReports, to: kDInitErrorReportFilepath, redacted: false)
-                }
-
-                return errorReports
             }
+        } catch {
+            configApplyError = error
+        }
+
+        // Write the cookie file after all configs have been attempted.
+        // Clients use this file to indicate darwin-init has finished running.
+        if system {
+            do {
+                try await writer.write(to: kDInitDoneFilepath)
+            } catch {
+                logger.error("Failed to write done cookie: \(error)")
+                throw configApplyError ?? error
+            }
+        }
+
+        // Re-throw any error from config application
+        if let configApplyError {
+            throw configApplyError
         }
 
         // Check if we have fully applied all configurations

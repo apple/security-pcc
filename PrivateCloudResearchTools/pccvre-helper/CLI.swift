@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -60,6 +60,7 @@ struct ToolsDirectory {
     var cloudremotediagctl: String { append("usr/local/bin/cloudremotediagctl") }
     var tie_vre_cli: String { append("usr/local/bin/tie-vre-cli") }
     var controlPlaneTestServer: String { append("usr/local/bin/PCCCPTestServer") }
+    var serviceDiscoveryTestServer: String { append("usr/local/bin/ServiceDiscoveryTestServer") }
     var PrivateFrameworks: String { append("System/Library/PrivateFrameworks/") }
 }
 

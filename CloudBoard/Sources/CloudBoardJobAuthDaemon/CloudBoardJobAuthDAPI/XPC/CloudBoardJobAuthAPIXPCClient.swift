@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -50,18 +50,11 @@ extension CloudBoardJobAuthAPIXPCClient {
 }
 
 extension CloudBoardJobAuthAPIXPCClient: CloudBoardJobAuthAPIClientToServerProtocol {
-    public func requestTGTSigningKeys() async throws -> [SigningKey] {
+    public func requestCostTokenSigningKey() async throws -> CostTokenSigningKeyPair {
         guard let connection else {
             throw CloudBoardJobAuthAPIError.notConnected
         }
-        return try await connection.send(CloudBoardJobAuthAPIXPCClientToServerMessages.RequestTGTSigningKeys())
-    }
-
-    public func requestOTTSigningKeys() async throws -> [SigningKey] {
-        guard let connection else {
-            throw CloudBoardJobAuthAPIError.notConnected
-        }
-        return try await connection.send(CloudBoardJobAuthAPIXPCClientToServerMessages.RequestOTTSigningKeys())
+        return try await connection.send(CloudBoardJobAuthAPIXPCClientToServerMessages.RequestCostTokenSigningKey())
     }
 }
 
@@ -74,9 +67,9 @@ extension CloudBoardJobAuthAPIXPCClient: CloudBoardJobAuthAPIClientProtocol {
         await self.connection?.activate(buildMessageHandlerStore: self.configureHandlers)
     }
 
-    internal func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
-        handlers.register(CloudBoardJobAuthAPIXPCServerToClientMessages.AuthKeysUpdated.self) { message in
-            try await self.delegate?.authKeysUpdated(newKeySet: message.newKeySet)
+    internal nonisolated func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
+        handlers.register(CloudBoardJobAuthAPIXPCServerToClientMessages.CostTokenKeyUpdated.self) { message in
+            try await self.delegate?.costTokenKeyUpdated(newKey: message.newKeyPair)
             return ExplicitSuccess()
         }
     }

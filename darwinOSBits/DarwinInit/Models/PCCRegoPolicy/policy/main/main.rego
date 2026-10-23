@@ -1,4 +1,4 @@
-# Copyright © 2025 Apple Inc. All Rights Reserved.
+# Copyright © 2026 Apple Inc. All Rights Reserved.
 
 # APPLE INC.
 # PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,8 +21,8 @@ import data.policy.common.has_key
 default is_valid := false
 
 # version used for enforcing policies can be overriden with input version, must be at least min
-min_enforced_version := 9
-default version := 9
+min_enforced_version := 10
+default version := 10
 # we set requested version to whatever is in first config and check for conflicts later
 requested_version := input["darwin-init"][0]["config_security_policy"]["version"]
 version := requested_version if requested_version >= min_enforced_version

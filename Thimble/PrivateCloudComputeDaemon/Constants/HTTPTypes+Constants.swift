@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -35,7 +35,6 @@ extension HTTPField.Name {
     static let appleWorkload = HTTPField.Name("apple-workload")!
     static let appleWorkloadParameters = HTTPField.Name("apple-workload-parameters")!
     static let appleQOS = HTTPField.Name("apple-qos")!
-    static let appleLocale = HTTPField.Name("apple-locale")!
     static let appleFeatureID = HTTPField.Name("apple-featureid")!
     static let appleBundleID = HTTPField.Name("apple-bundleid")!
     static let appleSessionProgress = HTTPField.Name("apple-session-progress")!

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -40,7 +40,7 @@ struct Configuration {
     }
 
     var requireProdTrustAnchors: Bool {
-        Self.CFPreferences.requireProdTrustAnchors ?? (environment >= .carry)
+        Self.CFPreferences.requireProdTrustAnchors ?? (environment >= .production)
     }
 
     var requireRestrictedExecutionMode: Bool {
@@ -57,6 +57,10 @@ struct Configuration {
 
     var requireProdFusing: Bool {
         Self.CFPreferences.requireProdFusing ?? (environment >= .production)
+    }
+
+    var fullReleaseSetVerification: Bool {
+        Self.CFPreferences.fullReleaseSetVerification ?? (environment >= .production)
     }
 
     var requireLockedCryptexes: Bool {
@@ -89,6 +93,26 @@ struct Configuration {
 
     var restrictSecurityPolicies: Bool {
         Self.CFPreferences.restrictSecurityPolicies ?? true
+    }
+
+    var certificateTransparency: Bool {
+        Self.CFPreferences.certificateTransparency ?? (environment >= .qa)
+    }
+
+    var certificateTransparencyFetchFailClosed: Bool {
+        Self.CFPreferences.certificateTransparencyFetchFailClosed ?? (environment > .production)
+    }
+
+    var certificateTransparencyVerifyFailClosed: Bool {
+        Self.CFPreferences.certificateTransparencyVerifyFailClosed ?? (environment > .production)
+    }
+
+    var certificateTransparencyShouldRecycleProxyAttestation: Bool {
+        Self.CFPreferences.certificateTransparencyShouldRecycleProxyAttestation ?? false
+    }
+
+    var enforceEnvironment: Bool {
+        Self.CFPreferences.enforceEnvironment ?? (environment > .production)
     }
 }
 
@@ -139,6 +163,12 @@ extension Configuration {
             shared.requireProdFusing
         }
 
+        @CFPreference(key: "fullReleaseSetVerification")
+        var fullReleaseSetVerification: Bool?
+        static var fullReleaseSetVerification: Bool? {
+            shared.fullReleaseSetVerification
+        }
+
         @CFPreference(key: "requireLockedCryptexes")
         var requireLockedCryptexes: Bool?
         static var requireLockedCryptexes: Bool? {
@@ -185,6 +215,36 @@ extension Configuration {
         var ensembleTopologyValidation: Bool?
         static var ensembleTopologyValidation: Bool? {
             shared.ensembleTopologyValidation
+        }
+
+        @CFPreference(key: "certificateTransparency")
+        var certificateTransparency: Bool?
+        static var certificateTransparency: Bool? {
+            shared.certificateTransparency
+        }
+
+        @CFPreference(key: "certificateTransparencyFetchFailClosed")
+        var certificateTransparencyFetchFailClosed: Bool?
+        static var certificateTransparencyFetchFailClosed: Bool? {
+            shared.certificateTransparencyFetchFailClosed
+        }
+
+        @CFPreference(key: "certificateTransparencyVerifyFailClosed")
+        var certificateTransparencyVerifyFailClosed: Bool?
+        static var certificateTransparencyVerifyFailClosed: Bool? {
+            shared.certificateTransparencyVerifyFailClosed
+        }
+
+        @CFPreference(key: "certificateTransparencyShouldRecycleProxyAttestation")
+        var certificateTransparencyShouldRecycleProxyAttestation: Bool?
+        static var certificateTransparencyShouldRecycleProxyAttestation: Bool? {
+            shared.certificateTransparencyShouldRecycleProxyAttestation
+        }
+
+        @CFPreference(key: "enforceEnvironment")
+        var enforceEnvironment: Bool?
+        static var enforceEnvironment: Bool? {
+            shared.enforceEnvironment
         }
     }
 }

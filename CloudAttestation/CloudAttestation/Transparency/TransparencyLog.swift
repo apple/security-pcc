@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,16 +19,47 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
-public typealias TransparencyLog = TransparencyProver & TransparencyVerifier
+import InternalSwiftProtobuf
+public typealias TransparencyLog = TransparencyProver & TransparencyVerifier & TransparencyConsistencyProver
 
 public protocol TransparencyProver: Sendable {
     func proveInclusion(of digest: Data) async throws -> TransparencyLogProofs
     func proveInclusion(of digests: [Data]) async throws -> [TransparencyLogProofs]
+
+    func proveInclusion(
+        of digest: Data,
+        at revision: TransparencyLogRevision?,
+        coveringAll: ATLogDataType?,
+        preferOldest: Bool,
+        releaseType: ATReleaseType
+    ) async throws -> TransparencyLogProofs
+
+    func proveInclusion(
+        of digests: [Data],
+        at revision: TransparencyLogRevision?,
+        coveringAll: ATLogDataType?,
+        preferOldest: Bool,
+        releaseType: ATReleaseType
+    ) async throws -> [TransparencyLogProofs]
 }
 
 extension TransparencyProver {
     public func proveInclusion(of digest: Data) async throws -> TransparencyLogProofs {
-        let proofs = try await proveInclusion(of: [digest])
+        return try await proveInclusion(of: digest, at: nil, coveringAll: nil, preferOldest: false, releaseType: .production)
+    }
+
+    public func proveInclusion(of digests: [Data]) async throws -> [TransparencyLogProofs] {
+        return try await proveInclusion(of: digests, at: nil, coveringAll: nil, preferOldest: false, releaseType: .production)
+    }
+
+    public func proveInclusion(
+        of digest: Data,
+        at revision: TransparencyLogRevision?,
+        coveringAll: ATLogDataType?,
+        preferOldest: Bool,
+        releaseType: ATReleaseType = .production
+    ) async throws -> TransparencyLogProofs {
+        let proofs = try await proveInclusion(of: [digest], at: revision, coveringAll: coveringAll, preferOldest: preferOldest, releaseType: releaseType)
 
         guard let proof = proofs.first else {
             throw TransparencyLogError.notFound
@@ -42,14 +73,19 @@ public protocol TransparencyVerifier: Sendable {
     func verifyExpiringInclusion(of digest: Data, proofs: TransparencyLogProofs) async throws -> Date
 }
 
-public struct TransparencyLogProofs: Sendable, Hashable {
-    let proofs: ATLogProofs
-    let expiration: Date?
-    let digest: Data?
+public protocol TransparencyConsistencyProver: Sendable {
+    func proveConsistency(between start: TransparencyLogRevision, and end: TransparencyLogRevision) async throws -> LogConsistency
+}
 
-    init(proofs: ATLogProofs, expiry: Int64, digest: Data) {
+/// Transparency Log Proofs specifically for the running software of a device.
+public struct TransparencyLogProofs: Sendable, Hashable {
+    var proofs: ATLogProofs
+    public var expiration: Date?
+    var digest: Data?
+
+    init(proofs: ATLogProofs, expiry: Int64?, digest: Data?) {
         self.proofs = proofs
-        self.expiration = Date(millisecondsSince1970: expiry)
+        self.expiration = expiry.map { Date(millisecondsSince1970: $0) }
         self.digest = digest
     }
 
@@ -71,6 +107,7 @@ public struct TransparencyLogProofs: Sendable, Hashable {
         self.digest = nil
     }
 
+    @available(*, deprecated, message: "This initializer is ambiguous for what kind of proofs are fetched")
     public init?(bundle: AttestationBundle) {
         guard bundle.proto.hasTransparencyProofs else {
             return nil
@@ -97,6 +134,46 @@ public struct TransparencyLogProofs: Sendable, Hashable {
         if proofsExpiration < expiration {
             throw TransparencyLogError.pendingExpiration(proofsExpiration: proofsExpiration, expiration: expiration)
         }
+    }
+
+    public var proto: Proto_TransparencyProofs {
+        return Proto_TransparencyProofs.with { builder in
+            builder.proofs = self.proofs
+        }
+    }
+}
+
+extension AttestationBundle {
+    public var softwareTransparencyProofs: TransparencyLogProofs? {
+        guard self.proto.hasTransparencyProofs else {
+            return nil
+        }
+        guard self.proto.transparencyProofs.hasProofs else {
+            return nil
+        }
+
+        let proofs = self.proto.transparencyProofs.proofs
+        guard proofs != ATLogProofs() else {
+            return nil
+        }
+
+        return .init(proofs: proofs, expiry: nil, digest: nil)
+    }
+
+    public var certificateTransparencyProofs: TransparencyLogProofs? {
+        guard self.proto.hasCertificateTransparencyProofs else {
+            return nil
+        }
+        guard self.proto.certificateTransparencyProofs.hasProofs else {
+            return nil
+        }
+
+        let proofs = self.proto.certificateTransparencyProofs.proofs
+        guard proofs != ATLogProofs() else {
+            return nil
+        }
+
+        return .init(proofs: proofs, expiry: nil, digest: nil)
     }
 }
 

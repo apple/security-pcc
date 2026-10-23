@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -31,7 +31,7 @@ struct SSHEnableCommand: ParsableCommand {
 
     func run() throws {
         var config = try options.readInputConfig()
-        config.enableSSH(publicKey: publicKey)
+        try config.enableSSH(publicKey: publicKey)
         try options.writeOutputConfig(config)
     }
 }

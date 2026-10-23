@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -126,6 +126,7 @@ class Volume : CustomStringConvertible {
             kAPFSVolumeCreateSynchronousKey : true,
             kAPFSVolumeNameKey : name as CFString,
             kAPFSVolumeRoleKey : APFS_VOL_ROLE_CACHE,
+            kAPFSVolumeEncryptedKey : true,
             kAPFSVolumeUUIDKey: uuidRef,
         ] as CFDictionary
         sk.withUnsafeContainerNodeCString { containerNode in

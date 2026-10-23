@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,7 +19,7 @@ import Synchronization
 import os
 #endif
 
-public final class ProcessSnapshotGenerator: EHGenerator, Sendable, AllEventsIterable {
+public final class ProcessSnapshotGenerator: EHGenerator, AllEventsIterable {
     private let log = EHLog.withCategory(ProcessSnapshotGenerator.self)
 
     public static let allEvents: [any EHUEFEvent.Type] = [
@@ -27,7 +27,7 @@ public final class ProcessSnapshotGenerator: EHGenerator, Sendable, AllEventsIte
     ]
 
     public enum ConfigKeys: String {
-        case process_snapshot_generator_interval
+        case process_snapshot_generator_interval = "com.apple.eventhorizond.processSnapshot.interval"
     }
 
     public struct ProcessSnapshotEvent: EHUEFEvent {
@@ -37,14 +37,18 @@ public final class ProcessSnapshotGenerator: EHGenerator, Sendable, AllEventsIte
         public init(processes: [EventNormalizer.NormalizedProcess]) {
             self.processes = processes
         }
-        public var tags = Set<String>()
-
-        public var fields: [String: EHValueType] = [:]
+        public var metadata = EHEventMetadata()
         public var event_category: EHUEFCategory = .process
         public var event_type: String = "process_snapshot"
 
         public var processes: [EventNormalizer.NormalizedProcess]?
     }
+
+    #if os(Linux)
+    public var hostProcPath: String?
+    #endif
+
+    public var intervalOverride: Int?
 
     public init() {}
 
@@ -54,16 +58,37 @@ public final class ProcessSnapshotGenerator: EHGenerator, Sendable, AllEventsIte
     public func start(_ pipeline: EHPipeline) throws {
         let logger = log
         os_log(.info, log: logger, "Initializing ProcessSnapshotGenerator")
-        let defaultInterval = 60 * 60 * 6 // 6 hours
-        let interval = EHConfigResolver(
-            SecureConfigProvider(),
-            EnvironmentConfigResolver(),
-            DefaultConfigProvider(value: defaultInterval)
-        ).resolve(key: ConfigKeys.process_snapshot_generator_interval.rawValue, domain: nil) ?? defaultInterval
+
+        #if os(Linux)
+        let enumerator: ProcessEnumerator
+        if let hostProc = hostProcPath {
+            os_log(.info, log: logger, "Using host proc path: \(hostProc)")
+            enumerator = ProcessEnumerator(procPath: hostProc)
+        } else {
+            enumerator = ProcessEnumerator.instance
+        }
+        #else
+        let enumerator = ProcessEnumerator.instance
+        #endif
+
+        let defaultInterval = 60 * 60 * 6
+        let interval: Int
+        if let intervalOverride, intervalOverride > 0 {
+            interval = intervalOverride
+        } else {
+            if let intervalOverride, intervalOverride <= 0 {
+                os_log(.error, log: logger, "Invalid intervalOverride: %d. Must be positive, using default.", intervalOverride)
+            }
+            interval = EHConfigResolver(
+                SecureConfigProvider(),
+                EnvironmentConfigResolver(),
+                DefaultConfigProvider(value: defaultInterval)
+            ).resolve(key: ConfigKeys.process_snapshot_generator_interval.rawValue, domain: nil) ?? defaultInterval
+        }
         os_log(.debug, log: logger, "Interval for process snapshot: \(interval)")
         Task {
             repeat {
-                guard let processes = await ProcessEnumerator.instance.enumerateProcesses() else {
+                guard let processes = await enumerator.enumerateProcesses() else {
                     os_log(.error, log: logger, "Unable to enumerate processes")
                     return
                 }
@@ -77,5 +102,44 @@ public final class ProcessSnapshotGenerator: EHGenerator, Sendable, AllEventsIte
     }
 
     public func stop() throws {
+    }
+}
+
+
+extension ProcessSnapshotGenerator.ProcessSnapshotEvent: EHFieldExtractable {
+    public func fieldValue(for field: String) -> Any? {
+        switch field {
+        case "tags": return tags
+        case "fields": return fields
+        case "event_category": return event_category
+        case "event_type": return event_type
+        case "processes": return processes
+        default: return nil
+        }
+    }
+}
+
+
+import AST
+
+private enum RK {
+    static let event_type: AST.RegoValue = .string("event_type")
+    static let event_category: AST.RegoValue = .string("event_category")
+    static let tags: AST.RegoValue = .string("tags")
+    static let fields: AST.RegoValue = .string("fields")
+    static let processes: AST.RegoValue = .string("processes")
+}
+
+extension ProcessSnapshotGenerator.ProcessSnapshotEvent: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = [:]
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        if let processes {
+            obj[RK.processes] = .array(processes.map { $0.toRegoValue() })
+        }
+        return .object(obj)
     }
 }

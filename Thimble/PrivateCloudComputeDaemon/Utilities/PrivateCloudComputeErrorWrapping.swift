@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -72,10 +72,11 @@ extension PrivateCloudComputeError {
             case .attestationKindMismatch: .attestationKindMismatch
             case .expectedResponseOnBypass: .expectedResponseOnBypass
             case .failedToLoadKeyData: .failedToLoadKeyData
-            case .failedToValidateAllAttestations: .failedToValidateAllAttestations
             case .invalidAttestationBundle: .invalidAttestationBundle
             case .invalidClientOverrideBuildVersion: .invalidClientOverrideBuildVersion
             case .missingAttestationBundle: .missingAttestationBundle
+            case .missingAttestationUDID: .missingAttestationUDID
+            case .failedToExtractAttestationUDID: .failedToExtractAttestationUDID
             case .missingResponseBypassContext: .missingResponseBypassContext
             case .privacyProxyFailed: .privacyProxyFailed
             case .privacyProxyFeatureDisabled: .privacyProxyFeatureDisabled
@@ -104,6 +105,10 @@ extension PrivateCloudComputeError {
             case .unexpectedAttestationKind: .unexpectedAttestationKind
             case .unexpectedlyReceivedResponseBypassContext: .unexpectedlyReceivedResponseBypassContext
             case .invokeRequestPayloadSendFailedAndCancelled: .networkTimedOutSendingRopesRequest
+            case .duplicateUDIDInBatch: .duplicateUDIDInBatch
+            case .insufficientInlineAttestations: .insufficientInlineAttestations
+            case .failedToValidateInlineAttestations: .failedToValidateInlineAttestations
+            case .failedToDecompressRequestExecutionLogEntry: .failedToDecompressRequestExecutionLogEntry
             }
 
         let telemetrySuffix = trustedRequestError.errorReason.map { "\($0)" }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,20 +24,21 @@
 package import Foundation
 private import OSLog
 
+// rdar://143946273 (Conform EnsemblerSession to the Sendable protocol)
 extension EnsemblerSession: @unchecked @retroactive Sendable {}
 
 extension EnsemblerSession: EnsembleTransponder {
 
     private static let logger = Logger(subsystem: EnsemblePorterConstants.controllerLoggerSubsystem, category: "EnsemblerSession")
 
-    package func registerMessageHandler(appID: String, handler: @escaping @Sendable (Int, Data) -> Data) throws {
+    package func registerMessageHandler(appID: String, handler: @escaping @Sendable (Int, Data) async throws -> Data) async throws {
         Self.logger.debug("Registering message handler for ensembled messages. appID=\(appID, privacy: .public)")
-        try self.registerDataCallback(appID: appID) { rank, data in
+        try await self.registerDataCallback(appID: appID) { rank, data in
             Self.logger.log("""
                 Received message from ensembled. \
                 sender=\(rank)
                 """)
-            return handler(rank, data)
+            return try await handler(rank, data)
         }
     }
 
@@ -53,11 +54,13 @@ extension EnsemblerSession: EnsembleTransponder {
         return peers.map { EnsemblePeerInfo(rank: $0.rank) }
     }
 
-    package func sendData(appID: String, data: Data, destination: Int, timeout: TimeInterval = 2.0) async throws -> Data {
-        let tracingContext = EnsembleTracingContext(name: nil,
-                                                    requestID: PrismTracing.requestID,
-                                                    spanID: PrismTracing.spanID,
-                                                    parentSpanID: nil)
+    package func sendData(appID: String, data: Data, destination: Int, timeout: TimeInterval = 2.0, includeTracingContext: Bool) async throws -> Data {
+        let tracingContext: EnsembleTracingContext? = includeTracingContext
+            ? EnsembleTracingContext(name: nil,
+                                     requestID: PrismTracing.requestID,
+                                     spanID: PrismTracing.spanID,
+                                     parentSpanID: nil)
+            : nil
         return try await self.sendDataToFollowerNode(appID: appID,
                                                      data: data,
                                                      destination: destination,

@@ -1,0 +1,12 @@
+.build
+.swiftpm
+.vscode
+DerivedData/
+rendred-config/
+.idea
+.sourcekit-lsp
+.ignored
+.DS_Store*
+.devcontainer/devcontainer-lock.json
+.local/identity
+.claude/

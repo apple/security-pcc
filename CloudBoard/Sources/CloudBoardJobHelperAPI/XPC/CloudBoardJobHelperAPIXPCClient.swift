@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -72,6 +72,12 @@ CloudBoardJobHelperAPIServerToClientHandlerProtocol {
         try await self.getConnection()?.send(CloudBoardJobHelperAPIXPCClientToServerMessages.AssignLAContext())
     }
 
+    public func queryProxyRequestStatus() async throws -> ProxyRequestStatus {
+        return try await self.getConnection()?.send(
+            CloudBoardJobHelperAPIXPCClientToServerMessages.QueryProxyRequestsStatusOnTimeout()
+        ) ?? ProxyRequestStatus(subrequestsStatus: .unavailable, workersStatus: .unavailable)
+    }
+
     public func set(delegate: CloudBoardJobHelperAPIClientDelegateProtocol) async {
         self.delegate.withLock { $0 = delegate }
     }
@@ -92,7 +98,7 @@ CloudBoardJobHelperAPIServerToClientHandlerProtocol {
         delegate.handleWorkloadResponse(response)
     }
 
-    internal func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
+    internal nonisolated func configureHandlers(_ handlers: inout CloudBoardAsyncXPCConnection.MessageHandlerStore) {
         handlers.register(JobHelperToCloudBoardDaemonMessage.self) { [weak self] message in
             guard let self else { return }
             self.handleWorkloadResponse(message)

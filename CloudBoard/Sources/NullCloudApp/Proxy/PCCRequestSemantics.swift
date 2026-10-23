@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -36,6 +36,12 @@ struct PCCRequestSemantics {
             parameters[NullCloudApp.workloadComputeModeKey.description] = [requestSpecificComputeWorkload]
         }
         self.parameters = parameters
-        self.responseBypass = configuration?.responseBypass
+
+        // Response bypass: workload parameter overrides config
+        if let responseBypassParam = parameters[NullCloudApp.workloadResponseBypassKey.description]?.first {
+            self.responseBypass = responseBypassParam == "true"
+        } else {
+            self.responseBypass = configuration?.responseBypass
+        }
     }
 }

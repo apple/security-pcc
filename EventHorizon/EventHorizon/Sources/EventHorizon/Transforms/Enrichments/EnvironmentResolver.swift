@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,10 +22,12 @@ public enum EnvironmentResolver {
     static let log = EHLog.withCategory(EnvironmentResolver.self)
 
     public static func resolveEnv(provider: any ConfigProvider, key: String, domain: String) -> String? {
+        #if !os(Linux)
         if let val: String = provider.get(key: key, domain: domain) {
             os_log(.debug, log: log, "Resolved \(domain): \(key) from \(provider.name): \(val)")
             return val
         }
+        #endif
         os_log(.debug, log: log, "Unable to resolve resolve \(domain): \(key) from \(provider.name)")
         return nil
     }
@@ -39,6 +41,10 @@ public enum EnvironmentResolver {
     }()
 
     static let EHVersion: String? = {
+        return BuildInfo.version
+    }()
+
+    static let COSBuildVersion: String? = {
         return Self.resolveEnv(provider: CFPrefsProvider(), key: "cloudOSBuildVersion", domain: "com.apple.cloudos.cloudOSInfo")
     }()
 
@@ -47,15 +53,25 @@ public enum EnvironmentResolver {
     }()
 
     static let observabilityLabels: [String: String]? = {
+        #if !os(Linux)
         if let labels: [String: String] = CFPrefsProvider().preferencesDictionaryValue("ObservabilityLabels", domain: "com.apple.cloudos.cloudOSInfo") {
             os_log(.debug, log: log, "Resolved observability labels: \(labels, privacy: .public)")
             return labels
         }
+        #endif
         os_log(.debug, log: log, "Unable to resolve observability labels")
         return nil
     }()
 
     static let bootSession: String? = {
+        #if os(Linux)
+        let bootIdPath = "/proc/sys/kernel/random/boot_id"
+        guard let bootIDUrl = URL(string: bootIdPath), let contents = bootIDUrl.readContentsAtPath() else {
+            os_log(.error, log: log, "unable to get boot session UUID from \(bootIdPath)")
+            return nil
+        }
+        return contents.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        #else
         var size = 0
         var ret: Int32
 
@@ -80,5 +96,6 @@ public enum EnvironmentResolver {
         }
 
         return uuid
+        #endif
     }()
 }

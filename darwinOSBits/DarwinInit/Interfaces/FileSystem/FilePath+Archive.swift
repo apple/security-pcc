@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -32,8 +32,10 @@ extension FilePath {
     private func call(_ archive: OpaquePointer?, _ function: (OpaquePointer?) -> Int32) throws {
         func errorString(archive: OpaquePointer?) -> String? {
             guard let cSstr = archive_error_string(archive) else {
+                logger.error("archive_errno(\(archive_errno(archive)))")
                 return nil
             }
+            logger.error("archive_errno(\(archive_errno(archive))) archive_error_string(\(String(cString: cSstr), privacy: .public))")
             return String(cString: cSstr)
         }
 
@@ -81,8 +83,11 @@ extension FilePath {
         ARCHIVE_EXTRACT_FFLAGS |
         ARCHIVE_EXTRACT_NO_OVERWRITE |
         ARCHIVE_EXTRACT_SECURE_NODOTDOT |
-        ARCHIVE_EXTRACT_SECURE_SYMLINKS |
-        ARCHIVE_EXTRACT_SECURE_NOABSOLUTEPATHS
+        ARCHIVE_EXTRACT_SECURE_SYMLINKS
+        // * Don't use ARCHIVE_EXTRACT_SECURE_NOABSOLUTEPATHS as we set absolute
+        //   paths using archive_entry_set_pathname() below.
+        // * ARCHIVE_EXTRACT_SECURE_SYMLINKS requires output path to be inside
+        //   realpath /private/var and not symlink /var .
         
         try call(extract) { archive_write_disk_set_options($0, options) }
         try call(extract) { archive_write_disk_set_standard_lookup($0) }
@@ -92,6 +97,11 @@ extension FilePath {
                 var entry: OpaquePointer?
                 try call(archive) { archive_read_next_header($0, &entry) }
                 defer { try? call(extract) { archive_write_finish_entry($0) } }
+
+                if archive_entry_hardlink(entry) != nil {
+                    logger.error("Extraction of archives with hardlinks is not permitted - rejecting")
+                    throw ArchiveError.failed("Hardlink entries are not permitted")
+                }
 
                 // skip entry if it has no pathname
                 guard let cStr = archive_entry_pathname(entry) else { continue }
@@ -109,7 +119,7 @@ extension FilePath {
             }
         } catch ArchiveError.endOfArchive { }
     }
-    
+
     func extract(to path: FilePath, using aeaDecryptionParameters: AEADecryptionParameters?) throws {
         logger.log("Extracting \(self) to \(path)")
         

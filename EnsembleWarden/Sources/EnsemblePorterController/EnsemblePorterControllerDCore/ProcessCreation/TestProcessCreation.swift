@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,49 +24,63 @@ package import EnsemblePorterCommon
 internal import EnsemblePorterDCore
 package import Foundation
 private import Synchronization
-@preconcurrency private import XPC
+@preconcurrency package import XPC
 
 /// Create porters in-process.
 ///
 /// This is to be used in tests, since we can't use launchd there.
 package final class TestProcessCreation: ProcessCreationProtocol {
-    private let instanceMap: Mutex<[UUID: EnsemblePorterImpl<MockEnsembleTransponder>]> = .init([:])
+    private struct InstanceEntry: Sendable {
+        let porter: EnsemblePorterImpl<MockEnsembleTransponder>
+        let endpoint: XPCEndpoint
+    }
+
+    private let instanceMap: Mutex<[UUID: InstanceEntry]> = .init([:])
 
     package init() {
     }
 
     package func createInstance() async throws -> UUID {
         let uuid = UUID()
-        let machServiceName = "com.apple.cloudos.ensembleporter.test.\(uuid)"
 
         let porter = EnsemblePorterImpl<MockEnsembleTransponder>(
             intraEnsembleTransponder: MockEnsembleTransponder(),
             clientType: .xpcSession
         )
 
-        // Store the porter instance so it stays alive
+        let endpoint = try await withCheckedThrowingContinuation { continuation in
+            Task {
+                // Unstructured task here, but this is basically what launchd would do!
+                // ie it would run the task and leave it running.
+                do {
+                    try await porter.prewarmFollowers()
+                    try await porter.runAnonymous { endpoint in
+                        continuation.resume(returning: endpoint)
+                    }
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+
+        // Store the porter instance and endpoint so they stay alive
         self.instanceMap.withLock { map in
-            map[uuid] = porter
+            map[uuid] = InstanceEntry(porter: porter, endpoint: endpoint)
         }
-
-        Task {
-            // Unstructured task here, but this is basically what launchd would do!
-            // ie it would run the task and leave it running.
-            try await porter.run(machServiceName: machServiceName)
-        }
-
-        // Wait for the porter's XPC server to be running before returning
-        await porter.waitForRunning()
 
         return uuid
     }
 
     package func createProvider(instanceUUID: UUID) throws -> EnsemblePorterCryptoProviderImpl<EnsemblePorterXPCSessionClient> {
-        let machServiceName = "com.apple.cloudos.ensembleporter.test.\(instanceUUID)"
-        let xpcConnection = xpc_connection_create_mach_service(machServiceName, nil, 0)
-        xpc_connection_set_event_handler(xpcConnection) { _ in }
-        xpc_connection_activate(xpcConnection)
-        return try EnsemblePorterCryptoProviderImpl<EnsemblePorterXPCSessionClient>(existingConnection: xpcConnection)
+        guard let entry = self.instanceMap.withLock({ $0[instanceUUID] }) else {
+            throw EnsemblePorterError.notRunning
+        }
+        let client = EnsemblePorterXPCSessionClient(endpoint: entry.endpoint)
+        return EnsemblePorterCryptoProviderImpl(client: client)
+    }
+
+    package func isInstanceRunning(instanceUUID: UUID) -> Bool {
+        self.hasInstance(instanceUUID: instanceUUID)
     }
 
     package func removeInstance(instanceUUID: UUID) async throws {
@@ -75,10 +89,32 @@ package final class TestProcessCreation: ProcessCreationProtocol {
         }
     }
 
+    package func runningInstanceCount() throws -> Int {
+        self.instanceMap.withLock { $0.count }
+    }
+
+    package func runningInstances() throws -> [UUID] {
+        self.instanceMap.withLock { Array($0.keys) }
+    }
+
     /// Exposed for testing - check if an instance exists
     package func hasInstance(instanceUUID: UUID) -> Bool {
         self.instanceMap.withLock { map in
             map[instanceUUID] != nil
+        }
+    }
+
+    /// Exposed for testing - get the endpoint for an instance
+    package func endpoint(for instanceUUID: UUID) -> XPCEndpoint? {
+        self.instanceMap.withLock { map in
+            map[instanceUUID]?.endpoint
+        }
+    }
+
+    /// Exposed for testing - get the total number of active instances
+    package func instanceCount() -> Int {
+        self.instanceMap.withLock { map in
+            map.count
         }
     }
 }

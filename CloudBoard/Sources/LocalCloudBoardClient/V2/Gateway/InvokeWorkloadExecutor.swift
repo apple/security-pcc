@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -440,12 +440,14 @@ extension PCCHarness {
                         decryptionKey: .makeDecryptionKey(keyID: dekInfo.keyID, key: dekInfo.dataEncryptionKey),
                         requestID: context.requestID,
                         metadata: context.workloadMetadata,
-                        requestBypassed: false,
+                        requestBypassed: true,
                         requestNack: true
                     )
                 )
-                // We do not finish sending here which seems to be inline with what ROPES does. If we were to complete
-                // the request stream, CloudBoard would treat it as an unexpected EOF.
+                // NACK requests have no further chunks to send, so finish the request stream immediately.
+                // This replicates the behaviour of ROPES which closes the request stream after sending
+                // setup + parameters for NACK requests.
+                invokeWorkloadSession.finishSending()
 
                 let (responseStream, responseContinuation) = AsyncThrowingStream<FinalizableChunk, Error>.makeStream()
 

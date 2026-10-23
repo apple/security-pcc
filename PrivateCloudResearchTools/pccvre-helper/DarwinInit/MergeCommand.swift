@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -32,7 +32,8 @@ struct MergeCommand: ParsableCommand {
 
     func run() throws {
         var config = try options.readInputConfig()
-        let overrideConfig = try DarwinInitConfig(json: try String(contentsOfFile: overrideConfigPath, encoding: .utf8))
+        let overrideConfig = try PCCDarwinInitConfig(json: try String(contentsOfFile: overrideConfigPath, encoding: .utf8))
+
         try config.overridingMerge(with: overrideConfig)
         try options.writeOutputConfig(config)
     }

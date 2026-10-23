@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -14,16 +14,43 @@
 
 
 import Foundation
+
 struct ASEPEvent: Codable {
     let event: String
     let host: String
     let time: TimeInterval
     let fields: [String: String]
+    let index: String?
+
+    enum CodingKeys: String, CodingKey {
+        case event, host, time, fields, index
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(event, forKey: .event)
+        try c.encode(host, forKey: .host)
+        try c.encode(time, forKey: .time)
+        try c.encode(fields, forKey: .fields)
+        if let index {
+            try c.encode(index, forKey: .index)
+        }
+    }
 }
 
 public final class UEFToASEP: HTTPPosterTransformEncoder {
-    static let encoder = JSONEncoder()
+    static let encoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.outputFormatting = [.withoutEscapingSlashes]
+        return e
+    }()
     static let evt_type: String = "event_horizon_1"
+
+    nonisolated(unsafe) private static var _configuredIndex: String?
+
+    public static func setConfiguredIndex(_ value: String?) {
+        _configuredIndex = value
+    }
 
     static public func encode(event: any EHUEFEvent) -> Data? {
         if let data = try? encoder.encode(event) {
@@ -32,7 +59,8 @@ public final class UEFToASEP: HTTPPosterTransformEncoder {
                     event: String(decoding: data, as: Unicode.UTF8.self),
                     host: getHostName(),
                     time: Date.now.timeIntervalSince1970,
-                    fields: ["evt_type": Self.evt_type]
+                    fields: ["evt_type": Self.evt_type],
+                    index: _configuredIndex
                 )
             )
         }

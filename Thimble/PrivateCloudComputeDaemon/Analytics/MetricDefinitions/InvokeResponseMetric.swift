@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -34,7 +34,6 @@ struct InvokeResponseMetric: CloudTelemetryReportable {
         case clientInfo = "appleClientInfo"
         case featureID = "appleFeatureid"
         case bundleID = "appleBundleid"
-        case locale = "appleLocale"
         case clientRequestId = "clientRequestId"
 
         case invokeResponseSuccess = "invokeResponseSuccess"
@@ -50,7 +49,6 @@ struct InvokeResponseMetric: CloudTelemetryReportable {
         environment: String,
         systemInfo: SystemInfo,
         featureID: String?,
-        locale: Locale,
         error: (any Error)?
     ) {
         var fields: [EventName: EventValue] = [
@@ -59,7 +57,6 @@ struct InvokeResponseMetric: CloudTelemetryReportable {
             .environment: .string(environment),
             .clientInfo: .string(systemInfo.osInfoWithDeviceModel),
             .bundleID: .string(bundleID),
-            .locale: .string(locale.identifier),
         ]
 
         if let featureID {

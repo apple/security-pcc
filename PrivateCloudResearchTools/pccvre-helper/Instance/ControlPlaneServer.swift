@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -60,9 +60,11 @@ struct ControlPlaneServerConfig: Codable {
         let arguments = ["instance", "configure", "darwin-init", "dump", "--name", instance]
 
         let result = try launcher.exec(executablePath: CLI.pccvrePath, arguments: arguments)
-        let config = try DarwinInitConfig(json: result.stdout)
+        let config = try PCCDarwinInitConfig(json: result.stdout)
 
-        let secureConfig = config.dictionary[ControlPlaneServerConfig.Keys.secureConfig] as? [String: Any]
+        let firstEntry = config.firstEntry
+
+        let secureConfig = firstEntry.dictionary[ControlPlaneServerConfig.Keys.secureConfig] as? [String: Any]
         let dict = secureConfig?[ControlPlaneServerConfig.Keys.controlPlane] as? [String: Any]
         if let dict, let config = try? ControlPlaneServerConfig(from: dict) {
             self = config

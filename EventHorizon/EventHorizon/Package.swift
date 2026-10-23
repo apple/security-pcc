@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,42 +12,151 @@
 // EA1937
 // 10/02/2024
 
-// swift-tools-version: 6.2
-// The swift-tools-version declares the minimum version of Swift required to build this package.
+// swift-tools-version: 6.0
 
 import Foundation
 import PackageDescription
+
+func computeBuildVersion() -> String {
+    let env = ProcessInfo.processInfo.environment
+
+    if env["RC_XBS"] != nil || env["RC_BUILDIT"] != nil {
+        let xbsVersion = env["RC_ProjectSourceVersion"].flatMap { $0.isEmpty ? nil : $0 } ?? "0"
+        return "EventHorizon-\(xbsVersion)"
+    }
+
+    if let gitTag = env["GIT_TAG"], gitTag.hasPrefix("EventHorizon-") {
+        return gitTag
+    }
+
+    if let rioBuild = env["RIO_BUILD_NUMBER"], !rioBuild.isEmpty {
+        let commit = env["GIT_COMMIT_SHORT"] ?? String((env["GIT_COMMIT"] ?? "unknown").prefix(12))
+        var group = "rio"
+        if let specID = env["PIPELINE_SPEC_ID"], let projectID = env["PROJECT_ID"] {
+            let stripped = specID.dropFirst(projectID.count + 1)
+            if let branchDash = stripped.range(of: "-rel-") ?? stripped.range(of: "-main") {
+                group = String(stripped[stripped.startIndex..<branchDash.lowerBound])
+            }
+        }
+        return "\(group)-\(rioBuild)-\(commit)"
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    process.arguments = ["describe", "--tags", "--match", "EventHorizon-*", "--abbrev=12"]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus == 0 {
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let version = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !version.isEmpty {
+                return version
+            }
+        }
+    } catch {}
+
+    return "unknown"
+}
+
+let buildVersion = computeBuildVersion()
 var swiftSettings: [PackageDescription.SwiftSetting] = [
     .enableUpcomingFeature("MemberImportVisibility")
 ]
 var productTargets = ["EventHorizon"]
-var eventHorizonDeps: [Target.Dependency] = []
-var eventHorizonTestDeps: [Target.Dependency] = ["EventHorizon"]
+var eventHorizonDeps: [Target.Dependency] = [.product(name: "SwiftOPA", package: "swift-opa"), "CBuildVersion"]
+var eventHorizonTestDeps: [Target.Dependency] = ["EventHorizon", .product(name: "SwiftOPA", package: "swift-opa")]
 var eventHorizonCMacTarget: [Target] = []
 var linkerSettings: [PackageDescription.LinkerSetting] = []
-var packageDependencies: [Package.Dependency] = []
+var packageDependencies: [Package.Dependency] = [.package(path: "../swift-opa")]
 var platformDependentTargets: [Target] = []
+var platformDependentProducts: [Product] = []
 let packageRoot = ProcessInfo.processInfo.environment["EH_PACKAGE_ROOT"] ?? "."
 
+#if !os(Linux)
 linkerSettings.append(.linkedLibrary("EndpointSecurity"))
 linkerSettings.append(.linkedLibrary("bsm"))
 
+#if canImport(ArgumentParserInternal)
 let systemlibwrappers = ["cryptex", "proc"]
+#else
+let isXBS = ProcessInfo.processInfo.environment["RC_XBS"] != nil || ProcessInfo.processInfo.environment["RC_LUXON"] != nil || ProcessInfo.processInfo.environment["RC_ProjectName"] != nil
+let isXcode = ProcessInfo.processInfo.environment["__CFBundleIdentifier"] == "com.apple.dt.Xcode"
+let isInternalSDK = ProcessInfo.processInfo.environment["EH_INTERNAL_SDK"] != nil
+let systemlibwrappers = (isXBS || isXcode || isInternalSDK) ? ["cryptex", "proc"] : ["proc"]
+if !isXBS {
+    packageDependencies.append(.package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"))
+    eventHorizonDeps.append(.product(name: "ArgumentParser", package: "swift-argument-parser"))
+    eventHorizonTestDeps.append(.product(name: "ArgumentParser", package: "swift-argument-parser"))
+}
+#endif
 systemlibwrappers.forEach {
     eventHorizonDeps.append(.target(name: "Clib\($0)"))
     eventHorizonTestDeps.append(.target(name: "Clib\($0)"))
     platformDependentTargets.append(.systemLibrary(name: "Clib\($0)", path: "Sources/Clib\($0)" ))
 }
+#else
+packageDependencies.append(.package(url: "https://github.com/apple/swift-log", from: "1.12.0"))
+eventHorizonDeps.append(.product(name: "Logging", package: "swift-log"))
+packageDependencies.append(.package(url: "https://github.com/apple/swift-crypto.git", from: "4.4.0"))
+eventHorizonDeps.append(.product(name: "Crypto", package: "swift-crypto"))
+packageDependencies.append(.package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"))
+eventHorizonDeps.append(.product(name: "ArgumentParser", package: "swift-argument-parser"))
+packageDependencies.append(.package(url: "https://github.com/apple/swift-metrics.git", from: "2.10.0"))
+eventHorizonDeps.append(.product(name: "Metrics", package: "swift-metrics"))
+packageDependencies.append(.package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.4.1"))
+eventHorizonDeps.append(.product(name: "Tracing", package: "swift-distributed-tracing"))
+packageDependencies.append(.package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.11.0"))
+eventHorizonDeps.append(.product(name: "ServiceLifecycle", package: "swift-service-lifecycle"))
+packageDependencies.append(.package(url: "https://github.com/swift-server/swift-prometheus.git", from: "2.0.0"))
+eventHorizonDeps.append(.product(name: "Prometheus", package: "swift-prometheus"))
+packageDependencies.append(.package(url: "https://github.com/swift-otel/swift-otel.git", from: "1.0.5"))
+eventHorizonDeps.append(.product(name: "OTel", package: "swift-otel"))
+eventHorizonDeps.append("Cehprobe")
+swiftSettings.append(.unsafeFlags(["-I", "\(packageRoot)/Sources/Cehprobe"]))
+let muslDepsPath = ProcessInfo.processInfo.environment["EH_MUSL_DEPS"]
+if let muslDepsPath {
+    linkerSettings.append(.unsafeFlags(["-L", muslDepsPath + "/lib"]))
+    linkerSettings.append(.unsafeFlags(["-L", "\(packageRoot)/Sources/Cehprobe"]))
+    linkerSettings.append(.linkedLibrary("ehprobe"))
+    linkerSettings.append(.linkedLibrary("bpf"))
+    linkerSettings.append(.linkedLibrary("elf"))
+    linkerSettings.append(.linkedLibrary("z"))
+} else {
+    linkerSettings.append(.unsafeFlags(["-L", "\(packageRoot)/Sources/Cehprobe"]))
+    linkerSettings.append(.linkedLibrary("ehprobe"))
+    linkerSettings.append(.linkedLibrary("bpf"))
+    linkerSettings.append(.linkedLibrary("z"))
+}
+platformDependentTargets.append(.target(name: "Cehprobe"))
+platformDependentTargets.append(.target(
+    name: "Czlib",
+    path: "Sources/Czlib",
+    publicHeadersPath: "include",
+    linkerSettings: [.linkedLibrary("z")]
+))
+eventHorizonDeps.append(.target(name: "Czlib"))
+#endif
 let package = Package(
     name: "EventHorizon",
     platforms: [
         .macOS("15.4.internal"), .iOS("18.0.internal")
     ],
     products: [
-        .library(name: "EventHorizon", targets: productTargets)
-    ],
+        .library(name: "EventHorizon", targets: productTargets),
+        .executable(name: "lsecuritymonitorlited", targets: ["lsecuritymonitorlited"])
+    ] + platformDependentProducts,
     dependencies: packageDependencies,
     targets: [
+        .target(
+            name: "CBuildVersion",
+            cSettings: [
+                .define("EH_BUILD_VERSION", to: "\"\(buildVersion)\"")
+            ]
+        ),
         .target(
             name: "EventHorizon",
             dependencies: eventHorizonDeps,
@@ -58,7 +167,16 @@ let package = Package(
             name: "EventHorizonTests",
             dependencies: eventHorizonTestDeps,
             swiftSettings: swiftSettings,
-            linkerSettings: linkerSettings,
+            linkerSettings: linkerSettings
+        ),
+        .executableTarget(
+            name: "lsecuritymonitorlited",
+            dependencies: [
+                "EventHorizon"
+            ] + eventHorizonDeps,
+            swiftSettings: swiftSettings,
+            linkerSettings: linkerSettings
         )
+
     ] + platformDependentTargets
 )

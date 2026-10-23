@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -42,9 +42,14 @@ extension EnsemblePorterController {
         case test(transponder: MockEnsembleTransponder, factory: TestProcessCreation)
 
 #if canImport(AppleComputeEnsembler)
-        package static func production() throws -> Self {
+        package static func production(
+            maxPorterInstances: Int = EnsemblePorterConstants.maxPorterInstances
+        ) throws -> Self {
             let metrics = EnsemblePorterMetrics()
-            return .production(transponder: try EnsembledTransponder(), factory: .init(metrics: .init()))
+            return .production(
+                transponder: try EnsembledTransponder(),
+                factory: .init(metrics: metrics, maxInstances: maxPorterInstances)
+            )
         }
 #endif
 
@@ -74,9 +79,22 @@ package final class EnsemblePorterController: Sendable {
     /// Allows us to be able to wait for `n` messages to have been received.
     private let waitingForMessagesContinuations: Mutex<[Int: CheckedContinuation<Void, Never>]> = .init([:])
 
-    package init(mode: EnsemblePorterController.Mode, metrics: EnsemblePorterMetrics = .init()) {
+    /// Per-instance last heartbeat time. Key is instance UUID.
+    private let lastHeartbeatTimes: Mutex<[UUID: ContinuousClock.Instant]> = .init([:])
+
+    /// How long the controller waits without a heartbeat before removing an instance.
+    private let heartbeatTimeoutDuration: Duration
+
+    /// How often the controller checks for timed-out instances.
+    private let heartbeatCheckInterval: Duration
+
+    package init(mode: EnsemblePorterController.Mode, metrics: EnsemblePorterMetrics = .init(),
+                 heartbeatTimeoutDuration: Duration = EnsemblePorterConstants.heartbeatTimeoutDuration,
+                 heartbeatCheckInterval: Duration = EnsemblePorterConstants.heartbeatSendInterval) {
         self.metrics = metrics
         self.mode = mode
+        self.heartbeatTimeoutDuration = heartbeatTimeoutDuration
+        self.heartbeatCheckInterval = heartbeatCheckInterval
     }
 
     /// Wait for the controller to have received at least the specified number of messages.
@@ -102,20 +120,36 @@ package final class EnsemblePorterController: Sendable {
         switch self.mode {
 #if canImport(AppleComputeEnsembler)
         case .production(let transponder, _):
-            try transponder.registerMessageHandler(appID: EnsemblePorterConstants.ensembledAppID, handler: self.handleIncomingMessage)
+            try await transponder.registerMessageHandler(appID: EnsemblePorterConstants.ensembledAppID, handler: self.handleIncomingMessage)
 #endif
         case .test(let transponder, _):
-            try transponder.registerMessageHandler(appID: EnsemblePorterConstants.ensembledAppID, handler: self.handleIncomingMessage)
+            try await transponder.registerMessageHandler(appID: EnsemblePorterConstants.ensembledAppID, handler: self.handleIncomingMessage)
         }
 
+        defer { self.metrics.controllerActiveJobs.set(0) }
+
         while !Task.isCancelled {
-            // Keep the controller running indefinitely
-            try await Task.sleep(for: .seconds(60 * 60))
+            try await Task.sleep(for: self.heartbeatCheckInterval)
+            await self.removeTimedOutInstances()
+            do {
+                let count: Int
+                switch self.mode {
+#if canImport(AppleComputeEnsembler)
+                case .production(_, let factory):
+                    count = try factory.runningInstanceCount()
+#endif
+                case .test(_, let factory):
+                    count = try factory.runningInstanceCount()
+                }
+                self.metrics.controllerActiveJobs.set(Int64(count))
+            } catch {
+                self.logger.error("Failed to query active job count: \(String(reportable: error), privacy: .public)")
+            }
         }
     }
 
-    internal func handleIncomingMessage(rank: Int, data: Data) -> Data {
-        self.logger.log("New message received")
+    internal func handleIncomingMessage(rank: Int, data: Data) async throws -> Data {
+        self.logger.trace("New message received")
 
         // Increment message count and notify waiters
         let currentCount = self.messagesReceivedCount.withLock { count in
@@ -138,8 +172,8 @@ package final class EnsemblePorterController: Sendable {
         }
 
         do {
-            let response = try self.handle(message: data)
-            self.logger.log("Handled message successfully")
+            let response = try await self.handle(message: data)
+            self.logger.trace("Handled message successfully")
             return response
         } catch EnsemblePorterError.invalidMessageReceived {
             self.logger.error("Invalid message received.")
@@ -150,13 +184,14 @@ package final class EnsemblePorterController: Sendable {
                 Error handling message. \
                 error=\(String(reportable: error), privacy: .public)
                 """)
+            //TODO: Better error handling
             return .init()
         }
     }
 
     /// Decodes a received message and uses the decoded data to create a new EnsemblePorter.
-    internal func handle(message: Data) throws -> Data {
-        self.logger.log("Handling new per-process message")
+    internal func handle(message: Data) async throws -> Data {
+        self.logger.trace("Handling new per-process message")
         let decodedMessage: Protos.PorterMessage
         do {
             decodedMessage = try Protos.PorterMessage(serializedBytes: message)
@@ -180,9 +215,9 @@ package final class EnsemblePorterController: Sendable {
         case .startNewProcess:
             self.logger.log("start new process request received on follower")
             self.metrics.startNewProcessRequests.increment()
-            let instanceUUID = try newProcess()
+            let instanceUUID = try await self.newProcess()
             self.logger.log("Fetching public key of ensemblefollowerporterd")
-            let publicKey = try getPublicKey(instanceUUID: instanceUUID)
+            let publicKey = try await self.getPublicKey(instanceUUID: instanceUUID)
             let proto = Protos.PorterMessage.with {
                 $0.requestID = decodedMessage.requestID
                 $0.spanID = decodedMessage.spanID
@@ -201,104 +236,125 @@ package final class EnsemblePorterController: Sendable {
             guard let requestID else {
                 throw EnsemblePorterError.invalidMessageReceived
             }
-            return try PrismTracing.withSyncResumed(requestID: requestID, spanID: spanID) {
+            return try await PrismTracing.withResumed(requestID: requestID, spanID: spanID) {
                 self.metrics.perProcessMessageRequests.increment()
                 PrismTracing.logCheckpoint(name: "PerProcessMessage received on follower")
-                try handle(perProcessMessage: perProcessMessage, requestID: requestID, spanID: spanID)
+                let response = try await self.handle(perProcessMessage: perProcessMessage, requestID: requestID, spanID: spanID)
                 PrismTracing.logCheckpoint(name: "Responding to leader following PerProcessMessage")
-                return try Protos.EmptyMessage().serializedData()
+                return try response.serializedData()
             }
         case .shutdown(let shutdownRequest):
             guard let requestID else {
                 throw EnsemblePorterError.invalidMessageReceived
             }
             self.metrics.shutdownRequests.increment()
-            try handle(shutdownRequest: shutdownRequest, requestID: requestID, spanID: spanID)
+            try await self.handle(shutdownRequest: shutdownRequest, requestID: requestID, spanID: spanID)
             return try Protos.EmptyMessage().serializedData()
-        }
-    }
+        case .heartbeat(let heartbeat):
+            let instanceUUID = try UUID(data: heartbeat.instanceUuid)
+            self.logger.trace("""
+                Heartbeat received. \
+                instance_uuid=\(instanceUUID, privacy: .public)
+                """)
+            self.metrics.heartbeatMessageRequests.increment()
 
-    private func newProcess() throws -> UUID {
-        self.logger.log("Creating new instance.")
-        // Note: createInstance is async, but we're called from a sync context (ensembled message handler)
-        // We spawn a Task and block waiting for the result
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: Result<UUID, Error>!
-        Task {
-            do {
-                let uuid: UUID
-                switch self.mode {
+            let isRunning: Bool
+            switch self.mode {
 #if canImport(AppleComputeEnsembler)
-                case .production(_, let factory):
-                    uuid = try await factory.createInstance()
+            case .production(_, let factory):
+                isRunning = factory.isInstanceRunning(instanceUUID: instanceUUID)
 #endif
-                case .test(_, let factory):
-                    uuid = try await factory.createInstance()
-                }
-                self.logger.log("""
-                    Created new instance. \
-                    instance_uuid=\(uuid, privacy: .public)
-                    """)
-                result = .success(uuid)
-            } catch {
-                self.logger.error("""
-                    Error creating instance. \
-                    error=\(String(reportable: error), privacy: .public)
-                    """)
-                result = .failure(error)
+            case .test(_, let factory):
+                isRunning = factory.isInstanceRunning(instanceUUID: instanceUUID)
             }
-            semaphore.signal()
+
+            self.lastHeartbeatTimes.withLock { times in
+                if isRunning {
+                    if times[instanceUUID] == nil {
+                        self.logger.log("""
+                            Adopted unknown but running instance. \
+                            instance_uuid=\(instanceUUID, privacy: .public)
+                            """)
+                        self.metrics.instanceAdopted.increment()
+                    }
+                    times[instanceUUID] = ContinuousClock.now
+                } else if times.removeValue(forKey: instanceUUID) != nil {
+                    self.logger.warning("""
+                        Heartbeat for crashed instance, removing. \
+                        instance_uuid=\(instanceUUID, privacy: .public)
+                        """)
+                    self.metrics.instanceRemovedByProcessCrash.increment()
+                } else {
+                    self.logger.warning("""
+                        Heartbeat for unknown/removed instance. \
+                        instance_uuid=\(instanceUUID, privacy: .public)
+                        """)
+                }
+            }
+
+            return try Protos.HeartbeatResponse.with {
+                $0.success = isRunning
+            }.serializedData()
         }
-        semaphore.wait()
-        return try result.get()
     }
 
-    private func getPublicKey(instanceUUID: UUID) throws -> Data {
+    private func newProcess() async throws -> UUID {
+        self.logger.log("Creating new instance.")
+        let uuid: UUID
+        switch self.mode {
+#if canImport(AppleComputeEnsembler)
+        case .production(_, let factory):
+            uuid = try await factory.createInstance()
+#endif
+        case .test(_, let factory):
+            uuid = try await factory.createInstance()
+        }
+        self.logger.log("""
+            Created new instance. \
+            instance_uuid=\(uuid, privacy: .public)
+            """)
+        self.lastHeartbeatTimes.withLock { times in
+            times[uuid] = ContinuousClock.now
+        }
+        return uuid
+    }
+
+    private func getPublicKey(instanceUUID: UUID) async throws -> Data {
         self.logger.log("""
             Retrieving public key from instance. \
             instance_uuid=\(instanceUUID, privacy: .public)
             """)
 
-        // Note: createProvider is async, but we're called from a sync context (ensembled message handler)
-        // We spawn a Task and block waiting for the result
-        let semaphore = DispatchSemaphore(value: 0)
-        let result: Mutex<Result<Data, Error>?> = .init(nil)
-        Task {
-            do {
-                // Get the public key from the instance
-                let provider: EnsemblePorterCryptoProviderImpl<EnsemblePorterXPCSessionClient>
-                switch self.mode {
+        let provider: EnsemblePorterCryptoProviderImpl<EnsemblePorterXPCSessionClient>
+        switch self.mode {
 #if canImport(AppleComputeEnsembler)
-                case .production(_, let factory):
-                    provider = try factory.createProvider(instanceUUID: instanceUUID)
+        case .production(_, let factory):
+            provider = try factory.createProvider(instanceUUID: instanceUUID)
 #endif
-                case .test(_, let factory):
-                    provider = try factory.createProvider(instanceUUID: instanceUUID)
-                }
-                
-                let publicKey = try await provider.getIntraEnsemblePublicKey()
-                self.logger.log("""
-                    Retrieved public key from instance. \
-                    instance_uuid=\(instanceUUID, privacy: .public) \
-                    public_key_size=\(publicKey.count)
-                    """)
-                result.withLock { $0 = .success(publicKey) }
-            } catch {
-                self.logger.error("""
-                    Error retrieving public key. \
-                    instance_uuid=\(instanceUUID, privacy: .public) \
-                    error=\(String(reportable: error), privacy: .public)
-                    """)
-                result.withLock { $0 = .failure(error) }
-            }
-            semaphore.signal()
+        case .test(_, let factory):
+            provider = try factory.createProvider(instanceUUID: instanceUUID)
         }
-        semaphore.wait()
-        return try result.withLock { try $0!.get() }
+
+        let publicKey = try await provider.getIntraEnsemblePublicKey()
+        do {
+            try await provider.shutdown()
+        } catch {
+            self.logger.warning("""
+                Failed to shutdown provider after getting public key. \
+                instance_uuid=\(instanceUUID, privacy: .public) \
+                error=\(String(reportable: error), privacy: .public)
+                """)
+        }
+        self.logger.log("""
+            Retrieved public key from instance. \
+            instance_uuid=\(instanceUUID, privacy: .public) \
+            public_key_size=\(publicKey.count)
+            """)
+        return publicKey
     }
 
     private func handle(shutdownRequest: Com_Apple_Cloudos_Ensembleporter_ShutdownRequest,
-                        requestID: UUID, spanID: UInt64) throws {
+                        requestID: UUID, spanID: UInt64) async throws {
         let instanceUUID = try UUID(data: shutdownRequest.instanceUuid)
         self.logger.log("""
             Shutdown request received. \
@@ -307,62 +363,131 @@ package final class EnsemblePorterController: Sendable {
             instance_uuid=\(instanceUUID, privacy: .public)
             """)
 
-        // Note: removeInstance is async, but we're called from a sync context (ensembled message handler)
-        // We spawn a Task and block waiting for the result
-        let semaphore = DispatchSemaphore(value: 0)
-        let result: Mutex<Result<Void, Error>?> = .init(nil)
-        Task {
+        self.lastHeartbeatTimes.withLock { times in
+            times.removeValue(forKey: instanceUUID)
+        }
+
+        switch self.mode {
+#if canImport(AppleComputeEnsembler)
+        case .production(_, let factory):
+            try await factory.removeInstance(instanceUUID: instanceUUID)
+#endif
+        case .test(_, let factory):
+            try await factory.removeInstance(instanceUUID: instanceUUID)
+        }
+        self.logger.log("""
+            Successfully removed instance. \
+            instance_uuid=\(instanceUUID, privacy: .public)
+            """)
+        self.metrics.instanceRemovedByShutdown.increment()
+    }
+
+    /// Reaps porter instances that should no longer be running.
+    ///
+    /// Iterates the launchd-running set as the source of truth and removes:
+    /// - Instances we have no record of (orphans left behind by a previous controller
+    ///   life — these are invisible to our in-memory bookkeeping).
+    /// - Instances whose last heartbeat is older than ``heartbeatTimeoutDuration``.
+    ///
+    /// Also drops bookkeeping entries for instances launchd no longer knows about, so
+    /// ``lastHeartbeatTimes`` can't grow unbounded.
+    private func removeTimedOutInstances() async {
+        let now = ContinuousClock.now
+        let runningUUIDs: Set<UUID>
+        do {
+            switch self.mode {
+#if canImport(AppleComputeEnsembler)
+            case .production(_, let factory):
+                runningUUIDs = Set(try factory.runningInstances())
+#endif
+            case .test(_, let factory):
+                runningUUIDs = Set(try factory.runningInstances())
+            }
+        } catch {
+            self.metrics.runningInstancesQueryFailures.increment()
+            self.logger.error("""
+                Failed to query running instances. \
+                error=\(String(reportable: error), privacy: .public)
+                """)
+            return
+        }
+
+        let toReap: [(uuid: UUID, reason: String)] = self.lastHeartbeatTimes.withLock { times in
+            // Drop bookkeeping entries for instances launchd no longer has.
+            for uuid in times.keys where !runningUUIDs.contains(uuid) {
+                times.removeValue(forKey: uuid)
+            }
+            return runningUUIDs.compactMap { uuid in
+                if let last = times[uuid] {
+                    return now - last > self.heartbeatTimeoutDuration
+                        ? (uuid, "stale_heartbeat")
+                        : nil
+                }
+                return (uuid, "orphan")
+            }
+        }
+
+        for (uuid, reason) in toReap {
+            self.logger.log("""
+                Reaping instance. \
+                instance_uuid=\(uuid, privacy: .public) \
+                reason=\(reason, privacy: .public)
+                """)
+
             do {
                 switch self.mode {
 #if canImport(AppleComputeEnsembler)
                 case .production(_, let factory):
-                    try await factory.removeInstance(instanceUUID: instanceUUID)
+                    try await factory.removeInstance(instanceUUID: uuid)
 #endif
                 case .test(_, let factory):
-                    try await factory.removeInstance(instanceUUID: instanceUUID)
+                    try await factory.removeInstance(instanceUUID: uuid)
                 }
+                self.lastHeartbeatTimes.withLock { $0.removeValue(forKey: uuid) }
                 self.logger.log("""
-                    Successfully removed instance. \
-                    instance_uuid=\(instanceUUID, privacy: .public)
+                    Successfully reaped instance. \
+                    instance_uuid=\(uuid, privacy: .public) \
+                    reason=\(reason, privacy: .public)
                     """)
-                result.withLock { $0 = .success(()) }
+                switch reason {
+                case "orphan":
+                    self.metrics.instanceRemovedByOrphan.increment()
+                default:
+                    self.metrics.instanceRemovedByHeartbeatTimeout.increment()
+                }
             } catch {
-                result.withLock { $0 = .failure(error) }
+                self.logger.error("""
+                    Failed to reap instance. \
+                    instance_uuid=\(uuid, privacy: .public) \
+                    reason=\(reason, privacy: .public) \
+                    error=\(String(reportable: error), privacy: .public)
+                    """)
             }
-            semaphore.signal()
         }
-        semaphore.wait()
-        try result.withLock { try $0!.get() }
     }
 
     private func handle(perProcessMessage: Protos.PerProcessMessage,
-                        requestID: UUID, spanID: UInt64) throws -> Protos.EmptyMessage {
+                        requestID: UUID, spanID: UInt64) async throws -> Protos.EmptyMessage {
         let instanceUUID = try UUID(data: perProcessMessage.instanceUuid)
         self.logger.log("""
             Providing encrypted turn-keys to provider. \
             request_id=\(requestID, privacy: .public) \
             span_id=\(spanID, privacy: .public)
             """)
-        // Ensembled currently does not support async.
-        let semaphore = DispatchSemaphore(value: 0)
-        Task {
-            switch self.mode {
+        switch self.mode {
 #if canImport(AppleComputeEnsembler)
-            case .production(_, let factory):
-                let provider = try factory.createProvider(instanceUUID: instanceUUID)
-                try await provider.provide(encryptedCryptoMaterial: perProcessMessage.serialisedMessage,
-                                           leaderPublicKey: perProcessMessage.leaderPublicKey,
-                                           requestID: requestID, spanID: spanID)
+        case .production(_, let factory):
+            let provider = try factory.createProvider(instanceUUID: instanceUUID)
+            try await provider.provide(encryptedCryptoMaterial: perProcessMessage.serialisedMessage,
+                                       leaderPublicKey: perProcessMessage.leaderPublicKey,
+                                       requestID: requestID, spanID: spanID)
 #endif
-            case .test(_, let factory):
-                let provider = try factory.createProvider(instanceUUID: instanceUUID)
-                try await provider.provide(encryptedCryptoMaterial: perProcessMessage.serialisedMessage,
-                                           leaderPublicKey: perProcessMessage.leaderPublicKey,
-                                           requestID: requestID, spanID: spanID)
-            }
-            semaphore.signal()
+        case .test(_, let factory):
+            let provider = try factory.createProvider(instanceUUID: instanceUUID)
+            try await provider.provide(encryptedCryptoMaterial: perProcessMessage.serialisedMessage,
+                                       leaderPublicKey: perProcessMessage.leaderPublicKey,
+                                       requestID: requestID, spanID: spanID)
         }
-        semaphore.wait()
         return .init()
     }
 }
@@ -372,4 +497,3 @@ extension Data {
         self = Swift.withUnsafeBytes(of: uuid.uuid) { Data($0) }
     }
 }
-

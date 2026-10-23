@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -124,7 +124,7 @@ class Cache<D: CacheDelegate> {
 
             Logger.caching.info("Calculated default cache size: \(calculatedSize.formatted(.byteCount(style: .memory))) (\(Int(ratio * 100))% of \(totalCapacity.formatted(.byteCount(style: .memory))) volume)")
 
-            // Sanity checks: minimum 1 GB
+            // Minimum 1 GB
             let minSize = 1 * 1024 * 1024 * 1024
 
             return max(minSize, calculatedSize)

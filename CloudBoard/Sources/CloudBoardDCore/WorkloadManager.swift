@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -43,8 +43,25 @@ package final class WorkloadManager: Sendable {
     /// Is the workload running in proxy mode.
     let isProxy: Bool
 
+    /// Whether the proxy sends the attestation transparency log tree ID and revision to ROPES as find-worker
+    /// routing-parameter constraints. Sourced from the global secure config.
+    let includeTransparencyConstraintsInWorkerRequests: Bool
+
     /// The name of the CloudBoard application being managed.
     let cloudAppName: String
+
+    /// How this cloud app advertises capacity and admits requests with respect to prewarmed-instance availability.
+    let prewarmedAdmissionPolicy: SecureConfig.PrewarmedAdmissionPolicy
+
+    /// Whether the reported max batch size should account for available prewarmed instances. Derived from
+    /// `prewarmedAdmissionPolicy`.
+    var maxBatchDependsOnPrewarmedSize: Bool {
+        self.prewarmedAdmissionPolicy != .disabled
+    }
+
+    /// The statically-configured prewarm pool size for this cloud app, forwarded to the `WorkloadController` so it
+    /// can warn when a registration's `maxBatchSize` exceeds it while `maxBatchDependsOnPrewarmedSize` is enabled.
+    let configuredPrewarmedPoolSize: Int
 
     /// Monitors the health status of the service and its components.
     package let healthMonitor: ServiceHealthMonitor
@@ -88,6 +105,13 @@ package final class WorkloadManager: Sendable {
         self.cloudBoardProvider.withLock { $0?.activeRequestsBeforeDrain ?? 0 }
     }
 
+    /// Awaits initial assets readiness for this cloud app. Returns immediately when no provider exists or gating is
+    /// disabled. Lets callers gate on per-app asset availability.
+    /// - SeeAlso: `JobHelperInstanceProvider.waitForInitialAssets()`.
+    func waitForInitialAssets() async throws {
+        try await self.jobHelperInstanceProvider?.waitForInitialAssets()
+    }
+
     /// Initializes a WorkloadManager
     ///
     /// This initializer sets up all the necessary components for running a CloudBoard application
@@ -110,18 +134,33 @@ package final class WorkloadManager: Sendable {
         launchdJobFinder: LaunchdJobFinderProtocol,
         tracer: RequestSummaryTracer,
         metrics: MetricsSystem,
-        inMemoryControllerConfig: SecureConfig.AppControllerConfig = .inMemoryControllerNotEnabled
+        inMemoryControllerConfig: SecureConfig.AppControllerConfig = .inMemoryControllerNotEnabled,
+        teardownTimeout: Duration,
+        includeTransparencyConstraintsInWorkerRequests: Bool = true
     ) throws {
         self.isProxy = isProxy
+        self.includeTransparencyConstraintsInWorkerRequests = includeTransparencyConstraintsInWorkerRequests
         self.cloudAppName = cloudAppName
-        self.healthMonitor = .init(cloudApp: cloudAppName)
+        self.prewarmedAdmissionPolicy = config.prewarmedAdmissionPolicy
+        self.configuredPrewarmedPoolSize = config.prewarmPoolSize
+        self.healthMonitor = .init(
+            cloudApp: cloudAppName,
+            maxBatchDependsOnPrewarmedSize: config.maxBatchDependsOnPrewarmedSize
+        )
         self.jobHelperInstanceProvider = try JobHelperInstanceProvider(
             cloudAppName: cloudAppName,
             supportAppNames: config.supportApps.map { $0 },
+            isTrampolineProxy: config.isTrampolineProxy,
             prewarmedPoolSize: config.prewarmPoolSize,
             maxInstanceCount: config.maxInstanceCount,
             maxLAContextCount: config.maxAuthContextCount,
             maxApplicationLayerMessageSize: config.maxApplicationLayerMessageSize,
+            maxToolInvocationsPerRequest: config.maxToolInvocationsPerRequest,
+            teardownTimeout: teardownTimeout,
+            warmupTimeout: config.warmupTimeout,
+            consecutiveWarmupFailuresThreshold: config.consecutiveWarmupFailuresThreshold,
+            healthMonitor: self.healthMonitor,
+            maxBatchDependsOnPrewarmedSize: config.maxBatchDependsOnPrewarmedSize,
             metrics: metrics,
             tracer: tracer,
             launchdJobFinder: launchdJobFinder,
@@ -155,7 +194,8 @@ package final class WorkloadManager: Sendable {
                 maxBatchSize: inMemoryControllerConfig.maxConcurrency,
                 optimalBatchSize: inMemoryControllerConfig.optimalBatchSize,
                 currentBatchSize: 0,
-                workloadTags: workloadTags
+                workloadTags: workloadTags,
+                appRoutingKeys: inMemoryControllerConfig.appRoutingKeys
             ))
         }
 
@@ -167,6 +207,8 @@ package final class WorkloadManager: Sendable {
                     .init(workloadName: inMemoryControllerConfig.workloadName, cloudAppName: cloudAppName),
                     workloadConfig
                 ),
+                maxBatchDependsOnPrewarmedSize: config.maxBatchDependsOnPrewarmedSize,
+                configuredPrewarmedPoolSize: config.prewarmPoolSize,
                 metrics: metrics
             )
         } else { nil }
@@ -215,7 +257,9 @@ package final class WorkloadManager: Sendable {
         isProxy: Bool,
         cloudAppName: String,
         supportAppNames: [String],
+        isTrampolineProxy: Bool,
         maxApplicationLayerMessageSize: Int = 1024 * 1024 * 4,
+        maxToolInvocationsPerRequest: Int = SecureConfig.CloudAppConfig.defaultMaxToolInvocationsPerRequest,
         config: CloudBoardDConfiguration,
         metrics: MetricsSystem? = nil,
         tracer: RequestSummaryTracer? = nil,
@@ -226,13 +270,20 @@ package final class WorkloadManager: Sendable {
         jobHelperResponseDelegateProvider: CloudBoardJobHelperResponseDelegateProvider? = nil,
         assetMetadataClient: (any AssetsMetadataClientProtocol)? = nil,
         waitForInitialAssets: Bool = false,
-        workloadController: WorkloadController? = nil
+        workloadController: WorkloadController? = nil,
+        teardownTimeout: Duration = .seconds(10)
     ) throws {
         self.isProxy = isProxy
         self.cloudAppName = cloudAppName
+        self.includeTransparencyConstraintsInWorkerRequests = config.secureConfig
+            .includeTransparencyConstraintsInWorkerRequests
+        self.prewarmedAdmissionPolicy =
+            try (config.secureConfig.cloudAppConfig(cloudApp: cloudAppName)).prewarmedAdmissionPolicy
+        self.configuredPrewarmedPoolSize = config.prewarming.prewarmedPoolSize ?? 0
         self.metrics = metrics ?? CloudMetricsSystem(clientName: "cloudboardd")
         self.tracer = tracer ?? RequestSummaryTracer(metrics: self.metrics)
         let launchdJobFinder = launchdJobFinder ?? LaunchdJobFinder(metrics: self.metrics)
+        self.healthMonitor = healthMonitor ?? ServiceHealthMonitor(cloudApp: self.cloudAppName)
         // This is a legacy of there being two different approaches to mocking the jobhelpers out.
         // One is high level, directly replacing the jobHelperClientProvider,
         // the other allows for mocking out the launchd and local XPC parts but still
@@ -251,9 +302,14 @@ package final class WorkloadManager: Sendable {
             self.jobHelperInstanceProvider = try JobHelperInstanceProvider(
                 cloudAppName: cloudAppName,
                 supportAppNames: supportAppNames,
+                isTrampolineProxy: isTrampolineProxy,
                 prewarmedPoolSize: config.prewarming.prewarmedPoolSize ?? 0,
                 maxInstanceCount: config.prewarming.maxProcessCount ?? 0,
                 maxApplicationLayerMessageSize: maxApplicationLayerMessageSize,
+                maxToolInvocationsPerRequest: maxToolInvocationsPerRequest,
+                teardownTimeout: teardownTimeout,
+                consecutiveWarmupFailuresThreshold: config.prewarming.prewarmedPoolSize ?? 1,
+                healthMonitor: self.healthMonitor,
                 metrics: self.metrics,
                 tracer: self.tracer,
                 launchdJobFinder: launchdJobFinder,
@@ -264,7 +320,6 @@ package final class WorkloadManager: Sendable {
                 instanceProvider: self.jobHelperInstanceProvider!
             )
         }
-        self.healthMonitor = healthMonitor ?? ServiceHealthMonitor(cloudApp: self.cloudAppName)
         self.healthProvider = .init(monitor: self.healthMonitor)
         if let jobHelperResponseDelegateProvider {
             self.jobhelperResponseDelegateProvider = jobHelperResponseDelegateProvider
@@ -333,6 +388,7 @@ package final class WorkloadManager: Sendable {
         serviceDiscovery: ServiceDiscoveryPublisherProtocol?,
         loadConfiguration: CloudBoardDConfiguration.LoadConfiguration,
         hotProperties: HotPropertiesController?,
+        perAppMaxCumulativeRequestBytes: Int? = nil,
         sessionStore: SessionStore,
         workloadControllerServer: WorkloadControllerServer?
     ) async throws {
@@ -348,7 +404,10 @@ package final class WorkloadManager: Sendable {
             attestationProvider: attestationProvider,
             loadConfiguration: loadConfiguration,
             hotProperties: hotProperties,
-            sessionStore: sessionStore
+            perAppMaxCumulativeRequestBytes: perAppMaxCumulativeRequestBytes,
+            sessionStore: sessionStore,
+            prewarmedAdmissionPolicy: self.prewarmedAdmissionPolicy,
+            includeTransparencyConstraintsInWorkerRequests: self.includeTransparencyConstraintsInWorkerRequests
         )
         self.cloudBoardProvider.withLock { $0 = cloudboardProvider }
         try await withErrorLogging(operation: "cloudApp:\(self.cloudAppName) task group", sensitiveError: false) {
@@ -415,6 +474,8 @@ package final class WorkloadManager: Sendable {
                             workloadController: self.workloadController ?? WorkloadController(
                                 cloudAppName: self.cloudAppName,
                                 healthPublisher: self.healthMonitor,
+                                maxBatchDependsOnPrewarmedSize: self.maxBatchDependsOnPrewarmedSize,
+                                configuredPrewarmedPoolSize: self.configuredPrewarmedPoolSize,
                                 metrics: self.metrics
                             ),
                             serviceDiscoveryPublisher: serviceDiscovery,

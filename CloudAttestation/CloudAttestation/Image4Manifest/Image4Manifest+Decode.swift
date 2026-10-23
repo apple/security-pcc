@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -81,6 +81,28 @@ extension Image4Manifest {
 
         return sepiDigest
     }
+
+    var stg1Digest: Data? {
+        guard
+            let stg1 =
+                (try? self.properties.first { (key: String, value: Any) in
+                    key == "stg1"
+                }.flatMap { $0.value } as? Image4Manifest.Properties)
+        else {
+            return nil
+        }
+
+        guard
+            let stg1Digest =
+                (stg1.first(where: { (key: String, value: Any) in
+                    key == "DGST"
+                }).flatMap { $0.value }) as? Data
+        else {
+            return nil
+        }
+
+        return stg1Digest
+    }
 }
 
 extension Image4Manifest {
@@ -95,8 +117,8 @@ extension Image4Manifest {
             self.properties = properties
         }
 
-        public init(derEncoded node: ASN1Node) throws {
-            self = try DER.sequence(node, identifier: .sequence) { nodes in
+        public init(derEncoded node: ASN1Node) throws(ThrownASN1Error) {
+            self = try DER.sequence(node, identifier: .sequence) { nodes throws(ThrownASN1Error) in
                 let tag = try ASN1IA5String(derEncoded: &nodes)
                 let version = try Int(derEncoded: &nodes)
                 let properties = try DER.set(of: Property.self, identifier: .set, nodes: &nodes)
@@ -116,7 +138,7 @@ extension Image4Manifest {
         let value: Value
 
         enum Value: DERParseable {
-            init(derEncoded node: ASN1Node) throws {
+            init(derEncoded node: ASN1Node) throws(ThrownASN1Error) {
                 switch node.identifier {
                 case .null:
                     self = .null
@@ -164,15 +186,15 @@ extension Image4Manifest {
             self.value = value
         }
 
-        public init(derEncoded node: ASN1Node) throws {
+        public init(derEncoded node: ASN1Node) throws(ThrownASN1Error) {
             guard node.identifier.tagClass == .private else {
                 throw ASN1Error.invalidASN1Object(reason: "unexpected tag class \(node.identifier.tagClass)")
             }
-            self = try DER.sequence(node, identifier: node.identifier) { nodes in
+            self = try DER.sequence(node, identifier: node.identifier) { nodes throws(ThrownASN1Error) in
                 guard let node = nodes.next() else {
                     throw ASN1Error.invalidASN1Object(reason: "unexpected end of sequence")
                 }
-                return try DER.sequence(node, identifier: node.identifier) { nodes in
+                return try DER.sequence(node, identifier: node.identifier) { nodes throws(ThrownASN1Error) in
                     let tag = try ASN1IA5String(derEncoded: &nodes)
                     let value = try Value(derEncoded: &nodes)
                     return Property(tag: tag, value: value)

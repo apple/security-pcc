@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -86,6 +86,7 @@ extension CLI.EnsembleCmd {
                     osVariantName: createOptions.osVariantName,
                     fusing: createOptions.fusing,
                     name: ensembleName + "-node\($0)",
+                    diskSizeGB: createOptions.diskSizeGB,
                     networks: [
                         VRE.VMConfig.Network(mode: .nat, macAddr: macAddrs?[$0]),
                         VRE.VMConfig.Network(mode: .hostOnly)
@@ -96,7 +97,8 @@ extension CLI.EnsembleCmd {
                     vsepImage: createOptions.vsepImage,
                     kernelCache: createOptions.kernelCache,
                     sptmPath: createOptions.sptmPath,
-                    txmPath: createOptions.txmPath
+                    txmPath: createOptions.txmPath,
+                    prkitPath: createOptions.prkitPath
                 )
             }
 
@@ -146,7 +148,7 @@ extension CLI.EnsembleCmd {
                 virtMeshPluginPath = URL(fileURLWithPath: virtMeshPlugin!)
             }
 
-            if FileManager.default.fileExists(atPath: virtMeshPluginPath.path) {
+            if Globals.computer.fileSystem.fileExists(atPath: virtMeshPluginPath.path) {
                 CLI.logger.info("Assigning virtmesh plugin and rank")
                 do {
                     for node in ensemble.nodes {

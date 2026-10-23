@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,6 +12,7 @@
 // EA1937
 // 10/02/2024
 
+import CloudAttestation
 internal import CloudBoardAsyncXPC
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
@@ -42,6 +43,10 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
     private let metrics: MetricsSystem
     private let workerValidationCache: WorkerValidationCache<ClockType>
     private let isProxy: Bool
+    private let transitiveTrustWarmupMaxKeysToValidate: Int
+    private let enableTransitiveProofVerification: Bool
+    private let recycleCheckInterval: Duration
+    private let unpublishExistingAttestationsOnRecycle: Bool
     private let clock: ClockType
     private let existingAttestationsAvailableOnlyOnNodeAfterReleaseEntryAddition: Bool
     private let revocationRequests = CancellableAsyncNotification<RevocationRequest>()
@@ -49,6 +54,11 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
 
     private var stateMachine: AttestationStateMachine
     private var _unpublishedKeys: [InternalAttestedKey] = []
+    /// keyID of this node's current attested key — the live, published key that incoming requests are wrapped
+    /// to. The run loop maintains it as a local; we mirror it here so `warmWorkerValidation` (proxy-only) can
+    /// warm it first without going through the potentially-blocking `obtainAttestedKey()`. `nil` until the
+    /// first key is available.
+    private var currentKeyID: Data?
     // This is only ever mutated safely on the actor
     // it may be read outside of it though in tests
     private let _proxiedReleases = Mutex<[ReleaseDigestEntry]>([])
@@ -73,6 +83,9 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
         attestationValidatorFactory: any AttestationValidatorFactoryProtocol,
         releasesProvider: ReleasesProviderProtocol? = nil,
         enableReleaseSetValidation: Bool,
+        enableTransitiveProofVerification: Bool,
+        recycleCheckInterval: Duration,
+        unpublishExistingAttestationsOnRecycle: Bool,
         keyLifetime: TimeAmount,
         keyExpiryGracePeriod: TimeAmount,
         keychain: SecKeychain? = nil,
@@ -81,6 +94,7 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
         existingAttestationsAvailableOnlyOnNodeAfterReleaseEntryAddition: Bool,
         maximumValidatedEntryCacheSize: Int,
         isProxy: Bool,
+        transitiveTrustWarmupMaxKeysToValidate: Int,
         // abstracted to allow unit testing
         clock: ClockType,
         workerRackIDCacheTTL: Int
@@ -88,12 +102,16 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
         self.apiServer = apiServer
         self.attestationProvider = attestationProvider
         self.releasesProvider = releasesProvider
+        self.enableTransitiveProofVerification = enableTransitiveProofVerification
+        self.recycleCheckInterval = recycleCheckInterval
+        self.unpublishExistingAttestationsOnRecycle = unpublishExistingAttestationsOnRecycle
         self.keyLifetime = keyLifetime
         self.keyExpiryGracePeriod = keyExpiryGracePeriod
         self.keychain = keychain
         self.attestationCache = attestationCache
         self.stateMachine = AttestationStateMachine(logger: self.logger)
         self.isProxy = isProxy
+        self.transitiveTrustWarmupMaxKeysToValidate = transitiveTrustWarmupMaxKeysToValidate
         self.workerValidationCache = WorkerValidationCache<ClockType>(
             factory: attestationValidatorFactory,
             enableReleaseSetValidation: enableReleaseSetValidation,
@@ -173,6 +191,53 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
             proxyAttestationKeyID: proxyAttestationKeyID,
             rawWorkerAttestationBundle: rawWorkerAttestationBundle
         )
+    }
+
+    func warmWorkerValidation(
+        rawWorkerAttestationBundle: Data
+    ) async throws -> CloudBoardAttestationDAPI.WarmWorkerValidationSummary {
+        guard self.isProxy else {
+            self.logger.error("requested warmup of a worker attestation when not a proxy!")
+            throw CloudBoardAttestationAPIError.internalError
+        }
+        // Warm the proxy's canonical active key set: the current published key first (the one incoming
+        // requests are most likely wrapped to), then the still-valid unpublished keys most-recent first — covering the
+        // grace-period window where lagging clients still use the previous key. Both are read straight from the
+        // daemon's own state (non-blocking) and were registered with the validation cache via `notifyOfNewKey`
+        // before becoming active, so validation won't hit the `unavailableKeyID` path. An empty set (no usable
+        // key yet) is a benign no-op — the helper retries on the next key-rotation broadcast.
+        var keyIDs: [Data] = []
+        if let current = self.currentKeyID {
+            keyIDs.append(current)
+        }
+        keyIDs.append(contentsOf: self.activeUnpublishedKeys.reversed().map(\.keyID))
+        let selected = keyIDs.prefix(max(0, self.transitiveTrustWarmupMaxKeysToValidate))
+        guard !selected.isEmpty else {
+            self.logger.notice(
+                "warmWorkerValidation: no active proxy keys available yet — nothing to warm, will retry on next rotation"
+            )
+            return .init(keysAttempted: 0, keysSucceeded: 0)
+        }
+        var succeeded = 0
+        for keyID in selected {
+            do {
+                _ = try await self.workerValidationCache.validateWorkerAttestation(
+                    proxyAttestationKeyID: keyID,
+                    rawWorkerAttestationBundle: rawWorkerAttestationBundle
+                )
+                succeeded += 1
+            } catch {
+                // Best-effort: a per-key failure is recorded but does not fail the warmup. The hot path
+                // remains authoritative and will reject a genuinely untrustworthy worker on use.
+                self.logger.warning(
+                    "warmWorkerValidation: validation failed against proxy key \(keyID.base64EncodedString(), privacy: .public): \(String(unredacted: error), privacy: .public)"
+                )
+            }
+        }
+        self.logger.log(
+            "warmWorkerValidation: warmed \(succeeded, privacy: .public)/\(selected.count, privacy: .public) active proxy keys"
+        )
+        return .init(keysAttempted: selected.count, keysSucceeded: succeeded)
     }
 
     private func obtainAttestedKey() async throws -> InternalAttestedKey {
@@ -275,10 +340,16 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
         if !attestedKeys.isEmpty {
             self._unpublishedKeys = attestedKeys
 
-            if self.existingAttestationsAvailableOnlyOnNodeAfterReleaseEntryAddition,
-               !Set(self.proxiedReleases.map { $0.releaseDigestHexString })
-                   .isSubset(of: self._unpublishedKeys.last!.proxiedReleaseDigests) {
-                self._unpublishedKeys.indices.forEach { self._unpublishedKeys[$0].availableOnNodeOnly = true }
+            if self.existingAttestationsAvailableOnlyOnNodeAfterReleaseEntryAddition {
+                let currentReleases = Set(self.proxiedReleases.map { $0.releaseDigestHexString })
+                for index in self._unpublishedKeys.indices {
+                    if !currentReleases.isSubset(of: self._unpublishedKeys[index].proxiedReleaseDigests) {
+                        self._unpublishedKeys[index].availableOnNodeOnly = true
+                    }
+                }
+            }
+
+            if self._unpublishedKeys.last!.availableOnNodeOnly {
                 self.stateMachine.initialize()
             } else {
                 self.stateMachine.initialize(cachedKey: self._unpublishedKeys.removeLast())
@@ -307,6 +378,7 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
         case rotationRequired
         case releaseSetChange([ReleaseDigestEntry])
         case keyRevocation(RevocationRequest)
+        case attestationRecycleRequired
         case cancelled
     }
 
@@ -320,6 +392,7 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
         // Create initial attested key
         self.logger.info("Creating initial attested key")
         var currentKey = try await self.obtainAttestedKey()
+        self.currentKeyID = currentKey.keyID
 
         // considered running from here, not legal to call run twice
         for continuation in self.waitingTillRunning! {
@@ -343,6 +416,7 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
                 // 1) the time to rotate the key
                 // 2) till there's an update in the releases set
                 // 3) a key revocation notification arrives
+                // 4) attestation recycle check indicates bundle should be refreshed (transitive proof verification)
                 if currentKeyHalfLife >= 0 {
                     group.addTask {
                         self.logger.notice(
@@ -363,10 +437,56 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
                     self.logger.critical("Current attested key expired before successfully rotating!")
                 }
 
-                if let releasesProvider {
+                if self.isProxy, self.enableTransitiveProofVerification {
+                    // With transitive proof verification, periodically check if the transparency log has advanced, and
+                    // if so recycle the attestation bundle
+                    let currentAttestationBundle = currentKey.attestationBundle
+                    group.addTask {
+                        while true {
+                            do {
+                                try await Task.sleep(
+                                    for: self.recycleCheckInterval,
+                                    tolerance: .zero,
+                                    clock: self.clock
+                                )
+                            } catch is CancellationError {
+                                return .cancelled
+                            }
+                            self.metrics.emit(
+                                CloudBoardAttestationMetrics.CloudBoardAttestationServer
+                                    .RecycleCheckCounter(action: .increment)
+                            )
+                            do {
+                                let bundle = try AttestationBundle(data: currentAttestationBundle)
+                                let attestor = PCC.ProxyNodeAttestor()
+                                if try await attestor.shouldRecycle(bundle: bundle) {
+                                    self.logger.log("Attestation recycle check: bundle should be recycled")
+                                    self.metrics.emit(
+                                        CloudBoardAttestationMetrics.CloudBoardAttestationServer
+                                            .RecycleCheckRecycledCounter(
+                                                action: .increment
+                                            )
+                                    )
+                                    return .attestationRecycleRequired
+                                }
+                                self.logger.info("Attestation recycle check: bundle is still current")
+                            } catch {
+                                self.logger.error("""
+                                Attestation recycle check failed
+                                error=\(error, privacy: .public)
+                                """)
+                                self.metrics.emit(
+                                    CloudBoardAttestationMetrics.CloudBoardAttestationServer.RecycleCheckFailedCounter
+                                        .Factory().make(error)
+                                )
+                            }
+                        }
+                    }
+                } else if self.isProxy, let releasesProvider {
                     // This task is vulnerable to cancellation while in progress due to the timeout in the
                     // expiry check. In reality the expiry is long enough that would be very unlikely, but
-                    // it can happen in testing a lot
+                    // it can happen in testing a lot.
+                    //
                     // The task therefore should only update trivial state, and loss of that update
                     // should be idempotent if restarted and the update did not take effect
                     group.addTask {
@@ -447,6 +567,17 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
                     case .cancelled:
                         self.logger.debug("cancel notification received")
                         ()
+                    case .attestationRecycleRequired:
+                        self.logger.log("Attestation recycle check triggered rotation")
+                        if self.unpublishExistingAttestationsOnRecycle {
+                            self.logger.log(
+                                "Marking all keys as available only on the node after recycle. They will no longer be sent to ROPES"
+                            )
+                            currentKey.availableOnNodeOnly = true
+                            self._unpublishedKeys.indices
+                                .forEach { self._unpublishedKeys[$0].availableOnNodeOnly = true }
+                        }
+                        performRotation = true
                     }
                     if !group.isCancelled {
                         self.logger.debug("cancelling group")
@@ -460,6 +591,7 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
                     self.stateMachine.keyRotated(key: newKey)
                     self._unpublishedKeys += [currentKey]
                     currentKey = newKey
+                    self.currentKeyID = newKey.keyID
                 } catch {
                     if let attestationProviderError = error as? CloudAttestationProviderError,
                        case .releaseDigestsExpirationCheckFailed = attestationProviderError {
@@ -518,7 +650,11 @@ actor CloudBoardAttestationServer<ClockType: DateAwareClock>: CloudBoardAttestat
                     logger: self.logger
                 ) }
             )
-            self.metrics.emit(Metrics.CloudBoardAttestationServer.KeyRotationCounter(action: .increment(by: 1)))
+            self.metrics
+                .emit(
+                    CloudBoardAttestationMetrics.CloudBoardAttestationServer
+                        .KeyRotationCounter(action: .increment(by: 1))
+                )
             self.logger.notice("Broadcasting new attested key set: \(keySet, privacy: .public)")
             try await self.apiServer.keyRotated(newKeySet: keySet)
             try await self.apiServer.attestationRotated(newAttestationSet: .init(
@@ -729,7 +865,9 @@ extension AttestationSet.Attestation {
             releaseDigest: key.releaseDigest,
             availableOnNodeOnly: key.availableOnNodeOnly,
             proxiedReleaseDigests: key.proxiedReleaseDigests,
-            appData: key.appData
+            appData: key.appData,
+            transparencyTreeID: key.transparencyTreeID,
+            transparencyRevision: key.transparencyRevision
         )
     }
 }

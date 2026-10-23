@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -106,19 +106,6 @@ enum Metrics {
             static let buckets: HistogramBuckets = .signingKeyFetchTime
             var value: Double
             var dimensions: MetricDimensions<DimensionKeys>
-        }
-
-        struct SigningKeyTimeToExpiryGauge: Gauge {
-            typealias KeyType = KeyRotationServiceClient.SigningKeyUseCase
-            static let label: MetricLabel = "\(ProcessInfo.prefix)_signing_key_time_to_expiry_seconds"
-
-            var dimensions: MetricDimensions<DimensionKeys>
-            var value: Double
-
-            init(keyType: KeyType, expireAt: Date) {
-                self.dimensions = [.keyType: keyType.metricValue]
-                self.value = expireAt.timeIntervalSince(Date())
-            }
         }
     }
 

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -138,8 +138,15 @@ struct LengthPrefixDeframer<
                 return nil
             }
 
-            let prefix = self.buffer.prefix(length)
-            self.buffer.removeFirst(length)
+            // SUBTLE: we must ensure `buffer` is uniquely referenced before removing this prefix,
+            // because Data is copy-on-write. Copying the body into its own storage first drops the
+            // shared reference to its backing storage, so the removeSubrange below mutates in place
+            // instead of cloning the entire buffer.
+            let subrange = self.buffer.startIndex..<self.buffer.startIndex.advanced(by: length)
+            let prefix = Data(self.buffer[subrange])
+
+            self.buffer.removeSubrange(subrange)
+
             return prefix
         }
     }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,9 +17,11 @@
 //  DarwinInit
 //
 
+import DarwinInitConfig
+
 /// Container structure for command-line arguments provided via NVRAM.
 struct DInitNVRAMArguments {
-    var failureAction: DInitFailureAction?
+    var failureAction: Config.Finish.FailureAction?
 }
 
 extension DInitNVRAMArguments: Decodable { }

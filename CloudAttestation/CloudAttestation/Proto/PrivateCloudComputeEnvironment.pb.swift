@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -119,20 +119,5 @@ public enum PrivateCloudCompute_Environment: InternalSwiftProtobuf.Enum, Swift.C
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 extension PrivateCloudCompute_Environment: InternalSwiftProtobuf._ProtoNameProviding {
-  public static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "UNSPECIFIED"),
-    1: .same(proto: "PRODUCTION"),
-    2: .same(proto: "CARRY"),
-    3: .same(proto: "STAGING"),
-    4: .same(proto: "QA"),
-    5: .same(proto: "PERF"),
-    6: .same(proto: "EPHEMERAL"),
-    7: .same(proto: "DEV"),
-    8: .same(proto: "LIVEON"),
-    9: .same(proto: "QUARANTINE"),
-    96: .same(proto: "QA1_PRIMARY"),
-    97: .same(proto: "QA1_INTERNAL"),
-    98: .same(proto: "QA2_PRIMARY"),
-    99: .same(proto: "QA2_INTERNAL"),
-  ]
+  public static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0UNSPECIFIED\0\u{1}PRODUCTION\0\u{1}CARRY\0\u{1}STAGING\0\u{1}QA\0\u{1}PERF\0\u{1}EPHEMERAL\0\u{1}DEV\0\u{1}LIVEON\0\u{1}QUARANTINE\0\u{2}W\u{1}QA1_PRIMARY\0\u{1}QA1_INTERNAL\0\u{1}QA2_PRIMARY\0\u{1}QA2_INTERNAL\0")
 }

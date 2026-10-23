@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -112,7 +112,10 @@ extension PCCHarness {
         /// Passed through all the way to the cloud app
         public var workloadParameters: [String: [String]] = [:]
 
-        /// Metadata associated with the request
+        /// PAT issuer identifier for cost token generation
+        public var patIssuer: String = "test-resource-pool"
+
+        /// Metadata associated with the request (ABI-compatible version)
         /// - Parameters:
         ///   - bundleID: Bundle identifier, identifying the client application bundle initiating the request
         ///   - bundleVersion: Version of the client application bundle
@@ -128,12 +131,42 @@ extension PCCHarness {
             workloadType: String = "",
             workloadParameters: [String: [String]] = [:]
         ) {
+            self.init(
+                bundleID: bundleID,
+                bundleVersion: bundleVersion,
+                featureID: featureID,
+                clientInfo: clientInfo,
+                workloadType: workloadType,
+                workloadParameters: workloadParameters,
+                patIssuer: "test-resource-pool"
+            )
+        }
+
+        /// Metadata associated with the request (with patIssuer)
+        /// - Parameters:
+        ///   - bundleID: Bundle identifier, identifying the client application bundle initiating the request
+        ///   - bundleVersion: Version of the client application bundle
+        ///   - featureID: Feature identifier
+        ///   - clientInfo: Version information for the client device
+        ///   - workloadType: Requested workload/service type
+        ///   - workloadParameters: Additional workload/routing parameters
+        ///   - patIssuer: PAT issuer identifier for cost token generation (defaults to "test-resource-pool")
+        public init(
+            bundleID: String? = nil,
+            bundleVersion: String? = nil,
+            featureID: String? = nil,
+            clientInfo: String? = nil,
+            workloadType: String = "",
+            workloadParameters: [String: [String]] = [:],
+            patIssuer: String = "test-resource-pool"
+        ) {
             self.bundleID = bundleID
             self.bundleVersion = bundleVersion
             self.featureID = featureID
             self.clientInfo = clientInfo
             self.workloadType = workloadType
             self.workloadParameters = workloadParameters
+            self.patIssuer = patIssuer
         }
     }
 

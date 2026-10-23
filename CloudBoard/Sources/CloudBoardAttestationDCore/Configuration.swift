@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -50,12 +50,6 @@ struct CloudBoardAttestationDConfiguration: Codable, Hashable {
     private var _existingAttestationsAvailableOnlyOnNodeAfterReleaseEntryAddition: Bool?
     private var _maximumValidatedEntryCacheSize: Int?
     private var _rackIdCacheLifetimeMinutes: Int?
-
-    // Test-only: Override default dummy IDs for in-memory attestations
-    // These are not serialized and only used in test environments with useInMemoryKey=true
-    var testEnsembleID: String?
-    var testBootID: String?
-    var testRackID: String?
 
     // If true, an in-memory key is used as node key instead of a SEP-backed key. This automatically disables the use of
     // CloudAttestation which require SEP-backed keys. Note that regular clients enforce SEP-backed attested keys and
@@ -265,16 +259,21 @@ struct CloudBoardAttestationDConfiguration: Codable, Hashable {
             self.cloudAttestation.includeTransparencyLogInclusionProof = true
         }
 
-        if self.transparencyLog.proxiedReleaseDigestsOverride != nil {
-            CloudBoardAttestationDaemon.logger
-                .error("Overriding configuration with new value TransparencyLog.ProxiedReleaseDigestsOverride=nil")
-            self.transparencyLog.proxiedReleaseDigestsOverride = nil
-        }
+        // Release-set infrastructure enforcement is irrelevant when transitive proof verification is enabled
+        if !self.secureConfig.enableTransitiveProofVerification {
+            if self.transparencyLog.proxiedReleaseDigestsOverride != nil {
+                CloudBoardAttestationDaemon.logger
+                    .error(
+                        "Overriding configuration with new value TransparencyLog.ProxiedReleaseDigestsOverride=nil"
+                    )
+                self.transparencyLog.proxiedReleaseDigestsOverride = nil
+            }
 
-        if !self.enableReleaseSetValidation {
-            CloudBoardAttestationDaemon.logger
-                .error("Overriding configuration with new value EnableReleaseSetValidation=true")
-            self.enableReleaseSetValidation = true
+            if !self.enableReleaseSetValidation {
+                CloudBoardAttestationDaemon.logger
+                    .error("Overriding configuration with new value EnableReleaseSetValidation=true")
+                self.enableReleaseSetValidation = true
+            }
         }
 
         // Enforce minimum rack ID cache lifetime of 60 minutes in production/customer mode

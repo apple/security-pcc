@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,34 +24,62 @@ import Foundation_Private.NSXPCConnection
 import PrivateCloudCompute
 import os.log
 
+private let logger = Logger(for: .daemon)
+
 extension TC2Daemon {
-    func listRateLimits(bundleIdentifier: String?, featureIdentifier: String?, fetch: Bool) async -> Data? {
+    func listRateLimits(bundleIdentifier: BundleIdentifier?, featureIdentifier: String?, fetch: Bool) async -> Data? {
         if fetch {
-            do {
-                let request = TC2RateLimitRequest(
-                    connectionFactory: NWAsyncConnection(),
-                    rateLimiter: self.rateLimiter,
-                    requestID: .init(),
-                    config: self.config,
-                    systemInfo: systemInfo,
-                    bundleIdentifier: bundleIdentifier,
-                    featureIdentifier: featureIdentifier)
-                try await request.sendRequest()
-            } catch {
-                self.logger.error("failure to process TC2RateLimitRequest send, error=\(error)")
-                return nil
+            await withTaskGroup { taskGroup in
+                taskGroup.addTask {
+                    do {
+                        let request = TC2RateLimitRequest(
+                            connectionFactory: NWAsyncConnection(),
+                            rateLimiter: self.rateLimiter,
+                            requestID: .init(),
+                            config: self.config,
+                            systemInfo: self.systemInfo,
+                            bundleIdentifier: bundleIdentifier,
+                            featureIdentifier: featureIdentifier,
+                            featureFlagChecker: self.featureFlagChecker)
+                        try await request.sendRequest()
+                    } catch {
+                        logger.error("failure to process TC2RateLimitRequest send, error=\(error)")
+                    }
+                }
+                taskGroup.addTask {
+                    do {
+                        try await self.vaultConfigurationUpdater.run()
+                    } catch {
+                        logger.error("failure to fetch rate limits from vault, error=\(error)")
+                    }
+                }
             }
         }
 
-        let ratelimits = await self.rateLimiter.applicableConfigs(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier)
+        let ratelimits = await self.rateLimiter.applicableConfigs(bundleIdentifier: bundleIdentifier?.rawValue, featureIdentifier: featureIdentifier)
         return ratelimits.json
     }
 
     // This is primarily for thtool
-    func addRateLimit(bundleIdentifier: String?, featureIdentifier: String?, workloadType: String?, count: UInt, duration: Double, ttl: Double, jitter: Double) async {
-        let filter = RateLimitFilter(bundleID: bundleIdentifier, featureID: featureIdentifier, workloadType: workloadType, workloadTags: [])
+    func addRateLimit(
+        source: RateLimitSource,
+        bundleIdentifier: String?,
+        featureIdentifier: String?,
+        workloadType: String?,
+        count: UInt,
+        duration: Double,
+        ttl: Double,
+        jitter: Double
+    ) async {
+        let filter = RateLimitFilter(
+            bundleID: bundleIdentifier,
+            featureID: featureIdentifier,
+            qos: nil,
+            workloadType: workloadType,
+            workloadTags: []
+        )
         let timing = RateLimitTimingDetails(now: Date.now, count: count, duration: duration, ttl: ttl, jitterRatio: jitter, config: self.config)
-        let config = RateLimitConfiguration(filter: filter, timing: timing)
+        let config = RateLimitConfiguration(source: source, filter: filter, timing: timing)
         await self.rateLimiter.limitByConfiguration(config)
         await self.rateLimiter.save()
     }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -29,13 +29,72 @@ struct Certificate {
         self.cert = SecCertificateCreateWithData(nil, certData)!
         self.label = label
     }
+
+    init(cert: SecCertificate, label: String) {
+        self.cert = cert
+        self.label = label
+    }
+
+    /// Add this certificate to the keychain and configure trust settings.
+    ///
+    /// Adding a certificate to the keychain allows it to be found when trust evaluation builds a certificate chain,
+    /// but just being in the keychain does not by itself cause a certificate to be trusted.
+    /// Trust must be added explicitly, and trusting in the admin domain means trusted for all users (uids) on the system.
+    ///
+    /// - Returns: true if the certificate was installed successfully, false on failure
+    func installAndTrust() -> Bool {
+        logger.info("Installing \(label)")
+
+        let addquery = [
+            kSecClass as String: kSecClassCertificate,
+            kSecValueRef as String: cert,
+            kSecAttrLabel as String: label
+        ] as [String: Any] as CFDictionary
+
+        var osstatus = SecItemAdd(addquery, nil)
+
+        switch osstatus {
+        case errSecSuccess:
+            logger.info("Added \(label) to keychain")
+        case errSecDuplicateItem:
+            logger.warning("\(label) already present in keychain")
+        default:
+            let message = (SecCopyErrorMessageString(osstatus, nil) ?? "OSStatus \(osstatus)" as CFString)
+            logger.error("Failed to add \(label) to keychain: \(message)")
+            return false
+        }
+
+#if os(macOS)
+        osstatus = SecTrustSettingsSetTrustSettings(cert, .admin, nil)
+        guard osstatus == errSecSuccess else {
+            let message = (SecCopyErrorMessageString(osstatus, nil) ?? "OSStatus \(osstatus)" as CFString)
+            logger.error("Failed to trust \(label): \(message)")
+            return false
+        }
+#else
+        // On embedded, we need to fetch the user domain instead. User trust store is for all users on iOS
+        guard let store = SecTrustStoreForDomain(SecTrustStoreDomain(kSecTrustStoreDomainUser)) else {
+            logger.error("Failed to retrieve user trust store")
+            return false
+        }
+        osstatus = SecTrustStoreSetTrustSettings(store, cert, nil)
+        guard osstatus == errSecSuccess else {
+            let message = (SecCopyErrorMessageString(osstatus, nil) ?? "OSStatus \(osstatus)" as CFString)
+            logger.error("Failed to add \(label) to trust store: \(message)")
+            return false
+        }
+#endif
+
+        logger.log("Installed \(label) successfully")
+        return true
+    }
 }
 
 /// This is temporary
 /// rdar://93920588 (Accessing Corp cert from DarwinOS customer build.)
 enum CorporateRoot {
 
-    static func apply() -> Bool {
+    static func install() -> Bool {
         let corpCerts = [
             Certificate(base64Encoded: """
                 MIIDsTCCApmgAwIBAgIIFJlrSmrkQKAwDQYJKoZIhvcNAQELBQAwZjEgMB4GA1UEAwwXQXBwbGUgQ29ycG9yYXRlIF\
@@ -94,55 +153,93 @@ enum CorporateRoot {
         logger.info("Installing Corporate Root CAs")
 
         for corpCert in corpCerts {
-            logger.info("Installing \(corpCert.label)")
-            let addquery = [
-                kSecClass as String: kSecClassCertificate,
-                kSecValueRef as String: corpCert.cert,
-                kSecAttrLabel as String: corpCert.label
-            ] as [String : Any] as CFDictionary
-
-            var osstatus = SecItemAdd(addquery, nil)
-
-            switch osstatus {
-            case errSecSuccess:
-                logger.info("Added \(corpCert.label) to keychain")
-            case errSecDuplicateItem:
-                logger.warning("\(corpCert.label) already present in keychain")
-            default:
-                let message = (SecCopyErrorMessageString(osstatus, nil) ?? "OSStatus \(osstatus)" as CFString)
-                logger.error("Failed to add \(corpCert.label) to keychain: \(message)")
+            guard corpCert.installAndTrust() else {
                 return false
             }
-
-            // Adding a certificate to the keychain allows it to be found when trust evaluation builds a certificate chain,
-            // but just being in the keychain does not by itself cause a certificate to be trusted.
-            // Trust must be added explicitly, and trusting in the admin domain means trusted for all users (uids) on the system.
-    #if os(macOS)
-            osstatus = SecTrustSettingsSetTrustSettings(corpCert.cert, .admin, nil)
-            guard osstatus == errSecSuccess else {
-                let message = (SecCopyErrorMessageString(osstatus, nil) ?? "OSStatus \(osstatus)" as CFString)
-                logger.error("Failed to trust \(corpCert.label): \(message)")
-                return false
-            }
-
-    #else
-            // On embedded, we need to fetch the user domain instead. User trust store is for all users on iOS
-            guard let store = SecTrustStoreForDomain(SecTrustStoreDomain(kSecTrustStoreDomainUser)) else {
-                logger.error("Failed to retrieve user trust store")
-                return false
-            }
-            osstatus = SecTrustStoreSetTrustSettings(store, corpCert.cert, nil)
-            guard osstatus == errSecSuccess else {
-                let message = (SecCopyErrorMessageString(osstatus, nil) ?? "OSStatus \(osstatus)" as CFString)
-                logger.error("Failed to add \(corpCert.label) to trust store: \(message)")
-                return false
-            }
-    #endif
-
-            logger.log("Installed \(corpCert.label) successfully")
         }
 
         logger.log("Corporate Root CAs installed successfully")
         return true
     }
 }
+
+// MARK: - CustomRoots
+
+/// Installs custom CA root certificates from configuration.
+enum CustomRoots {
+
+    private static let pemHeader = "-----BEGIN CERTIFICATE-----"
+    private static let pemFooter = "-----END CERTIFICATE-----"
+
+    /// Parse certificate data with auto-detection of PEM vs base64-encoded DER format.
+    ///
+    /// - Parameter certificateData: Either PEM text (with headers) or base64-encoded DER
+    /// - Returns: A Certificate if parsing succeeds, nil otherwise
+    ///
+    /// NOTE: Currently no validation is performed on the certificate (e.g., expiry, CA status).
+    /// Consider adding validation in the future if needed.
+    static func parseCertificate(from certificateData: String) -> Certificate? {
+        let derData: Data
+
+        if certificateData.contains(pemHeader) {
+            // PEM format: strip headers and decode inner base64
+            let stripped = certificateData
+                .replacingOccurrences(of: pemHeader, with: "")
+                .replacingOccurrences(of: pemFooter, with: "")
+                .replacingOccurrences(of: "\n", with: "")
+                .replacingOccurrences(of: "\r", with: "")
+                .trimmingCharacters(in: .whitespaces)
+
+            guard let decoded = Data(base64Encoded: stripped) else {
+                logger.error("Failed to decode PEM certificate base64 content")
+                return nil
+            }
+            derData = decoded
+        } else {
+            // Assume base64-encoded DER
+            guard let decoded = Data(base64Encoded: certificateData) else {
+                logger.error("Failed to decode certificate base64 data")
+                return nil
+            }
+            derData = decoded
+        }
+
+        guard let secCert = SecCertificateCreateWithData(nil, derData as CFData) else {
+            logger.error("Failed to create SecCertificate from data")
+            return nil
+        }
+
+        // Derive label from certificate subject
+        let label: String
+        if let summary = SecCertificateCopySubjectSummary(secCert) as String? {
+            label = summary
+        } else {
+            label = "Custom CA Certificate"
+        }
+
+        return Certificate(cert: secCert, label: label)
+    }
+
+    /// Install custom CA root certificates from configuration.
+    ///
+    /// - Parameter certificateDataStrings: Array of certificate data strings (PEM or base64-encoded DER)
+    /// - Returns: true if all certificates installed successfully, false on first failure
+    static func apply(_ certificateDataStrings: [String]) -> Bool {
+        logger.info("Installing Custom Root CAs")
+
+        for (index, certificateData) in certificateDataStrings.enumerated() {
+            guard let cert = parseCertificate(from: certificateData) else {
+                logger.error("Failed to parse custom certificate at index \(index)")
+                return false
+            }
+
+            guard cert.installAndTrust() else {
+                return false
+            }
+        }
+
+        logger.log("Custom Root CAs installed successfully")
+        return true
+    }
+}
+

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -33,9 +33,7 @@ public class NStatClient: EHGenerator, AllEventsIterable {
     }
 
     public struct NStatClientNWEvent: EHUEFEvent {
-        public var tags = Set<String>()
-
-        public var fields: [String: EHValueType] = [:]
+        public var metadata = EHEventMetadata()
         public var event_category: EHUEFCategory = .network
         public var event_type: String = "nw_open"
 
@@ -169,7 +167,7 @@ public class NStatClient: EHGenerator, AllEventsIterable {
                 remotePort: protoSnap.remotePort,
                 localPort: protoSnap.localPort,
                 epid: protoSnap.processID,
-                procName: protoSnap.processName ?? EventHorizonKit.eventInfoUnknown,
+                procName: "",
                 uid: protoSnap.uid,
                 direction: protoSnap.snapshotReasonString ?? EventHorizonKit.eventInfoUnknown)
             Task {
@@ -219,12 +217,74 @@ extension NStatClient.NStatClientNWEvent: EventNormalizer.NetworkNormalizable {
     }
 
     public var n_non_normalizable: [String: EHValueType] {
-        [:] // NStatClient doesn't have additional non-normalizable fields
+        [:]
     }
 }
 
 extension NStatClient.NStatClientNWEvent: EHEventSimilarityValue {
-    public var similarityHash: String {
-        "\(self.epid)_\(self.procName)_\(self.remoteAddr)_\(self.remotePort)"
+    public var similarityHash: Int {
+        var hasher = Hasher()
+        hasher.combine(epid)
+        hasher.combine(procName)
+        hasher.combine(remoteAddr)
+        hasher.combine(remotePort)
+        return hasher.finalize()
+    }
+}
+
+extension NStatClient.NStatClientNWEvent: EHFieldExtractable {
+    public func fieldValue(for field: String) -> Any? {
+        switch field {
+        case "tags": return tags
+        case "fields": return fields
+        case "event_category": return event_category
+        case "event_type": return event_type
+        case "startTime": return startTime
+        case "remoteAddr": return remoteAddr
+        case "remotePort": return remotePort
+        case "localPort": return localPort
+        case "epid": return epid
+        case "procName": return procName
+        case "uid": return uid
+        case "direction": return direction
+        default: return nil
+        }
+    }
+}
+
+
+import AST
+
+private enum RK {
+    static let event_type: AST.RegoValue = .string("event_type")
+    static let event_category: AST.RegoValue = .string("event_category")
+    static let tags: AST.RegoValue = .string("tags")
+    static let fields: AST.RegoValue = .string("fields")
+    static let startTime: AST.RegoValue = .string("startTime")
+    static let remoteAddr: AST.RegoValue = .string("remoteAddr")
+    static let remotePort: AST.RegoValue = .string("remotePort")
+    static let localPort: AST.RegoValue = .string("localPort")
+    static let epid: AST.RegoValue = .string("epid")
+    static let procName: AST.RegoValue = .string("procName")
+    static let uid: AST.RegoValue = .string("uid")
+    static let direction: AST.RegoValue = .string("direction")
+}
+
+extension NStatClient.NStatClientNWEvent: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = [:]
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.startTime] = .number(RegoNumber(decimal: Decimal(startTime)))
+        obj[RK.remoteAddr] = .string(remoteAddr)
+        obj[RK.remotePort] = .number(RegoNumber(int: Int64(remotePort)))
+        obj[RK.localPort] = .number(RegoNumber(int: Int64(localPort)))
+        obj[RK.epid] = .number(RegoNumber(int: Int64(epid)))
+        obj[RK.procName] = .string(procName)
+        obj[RK.uid] = .number(RegoNumber(int: Int64(uid)))
+        obj[RK.direction] = .string(direction)
+        return .object(obj)
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -147,7 +147,7 @@ extension VRE {
             }
 
             do {
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try Globals.computer.fileSystem.createDirectory(at: directory, withIntermediateDirectories: true)
             } catch {
                 throw VREError("cannot create instance folder: \(error)")
             }
@@ -167,17 +167,28 @@ extension VRE {
                 }
             }
 
+            vmConfig.darwinInitPath = darwinInitFile.path
+
+            // Only use DarwinInitHelper (which requires HOST_TOOLS via pccvreHelper)
+            // if there are cryptex assets to populate in the darwin-init config.
+            let hasCryptexAssets = copiedAssets.contains {
+                $0.assetType != SWReleaseMetadata.AssetType.os.label &&
+                $0.assetType != SWReleaseMetadata.AssetType.hostTools.label
+            }
+            if hasCryptexAssets {
+                var darwinInitHelper = try DarwinInitHelper(config: darwinInit, pccvreHelper: pccvreHelper())
+                try darwinInitHelper.populateReleaseCryptexes(assets: copiedAssets)
+                try darwinInitHelper.save(toFile: darwinInitFile.path)
+            } else {
+                config.httpService = nil
+                try darwinInit.write(toFile: darwinInitFile.path, atomically: true, encoding: .utf8)
+            }
+
             do {
                 try config.write(to: configFile)
             } catch {
                 throw VREError("save config into VRE area: \(error)")
             }
-
-
-            vmConfig.darwinInitPath = darwinInitFile.path
-            var darwinInitHelper = try DarwinInitHelper(config: darwinInit, pccvreHelper: pccvreHelper())
-            try darwinInitHelper.populateReleaseCryptexes(assets: copiedAssets)
-            try darwinInitHelper.save(toFile: darwinInitFile.path)
 
             do {
                 try vm.create(config: vmConfig)
@@ -196,7 +207,7 @@ extension VRE {
             instanceAssets: [CryptexSpec] // items to copy in
         ) throws -> [CryptexSpec] {
             do {
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try Globals.computer.fileSystem.createDirectory(at: directory, withIntermediateDirectories: true)
             } catch {
                 throw VREError("cannot create instance folder: \(error)")
             }
@@ -238,7 +249,7 @@ extension VRE {
                     // fall through
                 }
 
-                try FileManager.default.removeItem(at: directory)
+                try Globals.computer.fileSystem.removeItem(at: directory)
             } catch {
                 throw VREError("remove VRE instance folder: \(error)")
             }
@@ -272,16 +283,17 @@ extension VRE {
                 throw VREError("VRE VM currently running")
             }
 
-            var darwinInit = try darwinInitHelper()
-
+            var updatedDarwinInit: DarwinInitHelper? = nil
             var httpServer: HTTPServer?
             if let httpConfig = config.httpService {
+                var darwinInit = try darwinInitHelper()
                 httpServer = try await HTTPServer.start(httpConfig, accessPath: FilePath(directory.path))
 
                 let bindAddr = String(describing: httpServer!.host)
                 print("HTTP service started: \(bindAddr):\(httpServer!.port ?? .zero)")
 
                 try darwinInit.updateLocalCryptexURLs(httpServer: httpServer!)
+                updatedDarwinInit = darwinInit
             }
 
             defer {
@@ -308,14 +320,21 @@ extension VRE {
 
             defer {
                 do {
-                    try FileManager.default.removeItem(atPath: runningDarwinInitPath)
+                    try Globals.computer.fileSystem.removeItem(atPath: runningDarwinInitPath)
                 } catch {
                     VRE.logger.error("remove temp file \(runningDarwinInitPath, privacy: .public): \(error, privacy: .public)")
                 }
             }
 
             do {
-                try darwinInit.save(toFile: runningDarwinInitPath)
+                if let updatedDarwinInit {
+                    try updatedDarwinInit.save(toFile: runningDarwinInitPath)
+                } else {
+                    try Globals.computer.fileSystem.copyItem(
+                        at: darwinInitFile,
+                        to: URL(fileURLWithPath: runningDarwinInitPath)
+                    )
+                }
             } catch {
                 throw VREError("temp copy of darwin-init: \(error)")
             }
@@ -503,7 +522,7 @@ extension VRE {
             let dst = cryptexFile(dstName)
             if FileManager.isExist(dst, resolve: true) {
                 if overwrite {
-                    try FileManager.default.removeItem(at: dst)
+                    try Globals.computer.fileSystem.removeItem(at: dst)
                 } else {
                     return dst
                 }
@@ -536,10 +555,10 @@ extension VRE {
 
             // unpack into staging area (limit leaving partial results)
             let tmpPCToolsDir = FileManager.fileURL(pcToolsDir.path + "-unpack")
-            try? FileManager.default.removeItem(at: tmpPCToolsDir)
+            try? Globals.computer.fileSystem.removeItem(at: tmpPCToolsDir)
 
             do {
-                try FileManager.default.createDirectory(
+                try Globals.computer.fileSystem.createDirectory(
                     at: tmpPCToolsDir,
                     withIntermediateDirectories: false
                 )
@@ -551,7 +570,7 @@ extension VRE {
                 let src = mountPoint.appending(path: sub)
                 do {
                     VRE.logger.log("copy \(src.path, privacy: .public) -> \(tmpPCToolsDir.path, privacy: .public)")
-                    try FileManager.default.copyItem(at: src, to: tmpPCToolsDir.appending(path: sub))
+                    try Globals.computer.fileSystem.copyItem(at: src, to: tmpPCToolsDir.appending(path: sub))
                 } catch {
                     throw VREError("copy \(src.path) -> \(tmpPCToolsDir.path): \(error)")
                 }
@@ -559,9 +578,9 @@ extension VRE {
 
             // unpack completed - now move staging folder into place
             VRE.logger.debug("remove original VRE pctools folder \(pcToolsDir, privacy: .public)")
-            try? FileManager.default.removeItem(at: pcToolsDir)
+            try? Globals.computer.fileSystem.removeItem(at: pcToolsDir)
             do {
-                try FileManager.default.moveItem(at: tmpPCToolsDir, to: pcToolsDir)
+                try Globals.computer.fileSystem.moveItem(at: tmpPCToolsDir, to: pcToolsDir)
             } catch {
                 throw VREError("move \(tmpPCToolsDir.path) -> \(pcToolsDir): \(error)")
             }

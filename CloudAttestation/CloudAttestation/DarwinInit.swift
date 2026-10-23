@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -54,7 +54,7 @@ public struct DarwinInit: Sendable {
         secureConfigRoutingHint ?? cfPrefsRoutingHint
     }
 
-    /// The routing hint provided by `config-security-policy`.
+    /// The routing hint provided by `secure-config`.
     public var secureConfigRoutingHint: String? {
         guard let secureConfig = self.parameters["secure-config"] as? [String: Any] else {
             return nil
@@ -74,6 +74,25 @@ public struct DarwinInit: Sendable {
         }
 
         return cellID["value"] as? String
+    }
+
+    /// The environment provided by `secure-config`
+    public var environment: Environment? {
+        guard let secureConfig = self.parameters["secure-config"] as? [String: Any] else {
+            return nil
+        }
+        guard let envString = secureConfig["com.apple.CloudAttestation.environment"] as? String else {
+            return nil
+        }
+        return Environment(rawValue: envString)
+    }
+
+    /// The app identifiers provided by `secure-config`
+    public var appIdentifiers: [String]? {
+        guard let secureConfig = self.parameters["secure-config"] as? [String: Any] else {
+            return nil
+        }
+        return secureConfig["com.apple.libcryptex.appIdentifiers"] as? [String]
     }
 
     /// Creates a new `DarwinInit` instance.

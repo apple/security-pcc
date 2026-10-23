@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -99,6 +99,86 @@ public func updateGenericStateGaugeCounter<T: CustomStringConvertible & CaseIter
 	gauge.record(1)
 }
 #endif
+
+/// Record a sendDataAndGetResponse call as a latency histogram in milliseconds.
+/// Pass `error: nil` on success; pass the actual error on failure so the failure_reason
+/// dimension is resolved inside the CloudMetricsFramework guard and never evaluated otherwise.
+/// Pass `durationMs: 0` for pre-flight failures (not-ready, nil channel) that never hit
+/// the network.
+public func trackSendDataAndGetResponse(
+	success: Bool,
+	error: Error?,
+	durationMs: Double,
+	isLeader: Bool,
+	rank: Int,
+	chassisID: String
+) {
+	#if canImport(CloudMetricsFramework)
+	let failureReason: String
+	if success {
+		failureReason = "none"
+	} else if let dataErr = error as? DataMessageError {
+		switch dataErr {
+		case .noRegisteredHandler:  failureReason = "noRegisteredHandler"
+		case .timeoutOnPeerHandler: failureReason = "timeoutOnPeerHandler"
+		case .noResponseReceived:   failureReason = "noResponseReceived"
+		case .internalError:        failureReason = "internalError"
+		case .notReady:             failureReason = "notReady"
+		}
+	} else {
+		failureReason = "other"
+	}
+	if let histogram = try? Histogram(
+		label: "ensembled_senddataandgetresponse_latency_ms",
+		dimensions: [
+			("result", success ? "success" : "failure"),
+			("failure_reason", failureReason),
+			("ensemble_role", isLeader ? "leader" : "follower"),
+			("rank", "\(rank)"),
+			("chassisID", chassisID),
+		],
+		buckets: Array(stride(from: 0.0, through: 200.0, by: 5.0))
+	) {
+		histogram.record(durationMs)
+	}
+	#endif
+}
+
+/// Record the time from `.initializing` to first `.ready` as a histogram in seconds.
+/// Buckets: 2-minute intervals from 0 to 30 minutes, then 30+ minutes.
+public func trackEnsembleFormationDuration(durationSeconds: Double, isLeader: Bool, rank: Int, chassisID: String) {
+	#if canImport(CloudMetricsFramework)
+	if let histogram = try? Histogram(
+		label: "ensembled_formation_duration_seconds",
+		dimensions: [
+			("ensemble_role", isLeader ? "leader" : "follower"),
+			("rank", "\(rank)"),
+			("chassisID", chassisID),
+		],
+		buckets: Array(stride(from: 0.0, through: 1800.0, by: 120.0))
+	) {
+		histogram.record(durationSeconds)
+	}
+	#endif
+}
+
+/// Record the time from `.redistributingKey` back to `.ready` as a histogram in seconds.
+/// Buckets: 1-second intervals from 0 to 10 seconds, then 10+ seconds.
+public func trackKeyRotationDuration(durationSeconds: Double, isLeader: Bool, rank: Int, chassisID: String) {
+	#if canImport(CloudMetricsFramework)
+	if let histogram = try? Histogram(
+		label: "ensembled_keyrotation_duration_seconds",
+		dimensions: [
+			("ensemble_role", isLeader ? "leader" : "follower"),
+			("rank", "\(rank)"),
+			("chassisID", chassisID),
+		],
+		buckets: Array(stride(from: 0.0, through: 10.0, by: 1.0))
+	) {
+		histogram.record(durationSeconds)
+	}
+	#endif
+}
 
 /// Update the current state metrics gauges for this compute node with
 /// either the specified new state

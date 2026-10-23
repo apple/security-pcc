@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,6 +22,12 @@ import CryptoKit
 import AppleComputeEnsembler
 import Foundation
 
+/// Internal throwing variant of `EnsembleDataMessageReceived` used within ensembled.
+/// Allows the EnsemblerService to propagate typed `DataMessageError` values back through
+/// the TLS layer instead of silently returning empty `Data` on failure.
+/// External app clients continue to use the non-throwing `EnsembleDataMessageReceived`.
+public typealias EnsembleDataMessageReceivedInternal = @Sendable (Int, Data) async throws -> Data
+
 public protocol EnsemblerInterface {
 	func getMaxBuffersPerKey() throws -> UInt64?
 	func getMaxSecondsPerKey() throws -> UInt64?
@@ -41,7 +47,10 @@ public protocol EnsemblerInterface {
 	func drain()
 	func distributeDataKey(key: Data, type: DistributionType) throws -> SingleUseKeyToken
 	func getDataKey(token: SingleUseKeyToken) throws -> Data?
-    func registerDataCallback(appID: String, callback: @escaping EnsembleDataMessageReceived)
+    // Takes the internal throwing callback so ensembled can propagate typed DataMessageError
+    // values back through the TLS layer. Not exposed to external app clients — apps register
+    // via EnsemblerSession which stores the non-throwing EnsembleDataMessageReceived locally.
+    func registerDataCallback(appID: String, callback: @escaping EnsembleDataMessageReceivedInternal)
     func unregisterDataCallback(appID: String)
 	func sendDataAndGetResponse(appID: String,data: Data, destination: Int, timeout: TimeInterval, completion: @escaping (Result<Data, Error>) -> Void)
 	func sendDataToAllFollowers(appID: String, data: Data, timeout: TimeInterval, completion: @escaping (Result<[NodeResponse], Error>) -> Void)

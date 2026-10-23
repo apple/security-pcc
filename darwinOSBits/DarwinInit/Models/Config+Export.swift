@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,6 +18,7 @@
 //
 //
 
+import DarwinInitConfig
 import Foundation
 
 /// Exports Config (V2 schema) back to V1 schema JSON format.
@@ -30,6 +31,10 @@ struct VersionOneExporter {
 
     private struct DictWriter<Key: CodingKey> {
         var dict: [String: JSON] = [:]
+
+        func has(key: Key) -> Bool {
+            return dict[key.stringValue] != nil
+        }
 
         subscript(key: Key) -> JSON? {
             get {
@@ -52,6 +57,7 @@ struct VersionOneExporter {
 
     let config: Config
     let converter: Converter
+    let root: KeyedConverter<Config.VersionOneKeys>
     private var result: DictWriter<Config.VersionOneKeys>
 
     init(config: Config) throws {
@@ -65,6 +71,7 @@ struct VersionOneExporter {
 
         self.config = config
         self.converter = JSONConverter(config: origin.source)
+        self.root = try converter.container(keyedBy: Config.VersionOneKeys.self)
         self.result = DictWriter<Config.VersionOneKeys>()
     }
 
@@ -139,7 +146,6 @@ struct VersionOneExporter {
             try export(start: start)
         }
 
-        let root = try converter.container(keyedBy: Config.VersionOneKeys.self)
         if let critical = try root.objCBool(forKey: .preInitCritical).wrappedValue {
             result[.preInitCritical] = .bool(critical)
         }
@@ -160,13 +166,34 @@ struct VersionOneExporter {
             try export(volumes: volumes)
         }
 
+        // preserve empty input collections
+        if root.has(key: .installConfig) &&
+            !result.has(key: .installConfig) {
+            result[.installConfig] = .dictionary([:])
+        }
+
+        if root.has(key: .resultConfig) &&
+            !result.has(key: .resultConfig) {
+            result[.resultConfig] = .dictionary([:])
+        }
+
         return .dictionary(result.dict)
     }
 
     private mutating func export(caRoots: Config.CARoots) throws {
+        var value = DictWriter<Config.CARoots.VersionOneKeys>()
         if let appleCorporateRoot = caRoots.appleCorporateRoot {
-            var value = DictWriter<Config.CARoots.VersionOneKeys>()
             value[.appleCorpRoot] = .bool(appleCorporateRoot)
+        }
+        if let customRoots = caRoots.customRoots {
+            let rootsArray = customRoots.map { root -> JSON in
+                var rootDict = DictWriter<Config.CARoots.CustomRoot.VersionOneKeys>()
+                rootDict[.certificate] = .string(root.certificate)
+                return rootDict.json
+            }
+            value[.customRoots] = .array(rootsArray)
+        }
+        if !value.dict.isEmpty {
             result[.caRoots] = value.json
         }
     }
@@ -208,12 +235,10 @@ struct VersionOneExporter {
     private mutating func export(cryptex: Config.Cryptex) throws {
         // Restore the original cryptex entries from origin
         // This will also include their authentication settings
-        if let cryptexes = cryptex.cryptexes {
+        if let cryptexes = cryptex.cryptexes, root.has(key: .cryptexConfig) {
             let ids = Set(cryptexes.map { $0.key })
             let cryptexConfigs = try listCryptexes(include: ids)
-            if !cryptexConfigs.isEmpty {
-                result[.cryptexConfig] = .array(cryptexConfigs)
-            }
+            result[.cryptexConfig] = .array(cryptexConfigs)
         }
 
         if let cache = cryptex.cache {
@@ -246,7 +271,6 @@ struct VersionOneExporter {
 
     /// Extract cryptex entries from the original V1 JSON
     private func listCryptexes(include have: Set<String>) throws -> [JSON] {
-        let root = try converter.container(keyedBy: Config.VersionOneKeys.self)
         guard let cryptexArray = try root.indexedContainer(forKey: .cryptexConfig) else {
             return []
         }
@@ -349,9 +373,7 @@ struct VersionOneExporter {
         if let persist = log.persist {
             logConfig[.systemLoggingEnabled] = .bool(persist)
         }
-        if !logConfig.dict.isEmpty {
-            result[.logConfig] = logConfig.json
-        }
+        result[.logConfig] = logConfig.json
     }
 
     private mutating func export(meta: Config.Meta) throws {
@@ -432,9 +454,50 @@ struct VersionOneExporter {
         if let perfdata = start.perfdata {
             result[.collectPerfData] = .bool(perfdata)
         }
+
         if let scripts = start.scripts {
-            let scriptArray = scripts.map { JSON.string($0) }
-            result[.preInitCommands] = .array(scriptArray)
+            // scripts can come from three different places:
+            // 1. pre-init-cmds
+            // 2. install.preflight
+            // 3. install.postflight
+
+            let pre: String?
+            let post: String?
+            if let install = try root.container(
+                keyedBy: Config.Root.VersionOneKeys.self,
+                forKey: .installConfig
+            ) {
+                pre = try install.str(forKey: .preflight)?.wrappedValue
+                post = try install.str(forKey: .postflight)?.wrappedValue
+            } else {
+                pre = nil
+                post = nil
+            }
+
+            var installConfig = DictWriter<Config.Root.VersionOneKeys>()
+            var scriptArray: [JSON] = []
+
+            for item in scripts {
+                let js = JSON.string(item)
+                if item == pre {
+                    installConfig[.preflight] = js
+                } else if item == post {
+                    installConfig[.postflight] = js
+                } else {
+                    scriptArray.append(js)
+                }
+            }
+
+            if root.has(key: .preInitCommands) {
+                result[.preInitCommands] = .array(scriptArray)
+            }
+
+            // Always writing this key if it is not empty is ok
+            // since we only convert 'install.{pre,post}flight'
+            // iff 'install.root' is null/not-set
+            if !installConfig.dict.isEmpty {
+                result[.installConfig] = installConfig.json
+            }
         }
     }
 
@@ -494,13 +557,13 @@ struct VersionOneExporter {
         if let admin = user.admin {
             userConfig[.isAdmin] = .bool(admin)
         }
-        if let password = user.plaintextPassword {
+        if let password = user.authentication?.plaintextPassword {
             userConfig[.password] = .string(password)
         }
         if let passwordlessSudo = user.passwordlessSudo {
             userConfig[.passwordlessSudo] = .bool(passwordlessSudo)
         }
-        if let sshKey = user.sshAuthorizedKey {
+        if let sshKey = user.authentication?.sshAuthorizedKey {
             userConfig[.sshAuthorizedKeys] = .string(sshKey)
         }
 
@@ -539,8 +602,7 @@ struct VersionOneExporter {
     }
 
     private mutating func export(narrative: [String: JSON]) throws {
-        let container = try converter.container(keyedBy: Config.VersionOneKeys.self)
-        guard let ids = try container.indexedContainer(forKey: .narrativeIdentitiesConfig) else { return }
+        guard let ids = try root.indexedContainer(forKey: .narrativeIdentitiesConfig) else { return }
 
         var res: [JSON] = []
         for i in 0..<ids.count {

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,7 +13,7 @@
 // 10/02/2024
 
 //
-//  NodeAttestation.swift
+//  NodeAttestor.swift
 //  CloudAttestation
 //
 //  Copyright © 2024 Apple Inc. All rights reserved.
@@ -60,9 +60,17 @@ public struct NodeAttestor: Attestor {
     @_spi(Private)
     public var requireCryptex1: Bool
 
+    @_spi(Private)
     public var populateSecureConfigMetadata: Bool = false
 
+    @_spi(Private)
     public var preserveSecureConfigs: Bool = false
+
+    @_spi(Private)
+    public var certificateTransparency: Bool
+
+    @_spi(Private)
+    public var certificateTransparencyFetchFailClosed: Bool
 
     static let logger: Logger = Logger(subsystem: "com.apple.CloudAttestation", category: "NodeAttestor")
 
@@ -146,6 +154,8 @@ public struct NodeAttestor: Attestor {
         self.requireCertificateChain = configuration.requireCertificateChain
         self.requireSealedHashes = configuration.requireSealedHashes
         self.requireCryptex1 = configuration.requireCryptex1
+        self.certificateTransparency = configuration.certificateTransparency
+        self.certificateTransparencyFetchFailClosed = configuration.certificateTransparencyFetchFailClosed
     }
 
     /// Creates an attestaton bundle for the given SEP key.
@@ -174,6 +184,22 @@ public struct NodeAttestor: Attestor {
                     Self.logger.error("Unable to fetch ap ticket: \(error, privacy: .public)")
                     throw error
                 }
+
+                #if os(macOS)
+                do {
+                    builder.localPolicy = try .with { builder in
+                        builder.implementation = .ec384Sha384
+                        builder.policy = try self.assetProvider.localBootPolicy
+                    }
+
+                    builder.sfrManifest = try self.assetProvider.sfrManifest
+                } catch {
+                    Self.logger.error("Unable to fetch secure boot metadata: \(error, privacy: .public)")
+                    if self.enforcementOptions.requireAllAssets {
+                        throw error
+                    }
+                }
+                #endif
 
                 do {
                     // Only populate if not empty, so we don't have a wasteful empty proto field
@@ -238,17 +264,23 @@ public struct NodeAttestor: Attestor {
             }
 
             Self.logger.log("This device's \(release, privacy: .public):\n\(release.jsonString, privacy: .public)")
-            let proofs = try await self.transparencyProver.proveInclusion(of: Data(release.digest()))
+            let proofs = try await self.transparencyProver.proveInclusion(of: Data(release.digest()), at: nil, coveringAll: .release, preferOldest: true)
             Self.logger.debug("Fetched inclusion proofs for release")
 
             try proofs.verify(expiration: expiration)
 
             // only populate non-empty proofs
             if proofs.proofs != ATLogProofs() {
-                bundle.proto.transparencyProofs = Proto_TransparencyProofs.with { builder in
-                    builder.proofs = proofs.proofs
-                }
+                bundle.proto.transparencyProofs = proofs.proto
             }
+
+            // Populate Certificate Transparency proofs
+            let certificateTransparencyPopulator = NodeCertificateTransparencyPopulator(
+                certificateTransparency: self.certificateTransparency,
+                certificateTransparencyFetchFailClosed: self.certificateTransparencyFetchFailClosed,
+                transparencyProver: self.transparencyProver
+            )
+            try await certificateTransparencyPopulator.populateProofs(for: &bundle, expiration: expiration)
 
             // Can safely unwrap since a successful attestation of the key happened
             let publicKey = SecKeyCopyPublicKey(key)!
@@ -259,6 +291,22 @@ public struct NodeAttestor: Attestor {
         } catch {
             Self.logger.error("Attestation failed: \(error, privacy: .public)")
             throw error
+        }
+    }
+}
+
+extension NodeAttestor {
+    struct NodeCertificateTransparencyPopulator: CertificateTransparencyPopulator {
+        static let logger: Logger = Logger(subsystem: "com.apple.CloudAttestation", category: "NodeCertificateTransparencyPopulator")
+
+        let certificateTransparency: Bool
+
+        let certificateTransparencyFetchFailClosed: Bool
+
+        let transparencyProver: any TransparencyProver
+
+        func fetch(fingerprint: Data) async throws -> TransparencyLogProofs {
+            try await self.transparencyProver.proveInclusion(of: fingerprint, at: nil, coveringAll: .serverNode, preferOldest: true)
         }
     }
 }

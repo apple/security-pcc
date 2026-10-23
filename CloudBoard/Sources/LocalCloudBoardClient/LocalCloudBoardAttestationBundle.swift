@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -71,7 +71,7 @@ public struct LocalCloudBoardAttestationBundle: Sendable {
         case .cloudAttestationBundle(let unvalidatedBundle, _):
             return try unvalidatedBundle.serializedData()
         case .testOnlyAttestationBundle(let bundle):
-            return bundle.serializedData()
+            return try bundle.serializedData()
         }
     }
 
@@ -82,7 +82,7 @@ public struct LocalCloudBoardAttestationBundle: Sendable {
         case .cloudAttestationBundle(let unvalidatedBundle, _):
             return try unvalidatedBundle.jsonString()
         case .testOnlyAttestationBundle(let bundle):
-            return bundle.jsonString()
+            return try bundle.jsonString()
         }
     }
 

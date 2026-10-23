@@ -1,0 +1,88 @@
+# Dockerfile for deterministic proto generation.
+#
+# Reads the exact plugin versions from Package.resolved (passed in as build
+# args) so the generated output is always in sync with the Swift package graph.
+#
+# Build args (SWIFT_VERSION from .swift-version, revisions from Package.resolved):
+#   SWIFT_VERSION                - Swift toolchain version
+#   SWIFT_PROTOBUF_REVISION      - git revision for apple/swift-protobuf
+#   GRPC_SWIFT_PROTOBUF_REVISION - git revision for grpc/grpc-swift-protobuf
+#
+# Build (all args read automatically by the wrapper):
+#   Scripts/generate-protos.sh
+#
+# Or manually:
+#   docker build -f Scripts/Dockerfile.generate-protos -t proto-gen \
+#     --build-arg SWIFT_VERSION=<version> \
+#     --build-arg SWIFT_PROTOBUF_REVISION=<rev> \
+#     --build-arg GRPC_SWIFT_PROTOBUF_REVISION=<rev> .
+
+ARG SWIFT_VERSION
+
+# ── builder ───────────────────────────────────────────────────────────────────
+FROM swift:${SWIFT_VERSION}-noble AS builder
+
+ARG PROTOC_VERSION=v34.0
+ARG SWIFT_PROTOBUF_REVISION
+ARG GRPC_SWIFT_PROTOBUF_REVISION
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        unzip \
+        ca-certificates \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install protoc
+RUN ARCH="$(uname -m)" && \
+    case "${ARCH}" in \
+        x86_64)  PROTOC_ARCH="linux-x86_64"   ;; \
+        aarch64) PROTOC_ARCH="linux-aarch_64" ;; \
+        *) echo "Unsupported architecture: ${ARCH}" && exit 1 ;; \
+    esac && \
+    curl -fsSL \
+        "https://github.com/protocolbuffers/protobuf/releases/download/${PROTOC_VERSION}/protoc-${PROTOC_VERSION#v}-${PROTOC_ARCH}.zip" \
+        -o /tmp/protoc.zip && \
+    unzip -q /tmp/protoc.zip -d /usr/local && \
+    rm /tmp/protoc.zip
+
+WORKDIR /build
+
+# Clone and build protoc-gen-swift at the pinned revision.
+# --recurse-submodules is required: swift-protobuf's Package.swift references
+# C++ sources in submodules (protobuf, abseil) for its 'protoc' product, and
+# SPM validates all source paths in the manifest even when building an
+# unrelated product, so those files must exist on disk.
+RUN git clone https://github.com/apple/swift-protobuf.git swift-protobuf && \
+    git -C swift-protobuf checkout "${SWIFT_PROTOBUF_REVISION}" && \
+    git -C swift-protobuf submodule update --init --recursive && \
+    swift build \
+        --package-path swift-protobuf \
+        --configuration release \
+        --product protoc-gen-swift && \
+    cp swift-protobuf/.build/release/protoc-gen-swift /usr/local/bin/
+
+# Clone and build protoc-gen-grpc-swift-2 at the pinned revision.
+RUN git clone https://github.com/grpc/grpc-swift-protobuf.git grpc-swift-protobuf && \
+    git -C grpc-swift-protobuf checkout "${GRPC_SWIFT_PROTOBUF_REVISION}" && \
+    swift build \
+        --package-path grpc-swift-protobuf \
+        --configuration release \
+        --product protoc-gen-grpc-swift-2 && \
+    cp grpc-swift-protobuf/.build/release/protoc-gen-grpc-swift-2 /usr/local/bin/
+
+# ── runtime ───────────────────────────────────────────────────────────────────
+ARG SWIFT_VERSION
+FROM swift:${SWIFT_VERSION}-noble AS runtime
+
+COPY --from=builder /usr/local/bin/protoc                /usr/local/bin/protoc
+COPY --from=builder /usr/local/include/google            /usr/local/include/google
+COPY --from=builder /usr/local/bin/protoc-gen-swift      /usr/local/bin/protoc-gen-swift
+COPY --from=builder /usr/local/bin/protoc-gen-grpc-swift-2 /usr/local/bin/protoc-gen-grpc-swift-2
+
+WORKDIR /workspace
+
+COPY Scripts/generate-protos-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

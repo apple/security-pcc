@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -28,6 +28,8 @@ let kDInitPersistStorage = FilePath("/var/db/com.apple.darwininit")
 let kDInitStatusFilepath = FilePath("/var/db/.DarwinSetupStatus")
 let kDInitFirewallRulesPath = FilePath("/var/db/darwin-init/firewall/rules.pf")
 let kDInitErrorReportFilepath = FilePath("/var/db/.DarwinErrorReport")
+let kDInitSSHCAPublicKeyFilepath = FilePath("/etc/ssh/ca_key.pub")
+let kDInitSSHCAAuthorizedPrincipalsDirectory = FilePath("/etc/ssh/authorized_principals/")
 let kDInitValidatorBundle = "/usr/share/misc/darwin-init_validator_bundle"
 // File loaded by /etc/ssh/sshd_config.d/200-darwininit.conf on tto allow DarwinInit to configure sshd at boot time
 let kDInitSSHConfig = kDInitPersistStorage.appending("darwin-init-ssh.conf")
@@ -46,21 +48,12 @@ let kDInitSSHConfigPWAuthDisabled = """
     ChallengeResponseAuthentication no
 
     """
+let kDInitSSHConfigCAAuth = """
+    TrustedUserCAKeys file:\(kDInitSSHCAPublicKeyFilepath.string)
+    AuthorizedPrincipalsFile \(kDInitSSHCAAuthorizedPrincipalsDirectory.string)/%u
+
+    """
 let kDInitSSHConfigEmpty = "\n".data(using: .utf8)!
-
-/// The name of a known NVRAM variable.
-public struct NVRAMVariable: ExpressibleByStringLiteral, Hashable, Sendable {
-    public let rawValue: String
-
-    public init(stringLiteral value: String) {
-        self.rawValue = value
-    }
-}
-
-extension NVRAMVariable {
-    static let darwinInit: Self = "darwin-init"
-    static let darwinInitSystem: Self = "darwin-init-system"
-}
 
 let kDInitNVRAMConfigLegacyKey = "darwininit"
 /// static URL at which `User Data` from EC2 Instance Metadata Service is reachable
@@ -89,6 +82,18 @@ let kDInitDataCenterBootstrapServer = URL(
 let kDInitDataCenterBootstrapServerFallback = URL(
     string: "https://dc-bss.apple.com/v1"
 )!
+
+let kDInitTestBootstrapServerFallback = URL(
+    string: "http://192.168.64.1/"
+)!
+
+let kDInitTestBootstrapServerNVRAMKey = "DCBSS"
+
+
+enum DataCenterRegionCode: Int32, Sendable {
+    case reserved = 0
+    case internalTest = 100
+}
 
 /// The file to create on disk to enable users in the `admin` group to perform `sudo` operations
 /// without being prompted for a password.
@@ -169,6 +174,9 @@ let kDiavloServerLocation = "https://diavlo.apple.com"
 let kDefaultApplyTimeout: Duration = .seconds(60) * 30
 
 let kTailspinDefaultBufferSize: size_t = 50
+
+// We can get rid of this hardcoded builtin cryptex list once rdar://165792764 lands
+let kBuiltinCryptexIdentifiers = ["com.apple.ServerRestoreSupport"]
 
 public let logger = Logger.default
 

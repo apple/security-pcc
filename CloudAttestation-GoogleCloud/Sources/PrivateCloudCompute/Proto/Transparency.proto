@@ -1,0 +1,232 @@
+// Copyright © 2026 Apple Inc. All Rights Reserved.
+
+// APPLE INC.
+// PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
+// PLEASE READ THE FOLLOWING PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT (“AGREEMENT”) CAREFULLY BEFORE DOWNLOADING OR USING THE APPLE SOFTWARE ACCOMPANYING THIS AGREEMENT(AS DEFINED BELOW). BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT, DO NOT DOWNLOAD OR USE THE APPLE SOFTWARE. THESE TERMS AND CONDITIONS CONSTITUTE A LEGAL AGREEMENT BETWEEN YOU AND APPLE.
+// IMPORTANT NOTE: BY DOWNLOADING OR USING THE APPLE SOFTWARE, YOU ARE AGREEING ON YOUR OWN BEHALF AND/OR ON BEHALF OF YOUR COMPANY OR ORGANIZATION TO THE TERMS OF THIS AGREEMENT.
+// 1. As used in this Agreement, the term “Apple Software” collectively means and includes all of the Apple Private Cloud Compute materials provided by Apple here, including but not limited to the Apple Private Cloud Compute software, tools, data, files, frameworks, libraries, documentation, logs and other Apple-created materials. In consideration for your agreement to abide by the following terms, conditioned upon your compliance with these terms and subject to these terms, Apple grants you, for a period of ninety (90) days from the date you download the Apple Software, a limited, non-exclusive, non-sublicensable license under Apple’s copyrights in the Apple Software to download, install, compile and run the Apple Software internally within your organization only on a single Apple-branded computer you own or control, for the sole purpose of verifying the security and privacy characteristics of Apple Private Cloud Compute. This Agreement does not allow the Apple Software to exist on more than one Apple-branded computer at a time, and you may not distribute or make the Apple Software available over a network where it could be used by multiple devices at the same time. You may not, directly or indirectly, redistribute the Apple Software or any portions thereof. The Apple Software is only licensed and intended for use as expressly stated above and may not be used for other purposes or in other contexts without Apple's prior written permission. Except as expressly stated in this notice, no other rights or licenses, express or implied, are granted by Apple herein.
+// 2. The Apple Software is provided by Apple on an "AS IS" basis. APPLE MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS, SYSTEMS, OR SERVICES. APPLE DOES NOT WARRANT THAT THE APPLE SOFTWARE WILL MEET YOUR REQUIREMENTS, THAT THE OPERATION OF THE APPLE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, THAT DEFECTS IN THE APPLE SOFTWARE WILL BE CORRECTED, OR THAT THE APPLE SOFTWARE WILL BE COMPATIBLE WITH FUTURE APPLE PRODUCTS, SOFTWARE OR SERVICES. NO ORAL OR WRITTEN INFORMATION OR ADVICE GIVEN BY APPLE OR AN APPLE AUTHORIZED REPRESENTATIVE WILL CREATE A WARRANTY.
+// 3. IN NO EVENT SHALL APPLE BE LIABLE FOR ANY DIRECT, SPECIAL, INDIRECT, INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE, REPRODUCTION, COMPILATION OR OPERATION OF THE APPLE SOFTWARE, HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// 4. This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from Apple if you fail to comply with any term(s) of this Agreement. Upon termination, you agree to cease all use of the Apple Software and destroy all copies, full or partial, of the Apple Software. This Agreement constitutes the entire understanding of the parties with respect to the subject matter contained herein, and supersedes all prior negotiations, representations, or understandings, written or oral. This Agreement will be governed and construed in accordance with the laws of the State of California, without regard to its choice of law rules.
+// You may report security issues about Apple products to product-security@apple.com, as described here: https://www.apple.com/support/security/. Non-security bugs and enhancement requests can be made via https://bugreport.apple.com as described here: https://developer.apple.com/bug-reporting/
+// EA1937
+// 10/02/2024
+
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.apple.keyt.api";
+option java_outer_classname = "TransparencyProto";
+
+package PrivateCloudCompute.TransparencyLog;
+
+// Common elements used across APIs
+// Unless specified otherwise, all fields with an "Ms" suffix are timestamps specified in milliseconds elapsed since 00:00:00 UTC on January 1, 1970
+
+// Protobuf protocol protocol version.
+// Later versions must have larger ordinal numbers.  Device clients require number in enum name to match ordinal number.
+enum ProtocolVersion {
+    UNKNOWN_VERSION = 0;
+    // V1 used in Yukon, deprecated
+    V1 = 1;
+    // V2 introduced in SkyC. Adds account key, converts map leaves to TLS presentation language, changes some VRFs to SHA256 hashes
+    V2 = 2;
+    // V3 (was 2_1) introduced in SkyD. Same as V2 but clients can handle opt-in SMTs in query responses
+    V3 = 3;
+
+    // Future version used for testing
+    FUTURE = 999999999;
+}
+
+// Application is the smallest grouping that can not be divided across multiple sets of PACL,
+// PAM, and PAT. It defines a map-index namespace and is associated with a personality.
+enum Application {
+    UNKNOWN_APPLICATION = 0;
+    IDS_MESSAGING = 1;
+    CLOUDKIT = 2;
+    IDS_MULTIPLEX_ICLOUD = 3;
+    IDS_FACETIME = 4;
+    PRIVATE_CLOUD_COMPUTE = 5;
+    PRIVATE_CLOUD_COMPUTE_INTERNAL = 6;
+}
+
+// API response status.
+enum Status {
+    UNKNOWN_STATUS   = 0;
+    OK               = 1;
+    // 2 - can reuse
+    MUTATION_PENDING = 3;
+    ALREADY_EXISTS   = 4;
+    INTERNAL_ERROR   = 5;
+    INVALID_REQUEST  = 6;
+    NOT_FOUND        = 7;
+    // V2: removed TOO_MANY_VRF_REQUESTS = 8; because queries no longer need to request VRF witnesses for deviceId and clientData
+}
+
+message VRFWitness {
+    VRFType type = 1;
+    bytes   output  = 2;
+    bytes   proof   = 3;
+}
+
+message VRFPublicKey {
+    bytes vrfKey = 1;
+    VRFType type = 2;
+}
+
+enum VRFType {
+    UNKNOWN_VRF = 0;
+    // 1, 2 - can reuse
+    ECVRF_ED25519_SHA512_Elligator2 = 3;
+}
+
+message Signature {
+    bytes signature = 1;
+    // This is a hash of the DER encoded public key used to verify the signature.
+    // It is used to identify the correct key from multiple signing keys.
+    bytes signingKeySPKIHash = 2;
+    SignatureAlgorithm algorithm = 3;
+
+    enum SignatureAlgorithm {
+        UNKNOWN = 0;
+        ECDSA_SHA256 = 1;
+    }
+}
+
+message SignedObject {
+    // parse as a LogHead, MapHead, Mutation, or whatever is appropriate given context
+    bytes object        = 1;
+    Signature signature = 2;
+}
+
+message LogHead {
+    uint64 logBeginningMs = 1; // Used to identify the new tree when the tree has been reset
+    uint64 logSize = 2;
+    bytes logHeadHash = 3;
+    uint64 revision = 4;
+    LogType logType = 5;
+    Application application = 6; // omitted for TLT
+    uint64 treeId = 7;
+    uint64 timestampMs = 8;
+}
+
+enum LogType {
+    UNKNOWN_LOG = 0;
+    PER_APPLICATION_CHANGE_LOG = 1;
+    PER_APPLICATION_TREE = 2;
+    TOP_LEVEL_TREE = 3;
+    CT_LOG = 4;
+    AT_LOG = 5;
+    //ATR_LOG = 6;
+}
+
+// The value and inclusion proof of a log leaf.
+message LogEntry {
+    LogType logType = 1;
+    SignedObject slh = 2;
+    repeated bytes hashesOfPeersInPathToRoot = 3; // ordered with leaf at position 0, root-1 at end
+    // Parse based on nodeType
+    bytes nodeBytes = 4;
+    uint64 nodePosition = 5; // in range [0, slh.logSize)
+    NodeType nodeType = 6;
+}
+
+message MapHead {
+    uint64 logBeginningMs   = 1;
+    bytes mapHeadHash       = 2;
+    Application application = 3;
+    LogHead changeLogHead   = 4;
+    uint64 revision         = 5;
+    MapType mapType         = 6;
+    uint64 treeId           = 7;
+    uint64 timestampMs      = 8;
+    bool populating         = 9; // if true, indicates this map may not yet contain a full set of data
+}
+
+enum MapType {
+    UNKNOWN_MAP = 0;
+    PER_APP_OBJECT_MAP = 1;
+    //PER_APP_REVOCATION_MAP = 2;
+}
+
+// Value and inclusion proof of a map leaf.
+message MapEntry {
+    SignedObject smh = 1;
+    // When computing the hash chain, prepend each non-leaf hash with 0x01
+    // Empty peers may be omitted since they can be calculated by the client
+    repeated bytes hashesOfPeersInPathToRoot = 2; // ordered with leaf at position 0, root-1 at end
+    // When computing the hash chain, Prepend the hash of these bytes with 0x00
+    bytes mapLeaf = 3; // For IDS, Parse as MapLeaf
+}
+
+message InclusionProof {
+    // V2: removed uriVRFOutput = 1
+    MapEntry mapEntry = 2;
+    bytes index = 3; // Added for V2, equals SHA256(uriVrfOutput)
+
+    LogEntry perApplicationTreeEntry = 4; // optional
+    LogEntry topLevelTreeEntry = 5; // optional
+}
+
+// Inclusion proof of a PAT node
+message PatInclusionProof {
+    LogEntry perApplicationTreeEntry = 1;
+    LogEntry topLevelTreeEntry = 2;
+}
+
+enum NodeType {
+    PACL_NODE = 0;        // Dependent on personality. for IDS this is a ChangeLogNode
+    PAT_NODE = 1;         // PerApplicationTreeNode
+    PAT_CONFIG_NODE = 2;  // Only valid for node index 0. PerApplicationTreeConfigNode
+    TLT_NODE = 3;         // TopLevelTreeNode
+    TLT_CONFIG_NODE = 4;  // Only valid for node index 0. TopLevelTreeConfigNode
+    LOG_CLOSED_NODE = 5;  // Valid for PAT or TLT. LogClosedNode
+    CT_NODE = 6;          // Certificate transparency log node.
+    ATL_NODE = 7;          // Trusted compute log node. Can be an attestation node or certificate node (ChangeLogNodeV2 with an ATLeafData struct).
+    //ATRL_NODE = 8;          // Trusted compute revocation node.
+}
+
+message ChangeLogNodeV2 {
+    // Parse as appropriate for app, for IDS this is a TLS-encoded IdsMutation
+    bytes mutation = 1;
+}
+
+// node ID = SHA256( PAM tree ID || PAM revision )
+message PerApplicationTreeNode {
+    // 1 - can reuse
+    // changeLogHead is contained within objectMapHead
+    SignedObject objectMapHead = 2;
+}
+
+message TopLevelTreeNode {
+    SignedObject patHead = 1;
+}
+
+// The first node (nodePosition 0) in a Per-Application Tree will have this value.
+// V1: node ID = SHA256(VRF Public Key)
+// V2: node ID = SHA256("Config node")
+// Trusted compute PAT config nodes will not include the VRF public key
+message PerApplicationTreeConfigNode {
+    VRFPublicKey vrfPublicKey = 1;
+    bytes publicKeyBytes = 2; // public key for signing roots of all trees for this app, encoded in DER SPKI
+    // first supported version for this tree, interpret not set as V1
+    ProtocolVersion earliestVersion = 3;
+}
+
+// The first node (nodePosition 0) in a Top-level Tree will have this value.
+// V1: node ID = SHA256(signing public key)
+// V2: node ID = SHA256("Config node")
+message TopLevelTreeConfigNode {
+    bytes publicKeyBytes = 1; // public key for signing roots of the top-level tree, encoded in DER SPKI
+    // first supported version for this tree, interpret not set as V1
+    ProtocolVersion earliestVersion = 3;
+}
+
+// Indicates that this PAT or TLT is shut down (for PAT, the PACL and PAM that feed it are also shut down).
+// Not necessarily the last PAT node. (PAT should contain no other nodes newer than this + MMD?)
+// node ID = SHA256("Closed node")
+message LogClosedNode {
+    uint64 timestampMs = 1; // Any SMTs less than MMD before this may never merge
+    // Earliest version that is supported by the new tree.
+    ProtocolVersion earliestVersionForNextTree = 3;
+}

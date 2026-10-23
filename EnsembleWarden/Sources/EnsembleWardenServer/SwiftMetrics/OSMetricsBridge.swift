@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -26,24 +26,6 @@
 /// as a backend for code
 final package class OSMetricsBridge: MetricsFactory, Sendable {
     package let globalLabels: [String: String] = [:]
-    /// These histogram buckets are somewhat application specific and reflect expected operation durations
-    private let defaultTimeHistogramBuckets: [Double] =  [
-        0.1, 0.2, 0.3, 0.4, 0.5,
-        0.6, 0.7, 0.8, 0.9,
-
-        1.0, 2.0, 3.0, 4.0, 5.0,
-        6.0, 7.0, 8.0, 9.0,
-
-        10.0, 20.0, 30.0, 40.0, 50.0,
-        60.0, 70.0, 80.0, 90.0, 100.0,
-        200.0, 300.0, 400.0, 500.0, 600.0,
-        700.0, 800.0, 900.0,
-
-        1000.0, 2000.0, 3000.0, 4000.0, 5000.0,
-        6000.0, 7000.0, 8000.0, 9000.0,
-
-        10000.0, 20000.0, 30000.0
-    ]
 
     package init(){}
 
@@ -189,7 +171,7 @@ final package class OSMetricsBridge: MetricsFactory, Sendable {
         let histogram = OSMetricHistogram(
                             type: Double.self, label: label,
                             extraDimensions: OSMetricDimensions(values: finalDimensions),
-                            bins: .interval(count: 5, interval: 10))
+                            bins: .interval(count: 25, interval: 2))
 
         let histogramWrapper = OSMetricHistogramWrapper(histogram: histogram)
 
@@ -209,8 +191,7 @@ final package class OSMetricsBridge: MetricsFactory, Sendable {
 
     package func makeRecorder(label: String, dimensions: [(String, String)], aggregate: Bool) -> any RecorderHandler {
         let finalDimensions = dimensions + globalLabels
-        let binType = OSMetricBinType.logarithmic(count: UInt8(defaultTimeHistogramBuckets.count))
-        let histogram = OSMetricHistogram(type: Double.self, label: label, extraDimensions: OSMetricDimensions(values: finalDimensions), bins: binType)
+        let histogram = OSMetricHistogram(type: Double.self, label: label, extraDimensions: OSMetricDimensions(values: finalDimensions), bins: .interval(count: 25, interval: 2))
 
         let histogramWrapper = OSMetricHistogramWrapper(histogram: histogram)
         return OSMetricsValueHistogramHandler(histogram: histogramWrapper)

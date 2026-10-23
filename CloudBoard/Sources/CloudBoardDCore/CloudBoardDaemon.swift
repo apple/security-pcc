@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,11 +13,16 @@
 // 10/02/2024
 
 import CFPreferenceCoder
-#if canImport(CloudAssetDownloaderFramework)
+#if RC_IS_CLOUDOS_ENABLED && os(iOS)
 import CloudAssetDownloaderFramework
+#elseif canImport(CloudAssetDownloaderFramework)
+import CloudAssetDownloaderFramework
+#else
+#warning("CloudAssetDownloaderFramework not available at compile time")
 #endif
 import CloudBoardAttestationDAPI
 import CloudBoardCommon
+import CloudBoardController
 import CloudBoardIdentity
 import CloudBoardJobAuthDAPI
 import CloudBoardJobHelperAPI
@@ -31,10 +36,15 @@ import NIOCore
 import NIOTLS
 import NIOTransportServices
 import os
+import PersistentHelperInstance
 import Security
 import Synchronization
-#if canImport(SystemServiceMonitor)
+#if RC_IS_CLOUDOS_ENABLED && os(iOS)
+import SystemServiceMonitor
+#elseif canImport(SystemServiceMonitor)
 @_weakLinked import SystemServiceMonitor
+#else
+#warning("SystemServiceMonitor not available at compile time")
 #endif
 import GRPCClientConfiguration
 import Tracing
@@ -63,6 +73,8 @@ public actor CloudBoardDaemon {
     private let tracer: RequestSummaryTracer
 
     private let workloadManagers: [WorkloadManager]
+    /// Injected for testing; when empty the production path constructs them in `start()`.
+    private let persistentServiceManagers: [PersistentServiceManager]
     private let heartbeatPublisher: HeartbeatPublisher?
     private let launchdJobFinder: LaunchdJobFinderProtocol
     private let serviceDiscoverySetup: ServiceDiscoverySetup
@@ -81,9 +93,24 @@ public actor CloudBoardDaemon {
     private var exitContinuation: CheckedContinuation<Void, Never>?
     private let convergenceTracing: ConvergenceTracing?
     private var serviceDiscoveryComms: ServiceDiscoveryCommsProtocol?
+    private let globalLabels: [String: String]?
     private let healthReporter: (any RunnableHealthReporter)?
     private let statusProvider: StatusProvider?
     private let dependencyHealthChecker: ServiceDependencyHealthChecker?
+
+    fileprivate enum DaemonTaskCompleted: String {
+        case certificateRefresh
+        case attestationProvider
+        case sessionStore
+        case hotProperties
+        case controlPlaneHealthDHealthChecker
+        case healthServer
+        case statusServer
+        case heartbeat
+        case workloadManagers
+        case publishNodeReleaseDigestMetrics
+        case emitMemoryUsageMetrics
+    }
 
     public init(configPath: String?, metricsSystem: MetricsSystem? = nil) throws {
         let config: CloudBoardDConfiguration
@@ -96,6 +123,16 @@ public actor CloudBoardDaemon {
             Self.logger.info("Loading configuration from preferences")
             config = try CloudBoardDConfiguration.fromPreferences()
         }
+
+        // Global labels are always read from the cloudmetricsd preferences domain,
+        // regardless of how cloudboardd's own config is loaded.
+        let globalLabelsConfig: GlobalLabelsConfiguration
+        do {
+            globalLabelsConfig = try GlobalLabelsConfiguration.fromPreferences()
+        } catch {
+            Self.logger.info("No global labels found in cloudmetricsd preferences, continuing without global labels")
+            globalLabelsConfig = GlobalLabelsConfiguration()
+        }
         let configJSON = try String(decoding: JSONEncoder().encode(config), as: UTF8.self)
         Self.logger.log("Loaded configuration: \(configJSON, privacy: .public)")
         let nodeInfo = NodeInfo.load(secureConfig: config.secureConfig)
@@ -107,16 +144,27 @@ public actor CloudBoardDaemon {
         } else {
             CloudBoardDaemon.logger.error("Unable to check if node is a leader")
         }
-        try self.init(config: config, nodeInfo: nodeInfo, metricsSystem: metricsSystem)
+        try self.init(
+            config: config,
+            nodeInfo: nodeInfo,
+            globalLabels: globalLabelsConfig.globalLabels,
+            metricsSystem: metricsSystem
+        )
     }
 
-    internal init(config: CloudBoardDConfiguration, nodeInfo: NodeInfo?, metricsSystem: MetricsSystem? = nil) throws {
+    internal init(
+        config: CloudBoardDConfiguration,
+        nodeInfo: NodeInfo?,
+        globalLabels: [String: String]? = nil,
+        metricsSystem: MetricsSystem? = nil
+    ) throws {
         self.group = NIOTSEventLoopGroup.singleton
         let metricsSystem = metricsSystem ?? CloudMetricsSystem(clientName: CloudBoardDaemon.metricsClientName)
         self.statusMonitor = .init(metrics: metricsSystem)
         let tracer = RequestSummaryTracer(metrics: metricsSystem)
         let launchdJobFinder = LaunchdJobFinder(metrics: metricsSystem)
-        guard !config.secureConfig.cloudAppNames.isEmpty else {
+        guard !config.secureConfig.cloudAppNames.isEmpty || !config.secureConfig.persistentServices.isEmpty else {
+            Self.logger.fault("No cloud apps or persistent services set in configuration - aborting")
             throw CloudBoardDaemonError.noCloudAppSet
         }
 
@@ -124,6 +172,7 @@ public actor CloudBoardDaemon {
         #if canImport(CloudAssetDownloaderFramework)
         assetsMetadataClient = CloudAssetsMetadataClient()
         #else
+        Self.logger.fault("No cloud asset downloader framework found - aborting")
         throw CloudBoardDaemonError.noCloudAssetDownloaderFramework
         #endif
 
@@ -146,9 +195,13 @@ public actor CloudBoardDaemon {
                 launchdJobFinder: launchdJobFinder,
                 tracer: tracer,
                 metrics: metricsSystem,
-                inMemoryControllerConfig: cloudAppConfig.inMemoryController
+                inMemoryControllerConfig: cloudAppConfig.inMemoryController,
+                teardownTimeout: cloudAppConfig.teardownTimeout,
+                includeTransparencyConstraintsInWorkerRequests: config.secureConfig
+                    .includeTransparencyConstraintsInWorkerRequests
             )
         }
+        self.persistentServiceManagers = []
         guard totalMaxAuthContexts <= Self.maxAuthContextCount else {
             throw CloudBoardDaemonError.maxAuthContextCountExceedsLimit(totalMaxAuthContexts)
         }
@@ -168,6 +221,7 @@ public actor CloudBoardDaemon {
         let hotProperties = HotPropertiesController()
         self.hotProperties = hotProperties
         self.nodeInfo = nodeInfo
+        self.globalLabels = globalLabels
         self.insecureListener = false
         self.serviceDiscoverySetup = ServiceDiscoverySetup.standard
         self.jobAuthClient = nil
@@ -177,16 +231,33 @@ public actor CloudBoardDaemon {
             metrics: self.metricsSystem
         )
         self.healthReporter = Self.initializeHealthReporter(config: config)
-        self.healthServer = HealthServer(healthReporter: self.healthReporter)
+        self.healthServer = HealthServer(
+            healthReporter: self.healthReporter,
+            monitoringBridgeService: config.secureConfig.monitoringBridgeService
+        )
         if let heartbeat = config.heartbeat {
             CloudBoardDaemon.logger.info("Heartbeat configured")
+            // Gate the heartbeat's first healthy report on every cloud app converging on its initial
+            // assets. "All cloud apps converged" is the conservative node-level signal; persistent
+            // services carry no assets and are excluded. Awaiting all completes immediately when no
+            // cloud app is asset-bearing.
+            let workloadManagers = self.workloadManagers
             self.heartbeatPublisher = try .init(
                 configuration: heartbeat,
                 identifier: ProcessInfo.processInfo.hostName,
                 nodeInfo: nodeInfo,
                 statusMonitor: self.statusMonitor,
                 hotProperties: hotProperties,
-                metrics: metricsSystem
+                metrics: metricsSystem,
+                monitoringBridgeService: config.secureConfig.monitoringBridgeService,
+                initialAssetsReady: {
+                    try await withThrowingTaskGroup(of: Void.self) { group in
+                        for manager in workloadManagers {
+                            group.addTask { try await manager.waitForInitialAssets() }
+                        }
+                        try await group.waitForAll()
+                    }
+                }
             )
         } else {
             CloudBoardDaemon.logger.info("Heartbeat not configured")
@@ -201,7 +272,10 @@ public actor CloudBoardDaemon {
             )
         )
         self.watchdogService = CloudBoardWatchdogService(processName: Self.watchdogProcessName, logger: Self.logger)
-        self.dependencyHealthChecker = Self.initializeServiceDependencyHealthChecker(config: config)
+        self.dependencyHealthChecker = Self.initializeServiceDependencyHealthChecker(
+            config: config,
+            metricsSystem: metricsSystem
+        )
     }
 
     // Test entry point to allow dependency injection.
@@ -214,6 +288,7 @@ public actor CloudBoardDaemon {
         heartbeatPublisher: HeartbeatPublisher? = nil,
         serviceDiscoverySetup: ServiceDiscoverySetup = .notPresent,
         workloadManagers: [WorkloadManager] = [],
+        persistentServiceManagers: [PersistentServiceManager] = [],
         healthServer: HealthServer? = nil,
         healthReporter: (any RunnableHealthReporter)? = nil,
         lifecycleManager: LifecycleManager? = nil,
@@ -241,6 +316,7 @@ public actor CloudBoardDaemon {
         self.serviceDiscoverySetup = serviceDiscoverySetup
         let launchdJobFinder = launchdJobFinder ?? LaunchdJobFinder(metrics: metricsSystem)
         self.workloadManagers = workloadManagers
+        self.persistentServiceManagers = persistentServiceManagers
         self.metricsSystem = metricsSystem
         self.tracer = tracer
         self.launchdJobFinder = launchdJobFinder
@@ -259,6 +335,7 @@ public actor CloudBoardDaemon {
         self.config = config
         self.hotProperties = hotProperties
         self.nodeInfo = nodeInfo
+        self.globalLabels = nil
         self.insecureListener = insecureListener
         self.workloadControllerServer = workloadControllerServer
         self.watchdogService = nil
@@ -288,19 +365,30 @@ public actor CloudBoardDaemon {
         return nil
     }
 
-    nonisolated static func initializeServiceDependencyHealthChecker(config: CloudBoardDConfiguration)
+    nonisolated static func initializeServiceDependencyHealthChecker(
+        config: CloudBoardDConfiguration,
+        metricsSystem: MetricsSystem
+    )
     -> ServiceDependencyHealthChecker? {
         #if canImport(SystemServiceMonitor)
         if #available(iOS 26.0, macOS 15.6, *), #_hasSymbol(ReportClient.self) {
             let enableSSMStatusReportingFlag = config.systemServiceMonitor?
                 .enableSSMStatusReporting ?? CloudBoardDConfiguration.SystemServiceMonitorConfiguration()
                 .enableSSMStatusReporting
+
             guard enableSSMStatusReportingFlag else {
                 CloudBoardDaemon.logger.info("SystemServiceMonitor disabled")
                 return nil
             }
 
-            return ControlPlaneHealthDHealthChecker()
+            let waitForHealthyState = config.systemServiceMonitor?
+                .enableControlPlaneHealthDWaitForHealthyState ?? CloudBoardDConfiguration
+                .SystemServiceMonitorConfiguration()
+                .enableControlPlaneHealthDWaitForHealthyState
+            return ControlPlaneHealthDHealthChecker(
+                metrics: metricsSystem,
+                waitForHealthyState: waitForHealthyState
+            )
         }
         #endif
 
@@ -327,6 +415,7 @@ public actor CloudBoardDaemon {
     /// - a way of configuring the search paths
     func start(
         portPromisePerCloudApp: [String: Promise<Int, Error>]?,
+        portPromisePerPersistentService: [String: Promise<Int, Error>]? = nil,
         allowExit: Bool,
         // any test using this should be isolated by default
         customSearchPath: CustomSearchPathDirectory = .explictCompleteIsolation()
@@ -337,6 +426,7 @@ public actor CloudBoardDaemon {
         ) {
             try await self._start(
                 portPromisePerCloudApp: portPromisePerCloudApp,
+                portPromisePerPersistentService: portPromisePerPersistentService,
                 allowExit: allowExit,
                 customSearchPath: customSearchPath
             )
@@ -345,6 +435,7 @@ public actor CloudBoardDaemon {
 
     private func _start(
         portPromisePerCloudApp: [String: Promise<Int, Error>]?,
+        portPromisePerPersistentService: [String: Promise<Int, Error>]? = nil,
         allowExit: Bool,
         // any test using this should be isolated by default
         customSearchPath: CustomSearchPathDirectory = .explictCompleteIsolation()
@@ -375,10 +466,16 @@ public actor CloudBoardDaemon {
             try jobQuiescenceMonitor.startQuiescenceMonitor()
 
             try await self.lifecycleManager.managed {
+                let identityBackendType: IdentityBackendType = if self.config.grpc?.useSelfSignedCertificate == true {
+                    .selfsigned
+                } else {
+                    .narrative()
+                }
+
                 let identityManager = IdentityManager(
-                    useSelfSignedCert: self.config.grpc?.useSelfSignedCertificate == true,
                     metricsSystem: self.metricsSystem,
-                    metricProcess: "cloudboardd"
+                    metricProcess: "cloudboardd",
+                    identityBackendType: identityBackendType
                 )
                 if !self.insecureListener, identityManager.identity == nil {
                     CloudBoardDaemon.logger.error("Unable to load TLS identity, exiting.")
@@ -432,30 +529,119 @@ public actor CloudBoardDaemon {
                     nil as GRPCTLSConfiguration.IdentityCallback?
                 }
 
+                // PersistentService mTLS is only meaningful with real (narrative) certs.
+                // Self-signed certs won't pass PolicyAPRN validation, so skip TLS entirely.
+                let persistentServiceIdentityCallback: GRPCTLSConfiguration
+                    .IdentityCallback? = switch identityBackendType {
+                case .selfsigned, .custom:
+                    nil
+                case .narrative:
+                    identityCallback
+                }
+
                 try await withErrorLogging(operation: "cloudboardDaemon task group", sensitiveError: false) {
-                    try await withThrowingTaskGroup(of: String.self) { group in
+                    // Pre-create health monitors for persistent services so they're available
+                    // for the health server, which starts before PersistentServiceManagers are constructed.
+                    let persistentHealthMonitors: [String: ServiceHealthMonitor] = if !self.persistentServiceManagers
+                        .isEmpty {
+                        // Injected (e.g. tests) — reuse their existing monitors
+                        Dictionary(
+                            self.persistentServiceManagers.map {
+                                ($0.serviceId, $0.healthMonitor)
+                            },
+                            uniquingKeysWith: { first, _ in first }
+                        )
+                    } else {
+                        Dictionary(
+                            self.config.secureConfig.persistentServices.map {
+                                ($0, ServiceHealthMonitor(cloudApp: $0))
+                            },
+                            uniquingKeysWith: { first, _ in first }
+                        )
+                    }
+
+                    try await withThrowingTaskGroup(of: DaemonTaskCompleted.self) { group in
+
+                        // Register watchdog work processor to monitor global concurrency thread pool.
+                        //
+                        // We start this as early as possible, since not responding to watchdog pings will result in
+                        // node panics, which makes investigating startup issues (like failures to generate attestations
+                        // or fetch KRS keys) in CloudBoard difficult. This will still cover deadlocks.
+                        if let watchdogService = self.watchdogService {
+                            await watchdogService.activate()
+                        }
 
                         // Starting the IdentityManager early is important in permitting services using TLS
                         // to become available early in the daemon's lifecycle - e.g. statusServer
                         group.addTaskWithLogging(operation: "certificate refresh", sensitiveError: false) {
                             await identityManager.identityUpdateLoop()
-                            return "certificate refresh"
+                            return .certificateRefresh
                         }
 
                         group.addTask {
                             try await attestationProvider.run()
-                            return "attestationProvider"
+                            return .attestationProvider
                         }
 
                         group.addTask {
                             try await sessionStore.run()
-                            return "sessionStore"
+                            return .sessionStore
                         }
 
                         if let hotProperties = self.hotProperties {
                             group.addTaskWithLogging(operation: "Hot properties task", sensitiveError: false) {
                                 try await hotProperties.run(metrics: self.metricsSystem)
-                                return "Hot properties task"
+                                return .hotProperties
+                            }
+                        }
+
+                        /// Ensures BMC can monitor the health of current node before node advertises healthy state
+                        ///
+                        /// Scenario: BMC falsely sees a node as unhealthy and restarts it while CloudBoard is healthy
+                        /// and serving requests.
+                        /// Result: Requests fail due to node restart.
+                        /// Solution: controlplanehealthd will report node status to BMC, cloudboard should accept
+                        /// requests after controlplanhealthd is ready
+                        /// This check is not required in VRE.
+                        if let dependencyHealthChecker = self.dependencyHealthChecker,
+                           !self.config.secureConfig.disableAppleInfrastructureEnforcementForResearch {
+                            if dependencyHealthChecker.isWaitForHealthyStateRequired() {
+                                Self.logger.log("Waiting for controlplanehealthd to report healthy status")
+                                try await dependencyHealthChecker.waitForHealthyState()
+                                Self.logger.log("Controlplanehealthd is healthy")
+                            } else {
+                                group.addTask {
+                                    do {
+                                        // This task will asynchronously monitor controlplanehealthd state
+                                        // until controlplanehealthd gets healthy
+                                        Self.logger.log("Monitoring controlplanehealthd status async")
+                                        try await dependencyHealthChecker.waitForHealthyState()
+                                    } catch {
+                                        Self.logger.error("Background health check failed: \(error, privacy: .public)")
+                                    }
+                                    return .controlPlaneHealthDHealthChecker
+                                }
+                            }
+                        }
+
+                        // Spawn the local health XPC server before any blocking dependency gate so
+                        // peers can query the daemon's CloudBoardHealthState while it is still in
+                        // `.initializing`, rather than hanging on a never-bound XPC listener.
+                        if let healthServer = self.healthServer {
+                            let allHealthPublishers: [ServiceHealthMonitor] =
+                                self.workloadManagers.map { $0.healthMonitor }
+                                    + persistentHealthMonitors.values.map { $0 }
+                            await self.statusProvider?.setHealthMonitors(allHealthPublishers)
+                            if let healthReporter = self.healthReporter {
+                                await healthReporter.run()
+                            }
+                            if !allHealthPublishers.isEmpty {
+                                group.addTaskWithLogging(operation: "healthServer", sensitiveError: false) {
+                                    try await healthServer.run(healthPublishers: allHealthPublishers)
+                                    return .healthServer
+                                }
+                            } else {
+                                Self.logger.warning("No health publishers available — skipping health server")
                             }
                         }
 
@@ -467,35 +653,25 @@ public actor CloudBoardDaemon {
                             try await self.hotProperties?.waitForFirstUpdate()
                         }
 
-                        if let healthServer = self.healthServer {
-                            if let healthReporter = self.healthReporter {
-                                await healthReporter.run()
-                            }
-                            group.addTaskWithLogging(operation: "healthServer", sensitiveError: false) {
-                                await healthServer.run(healthPublishers: self.workloadManagers.map { $0.healthMonitor })
-                                return "healthServer"
-                            }
-                        }
-
                         if let statusProvider = self.statusProvider {
                             group.addTaskWithLogging(operation: "statusServer", sensitiveError: false) {
                                 let statusPort = self.config.statusServer.port
                                 let statusServiceAddress = try await self
-                                    .resolveServiceAddress(cloudAppPort: statusPort)
+                                    .resolveServiceAddress(forcedPort: statusPort)
                                 try await self.runStatusServer(
                                     statusProvider: statusProvider,
                                     identityCallback: identityCallback,
                                     keepalive: keepalive,
                                     serviceAddress: statusServiceAddress
                                 )
-                                return "statusServer"
+                                return .statusServer
                             }
                         }
 
                         if let heartbeatPublisher {
                             group.addTaskWithLogging(operation: "heartbeat", sensitiveError: false) {
                                 try await heartbeatPublisher.run()
-                                return "heartbeat"
+                                return .heartbeat
                             }
                         }
 
@@ -508,21 +684,8 @@ public actor CloudBoardDaemon {
                             _ = try await attestationProvider.currentAttestationSet()
                         }
 
-                        // Block service announce until we have obtained signing keys from cb_jobauthd
-                        try await withErrorLogging(
-                            operation: "Verify presence of auth token signing keys",
-                            level: .default
-                        ) {
-                            self.statusMonitor.waitingForFirstKeyFetch()
-
-                            self.convergenceTracing?.checkpoint(
-                                operationName: DaemonStatus.waitingForFirstKeyFetch.metricDescription
-                            )
-
-                            try await self.checkAuthTokenSigningKeysPresence()
-                            CloudBoardDaemon.logger.log("Signing key verification passed")
-                        }
-
+                        // covers workload managers and persistent service managers
+                        // and the shared workloadControllerServer for all of them.
                         group.addTaskWithLogging(operation: "workload managers", sensitiveError: false) {
                             do {
                                 let expectedPeerAPRNs: [APRN]? = if let aprns = self.config.grpc?.expectedPeerAPRNs {
@@ -535,12 +698,6 @@ public actor CloudBoardDaemon {
                                 CloudBoardDaemon.logger.log(
                                     "Configured expected peer APRNs: \(expectedPeerAPRNs.map { "\($0)" } ?? "nil", privacy: .public)"
                                 )
-
-                                // register watchdog work processor to monitor global concurrency thread pool.
-                                // Disabled in unit tests
-                                if let watchdogService = self.watchdogService {
-                                    await watchdogService.activate()
-                                }
                                 try await withLifecycleManagementHandlers(label: "workloadControllerServer") {
                                     self.statusMonitor.waitingForWorkloadRegistration()
                                     do {
@@ -550,6 +707,70 @@ public actor CloudBoardDaemon {
                                                     fatalError("port promise not set for all cloud apps")
                                                 }
                                             }
+                                            // Setup persistent first - arbitrary order decision
+                                            let persistentServiceManagers: [PersistentServiceManager] = if !self
+                                                .persistentServiceManagers.isEmpty {
+                                                // Injected (e.g. tests)
+                                                self.persistentServiceManagers
+                                            } else if !self.config.secureConfig.persistentServices.isEmpty {
+                                                try self.config.secureConfig
+                                                    .persistentServices.map { serviceId in
+                                                        let pserverHelperJob = try self.launchdJobFinder
+                                                            .getJobDefinition(
+                                                                type: .cbPServerHelper,
+                                                                name: "cb_pserverhelper"
+                                                            )
+                                                        let helperInstanceProvider = PersistentHelperInstanceProvider(
+                                                            helperLaunchdJob: pserverHelperJob.definition,
+                                                            helperXPCClientFactory:
+                                                            PersistentServerHelperXPCClientFactory(),
+                                                            maxConcurrentInstances: self.config.secureConfig
+                                                                .persistentServiceMaxConcurrentHelperInstances(
+                                                                    serviceID: serviceId
+                                                                )
+                                                        )
+                                                        return PersistentServiceManager(
+                                                            serviceId: serviceId,
+                                                            helperInstanceProvider: helperInstanceProvider,
+                                                            attestationProvider: attestationProvider,
+                                                            healthMonitor: persistentHealthMonitors[serviceId],
+                                                            drainJitterConfig: DrainJitterConfig(
+                                                                secureConfig: self.config.secureConfig,
+                                                                serviceID: serviceId
+                                                            )
+                                                        )
+                                                    }
+                                            } else {
+                                                []
+                                            }
+                                            for persistentServiceManager in persistentServiceManagers {
+                                                let serviceAddress = try await self.resolveServiceAddress(
+                                                    forcedPort: self.config.secureConfig
+                                                        .persistentServicePort(
+                                                            serviceID: persistentServiceManager
+                                                                .serviceId
+                                                        )
+                                                )
+                                                let serviceDiscovery = try await self.setupServiceDiscovery(
+                                                    attestationProvider: attestationProvider,
+                                                    identityManager: identityManager,
+                                                    serviceAddress: serviceAddress
+                                                )
+                                                grpcGroup.addTask {
+                                                    try await persistentServiceManager.run(
+                                                        identityCallback: persistentServiceIdentityCallback,
+                                                        serviceAddress: serviceAddress,
+                                                        expectedPeerAPRNs: expectedPeerAPRNs,
+                                                        serviceDiscovery: serviceDiscovery,
+                                                        workloadControllerServer: self.workloadControllerServer,
+                                                        portPromise: portPromisePerPersistentService?[
+                                                            persistentServiceManager
+                                                                .serviceId
+                                                        ]
+                                                    )
+                                                }
+                                            }
+
                                             for workloadManager in self.workloadManagers {
                                                 if let portPromisePerCloudApp {
                                                     guard portPromisePerCloudApp[workloadManager.cloudAppName] != nil
@@ -562,7 +783,7 @@ public actor CloudBoardDaemon {
 
                                                 let serviceAddress = try await self
                                                     .resolveServiceAddress(
-                                                        cloudAppPort: self.config.secureConfig
+                                                        forcedPort: self.config.secureConfig
                                                             .cloudAppPort(cloudApp: workloadManager.cloudAppName)
                                                     )
                                                 let serviceDiscovery = try await self.setupServiceDiscovery(
@@ -589,40 +810,48 @@ public actor CloudBoardDaemon {
                                                         serviceDiscovery: serviceDiscovery,
                                                         loadConfiguration: self.config.load,
                                                         hotProperties: hotProperties,
+                                                        perAppMaxCumulativeRequestBytes: self.config
+                                                            .secureConfig
+                                                            .cloudAppConfig(
+                                                                cloudApp: workloadManager.cloudAppName
+                                                            ).maxCumulativeRequestBytes,
                                                         sessionStore: sessionStore,
                                                         workloadControllerServer: self.workloadControllerServer
                                                     )
                                                 }
                                             }
+
                                             await self.workloadControllerServer?.start()
                                             self.convergenceTracing?.stopSummary()
                                             do {
                                                 try await grpcGroup.waitForAll()
                                             } catch {
-                                                Self.logger
-                                                    .error(
-                                                        "workload controller failed with error: \(String(unredacted: error), privacy: .public)"
-                                                    )
+                                                Self.logger.error(
+                                                    "workload controller failed with error: \(String(unredacted: error), privacy: .public)"
+                                                )
                                                 throw error
                                             }
                                         }
                                     } catch {
-                                        self.statusMonitor.workloadControllerRunningFailed()
+                                        if !Task.isCancelled {
+                                            self.statusMonitor.workloadControllerRunningFailed()
+                                        }
                                         throw error
                                     }
                                 } onDrain: {
                                     do {
                                         try await self.workloadControllerServer?.shutdown()
                                     } catch {
-                                        Self.logger
-                                            .error(
-                                                "workload controller server failed to notify listeners of shutdown: \(String(reportable: error), privacy: .public)"
-                                            )
+                                        Self.logger.error(
+                                            "workload controller server failed to notify listeners of shutdown: \(String(reportable: error), privacy: .public)"
+                                        )
                                     }
                                 }
-                                return "workload managers"
+                                return .workloadManagers
                             } catch {
-                                self.statusMonitor.grpcServerRunningFailed()
+                                if !Task.isCancelled {
+                                    self.statusMonitor.grpcServerRunningFailed()
+                                }
                                 throw error
                             }
                         }
@@ -643,7 +872,7 @@ public actor CloudBoardDaemon {
                                 Self.logger.log("publishing nodeReleaseDigest metrics \(nodeReleaseDigest)")
                                 try await Task.sleep(for: gaugeMetricPublishInterval)
                             }
-                            return "Publish nodeReleaseDigest metrics task"
+                            return .publishNodeReleaseDigestMetrics
                         }
 
                         group.addTaskWithLogging(
@@ -662,13 +891,28 @@ public actor CloudBoardDaemon {
                                     Metrics.CloudBoardDaemon.LifetimeMaxPhysicalMemoryFootprintGauge(value: $0)
                                 }
                             )
-                            return "Emit daemon memory usage metrics"
+                            return .emitMemoryUsageMetrics
                         }
 
-                        // When any of these tasks exit, they all do.
-                        let name = try await group.next()
-                        Self.logger.log("\(name ?? "nil", privacy: .public) exited - cancelling everything else")
-                        group.cancelAll()
+                        for try await result in group {
+                            if group.isCancelled {
+                                break
+                            }
+                            switch result {
+                            case .controlPlaneHealthDHealthChecker:
+                                // controlPlaneHealthDHealthChecker task monitors controlplanehealthd status at
+                                // cloudboard startup
+                                // task is expected to end when controlplanehealthd switches to healthy state
+                                // Continue working as usual when this task ends
+                                Self.logger.log("controlPlaneHealthDHealthChecker exited - continue working as usual")
+                                continue
+                            default:
+                                // When any of the tasks except controlPlaneHealthDHealthChecker exit, cancel all tasks.
+                                Self.logger
+                                    .log("\(result.rawValue, privacy: .public) exited - cancelling everything else")
+                                group.cancelAll()
+                            }
+                        }
                     }
                 }
             } onDrain: {
@@ -800,11 +1044,25 @@ public actor CloudBoardDaemon {
                         group: self.group,
                         configuration: sdConfig,
                         localIdentityCallback: identityManager.identityCallback,
-                        metrics: self.metricsSystem
+                        metrics: self.metricsSystem,
+                        useV2: self.config.secureConfig.useV2ServiceDiscovery
                     )
                 }
                 self.serviceDiscoveryComms = serviceDiscoveryComms
                 let attestationSet = try await attestationProvider.currentAttestationSet()
+                // Mirror the listener-side TLS decision at L485–499:
+                // the persistent-service listener serves mTLS only when
+                // the daemon has a real (narrative) identity AND TLS
+                // is enabled. Self-signed and insecure builds publish
+                // `plaintext` so consumers (cb_bridged) pick a matching
+                // transport without runtime probing.
+                let persistentServiceTransportSecurity: PersistentServiceTransportSecurity =
+                    if !self.insecureListener,
+                    self.config.grpc?.useSelfSignedCertificate != true {
+                        .mtls
+                    } else {
+                        .plaintext
+                    }
                 serviceDiscovery = try ServiceDiscoveryPublisher(
                     serviceDiscoveryComms: serviceDiscoveryComms,
                     configuration: sdConfig,
@@ -817,7 +1075,11 @@ public actor CloudBoardDaemon {
                     nodeReleaseDigest: attestationSet.currentAttestation.releaseDigest,
                     routingGroupAliases: self.config.secureConfig.routingGroupAliases,
                     bootID: self.getAdvertisedBootID(appData: attestationSet.currentAttestation.appData),
-                    dependencyHealthChecker: self.dependencyHealthChecker
+                    dependencyHealthChecker: self.dependencyHealthChecker,
+                    globalLabels: self.globalLabels,
+                    useV2: self.config.secureConfig.useV2ServiceDiscovery,
+                    isolationDomain: self.config.secureConfig.isolationDomain,
+                    persistentServiceTransportSecurity: persistentServiceTransportSecurity
                 )
             } else {
                 CloudBoardDaemon.logger.warning("Service discovery not enabled due to config")
@@ -845,27 +1107,9 @@ public actor CloudBoardDaemon {
         return bootIDString
     }
 
-    private func checkAuthTokenSigningKeysPresence() async throws {
-        let jobAuthClient: CloudBoardJobAuthAPIClientProtocol = if let _ = self.jobAuthClient {
-            self.jobAuthClient!
-        } else {
-            await CloudBoardJobAuthAPIXPCClient.localConnection()
-        }
-        await jobAuthClient.connect()
-        // This will wait until we successfully obtain the keys from cb_jobauthd. We deliberately block on this since
-        // cb_jobhelper instances will do the same and we shouldn't register with Service Discovery if we know
-        // cb_jobhelper instances won't come up.
-        _ = try await jobAuthClient.requestTGTSigningKeys()
-        _ = try await jobAuthClient.requestOTTSigningKeys()
-
-        // We do not check that the signing key sets are non-empty as that is a valid configuration in non-prod
-        // environments. cb_jobauthd itself enforces that the key rotation service configuration is provided for
-        // customer configurations.
-        await jobAuthClient.disconnect()
-    }
-
-    private func resolveServiceAddress(cloudAppPort: Int?) async throws -> SocketAddress {
-        return try await self.config.resolveLocalServiceAddress(cloudAppPort: cloudAppPort)
+    /// Resolve the gRPC port allow overriding the port
+    private func resolveServiceAddress(forcedPort: Int? = nil) async throws -> SocketAddress {
+        return try await self.config.resolveLocalServiceAddress(forcedPort: forcedPort)
     }
 }
 

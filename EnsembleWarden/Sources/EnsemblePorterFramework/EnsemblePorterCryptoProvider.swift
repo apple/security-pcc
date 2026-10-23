@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -53,6 +53,7 @@ final package class EnsemblePorterCryptoProviderImpl<Client: EnsemblePorterClien
 
     private let client: Client
     private let logger = Logger(OSLog(subsystem: EnsemblePorterConstants.loggerSubsystem, category: "EnsemblePorterCryptoProvider"))
+    private let metrics = EnsemblePorterMetrics()
 
     /// Creates a new crypto provider implementation with the specified client.
     /// - Parameter client: The client mechanism to use for communication
@@ -92,11 +93,13 @@ final package class EnsemblePorterCryptoProviderImpl<Client: EnsemblePorterClien
                 span_id=\(spanID, privacy: .public)
                 """)
         }
-        do {
-            try await self.client.provide(additionalCryptoPayload: additionalCryptoPayload, requestID: requestID, spanID: spanID)
-        } catch {
-            logger.error("Error during provide. error=\(String(reportable: error), privacy: .public)")
-            throw error
+        try await self.metrics.reportingPorterClient(operation: EnsemblePorterMetrics.ClientOperation.provide) {
+            do {
+                try await self.client.provide(additionalCryptoPayload: additionalCryptoPayload, requestID: requestID, spanID: spanID)
+            } catch {
+                self.logger.error("Error during provide. error=\(String(reportable: error), privacy: .public)")
+                throw error
+            }
         }
     }
 
@@ -105,13 +108,16 @@ final package class EnsemblePorterCryptoProviderImpl<Client: EnsemblePorterClien
         defer {
             logger.log("getIntraEnsemblePublicKey() end.")
         }
-        do {
-            return try await PrismTracing.withResumed(requestID: UUID(), spanID: 0) {
-                return try await self.client.getIntraEnsemblePublicKey()
+        return try await self.metrics.reportingPorterClient(operation: EnsemblePorterMetrics.ClientOperation.getIntraEnsemblePublicKey) {
+            do {
+                // TODO: Think of some better way of handling this
+                return try await PrismTracing.withResumed(requestID: UUID(), spanID: 0) {
+                    return try await self.client.getIntraEnsemblePublicKey()
+                }
+            } catch {
+                self.logger.error("Error during getIntraEnsemblePublicKey. error=\(String(reportable: error), privacy: .public)")
+                throw error
             }
-        } catch {
-            logger.error("Error during getIntraEnsemblePublicKey. error=\(String(reportable: error), privacy: .public)")
-            throw error
         }
     }
 
@@ -129,12 +135,14 @@ final package class EnsemblePorterCryptoProviderImpl<Client: EnsemblePorterClien
                 span_id=\(spanID, privacy: .public)
                 """)
         }
-        do {
-            try await self.client.provide(encryptedCryptoMaterial: encryptedCryptoMaterial, leaderPublicKey: leaderPublicKey,
-                                          requestID: requestID, spanID: spanID)
-        } catch {
-            logger.error("Error during provide(encryptedCryptoMaterial:). error=\(String(reportable: error), privacy: .public)")
-            throw error
+        try await self.metrics.reportingPorterClient(operation: EnsemblePorterMetrics.ClientOperation.provideEncryptedCryptoMaterial) {
+            do {
+                try await self.client.provide(encryptedCryptoMaterial: encryptedCryptoMaterial, leaderPublicKey: leaderPublicKey,
+                                              requestID: requestID, spanID: spanID)
+            } catch {
+                self.logger.error("Error during provide(encryptedCryptoMaterial:). error=\(String(reportable: error), privacy: .public)")
+                throw error
+            }
         }
     }
 }

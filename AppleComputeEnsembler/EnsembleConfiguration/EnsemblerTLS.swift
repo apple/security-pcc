@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -36,8 +36,120 @@ private let kDefaultDataKeyDeleteTimeout = 20.0
 public let kDefaultRetryInterval = 2
 public let kEnsemblerTimeout =
 	1200 // we will wait for 20 minutes for followers to check in and nodes to activate their CIOMesh.
+public let kMessageProcessTimeout = 2
+public let kEnsemblerRecyclingTimeout =
+    120 // we will wait for 2 minutes for key rotation to be successful. Currently it takes 1.5 seconds.
 
 public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
+    
+    public func getMaxBuffersPerKey() throws -> UInt64? {
+        throw "Not implemented"
+    }
+    
+    public func getMaxSecondsPerKey() throws -> UInt64? {
+        throw "Not implemented"
+    }
+    
+    public func getAuthCode(data: Data) throws -> Data {
+        throw "Not implemented"
+    }
+    
+    /// Triggers the workflow to rotate the keys.
+    /// Common implementation shared by all subclasses (CIO, CIOFusion, etc.).
+    /// Subclasses with different behaviour can override this method.
+    public func rotateKey() throws {
+        // Barrier on dataRequestQueue provides mutual exclusion with data sends:
+        // - Waits for all currently dispatched send-initiation blocks to complete.
+        // - Blocks new sendDataAndGetResponse / sendDataToAllFollowers calls from
+        //   dispatching until rotateKeyInternal() returns and the barrier is released.
+        // Concurrent rotateKey() callers are also serialized here since barriers on the
+        // same queue are ordered with respect to each other.
+        // rotateKeyInternal() additionally calls activeDataRequests.wait() to drain
+        // any in-flight round-trips whose completions run outside dataRequestQueue.
+        try dataRequestQueue.sync(flags: .barrier) {
+            try rotateKeyInternal()
+        }
+    }
+    
+    internal func rotateKeyInternal() throws {
+        guard self.status == .ready else {
+            EnsemblerTLS.logger.error(
+            """
+            Oops: Attempting to rotate key from an illegal state: Expected .ready, \
+            found \(self.status, privacy: .public)
+            """
+            )
+            throw InitializationError.invalidOperation
+        }
+
+        guard self.isLeader == true else {
+            EnsemblerTLS.logger.error("Oops: Rotate key can be called only on leader")
+            throw InitializationError.invalidOperation
+        }
+
+        if self.nodeMap.count == 1 {
+            EnsemblerTLS.logger.info(
+            """
+            EnsemblerTLS.rotateKey(): Returning in the .ready state because single-node ensembles \
+            don't have a shared key to rotate.
+            """
+            )
+            return
+        }
+
+        self.resetEnsembleKeyDistributionStatus()
+        self.resetNodeReadyStatus()
+
+        if !self.setStatus(.redistributingKey) {
+            throw EnsembleError.illegalStateTransition
+        }
+        
+        // Wait for any inflight active data requests to complete with a maximum timeout of 1 second.
+        // Any new data requests would fail because we had already set the state to redistributingKey.
+        let result = activeDataRequests.wait(timeout: .now() + 1)
+
+        switch result {
+        case .success:
+            EnsemblerTLS.logger.info("All active data requests completed before key rotation")
+        case .timedOut:
+            EnsemblerTLS.logger.warning("Some data requests are still active after 1 second timeout, proceeding with key rotation")
+        }
+
+        // Timeout and move to failed state, if we get stuck in redistributingKey.
+        // Store the work item so it can be cancelled when rotation succeeds and we return to .ready.
+        let timeoutItem = DispatchWorkItem { [weak self] in
+              guard let self = self else {
+                  EnsemblerTLS.logger.error("EnsemblerTLS.rotateKey(): self deallocated")
+                  return
+              }
+
+              guard self.status == .ready else {
+                  EnsemblerTLS.logger.error("EnsemblerTLS.rotateKey(): Timeout when redistributing key during key recycling")
+                  EnsemblerTLS.fromBackendQ.async {
+                      self.ensembleFailed(failMsg: "EnsemblerTLS.rotateKey(): Timeout when redistributing key during key recycling")
+                  }
+                  return
+              }
+            EnsemblerTLS.logger.info("EnsemblerTLS.rotateKey(): Redistributing key was successful, and moved to ready state.")
+        }
+        keyRotationTimeoutItem = timeoutItem
+        DispatchQueue.global(qos: .userInitiated)
+          .asyncAfter(deadline: .now() + .seconds(kEnsemblerRecyclingTimeout), execute: timeoutItem)
+        
+        try self.resetFollowerConnections()
+        self.sharedKey = SecureSymmetricKey()
+
+        self.distributeKey()
+    }
+    
+    public func sendTestMessage(destination: Int) throws {
+        throw "Not implemented"
+    }
+    
+    public func checkConnectivity() throws -> [String] {
+        throw "Not implemented"
+    }
+    
 	let ensembleConfig: EnsembleConfiguration
 	public let ensembleID: String?
     public let rackID: String?
@@ -74,32 +186,61 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
 		qos: .userInteractive
 	)
 
+	// `dataCallbackQ` is dedicated to executing external data message callbacks (e.g.
+	// EnsemblePorter). It is serial to preserve message ordering for appIDs with sequential
+	// dependencies. Keeping it separate from `fromBackendQ` ensures that a slow or hung
+	// application callback cannot block control message processing (key rotation, ensemble
+	// state transitions, etc.) on `fromBackendQ`.
+	static let dataCallbackQ = DispatchSerialQueue(
+		label: "\(kEnsemblerPrefix).data.callback.queue",
+		qos: .userInteractive
+	)
+
 	// `drainingQ` serializes all reads/writes to `_draining`.
 	let drainingQ = DispatchSerialQueue(label: "\(kEnsemblerPrefix).draining.queue")
 
 	let dataKeyQ = DispatchSerialQueue(label: "\(kEnsemblerPrefix).datakey.queue")
 	
-	// Reader-writer lock to ensure mutual exclusion between key rotation and data operations
-    private let keyRotationLock = DispatchSerialQueue(label: "\(kEnsemblerPrefix).keyrotation.queue", qos: .userInitiated)
+	// Concurrent queue for data sends. Multiple sendDataAndGetResponse / sendDataToAllFollowers
+    // calls dispatch here with .async and run in parallel. Key rotation dispatches with
+    // .sync(flags: .barrier) as the exclusive writer, waiting for all in-flight send-initiation
+    // blocks and blocking new ones until rotation completes.
+    private let dataRequestQueue = DispatchQueue(label: "\(kEnsemblerPrefix).datarequest.queue", qos: .userInitiated, attributes: .concurrent)
+    
     
     // active data request group
-    private let activeDataRequests = DispatchGroup()
+    internal let activeDataRequests = DispatchGroup()
 
+    // Cancellable timeout work item for key rotation; cancelled on successful transition to .ready
+    private var keyRotationTimeoutItem: DispatchWorkItem?
+
+    // Cancellable timeout work item for ensemble formation; cancelled when ensemble first reaches .ready,
+    // preventing a false failure if rotateSharedKey moves state to .redistributingKey before the timer fires.
+    private var formationTimeoutItem: DispatchWorkItem?
+
+    // Timestamp (nanoseconds) captured when key rotation begins (.redistributingKey); cleared after
+    // duration is emitted on the subsequent .ready transition.
+    private let keyRotationStartNanos = OSAllocatedUnfairLock<Int64?>(initialState: nil)
+    
 	private let attestationAsyncQueue = AsyncQueue()
 	private var plainTextUUID = UUID().uuidString
 	static let logger = Logger(subsystem: kEnsemblerPrefix, category: "EnsemblerTLS")
-	private var router: Router?
 	internal var backend: Backend?
-	internal var clientConnections: [Int: NWConnection.State] = [:]
+	// Lock-protected: onClientConnectionChange (NW delegate queue), reset functions (key-rotation
+	// paths), and isAllFollowerConnectionsReady (timeout/global queues) all race on this dict.
+	internal let clientConnectionsLock = OSAllocatedUnfairLock(initialState: [Int: NWConnection.State]())
+	private let leaderConnectionReadySemaphore = DispatchSemaphore(value: 0)
+	let allFollowersReadySemaphore = DispatchSemaphore(value: 0)
+	private var announceRetryTimer: DispatchSourceTimer?
 	private var serverStatus: NWListener.State = .cancelled
 	private var denaliMonitor: DenaliFileMonitor? = nil
 	private let skipWaitingForDenali: Bool
 	private let useStubAttestation: Bool
 	public var status: EnsemblerStatus {
-		return self.stateMachine.state
+        return self.stateMachine?.state ?? EnsemblerStatus.unknown
 	}
 
-	private var stateMachine: any StateMachine
+    internal var stateMachine: (any StateMachine)? = nil
 
 	private var _draining = false
 	public var draining: Bool {
@@ -116,9 +257,9 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
 	}
 
 	internal var sharedKey: SecureSymmetricKey?
-	private var initialSharedkey: SecureSymmetricKey?
+	internal var initialSharedkey: SecureSymmetricKey?
 	public var tlsChannel: TLSChannel?
-	private let jobQuiescenceMonitor = JobQuiescenceMonitor()
+	internal let jobQuiescenceMonitor = JobQuiescenceMonitor()
 	internal let dataKeyDistributedDisapatchGroup = DispatchGroup()
 	internal var debugMsg: DebugMessage
     internal var convergenceSummary: EnsembleFormationConvergenceSummary
@@ -126,9 +267,10 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
     internal var linkSpanID: String?
     internal var linkTraceID: String?
     internal var spanID: String?
-    
-    // Callback for handling data messages
-    private var dataMessageCallbackRegistry: [String: EnsembleDataMessageReceived] = [:]
+    // Lock-protected registry: multiple data callbacks can be dispatched concurrently onto
+    // DispatchQueue.global, so register/unregister must be thread-safe with respect to reads.
+    private let dataMessageCallbackRegistry = OSAllocatedUnfairLock(initialState: [String: EnsembleDataMessageReceivedInternal]())
+    internal var gpuCount: Int = 1
 
     internal func updateTraceCheckpoint(state: EnsemblerStatus,error: Error? = nil) {
         
@@ -159,7 +301,7 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
     
 	internal func setStatus(_ state: EnsemblerStatus) -> Bool {
 		do {
-			try self.stateMachine.goto(targetState: state)
+			try self.stateMachine?.goto(targetState: state)
 		} catch {
 			Self.logger.error(
 				"EnsemblerTLS.setStatus(): Failed on state transition \(self.status, privacy: .public) -> \(state, privacy: .public): \(error, privacy: .public)"
@@ -176,6 +318,11 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
 			chassisID: self.currentNodeConfig.chassisID,
 			nodeCnt: self.nodeMap.count
 		)
+
+        // capture start time for key rotation duration metric
+        if state == .redistributingKey {
+            keyRotationStartNanos.withLock { $0 = getNanoSec() }
+        }
 
         // update tracecheckpoints
         updateTraceCheckpoint(state: state)
@@ -227,7 +374,8 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
 		skipWaitingForDenali: Bool = false,
 		ensemblerTimeout: Int? = nil,
         traceID: String? = nil,
-        spanID: String? = nil
+        spanID: String? = nil,
+        gpuCount: Int = 1
 	) throws {
 		self.ensembleConfig = ensembleConfig
 		self.ensembleID = ensembleConfig.ensembleID
@@ -377,125 +525,24 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
 				UDID: node.key,
 				rank: node.value.rank,
 				hostName: node.value.hostName,
-				chassisID: node.value.chassisID
+				chassisID: node.value.chassisID,
+                gpuCount: gpuCount
 			)
 		}
 		EnsemblerTLS.logger.info(
 			"Initalizing ensembler: nodeMap.count: \(self.nodeMap.count, privacy: .public)"
 		)
 
-		// Create the `StateMachine`, used to track the ensemble.
-		if self.isLeader {
-			self.stateMachine = try LeaderStateMachineTLS(singleNode: self.nodeMap.count == 1)
-
-		} else {
-			self.stateMachine = try FollowerStateMachineTLS(singleNode: self.nodeMap.count == 1)
-		}
-
-		// The ensembler has an in-memory state machine and is thus always dirty.
-		self.transaction = os_transaction_create(kEnsemblerPrefix)
-
-		let backendConfig = BackendConfiguration(
-			queue: EnsemblerTLS.toBackendQ,
-			node: self.currentNodeConfig,
-			ensemble: self.ensembleConfig,
-			delegate: self
-		)
-
-		let backendType: BackendType
-		// We use stub backend if node count is 1
-		// For all other cases, we assume CIOBackend if nothing is provided
-		if self.nodeMap.count == 1 {
-			backendType = .StubBackend
-
-			// For a one-node ensemble, out of an abundance of caution, lock the backend.
-			do {
-				let tmpBackend = try CIOBackend(configuration: backendConfig)
-				try tmpBackend.lock()
-			} catch {
-				Self.logger.error(
-					"""
-					Oops: Failed to lock CIO backend for 1-node ensemble: \
-					Maybe this system doesn't have a CIO backend? Ignoring error: \(error, privacy: .public)
-					"""
-				)
-			}
-		} else {
-			backendType = ensembleConfig.backendType ?? .CIOBackend
-		}
-		EnsemblerTLS.logger.info(
-			"Initalizing ensembler: backendType: \(backendType, privacy: .public)"
-		)
-
-		switch backendType {
-		case .CIOBackend:
-			self.backend = try CIOBackend(configuration: backendConfig)
-		case .StubBackend:
-			self.backend = try StubBackend(configuration: backendConfig)
-		default:
-			EnsemblerTLS.logger.error(
-				"Invalid backend: \(backendType, privacy: .public)"
-			)
-			throw InitializationError.invalidBackend
-		}
-
-		guard let backend = self.backend else {
-			EnsemblerTLS.logger.error("Initalizing ensembler: nil backend: This should never happen!")
-			throw InitializationError.invalidBackend
-		}
-
-		let routerConfiguration = RouterConfiguration(
-			backend: backend,
-			node: self.currentNodeConfig,
-			ensemble: self.ensembleConfig,
-			delegate: self
-		)
-
-		if self.validateEnsembleConfigForChassisID() == false {
-			EnsemblerTLS.logger.error(
-				"""
-				Oops: The EnsembleConfiguration does not confirm to required specification.
-				Rank0-3 should have same chassisID, Rank4-7 should have same chassisID and so on.
-				"""
-			)
-			throw InitializationError.invalidRankChassisdIDConfiguration
-		}
-
-		switch self.ensembleConfig.nodes.count {
-		case 1:
-			EnsemblerTLS.logger.info("Initalizing ensembler: 1-node ensemble: Skip router creation")
-		case 2:
-			self.router = try Router2(configuration: routerConfiguration)
-		case 4:
-			self.router = try Router4(configuration: routerConfiguration)
-		case 8, 16, 32:
-			// For nodes greater than 8, we will use the Router8 and pass the full configuration.
-			// Router will calculate the 8 nodes that it is part of, to activate the CIO links.
-			self.router = try Router8Hypercube(configuration: routerConfiguration)
-		default:
-			EnsemblerTLS.logger.error(
-				"""
-				Illegal ensemble size: \(self.ensembleConfig.nodes.count, privacy: .public)
-				"""
-			)
-			// setting the state to failed otherwise it will stay in uninitialized state.
-			self.setStatus(.failed)
-			throw InitializationError.invalidRouterTopology(count: self.ensembleConfig.nodes.count)
-		}
-
+        // The ensembler has an in-memory state machine and is thus always dirty.
+        self.transaction = os_transaction_create(kEnsemblerPrefix)
+        
 		if skipJobQuiescence == false {
 			try self.jobQuiescenceMonitor.start(ensembler: self)
 		}
 	}
 
 	private func startTLSChannel() throws {
-		let backendConfig = BackendConfiguration(
-			queue: EnsemblerTLS.toBackendQ,
-			node: self.currentNodeConfig,
-			ensemble: self.ensembleConfig,
-			delegate: self
-		)
-
+		
         let dispatchGroup = DispatchGroup()
         dispatchGroup.enter()
         Task {
@@ -503,7 +550,8 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
                 dispatchGroup.leave()
             }
             self.tlsChannel = try await TLSChannel(
-                configuration: backendConfig,
+                nodeInfo: self.currentNodeConfig,
+                ensembleConfig: self.ensembleConfig,
                 serverDelegate: self,
                 clientDelegate: self,
                 useNoAttestation: self.useStubAttestation
@@ -638,6 +686,14 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
 		return ok
 	}
 
+    public func activateMesh() throws {
+        EnsemblerTLS.logger.info("EnsemblerTLS: activateMesh not implemented")
+    }
+    
+    internal func singleNodeActivation() throws -> Bool {
+        return false
+    }
+    
 	public func activate() throws {
 		// Bail if we're not initializing; no need for this to be fatal
 		guard self.status == .initializing else {
@@ -673,14 +729,7 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
 
 			// if there is only one node, its a single node ensemble which is valid configuration
 			// we transition to ready state
-			if self.nodeMap.count == 1 {
-				EnsemblerTLS.logger.info(
-					"It's a single node ensemble configuration. Mark ensemble as ready."
-				)
-				self.goToReady()
-				self.dumpEnsembleDebugMap()
-				return
-			} else {
+			if try singleNodeActivation() == false {
 				if self.skipWaitingForDenali == false {
 					EnsemblerTLS.logger.info(
 						"Waiting for Denali provisioning to be complete."
@@ -717,161 +766,133 @@ public class EnsemblerTLS: EnsemblerInterface, DenaliFileMonitorDelegate {
 	}
 
 	public func stopServer() {
+		self.tlsChannel?.cancelClientRetries()
 		self.tlsChannel?.stopServer()
 	}
+    
+    internal func forwardMessage(forward: EnsembleControlMessage.Forward) {
+        Self.logger.error("Not implemented")
+    }
+    
+    func addPeer(hostName: String, nodeRank: Int) {
+        Self.logger.error("Not implemented")
+    }
+    
+    public func setCryptoKey() {
+        setCryptoKeyInternal()
+    }
+    
+    internal func setCryptoKeyInternal(outputSize: Int = 32) {
+        do {
+            EnsemblerTLS.logger.info(
+                """
+                EnsemblerTLS.setCryptoKey(): \
+                Getting the derived key to set
+                """
+            )
+            
+            // use the HKDF-SHA384 derived key, default is 128bits/32 bytes, required by CIOMesh
+            guard let derivedKey = try sharedKey?.getDerivedKey(type: .MeshEncryption, outputSize: outputSize) else {
+                EnsemblerTLS.logger.error(
+                    """
+                    Oops: setCryptoKey() Getting derivedKey failed. Error getting shared key.
+                    """
+                )
+                throw InitializationError.unexpectedBehavior(
+                    """
+                    Oops: setCryptoKey() Getting derivedKey failed. Error getting shared key.
+                    """
+                )
+            }
+
+            // store the key in initialSharedkey for use in TLS PSK Options.
+            // this initialSharedkey will not be updated on rotation.
+            if self.initialSharedkey == nil {
+                self.initialSharedkey = try self.sharedKey?.getDerivedKey(type: .TlsPsk)
+            }
+
+            defer {
+                derivedKey.zeroKey()
+
+                EnsemblerTLS.logger.info(
+                    """
+                    EnsemblerTLS.setCryptoKey(): \
+                    Succcessfully cleared the keydata
+                    """
+                )
+
+                sharedKey?.zeroKey()
+                self.sharedKey = nil
+            }
+
+            EnsemblerTLS.logger.info("EnsemblerTLS.setCryptoKey(): Call backend.setCryptoKey()")
+            try self.backend?.setCryptoKey(key: derivedKey.getKeyDataWrapper().data, flags: 0)
+            EnsemblerTLS.logger.info(
+                "EnsemblerTLS.setCryptoKey(): Successfully set crypto key"
+            )
+        } catch {
+            // This is technically harmless as only our status matters
+            EnsemblerTLS.logger.error(
+                """
+                Failed to set crypto key: \
+                \(String(reportableError: error), privacy: .public) (\(error, privacy: .public))
+                """
+            )
+            ensembleFailed(failMsg: "Failed to set crypto key: \(error)")
+        }
+    }
+    
 }
 
 // MARK: - Delegates -
 
 // Assume we are queue protected in these delegates
 
-// Backend delegate implementations.
-extension EnsemblerTLS: BackendDelegate {
-	func channelChangeInternal(node: Int, chassis: String, channelIndex: Int, connected: Bool) {
-		guard self.router != nil else {
-			EnsemblerTLS.logger.warning("Received channelChange event before router was initialized")
-			return
-		}
-		if connected == false {
-			EnsemblerTLS.logger.error(
-				"""
-				EnsemblerTLS.channelChange(): \
-				Received disconnect during channelChange event \
-				from node \(node, privacy: .public): \
-				chassis: \(chassis, privacy: .public) \
-				channelIndex: \(channelIndex, privacy: .public)
-				"""
-			)
-		} else {
-			EnsemblerTLS.logger.info(
-				"""
-				EnsemblerTLS.channelChange(): \
-				Received channelChange event: \
-				from node \(node, privacy: .public) \
-				chassis: \(chassis, privacy: .public) \
-				channelIndex: \(channelIndex, privacy: .public) \
-				connected: \(connected, privacy: .public)
-				"""
-			)
-		}
-		self.router?.channelChange(
-			channelIndex: channelIndex,
-			node: node,
-			chassis: chassis,
-			connected: connected
-		)
-		EnsemblerTLS.logger.info("EnsemblerTLS.channelChange(): router.channelChange() done")
-	}
-
-	func channelChange(node: Int, chassis: String, channelIndex: Int, connected: Bool) {
-		let dispatchGroup = DispatchGroup()
-		dispatchGroup.enter()
-		EnsemblerTLS.fromBackendQ.async {
-			defer {
-				dispatchGroup.leave()
-			}
-			self.channelChangeInternal(
-				node: node,
-				chassis: chassis,
-				channelIndex: channelIndex,
-				connected: connected
-			)
-		}
-		dispatchGroup.wait()
-	}
-
-	func connectionChangeInternal(
-		direction: BackendConnectionDirection,
-		node: Int,
-		channelIndex: Int,
-		connected: Bool
-	) {
-		guard self.router != nil else {
-			EnsemblerTLS.logger.warning("Received connectionChange event before router was initialized")
-			return
-		}
-		if connected == false {
-			EnsemblerTLS.logger.info(
-				"""
-				EnsemblerTLS.connectionChange(): \
-				Received disconnect during connectionChange event \
-				from node \(node, privacy: .public):
-				direction: \(String(describing: direction), privacy: .public)
-				channelIndex: \(channelIndex, privacy: .public)
-				"""
-			)
-		} else {
-			EnsemblerTLS.logger.info(
-				"""
-				EnsemblerTLS.connectionChange(): \
-				Received connectionChange event: \
-				from node \(node, privacy: .public) \
-				channelIndex: \(channelIndex, privacy: .public) \
-				connected: \(connected, privacy: .public) \
-				direction: \(direction, privacy: .public)
-				"""
-			)
-		}
-		self.router?.connectionChange(
-			direction: direction,
-			channelIndex: channelIndex,
-			node: node,
-			connected: connected
-		)
-		EnsemblerTLS.logger.info("EnsemblerTLS.connectionChange(): router.connectionChange() done")
-	}
-
-	func connectionChange(
-		direction: BackendConnectionDirection,
-		node: Int,
-		channelIndex: Int,
-		connected: Bool
-	) {
-		let dispatchGroup = DispatchGroup()
-		dispatchGroup.enter()
-		EnsemblerTLS.fromBackendQ.async {
-			defer {
-				dispatchGroup.leave()
-			}
-			self.connectionChangeInternal(
-				direction: direction,
-				node: node,
-				channelIndex: channelIndex,
-				connected: connected
-			)
-		}
-		dispatchGroup.wait()
-	}
-
-	func networkConnectionChange(node: Int, connected: Bool) {
-		self.router?.networkConnectionChange(node: node, connected: connected)
-	}
-
-	func incomingMessage(node: Int, message: Data) {
-		// Handle incoming messages from the backend
-		_ = incomingMessageInternal(node: node, message: message)
-	}
-}
-
 extension EnsemblerTLS: ServerConnectionDelegate, ClientConnectionDelegate {
-	public func incomingMessage(node: Int, message: Data) -> Data? {
-		let dispatchGroup = DispatchGroup()
-		var responseData: Data?
-		dispatchGroup.enter()
-		EnsemblerTLS.fromBackendQ.async {
-			defer {
-				dispatchGroup.leave()
-			}
-			responseData = self.incomingMessageInternal(node: node, message: message)
-		}
-		dispatchGroup.wait()
-		return responseData
-	}
 
+    public func incomingMessage(node: Int, message: Data, completion:@escaping (Data?) -> Void) {
+        let controlMsg: EnsembleControlMessage
+        do {
+            controlMsg = try EnsembleControlMessage.decode(from: message)
+        } catch {
+            Self.logger.warning(
+                "EnsemblerTLS.incomingMessage() on rank \(self.currentNodeConfig.rank, privacy: .public): Control message decoding failed: \(error, privacy: .public)"
+            )
+            completion(nil)
+            return
+        }
+
+        // Data messages bypass fromBackendQ to reduce latency; control messages need
+        // serialisation through fromBackendQ to prevent concurrent state mutations.
+        if case .dataMessageRequest(let appID, let data, let requestID, let callbackTimeout) = controlMsg {
+            incomingDataMessageInternal(
+                node: node,
+                appID: appID,
+                data: data,
+                requestID: requestID,
+                callbackTimeout: callbackTimeout,
+                completion: completion
+            )
+        } else {
+            let dispatchGroup = DispatchGroup()
+            dispatchGroup.enter()
+            EnsemblerTLS.fromBackendQ.async {
+                defer {
+                   dispatchGroup.leave()
+                }
+                self.incomingControlMessageInternal(node: node, controlMsg: controlMsg, completion: completion)
+            }
+            if dispatchGroup.wait(timeout: .now() + 2) == .timedOut {
+                Self.logger.error("EnsemblerTLS.incomingMessage(): control message processing timed out — fromBackendQ may be blocked")
+                completion(nil)
+            }
+        }
+    }
+    
 	public func sendCallback(node: Int, message: Data, error: Error?) {
 		let controlMsg: EnsembleControlMessage
 		do {
-			controlMsg = try JSONDecoder().decode(EnsembleControlMessage.self, from: message)
+			controlMsg = try EnsembleControlMessage.decode(from: message)
 		} catch {
 			Self.logger.warning(
 				"EnsemblerTLS.sendCallback() on rank \(self.currentNodeConfig.rank, privacy: .public): Control message decoding failed: \(error, privacy: .public)"
@@ -893,15 +914,6 @@ extension EnsemblerTLS: ServerConnectionDelegate, ClientConnectionDelegate {
             ensembleFailed(failMsg: "EnsemblerTLS.sendCallback(): sending message \(controlMsg) to \(node) failed with error: \(String(describing: error)) ")
 			return
 		}
-
-		EnsemblerTLS.logger.info(
-			"""
-			EnsemblerTLS.sendCallback() on rank \(
-				self.currentNodeConfig
-					.rank, privacy: .public
-			): sent message \(controlMsg, privacy: .public) to \(node, privacy: .public) successfully.
-			"""
-		)
 	}
 
 	public func onClientConnectionFailure(node: Int) {
@@ -928,7 +940,13 @@ extension EnsemblerTLS: ServerConnectionDelegate, ClientConnectionDelegate {
 	}
 
 	public func onClientConnectionChange(node: Int, state: NWConnection.State) {
-		if self.clientConnections[node] != .ready, state == .ready {
+		let prevState = clientConnectionsLock.withLock { connections -> NWConnection.State? in
+			let prev = connections[node]
+			connections[node] = state
+			return prev
+		}
+
+		if prevState != .ready, state == .ready {
 			EnsemblerTLS.logger.info(
 				"""
 				EnsemblerTLS.onClientConnectionChange() on rank \(
@@ -939,7 +957,7 @@ extension EnsemblerTLS: ServerConnectionDelegate, ClientConnectionDelegate {
 			)
 		}
 
-		if self.clientConnections[node] == .ready, state != .ready {
+		if prevState == .ready, state != .ready {
 			EnsemblerTLS.logger.info(
 				"""
 				EnsemblerTLS.onClientConnectionChange() on rank \(
@@ -950,7 +968,12 @@ extension EnsemblerTLS: ServerConnectionDelegate, ClientConnectionDelegate {
 			)
 		}
 
-		self.clientConnections[node] = state
+		if node == 0, state == .ready {
+			self.leaderConnectionReadySemaphore.signal()
+		}
+		if self.isAllFollowerConnectionsReady() {
+			self.allFollowersReadySemaphore.signal()
+		}
 	}
 
 	public func onServerStatusChange(state: NWListener.State) {
@@ -977,77 +1000,6 @@ extension EnsemblerTLS: ServerConnectionDelegate, ClientConnectionDelegate {
 		}
 
 		self.serverStatus = state
-	}
-}
-
-// Functions which invokes backend.
-extension EnsemblerTLS {
-	/// Activate the mesh in the underlying backend
-	/// This function should NOOP if mesh is already active
-	public func activateMesh() throws {
-		guard self.status == .distributedCIOKey || self.status == .keyAccepted else {
-			EnsemblerTLS.logger.error(
-				"Oops: Attempted to activate from an illegal state: \(self.status, privacy: .public)"
-			)
-			throw InitializationError.invalidActivationState
-		}
-
-		guard let backend = self.backend else {
-			EnsemblerTLS.logger.error(
-				"Oops: No backend specified"
-			)
-			throw EnsembleError.internalError(error: "No backend specified")
-		}
-
-		do {
-			if !backend.isLocked() {
-				// This is the expected case in production where we activate the ensemble after
-				// rebooting and install the "[ACDC|Trusted] Support" cryptex.
-				self.setStatus(.activating)
-				try backend.activate()
-
-				// for stub backend, call the ensembleReady, since there is no real activation.
-				if self.backend is StubBackend {
-					ensembleReady()
-				}
-
-			} else if self.autoRestart {
-				// TODO: rdar://123743845 (Auto restart should check isActivate() when it becomes available)
-				// TODO: And looking at the surrounding code, the check above should also check it.
-				EnsemblerTLS.logger.error(
-					"""
-					The ensemble has already been activated. Attempting to auto-restart it. \
-					This should never happen in production!
-					"""
-				)
-				backend.setActivatedFlag()
-				goToNodeReady()
-			} else {
-				// If we're initializing but locked, the process probably restarted. We're toast.
-				EnsemblerTLS.logger.error("Ensembler initialized in unrecoverable state, failing!")
-				throw InitializationError.ensembleAlreadyActive
-			}
-
-		} catch {
-			self.ensembleFailed(failMsg: "EnsemblerTLS.activateMesh: Error when activating mesh, error = \(error)")
-			throw error
-		}
-	}
-
-	/// Deactivate the mesh in the underlying backend
-	/// This function should NOOP if mesh is already deactivated
-	public func deactivate() throws {
-		try self.backend?.deactivate()
-	}
-
-	/// Is the mesh currently locked?
-	///  - Returns: `Bool` with lock status  or `false` if no backend found
-	private func isLocked() -> Bool {
-		let locked = self.backend?.isLocked() ?? false
-		EnsemblerTLS.logger.info(
-			"Backend locked status: \(locked ? "LOCKED" : "unlocked", privacy: .public)"
-		)
-		return locked
 	}
 }
 
@@ -1108,8 +1060,18 @@ extension EnsemblerTLS {
 	private func incomingMessageForFollower(
 		node _: Int,
 		controlMsg: EnsembleControlMessage,
-		sender _: [String: NodeConfiguration].Element
+		sender: [String: NodeConfiguration].Element
 	) throws {
+		guard sender.value.rank == 0 else {
+			Self.logger.error(
+				"""
+				EnsemblerTLS.incomingMessageForFollower(): \
+				Rejecting \(String(describing: controlMsg), privacy: .public) \
+				from non-leader rank \(sender.value.rank, privacy: .public)
+				"""
+			)
+			return
+		}
 		switch controlMsg {
 		case .ensembleAcceptAndshareCIOKey(let cioKey):
 			if self.status == .keyAccepted {
@@ -1122,6 +1084,7 @@ extension EnsemblerTLS {
 				try self.resetLeaderConnection()
 			}
 
+            EnsemblerTLS.logger.info("Key obtained is of size \(cioKey.count)")
 			// get the key and store it
 			self.sharedKey = SecureSymmetricKey(data: cioKey)
 			if !self.setStatus(.keyAccepted) {
@@ -1135,9 +1098,6 @@ extension EnsemblerTLS {
 			}
 			try handleEnsembleCIOKeyShared()
 		case .ensembleActivationComplete:
-			if self.status == .nodeReady {
-				return
-			}
 			try handleEnsembleActivationComplete()
 		case .ensembleReady:
 			if self.status == .ready {
@@ -1184,35 +1144,162 @@ extension EnsemblerTLS {
         } catch {
             EnsemblerTLS.logger.error(
                 """
-                EnsemblerTLS.incomingMessageInternal(): Failed to encode response to data message: \(error, privacy: .public)
+                EnsemblerTLS.controlMessageToData(): Failed to encode response to data message: \(error, privacy: .public)
                 Sending default acknowledge
                 """
             )
             return controlMessageToData(message: EnsembleControlMessage.acknowledge)
         }
     }
+
+    private func invokeRegisteredCallback(callback: @escaping EnsembleDataMessageReceivedInternal,
+                                          appID: String,
+                                          node: Int,
+                                          data: Data,
+                                          requestID: UUID,
+                                          callbackTimeout: TimeInterval,
+                                          completion: @escaping (Data?) -> Void) {
+        // Apply a callback timeout so a hung app callback doesn't block the leader
+        // for the full round-trip timeout. The flag ensures only one branch fires.
+        let responseSent = OSAllocatedUnfairLock(initialState: false)
+
+        // Branch 1: app callback returns in time.
+        // Use a Swift Task so the cooperative thread suspends during the async XPC round-trip
+        // to the client app — no GCD thread is held while waiting, preventing thread-pool
+        // exhaustion when slow or sync-callback clients (e.g. porter) share the same pool.
+        let capturedAppID = appID
+        let capturedRequestID = requestID
+        Task(priority: .userInitiated) { [weak self] in
+            guard let self else {
+                EnsemblerTLS.logger.error(
+                    "EnsemblerTLS.invokeRegisteredCallback: EnsemblerTLS deallocated while callback was in flight for appID: \(capturedAppID, privacy: .public) requestID: \(capturedRequestID, privacy: .public)"
+                )
+                return
+            }
+            let callbackResult: Result<Data, Error>
+            do {
+                callbackResult = .success(try await callback(node, data))
+            } catch {
+                callbackResult = .failure(error)
+            }
+
+            let alreadySent = responseSent.withLock { state -> Bool in
+                if state { return true }
+                state = true
+                return false
+            }
+            guard !alreadySent else {
+                EnsemblerTLS.logger.warning(
+                    "EnsemblerTLS.invokeRegisteredCallback: callback returned after timeout already fired for appID: \(appID, privacy: .public) requestID: \(requestID, privacy: .public) — discarding late response"
+                )
+                return
+            }
+
+            switch callbackResult {
+            case .success(let responseData):
+                let responseMessage = EnsembleControlMessage.dataMessageResponse(
+                    appID: appID,
+                    data: responseData,
+                    requestID: requestID
+                )
+                completion(self.controlMessageToData(message: responseMessage))
+            case .failure(let error):
+                EnsemblerTLS.logger.error(
+                    """
+                    EnsemblerTLS.invokeRegisteredCallback(): data message callback failed for appID:\(appID, privacy: .public) requestID: \(requestID, privacy: .public) with error: \(error, privacy: .public)
+                    """
+                )
+                let dataError = (error as? DataMessageError) ?? DataMessageError.internalError(appID: appID, reason: error.localizedDescription)
+                let errorMessage = EnsembleControlMessage.dataMessageError(
+                    error: dataError,
+                    requestID: requestID
+                )
+                completion(self.controlMessageToData(message: errorMessage))
+            }
+        }
+
+        // Branch 2: callback timeout fires first
+        DispatchQueue.global().asyncAfter(deadline: .now() + callbackTimeout) { [weak self] in
+            guard let self else {
+                EnsemblerTLS.logger.error(
+                    "EnsemblerTLS.invokeRegisteredCallback: EnsemblerTLS deallocated while timeout was in flight for appID: \(capturedAppID, privacy: .public) requestID: \(capturedRequestID, privacy: .public)"
+                )
+                return
+            }
+            let alreadySent = responseSent.withLock { state -> Bool in
+                if state { return true }
+                state = true
+                return false
+            }
+            guard !alreadySent else { return }
+            
+            EnsemblerTLS.logger.error(
+                """
+                EnsemblerTLS.invokeRegisteredCallback(): data message callback timedout for appID:\(appID, privacy: .public) requestID: \(requestID, privacy: .public)
+                """
+            )
+            
+            let errorMessage = EnsembleControlMessage.dataMessageError(
+                error: DataMessageError.timeoutOnPeerHandler(appID: appID),
+                requestID: requestID
+            )
+            completion(self.controlMessageToData(message: errorMessage))
+        }
+    }
     
-	private func incomingMessageInternal(node: Int, message: Data) -> Data? {
-		let controlMsg: EnsembleControlMessage
-		do {
-			controlMsg = try JSONDecoder().decode(EnsembleControlMessage.self, from: message)
-		} catch {
-			Self.logger.warning(
-				"EnsemblerTLS.incomingMessageInternal() on rank \(self.currentNodeConfig.rank, privacy: .public): Control message decoding failed: \(error, privacy: .public)"
-			)
-			return nil
-		}
+	// Handles an incoming dataMessageRequest from a peer node.
+	// Called directly from incomingMessage — bypasses fromBackendQ for lower latency.
+	internal func incomingDataMessageInternal(
+		node: Int,
+		appID: String,
+		data: Data,
+		requestID: UUID,
+		callbackTimeout: TimeInterval,
+		completion: @escaping (Data?) -> Void
+	) {
+		EnsemblerTLS.logger.debug(
+			"EnsemblerTLS.incomingDataMessageInternal(): Received data message from rank \(node, privacy: .public), appID: \(appID, privacy: .public)"
+		)
+
+        guard let callback = self.dataMessageCallbackRegistry.withLock({ $0[appID] }) else {
+            // Fast-fail: no registered handler — reply immediately so the leader
+            // gets a typed error rather than waiting for the full timeout.
+            EnsemblerTLS.logger.warning(
+                "EnsemblerTLS.incomingDataMessageInternal(): No callback registered for appID: \(appID, privacy: .public), requestID: \(requestID)"
+            )
+            let errorMessage = EnsembleControlMessage.dataMessageError(
+                error: DataMessageError.noRegisteredHandler(appID: appID),
+                requestID: requestID
+            )
+            completion(self.controlMessageToData(message: errorMessage))
+            return
+        }
+        
+        self.invokeRegisteredCallback(
+            callback: callback,
+            appID: appID,
+            node: node,
+            data: data,
+            requestID: requestID,
+            callbackTimeout: callbackTimeout,
+            completion: completion
+        )
+	}
+
+	// Handles all non-data control messages. Always called on fromBackendQ for serialisation.
+	internal func incomingControlMessageInternal(node: Int, controlMsg: EnsembleControlMessage, completion:@escaping (Data?) -> Void) {
 
 		guard let sender = self.ensembleConfig.nodes.first(where: { $0.value.rank == node }) else {
-			Self.logger.warning(
-				"EnsemblerTLS.incomingMessageInternal() on rank \(self.currentNodeConfig.rank, privacy: .public): Cannot find node \(node, privacy: .public) in configuration"
+			Self.logger.error(
+				"EnsemblerTLS.incomingControlMessageInternal() on rank \(self.currentNodeConfig.rank, privacy: .public): Cannot find node \(node, privacy: .public) in configuration"
 			)
-			return nil
+            completion(nil)
+            return
 		}
 
 		Self.logger.info(
 			"""
-			EnsemblerTLS.incomingMessageInternal() on rank \(self.currentNodeConfig.rank, privacy: .public): Received \(
+			EnsemblerTLS.incomingControlMessageInternal() on rank \(self.currentNodeConfig.rank, privacy: .public): Received \(
 				controlMsg,
 				privacy: .public
 			) message \
@@ -1223,40 +1310,16 @@ extension EnsemblerTLS {
 		switch controlMsg {
 		// Generic operations
 		case .ForwardMessage(let forward):
-			self.router?.forwardMessage(forward)
+            forwardMessage(forward: forward)
 		case .testMessage:
 			EnsemblerTLS.logger.info(
 				"""
-				EnsemblerTLS.incomingMessageInternal(): Received test message \
+				EnsemblerTLS.incomingControlMessageInternal(): Received test message \
 				from node \(sender.key, privacy: .public) with rank \(node, privacy: .public)
 				"""
 			)
 		case .ensembleDraining:
 			self.draining = true
-        case .dataMessage(let appID, let data,let requestID):
-            // Handle data message
-            EnsemblerTLS.logger.info(
-                """
-                EnsemblerTLS.incomingMessageInternal(): Received data message \
-                from node \(sender.key, privacy: .public) with rank \(node, privacy: .public)
-                """
-            )
-            
-            // Call the callback if it's set and send the response back
-            if let callback = self.dataMessageCallbackRegistry[appID] {
-                let responseData = callback(node, data)
-                let responseMessage = EnsembleControlMessage.dataMessage(appID: appID,data: responseData, requestID: requestID)
-                return controlMessageToData(message: responseMessage)
-               
-            } else {
-                EnsemblerTLS.logger.warning(
-                    """
-                    EnsemblerTLS.incomingMessageInternal(): Received data message but no callback is registered
-                    """
-                )
-                let responseMessage = EnsembleControlMessage.acknowledge
-                return controlMessageToData(message: responseMessage)
-            }
 		default:
 			// Non-generic operations
 			do {
@@ -1272,7 +1335,7 @@ extension EnsemblerTLS {
 			} catch {
 				Self.logger.warning(
 					"""
-					EnsemblerTLS.incomingMessageInternal() on rank \(self.currentNodeConfig.rank, privacy: .public):: \
+					EnsemblerTLS.incomingControlMessageInternal() on rank \(self.currentNodeConfig.rank, privacy: .public):: \
 					Failed to handle command message \(String(describing: controlMsg), privacy: .public): \(error, privacy: .public)
 					"""
 				)
@@ -1281,14 +1344,16 @@ extension EnsemblerTLS {
 
 		Self.logger.info(
 			"""
-			EnsemblerTLS.incomingMessageInternal(): \
+			EnsemblerTLS.incomingControlMessageInternal(): \
 			Finished handling message \(controlMsg, privacy: .public) \
 			from node \(sender.key, privacy: .public) with rank \(node, privacy: .public)
 			"""
 		)
-		
-		return nil
+
+        completion(nil)
 	}
+    
+    
 }
 
 // basic methods to send out communication mewssages
@@ -1315,7 +1380,7 @@ extension EnsemblerTLS {
 	private func handleEnsembleCIOKeyShared() throws {
 		// Now that we know the key is present in all nodes, we can set it in CIOMesh driver.
 		self.setCryptoKey()
-
+        
 		if self.backend?.isLocked() == true {
 			// backend is already activated as part of initial bootstrapping, so we can go to ready state,
 			// now that we got the new rotated key
@@ -1340,11 +1405,12 @@ extension EnsemblerTLS {
 		// Now that we know the all nodes are activated, we can to ready state
 		goToNodeReady()
 	}
+
 }
 
 // methods used in leader/follower to perform operations
 extension EnsemblerTLS {
-	private func goToNodeReady() {
+	internal func goToNodeReady() {
 		if self.status == .ready {
 			return
 		}
@@ -1359,9 +1425,25 @@ extension EnsemblerTLS {
 			return
 		}
         
+        dataRequestQueue.sync {
+           keyRotationTimeoutItem?.cancel()
+           keyRotationTimeoutItem = nil
+           formationTimeoutItem?.cancel()
+           formationTimeoutItem = nil
+        }
+        
         if doneInitializing == false {
             convergenceSummary.endTimeNanos = getNanoSec()
             convergenceSummary.log(to: EnsemblerTLS.logger)
+            if let startNanos = convergenceSummary.startTimeNanos, let endNanos = convergenceSummary.endTimeNanos {
+                let durationSeconds = Double(endNanos - startNanos) / 1_000_000_000.0
+                trackEnsembleFormationDuration(durationSeconds: durationSeconds, isLeader: self.isLeader, rank: self.currentNodeConfig.rank, chassisID: self.currentNodeConfig.chassisID)
+            }
+        } else if let startNanos = keyRotationStartNanos.withLock({ nanos -> Int64? in
+            let s = nanos; nanos = nil; return s
+        }) {
+            let durationSeconds = Double(getNanoSec() - startNanos) / 1_000_000_000.0
+            trackKeyRotationDuration(durationSeconds: durationSeconds, isLeader: self.isLeader, rank: self.currentNodeConfig.rank, chassisID: self.currentNodeConfig.chassisID)
         }
         
         self.doneInitializing = true
@@ -1395,7 +1477,7 @@ extension EnsemblerTLS {
 
     // Check for any failures that prevents ensemble from going to ready state
     private func handleEnsemblerTimeoutFollower() {
-        EnsemblerTLS.logger.info(
+        EnsemblerTLS.logger.warning(
             "EnsemblerTLS.handleEnsemblerTimeout(): Timeout occured while forming ensemble."
         )
         if self.status != .ready {
@@ -1406,7 +1488,7 @@ extension EnsemblerTLS {
 	// Check for any failures that prevents ensemble from going to ready state
 	// update the debugMsg which will be propogated to AirDarwin
 	private func handleEnsemblerTimeoutLeader() {
-        EnsemblerTLS.logger.info(
+        EnsemblerTLS.logger.warning(
             "EnsemblerTLS.handleEnsemblerTimeout(): Timeout occured while forming ensemble."
         )
         
@@ -1444,7 +1526,7 @@ extension EnsemblerTLS {
 			return
 		}
 
-		if self.status == .distributingCIOKey, self.checkEnsembleForKeyDistribution() == false {
+		if self.status == .distributingKey, self.checkEnsembleForKeyDistribution() == false {
 			EnsemblerTLS.logger.error(
 				"EnsemblerTLS.handleEnsemblerTimeout(): Atleast one follower is not distributed with the CIOKey."
 			)
@@ -1517,104 +1599,73 @@ extension EnsemblerTLS {
 
 			// Trigger handleEnsmblerTimout, and check for any failures that prevents the
 			// ensemble to goto ready state.
-			DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(self.ensemblerTimeout)) {
+			let leaderTimeoutItem = DispatchWorkItem { [weak self] in
+				guard let self else {
+					EnsemblerTLS.logger.warning("EnsemblerTLS.coordinateEnsemble(): self deallocated before leader formation timeout fired.")
+					return
+				}
 				self.handleEnsemblerTimeoutLeader()
 			}
+			self.formationTimeoutItem = leaderTimeoutItem
+			DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(self.ensemblerTimeout), execute: leaderTimeoutItem)
 			return
 		}
 
         // Trigger handleEnsmblerTimout, and check for any failures that prevents the
         // ensemble to goto ready state.
-        DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(self.ensemblerTimeout)) {
+        let followerTimeoutItem = DispatchWorkItem { [weak self] in
+            guard let self else {
+                EnsemblerTLS.logger.warning("EnsemblerTLS.coordinateEnsemble(): self deallocated before follower formation timeout fired.")
+                return
+            }
             self.handleEnsemblerTimeoutFollower()
         }
+        self.formationTimeoutItem = followerTimeoutItem
+        DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(self.ensemblerTimeout), execute: followerTimeoutItem)
         
 		DispatchQueue.global().async {
-			repeat {
-				// wait for leader to come up. we have already initiated attempts to open connection to leader.
-				// when get connection status change to ready, then we are good to send announce message.
-				Thread.sleep(forTimeInterval: 1)
-			} while self.clientConnections[0] != .ready
+			// Wait for leader connection to become ready instead of polling every second.
+			_ = self.leaderConnectionReadySemaphore.wait(timeout: .now() + .seconds(self.ensemblerTimeout))
+			let leaderState = self.clientConnectionsLock.withLock { $0[0] }
+			guard leaderState == .ready else {
+				EnsemblerTLS.logger.error(
+					"""
+					EnsemblerTLS.coordinateEnsemble(): Timed out waiting for leader connection \
+					after \(self.ensemblerTimeout)s. Leader connection state: \
+					\(String(describing: leaderState), privacy: .public). \
+					Leader may not have started yet or network connectivity issue.
+					"""
+				)
+				return
+			}
 
             self.updateTraceCheckpoint(operationName: "Leader arrived")
 			EnsemblerTLS.logger.info(
 				"EnsemblerTLS.coordinateEnsemble(): Leader came up, lets checkin with leader."
 			)
-            
+
             // we need to keep retrying because, in case of follower node rebooted with new config
             // the connection to leader will succeed and start sending announce message
             // but the leader will ignore it because it already found this UDID checked in.
             // when the leader node is also rebooted, then leader will respond to announce message
             // and proceed.
-            repeat {
-                if self.clientConnections[0] == .ready {
+            let timer = DispatchSource.makeTimerSource(queue: .global())
+            timer.schedule(deadline: .now(), repeating: .seconds(30))
+            timer.setEventHandler { [weak self] in
+                guard let self, self.status == .coordinating else {
+                    self?.announceRetryTimer?.cancel()
+                    return
+                }
+                if self.clientConnectionsLock.withLock({ $0[0] }) == .ready {
                     self.sendAnnounceToLeader()
                 }
-                
-                Thread.sleep(forTimeInterval: 30)
-            } while self.status == .coordinating
+            }
+            self.announceRetryTimer = timer
+            timer.resume()
 		}
 	}
 
-	internal func setCryptoKey() {
-		do {
-            EnsemblerTLS.logger.info(
-                """
-                EnsemblerTLS.setCryptoKey(): \
-                Getting the derived key to set in CIOMesh
-                """
-            )
-            
-			// use the HKDF-SHA384 derived key
-			guard let derivedKey = try sharedKey?.getDerivedKey(type: .MeshEncryption) else {
-				EnsemblerTLS.logger.error(
-					"""
-					Oops: setCryptoKey() Getting derivedKey failed. Error getting shared key.
-					"""
-				)
-				throw InitializationError.unexpectedBehavior(
-					"""
-					Oops: setCryptoKey() Getting derivedKey failed. Error getting shared key.
-					"""
-				)
-			}
-
-			// store the key in initialSharedkey for use in TLS PSK Options.
-			// this initialSharedkey will not be updated on rotation.
-			if self.initialSharedkey == nil {
-				self.initialSharedkey = try self.sharedKey?.getDerivedKey(type: .TlsPsk)
-			}
-
-			defer {
-				derivedKey.zeroKey()
-
-				EnsemblerTLS.logger.info(
-					"""
-					EnsemblerTLS.setCryptoKey(): \
-					Succcessfully cleared the keydata
-					"""
-				)
-
-				sharedKey?.zeroKey()
-				self.sharedKey = nil
-			}
-
-			EnsemblerTLS.logger.info("EnsemblerTLS.setCryptoKey(): Call backend.setCryptoKey()")
-			try self.backend?.setCryptoKey(key: derivedKey.getKeyDataWrapper().data, flags: 0)
-			EnsemblerTLS.logger.info(
-				"EnsemblerTLS.setCryptoKey(): Successfully set crypto key in CIOMesh"
-			)
-		} catch {
-			// This is technically harmless as only our status matters
-			EnsemblerTLS.logger.error(
-				"""
-				Failed to set crypto key in CIOMesh: \
-				\(String(reportableError: error), privacy: .public) (\(error, privacy: .public))
-				"""
-			)
-            ensembleFailed(failMsg: "Failed to set crypto key in CIOMesh: \(error)")
-		}
-	}
+	
 }
 
 // functions exposed to framework
@@ -1650,57 +1701,52 @@ extension EnsemblerTLS {
 	}
 
 	public func encryptData(data: Data) throws -> Data {
-		guard let keyData = try self.backend?.getCryptoKey() else {
-			throw InitializationError.unexpectedBehavior(
-				"Oops: Error getting crypt key!"
-			)
+		guard let cioBackend = self.backend as? (any CIOBackendProtocol) else {
+			EnsemblerTLS.logger.error("encryptData: backend does not support getCryptoKey")
+			throw InitializationError.unexpectedBehavior("Oops: Error getting crypt key!")
 		}
-
+		var keyData = try cioBackend.getCryptoKey()
+		defer {
+			let keySize = keyData.count
+			keyData.withUnsafeMutableBytes { ptr in
+				if let base = ptr.baseAddress, keySize > 0 {
+					memset_s(base, keySize, 0, keySize)
+				}
+			}
+		}
 		// The key we get from CIOMesh is already a derived key,
 		// we are deriving a new key from the derived key here.
 		let encryptKey = SecureSymmetricKey(data: keyData)
+		defer { encryptKey.zeroKey() }
 		let derivedKey = try encryptKey.getDerivedKey(type: .TestEncryptDecrypt)
-
+		defer { derivedKey.zeroKey() }
 		return try derivedKey.encrypt(data: data)
 	}
 
 	public func decryptData(data: Data) throws -> Data {
-		guard let keyData = try self.backend?.getCryptoKey() else {
-			throw InitializationError.unexpectedBehavior(
-				"Oops: Error getting crypt key!"
-			)
+		guard let cioBackend = self.backend as? (any CIOBackendProtocol) else {
+			EnsemblerTLS.logger.error("decryptData: backend does not support getCryptoKey")
+			throw InitializationError.unexpectedBehavior("Oops: Error getting crypt key!")
+		}
+		var keyData = try cioBackend.getCryptoKey()
+		defer {
+			let keySize = keyData.count
+			keyData.withUnsafeMutableBytes { ptr in
+				if let base = ptr.baseAddress, keySize > 0 {
+					memset_s(base, keySize, 0, keySize)
+				}
+			}
 		}
 		// The key we get from CIOMesh is already a derived key,
 		// we are deriving a new key from the derived key here.
 		let decryptKey = SecureSymmetricKey(data: keyData)
+		defer { decryptKey.zeroKey() }
 		let derivedKey = try decryptKey.getDerivedKey(type: .TestEncryptDecrypt)
-
+		defer { derivedKey.zeroKey() }
 		return try derivedKey.decrypt(data: data)
 	}
 
-	public func getAuthCode(data: Data) throws -> Data {
-		// we will be using the initial shared key. This key will not be updated on rotation.
-
-		// use the HKDF-SHA384 derived key
-		guard let derivedKey = try self.initialSharedkey?.getDerivedKey(type: .TlsPsk) else {
-			throw EnsembleError
-				.internalError(error: "Cannot generate Authcode since initialSharedkey is nil")
-		}
-
-		let authenticationData = derivedKey.getAuthCode(data: data)
-
-		return authenticationData
-	}
-
-	public func getMaxBuffersPerKey() throws -> UInt64? {
-		return try self.backend?.getMaxBuffersPerKey()
-	}
-
-	public func getMaxSecondsPerKey() throws -> UInt64? {
-		return try self.backend?.getMaxSecondsPerKey()
-	}
-
-	private func resetFollowerConnections() throws {
+	internal func resetFollowerConnections() throws {
 		resetFollowerConnectionStatus()
 		// reconnect with clients to pick up the refreshed attestation.
 		try self.tlsChannel?.reConnectWithClients()
@@ -1714,180 +1760,6 @@ extension EnsemblerTLS {
 			)
 			ensembleFailed(failMsg: "EnsemblerTLS.resetFollowerConnections(): Leader could not create client connections to all followers")
 		}
-	}
-
-	/// Triggers the workflow to rotate the keys
-	public func rotateKey() throws {
-        try keyRotationLock.sync {
-			try rotateKeyInternal()
-		}
-	}
-	
-	private func rotateKeyInternal() throws {
-		guard self.status == .ready else {
-			EnsemblerTLS.logger.error(
-				"""
-				Oops: Attempting to rotate key from an illegal state: Expected .ready, \
-				found \(self.status, privacy: .public)
-				"""
-			)
-			throw InitializationError.invalidOperation
-		}
-
-		guard self.isLeader == true else {
-			EnsemblerTLS.logger.error("Oops: Rotate key can be called only on leader")
-			throw InitializationError.invalidOperation
-		}
-
-		if self.nodeMap.count == 1 {
-			EnsemblerTLS.logger.info(
-				"""
-				EnsemblerTLS.rotateKey(): Returning in the .ready state because single-node ensembles \
-				don't have a shared key to rotate.
-				"""
-			)
-			return
-		}
-
-		self.resetEnsembleKeyDistributionStatus()
-		self.resetNodeReadyStatus()
-        
-		try self.resetFollowerConnections()
-
-		self.sharedKey = SecureSymmetricKey()
-
-		if !self.setStatus(.reDistributingCIOKey) {
-			throw EnsembleError.illegalStateTransition
-		}
-        
-        // Wait for any active data requests to complete with a maximum timeout of 3 seconds
-        // Any new data requests would fail because we had already set the state to reDistributingCIOKey
-        let result = activeDataRequests.wait(timeout: .now() + 1)
-        
-        switch result {
-        case .success:
-            EnsemblerTLS.logger.info("All active data requests completed before key rotation")
-        case .timedOut:
-            EnsemblerTLS.logger.warning("Some data requests are still active after 1 second timeout, proceeding with key rotation")
-        }
-
-		self.distributeKey()
-	}
-
-	public func checkConnectivity() throws -> [String] {
-		if self.nodeMap.count != 8 {
-			throw InitializationError.unexpectedBehavior(
-				"""
-				Oops: Cable diagnostics only supported for an 8-node ensemble. \
-				Current ensemble is \(self.nodeMap.count) nodes.
-				"""
-			)
-		}
-
-		// When all nodes have established a connection with each other then the connection is
-		// assumed to be good.
-		guard !self.everyoneFound else {
-			return []
-		}
-
-		guard let backend = self.backend else {
-			throw InitializationError.invalidBackend
-		}
-
-		let cio = try backend.getCIOCableState()
-		var cableStatus: [Bool] = .init(repeating: false, count: 8)
-		var expectedPartners: [Int] = .init(repeating: -1, count: 8)
-		var actualPartners: [Int] = .init(repeating: -1, count: 8)
-
-		for (i, c) in cio.enumerated() {
-			let cableConnectedObj = c["cableConnected"]
-			guard let cableConnected = cableConnectedObj as? Int else {
-				EnsemblerTLS.logger.error(
-					"""
-					Failed on getCIOCableState() CIO mesh API: Unable to parse entry i=\(i) -> \
-					c["cableConnected"]=\(String(describing: cableConnectedObj), privacy: .public) as Int.
-					"""
-				)
-				throw InitializationError.unexpectedBehavior(
-					"Failed on getCIOCableState(): Unable to parse c[\"cableConnected\"] as Int."
-				)
-			}
-
-			let expectedPartnerObj = c["expectedPartnerHardwareNode"]
-			guard let expectedPartner = expectedPartnerObj as? Int else {
-				EnsemblerTLS.logger.error(
-					"""
-					Failed on getCIOCableState() CIO mesh API: Unable to parse entry i=\(i) -> \
-					c["expectedPartnerHardwareNode"]=\(String(describing: expectedPartnerObj), privacy: .public) \
-					as Int.
-					"""
-				)
-				throw InitializationError.unexpectedBehavior(
-					"""
-					Failed on getCIOCableState(): Unable to parse \
-					c[\"expectedPartnerHardwareNode\"] as Int.
-					"""
-				)
-			}
-
-			let actualPartnerObj = c["actualPartnerHardwareNode"]
-			guard let actualPartner = actualPartnerObj as? Int else {
-				EnsemblerTLS.logger.error(
-					"""
-					Failed on getCIOCableState() CIO mesh API: Unable to parse entry i=\(i) -> \
-					c["actualPartnerHardwareNode"]=\(String(describing: actualPartnerObj), privacy: .public) \
-					as Int.
-					"""
-				)
-				throw InitializationError.unexpectedBehavior(
-					"""
-					Failed on getCIOCableState(): Unable to parse \
-					c[\"actualPartnerHardwareNode\"] as Int.
-					"""
-				)
-			}
-
-			cableStatus[i] = cableConnected == 1
-			expectedPartners[i] = expectedPartner
-			actualPartners[i] = actualPartner
-		}
-
-		var diagnostics: [String] = []
-
-		if !cableStatus[0] || !cableStatus[2] {
-			diagnostics.append("PortB Cable not functioning")
-		}
-		if !cableStatus[1] || !cableStatus[3] {
-			diagnostics.append("PortA Cable not functioning")
-		}
-		if !cableStatus[4] || !cableStatus[5] || !cableStatus[6] || !cableStatus[7] {
-			diagnostics.append("Internal Cable not functioning")
-		}
-
-		if expectedPartners[0] != actualPartners[0] ||
-			expectedPartners[2] != actualPartners[2] {
-			diagnostics.append("PortB Cable not plugged correctly")
-		}
-		if expectedPartners[1] != actualPartners[1] ||
-			expectedPartners[3] != actualPartners[3] {
-			diagnostics.append("PortA Cable not plugged correctly")
-		}
-		if expectedPartners[4] != actualPartners[4] ||
-			expectedPartners[5] != actualPartners[5] ||
-			expectedPartners[6] != actualPartners[6] ||
-			expectedPartners[7] != actualPartners[7] {
-			diagnostics.append("Internal Cable not plugged correctly")
-		}
-
-		return diagnostics
-	}
-
-	/// Simple public function that sends a fixed test message to any node
-	public func sendTestMessage(destination: Int) throws {
-		try self.tlsChannel?.sendMessageTo(
-			msg: EnsembleControlMessage.testMessage,
-			destination: destination
-		)
 	}
 
 	public func getStatus() -> EnsemblerStatus {
@@ -1913,6 +1785,12 @@ extension EnsemblerTLS {
 	}
 
 	private func setDataKey(singleUseKeyToken: SingleUseKeyToken, key: Data) {
+		func zeroOutKey(inputKey: Data) {
+			let keyDataPointer = inputKey.withUnsafeBytes { UnsafeRawPointer($0.baseAddress!) }
+			let keySize = inputKey.count
+			memset_s(UnsafeMutableRawPointer(mutating: keyDataPointer), keySize, 0, keySize)
+		}
+
 		EnsemblerTLS.logger.info("Setting data key for singleUseKeyToken: \(singleUseKeyToken, privacy: .public)")
 		self.dataKeyQ.sync {
 			// store the key in the memory map
@@ -1921,14 +1799,18 @@ extension EnsemblerTLS {
 
 		// start the timer to delete it.
 		DispatchQueue.global().asyncAfter(deadline: .now() + self.dataKeyDeleteTimeout) { [weak self] in
+			guard let self = self else {
+				// bail out, but wipe out the key before we go
+				EnsemblerTLS.logger.info("EnsemblerTLS deallocated during key deletion delay - key cleanup abandoned for singleUseKeyToken: \(singleUseKeyToken, privacy: .public)")
+				zeroOutKey(inputKey: key)
+				return
+			}
 			EnsemblerTLS.logger
 				.info("Deleting the key from memory for singleUseKeyToken: \(singleUseKeyToken, privacy: .public)")
-			self?.dataKeyQ.sync {
+			self.dataKeyQ.sync {
 				// secure memset the data key to 0 before we remove from the map
-				let keyDataPointer = key.withUnsafeBytes { UnsafeRawPointer($0.baseAddress!) }
-				let keySize = key.count
-				memset_s(UnsafeMutableRawPointer(mutating: keyDataPointer), keySize, 0, keySize)
-				self?.keyMap.removeValue(forKey: singleUseKeyToken)
+				zeroOutKey(inputKey: key)
+				self.keyMap.removeValue(forKey: singleUseKeyToken)
 			}
 		}
 	}
@@ -1987,17 +1869,16 @@ extension EnsemblerTLS {
 		}
 	}
 	
-    public func registerDataCallback(appID: String, callback: @escaping EnsembleDataMessageReceived) {
-		self.dataMessageCallbackRegistry[appID] = callback
+    public func registerDataCallback(appID: String, callback: @escaping EnsembleDataMessageReceivedInternal) {
+		dataMessageCallbackRegistry.withLock { $0[appID] = callback }
 	}
     
     public func unregisterDataCallback(appID: String) {
-        guard dataMessageCallbackRegistry[appID] != nil else {
+        let removed = dataMessageCallbackRegistry.withLock { $0.removeValue(forKey: appID) != nil }
+        guard removed else {
             EnsemblerTLS.logger.error("No callback registered for appID: \(appID, privacy: .public)")
             return
         }
-        
-        dataMessageCallbackRegistry.removeValue(forKey: appID)
         EnsemblerTLS.logger.info("Successfully unregistered callback for appID: \(appID, privacy: .public)")
     }
 	
@@ -2015,21 +1896,39 @@ extension EnsemblerTLS {
 		completion: @escaping (Result<Data, Error>) -> Void
 	) {
         
-		keyRotationLock.async {
+		dataRequestQueue.async {
             guard self.status == .ready else {
-                EnsemblerTLS.logger.error("Error sending data to appID: \(appID, privacy: .public), destination:\(destination, privacy: .public)")
-                completion(.failure(ClientError.ClientError(message: "sendDataAndGetResponse Error: cannot send data to appID: \(appID), destination:\(destination) when status is \(self.status)")))
+                EnsemblerTLS.logger.error("sendDataAndGetResponse: dropping send for appID: \(appID, privacy: .public), destination: \(destination, privacy: .public) — not ready, current status: \(self.status, privacy: .public)")
+                let notReadyError = DataMessageError.notReady(appID: appID, currentStatus: String(describing: self.status))
+                trackSendDataAndGetResponse(success: false, error: notReadyError, durationMs: 0, isLeader: self.isLeader, rank: self.currentNodeConfig.rank, chassisID: self.currentNodeConfig.chassisID)
+                completion(.failure(notReadyError))
                 return
             }
-            
-            self.activeDataRequests.enter()
-            self.tlsChannel?.sendDataAndGetResponse(
+
+            guard let channel = self.tlsChannel else {
+                EnsemblerTLS.logger.error("sendDataAndGetResponse: tlsChannel is nil for appID: \(appID, privacy: .public), destination: \(destination, privacy: .public)")
+                let channelNilError = ClientError.ClientError(message: "sendDataAndGetResponse Error: tlsChannel is nil for appID: \(appID), destination: \(destination)")
+                trackSendDataAndGetResponse(success: false, error: channelNilError, durationMs: 0, isLeader: self.isLeader, rank: self.currentNodeConfig.rank, chassisID: self.currentNodeConfig.chassisID)
+                completion(.failure(channelNilError))
+                return
+            }
+            let activeRequests = self.activeDataRequests
+            activeRequests.enter()
+            let sendStartNanos = getNanoSec()
+            channel.sendDataAndGetResponse(
                 appID: appID,
                 data: data,
                 rank: destination,
                 timeout: timeout,
                 completion: { result in
-                    self.activeDataRequests.leave()
+                    activeRequests.leave()
+                    let durationMs = Double(getNanoSec() - sendStartNanos) / 1_000_000.0
+                    switch result {
+                    case .success:
+                        trackSendDataAndGetResponse(success: true, error: nil, durationMs: durationMs, isLeader: self.isLeader, rank: self.currentNodeConfig.rank, chassisID: self.currentNodeConfig.chassisID)
+                    case .failure(let error):
+                        trackSendDataAndGetResponse(success: false, error: error, durationMs: durationMs, isLeader: self.isLeader, rank: self.currentNodeConfig.rank, chassisID: self.currentNodeConfig.chassisID)
+                    }
                     completion(result)
                 }
             )
@@ -2042,20 +1941,26 @@ extension EnsemblerTLS {
         timeout: TimeInterval = 2.0,
         completion: @escaping (Result<[NodeResponse], Error>) -> Void
     ) {
-		keyRotationLock.async {
+		dataRequestQueue.async {
             guard self.status == .ready else {
                 EnsemblerTLS.logger.error("sendDataToAllFollowers: Error sending data to all followers for appID: \(appID, privacy: .public)")
-                completion(.failure(ClientError.ClientError(message: "sendDataToAllFollowers Error: cannot send data to all followers for appID: \(appID) when status is \(self.status)")))
+                completion(.failure(DataMessageError.notReady(appID: appID, currentStatus: String(describing: self.status))))
                 return
             }
             
-            self.activeDataRequests.enter()
-            self.tlsChannel?.sendDataToAllFollowers(
+            guard let channel = self.tlsChannel else {
+                EnsemblerTLS.logger.error("sendDataToAllFollowers: tlsChannel is nil for appID: \(appID, privacy: .public)")
+                completion(.failure(ClientError.ClientError(message: "sendDataToAllFollowers Error: tlsChannel is nil for appID: \(appID)")))
+                return
+            }
+            let activeRequests = self.activeDataRequests
+            activeRequests.enter()
+            channel.sendDataToAllFollowers(
                 appID: appID,
                 data: data,
                 timeout: timeout,
-                completion:  { result in
-                    self.activeDataRequests.leave()
+                completion: { result in
+                    activeRequests.leave()
                     completion(result)
                 }
             )
@@ -2065,6 +1970,7 @@ extension EnsemblerTLS {
 
 // Router delegates
 extension EnsemblerTLS: RouterDelegate {
+    
     func ensembleFailed(failMsg: String) {
         self.ensembleFailed(failMsg: failMsg, helpMsg: nil)
     }
@@ -2091,15 +1997,6 @@ extension EnsemblerTLS: RouterDelegate {
 		} catch {
             EnsemblerTLS.logger.error("Failed to lock ensemble, failing, error = \(error, privacy: .public).")
             self.ensembleFailed(failMsg: "Failed to lock ensemble, failing, error = \(error).")
-			return
-		}
-	}
-
-	func addPeer(hostName: String, nodeRank: Int) {
-		do {
-			try self.backend?.addPeerHostname(hostname: hostName, node: nodeRank)
-		} catch {
-			EnsemblerTLS.logger.warning("Failed to add peer hostname")
 			return
 		}
 	}

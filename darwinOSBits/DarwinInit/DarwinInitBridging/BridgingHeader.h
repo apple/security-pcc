@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,11 +21,6 @@
 
 #include <TargetConditionals.h>
 
-#if !TARGET_OS_OSX
-#include <IOKit/IOKitLib.h>
-#include <IOKit/IOTypes.h>
-#endif
-
 #include <archive.h>
 #include <archive_entry.h>
 #include <reboot2.h>
@@ -37,16 +32,13 @@
 #include <libproc.h>
 #include <Foundation/NSTask.h>
 #import <os/log.h>
-#import <CoreTime/CoreTime.h>
 #include <os/variant_private.h>
 #import <SoftLinking/SoftLinking.h>
 #if TARGET_OS_OSX
     #import <PackageKit/PackageKit.h>
     #import <DistributionKit/PKDistributionController.h>
 #endif
-#import <MobileGestalt.h>
 #import <Security/SecTrustStore.h>
-#import <OSAnalytics/OSASystemConfiguration_Public.h>
 
 // For NSURLSessionTask._timeoutIntervalForResource
 #import <CFNetwork/CFNSURLConnection.h>
@@ -54,30 +46,12 @@
 #include <uuid/uuid.h>
 #include <libaks_filevault.h>
 
-extern bool shim_allows_internal_security_policies(void);
 extern bool shim_WIFSIGNALED(int32_t status);
 extern int shim_WTERMSIG(int32_t status);
 extern bool shim_WIFEXITED(int32_t status);
 extern int shim_WEXITSTATUS(int32_t status);
 extern int shim_reboot3(uint64_t flag);
 extern int shim_reboot3_with_purpose(uint64_t flag, rb3_userreboot_purpose_t_t purpose);
-extern int64_t shim_MGQUniqueChipID(void);
-extern NSString* shim_MGQSerialNumber(void);
-extern NSNumber* shim_MGQOceanComputeCarrierID(void);
-extern NSNumber* shim_MGQOceanComputeCarrierSlot(void);
-extern int64_t shim_MGQChipID(void);
-extern int64_t shim_MGQBoardID(void);
-extern int64_t shim_MGQSecurityDomain(void);
-extern uint8_t* shim_MGPROD_E126B(void);
-extern uint8_t* shim_MGPROD_E126T(void);
-extern uint8_t* shim_MGPROD_E130(void);
-extern bool shim_TMSetupTime(void);
-extern bool support_package_install(void);
-extern int shim_register_config(NSData *data);
-extern int shim_register_secureconfig_parameters(NSData *data, NSString *securityPolicy);
-extern int shim_kIOReturnNoResources(void);
-extern NSString* shim_automatedDeviceGroup(void);
-extern void shim_setAutomatedDeviceGroup(NSString *automatedDeviceGroup);
 errno_t shim_cryptex_lockdown(void);
 bool shim_check_tailspin(void);
 bool shim_validateImage4Ticket(const void * _Nonnull manifest, size_t manifest_len, const void * _Nonnull trustcache, size_t trustcache_len);

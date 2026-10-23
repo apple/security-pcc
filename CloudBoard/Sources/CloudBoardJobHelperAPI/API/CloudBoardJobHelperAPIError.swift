@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -88,7 +88,7 @@ extension CloudBoardJobHelperAPIError: ReportableError {
         case .unexpectedReportableError(let reportableDescription):
             return "unexpected:\(reportableDescription)"
         case .failedWarmUp:
-            return "faieldWarmingUp"
+            return "failedWarmingUp"
         case .failedAssigningLAContext:
             return "failedAssigningLAContext"
         case .failedReclaimingLAContext:

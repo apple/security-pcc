@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,8 +20,8 @@ import Foundation
 import NIOTransportServices
 import os
 
-/// Long-lived daemon responsible for fetching and managing TGT and OTT signing keys that cb_jobhelper uses for
-/// authenticating requests
+/// Long-lived daemon responsible for fetching and managing the cost token signing key that cb_jobhelper uses for
+/// cost token signing
 public struct CloudBoardJobAuthDaemon: Sendable {
     public static let logger: Logger = .init(
         subsystem: "com.apple.cloudos.cb_jobauthd",
@@ -80,12 +80,12 @@ public struct CloudBoardJobAuthDaemon: Sendable {
 
     private func _run() async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in
-            let authTokenSigningKeyProvider: AuthTokenSigningKeyProvider
+            let signingKeyProvider: SigningKeyProvider
             if let keyRotationServiceConfig = self.config.keyRotationService {
                 let identityManager = IdentityManager(
-                    useSelfSignedCert: false, // self-signed certs never work with KRS
                     metricsSystem: self.metrics,
-                    metricProcess: "cb_jobauthd"
+                    metricProcess: "cb_jobauthd",
+                    identityBackendType: .narrative()
                 )
                 if identityManager.identity == nil {
                     Self.logger.error("Unable to load TLS identity, exiting.")
@@ -101,25 +101,23 @@ public struct CloudBoardJobAuthDaemon: Sendable {
                     identityCallback: identityManager.identityCallback,
                     metrics: self.metrics
                 )
-                authTokenSigningKeyProvider = keyRotationServiceClient
+                signingKeyProvider = keyRotationServiceClient
                 group.addTask {
                     try await keyRotationServiceClient.run()
                 }
             } else {
                 Self.logger.error("""
-                Starting with static public siging keys
-                ott=\(self.config.staticPublicSigningKeys.ottPublicSigningDERKeys, privacy: .public)
-                tgt=\(self.config.staticPublicSigningKeys.tgtPublicSigningDERKeys, privacy: .public)
+                Starting with static cost token signing key
                 """)
-                authTokenSigningKeyProvider = StaticAuthTokenSigningKeyProvider(
-                    signingKeys: self.config.staticPublicSigningKeys
+                signingKeyProvider = StaticSigningKeyProvider(
+                    signingKeys: self.config.staticSigningKeys
                 )
             }
 
             group.addTask {
                 try await CloudBoardJobAuthServer(
                     apiServer: self.apiServer,
-                    authTokenSigningKeyProvider: authTokenSigningKeyProvider
+                    signingKeyProvider: signingKeyProvider
                 ).run()
             }
 

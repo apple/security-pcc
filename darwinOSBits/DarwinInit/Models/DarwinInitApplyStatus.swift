@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -28,9 +28,10 @@ public struct DarwinInitApplyFailureInfo: Codable {
     }
 }
 
-public enum DarwinInitApplyStatus: Codable {
+public enum DarwinInitApplyStatus {
     case failure(info: DarwinInitApplyFailureInfo?)
     case success
+    case progress(tracker: AnyObject?)
 
     internal func toJSON() throws -> Data {
         return try JSONEncoder().encode(self)
@@ -50,5 +51,47 @@ public enum DarwinInitApplyStatus: Codable {
     public static func loadBootStatus() throws -> Self {
         let data = try kDInitStatusFilepath.loadData()
         return try Self.fromJSON(data)
+    }
+}
+
+extension DarwinInitApplyStatus: Codable {
+    enum CodingKeys: String, CodingKey {
+        case failure
+        case success
+        case progress
+    }
+
+    enum FailureCodingKeys: String, CodingKey {
+        case info
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .failure(let info):
+            var nested = container.nestedContainer(keyedBy: FailureCodingKeys.self, forKey: .failure)
+            try nested.encodeIfPresent(info, forKey: .info)
+        case .success:
+            try container.encode([String: String](), forKey: .success)
+        case .progress:
+            try container.encode([String: String](), forKey: .progress)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if container.contains(.success) {
+            self = .success
+        } else if container.contains(.failure) {
+            let nested = try container.nestedContainer(keyedBy: FailureCodingKeys.self, forKey: .failure)
+            let info = try nested.decodeIfPresent(DarwinInitApplyFailureInfo.self, forKey: .info)
+            self = .failure(info: info)
+        } else if container.contains(.progress) {
+            self = .progress(tracker: nil)
+        } else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Unknown status type")
+            )
+        }
     }
 }

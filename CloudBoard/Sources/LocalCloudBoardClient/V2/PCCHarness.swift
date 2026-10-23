@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -37,13 +37,9 @@ public final class PCCHarness: Sendable {
         category: "LocalCloudBoardClient.PCCHarness"
     )
 
-    // MARK: - Internal State
-
     private let registeredProxyAppEndpoints: Mutex<[HostAndPort: ProxyCloudAppEndpoint]> = .init([:])
     private let registeredComputeAppEndpoints: Mutex<[HostAndPort: ComputeCloudAppEndpoint]> = .init([:])
     private let gatewayConfig: Mutex<PCCGatewayConfig>
-
-    // MARK: - Initialization
 
     /// Initializes a PCC harness for testing local or remote proxy or compute PCC nodes
     /// - Parameter gatewayConfig: PCC Gateway configuration to control PCC Gateway behavior, e.g. the compute node
@@ -69,14 +65,15 @@ public final class PCCHarness: Sendable {
     /// Set or update the service discovery instance (package-internal)
     /// - Parameter serviceDiscovery: The service discovery instance to use for negotiate/pick flows
     package func setServiceDiscovery(_ serviceDiscovery: ServiceDiscoveryAbstraction.ConsumerClientProtocol?) {
-        self.gatewayConfig.withLock { config in
-            let updatedConfig = PCCGatewayConfig(
-                extendedComputeNodeSelectionStrategy: config.extendedComputeNodeSelectionStrategy,
-                useTLS: config.useTLS,
-                serviceDiscovery: serviceDiscovery
-            )
-            config = updatedConfig
-        }
+        // Mutate in place so every other field (selection strategy, injected selection config,
+        // desired scale, ...) is preserved; reconstructing the config risks silently dropping fields.
+        self.gatewayConfig.withLock { $0.serviceDiscovery = serviceDiscovery }
+    }
+
+    /// Set the factor by which the simulated ROPES tries to scale the announced pick ratio during
+    /// negotiate/pick (package-internal, for tests). Defaults to 1 (no scaling).
+    package func setNegotiatePickDesiredScale(_ scale: UInt32) {
+        self.gatewayConfig.withLock { $0.negotiatePickDesiredScale = scale }
     }
 
     // MARK: - Endpoint Registration

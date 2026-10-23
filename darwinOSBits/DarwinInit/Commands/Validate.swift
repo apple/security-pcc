@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,6 +18,7 @@
 //
 
 import ArgumentParserInternal
+import DarwinInitConfig
 import Foundation
 
 struct Validate: AsyncParsableCommand {
@@ -30,9 +31,13 @@ struct Validate: AsyncParsableCommand {
 
     @Argument(help: "Configuration to validate")
     var source: DInitConfigSource?
-    
+
     @Flag(name: .shortAndLong, help: "Validate the system configuration")
     var system: Bool = false
+
+    @Option(name: .customLong("rego-bundle"),
+        help: "Path to a rego bundle to use for validation instead of the default")
+    var regoBundlePath: String?
 
     func validate() throws {
         if source == nil && !system {
@@ -54,7 +59,7 @@ struct Validate: AsyncParsableCommand {
         // (the validator will report an error if policy set in configs at index > 0)
         if let policyConfig = configs[0].configSecurityPolicy, let policyString = policyConfig.policy {
             print("Validating configs against \(policyString) security policy: \(json)")
-            try await Apply.validateConfigs(policyString: policyString, configs: configs, on: computer)
+            try await Apply.validateConfigs(policyString: policyString, configs: configs, on: computer, regoBundlePath: regoBundlePath)
             print("Configs valid with respect to \(policyString) security policy")
         } else {
             print("No config-security-policy specified in config 0. Configs cannot be validated")

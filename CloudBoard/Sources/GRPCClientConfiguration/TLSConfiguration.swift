@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -58,11 +58,36 @@ extension GRPCTLSConfiguration {
 
     public typealias IdentityCallback = @Sendable () throws -> IdentityManager.ResolvedIdentity?
 
+    /// Caller-supplied server certificate verification block and dispatch queue.
+    public struct ServerVerification: @unchecked Sendable {
+        // @unchecked because sec_protocol_verify_t is not annotated @Sendable in the SDK.
+        // SAFETY CONTRACT: Callers MUST ensure the verifyBlock closure captures only Sendable
+        // values and does not reference mutable non-Sendable state. The block is dispatched on
+        // the provided serial queue.
+        // TODO: Remove @unchecked Sendable when sec_protocol_verify_t gains @Sendable annotation
+        public let verifyBlock: sec_protocol_verify_t
+        public let queue: DispatchQueue
+
+        public init(
+            verifyBlock: @escaping sec_protocol_verify_t,
+            queue: DispatchQueue
+        ) {
+            self.verifyBlock = verifyBlock
+            self.queue = queue
+        }
+    }
+
     public static func grpcTLSConfiguration(
         hostnameOverride: String?,
         identityCallback: IdentityCallback?,
-        customRoot: SecCertificate?
+        customRoot: SecCertificate?,
+        serverVerification: ServerVerification? = nil
     ) -> GRPCTLSConfiguration {
+        assert(
+            customRoot == nil || serverVerification == nil,
+            "customRoot and serverVerification are mutually exclusive"
+        )
+
         let options = NWProtocolTLS.Options()
 
         if let identityCallback {
@@ -80,7 +105,15 @@ extension GRPCTLSConfiguration {
             )
         }
 
-        if let customRoot {
+        if let serverVerification {
+            Self.validatorLogger.info("Setting custom server verification block")
+            sec_protocol_options_set_peer_authentication_required(options.securityProtocolOptions, true)
+            sec_protocol_options_set_verify_block(
+                options.securityProtocolOptions,
+                serverVerification.verifyBlock,
+                serverVerification.queue
+            )
+        } else if let customRoot {
             Self.validatorLogger.warning("Setting custom root for service discovery")
 
             let validationQueue = DispatchQueue(label: "com.apple.cloudos.cloudboard.tlsValidationQueue")
@@ -179,28 +212,39 @@ public enum ClientTLSConfiguration: CustomStringConvertible, Sendable {
         // therefore opt out isolation checking.
         public nonisolated(unsafe) var customRoot: SecCertificate?
 
+        /// Caller-supplied server certificate verification (e.g., PolicyAPRN validation).
+        /// Takes precedence over `customRoot` when both are set.
+        public var serverVerification: GRPCTLSConfiguration.ServerVerification?
+
         public var description: String {
-            "SimpleTLSConfig(sniOverride: \(String(describing: self.sniOverride)))"
+            "SimpleTLSConfig(sniOverride: \(String(describing: self.sniOverride)), serverVerification: \(self.serverVerification != nil ? "set" : "nil"))"
         }
 
         public init(
             sniOverride: String? = nil,
             localIdentityCallback: GRPCTLSConfiguration.IdentityCallback? = nil,
-            customRoot: SecCertificate? = nil
+            customRoot: SecCertificate? = nil,
+            serverVerification: GRPCTLSConfiguration.ServerVerification? = nil
         ) {
             self.sniOverride = sniOverride
             self.localIdentityCallback = localIdentityCallback
             self.customRoot = customRoot
+            self.serverVerification = serverVerification
         }
     }
 
     public init(
         _ tlsConfig: TLSConfiguration?,
-        identityCallback: GRPCTLSConfiguration.IdentityCallback?
+        identityCallback: GRPCTLSConfiguration.IdentityCallback?,
+        serverVerification: GRPCTLSConfiguration.ServerVerification? = nil
     ) {
         if let tlsConfig, tlsConfig.enable {
             let usedIdentity = tlsConfig.enablemTLS ? identityCallback : nil
-            self = .simpleTLS(.init(sniOverride: tlsConfig.sniOverride, localIdentityCallback: usedIdentity))
+            self = .simpleTLS(.init(
+                sniOverride: tlsConfig.sniOverride,
+                localIdentityCallback: usedIdentity,
+                serverVerification: serverVerification
+            ))
         } else {
             self = .plaintext
         }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -31,7 +31,7 @@ protocol AttestationValidatorFactoryProtocol: Sendable {
     ///   - enableReleaseSetValidation: if true, the validator will enforce that the compute node attestation must run
     ///   a release that corresponds to the set of trusted releases associated with the provided proxyAttestationBundle
     func makeForProxyAttestation(
-        rawProxyAttestationBundle: Data,
+        rawProxyAttestationBundle: RawAttestationBundle,
         enableReleaseSetValidation: Bool
     ) async throws -> any AttestationValidatorProtocol
 }
@@ -48,12 +48,12 @@ protocol AttestationValidatorProtocol: Sendable {
     /// Parameters:
     ///   - rawAttestationBundle: serialized form of the worker's bundle
     func validate(
-        rawAttestationBundle: Data,
+        rawAttestationBundle: RawAttestationBundle,
     ) async throws -> ValidatedWorker
 
     // all purely for diagnostics
-    var rawProxyAttestationBundle: Data { get }
+    var rawProxyAttestationBundle: RawAttestationBundle { get }
     var proxiedReleaseDigests: [String] { get }
     var enableReleaseSetValidation: Bool { get }
-    func parseReleaseDigest(rawAttestationBundle: Data) throws -> String
+    func parseReleaseDigest(rawAttestationBundle: RawAttestationBundle) async throws -> String
 }

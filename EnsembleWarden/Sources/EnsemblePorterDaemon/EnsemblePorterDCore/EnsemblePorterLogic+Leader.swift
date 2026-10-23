@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -144,8 +144,7 @@ extension EnsemblePorterLogic {
                     request_id=\(PrismTracing.requestID, privacy: .public) \
                     span_id=\(PrismTracing.spanID, privacy: .public)
                     """)
-                self.metrics.incrementFollowerSend(success: true)
-                self.metrics.distributionAttemptsSuccess.increment()
+                self.metrics.recordDistributionAttempt(success: true)
                 PrismTracing.logCheckpoint(name: "Sent turn keys to all followers")
             }
             let distributionDuration = ContinuousClock.now - distributionStartTime
@@ -153,7 +152,7 @@ extension EnsemblePorterLogic {
         } catch {
             let distributionDuration = ContinuousClock.now - distributionStartTime
             self.metrics.distributionRequestDuration.set(Double(distributionDuration.components.seconds) + Double(distributionDuration.components.attoseconds) / 1e18)
-            self.metrics.incrementFollowerSend(success: false, error: .ensembledError)
+            self.metrics.recordDistributionAttempt(success: false)
             throw error
         }
     }
@@ -205,17 +204,27 @@ extension EnsemblePorterLogic {
                     $0.leaderPublicKey = peerInfo.intraEnsemblePublicKey.rawRepresentation
                 })
             }
+            PrismTracing.logCheckpoint(name: "Sending encrypted additionalCryptoPayload to peer")
+            let sendStart = ContinuousClock.now
             do {
-                PrismTracing.logCheckpoint(name: "Sending encrypted additionalCryptoPayload to peer")
                 _ = try await self.intraEnsembleTransponder.sendData(appID: EnsemblePorterConstants.ensembledAppID,
                                                                      data: perProcessMessage.serializedData(),
                                                                      destination: rank,
                                                                      timeout: 0.25)
-                PrismTracing.logCheckpoint(name: "Response received from peer")
+                let elapsed = ContinuousClock.now - sendStart
+                self.metrics.recordFollowerSend(
+                    rank: rank,
+                    success: true,
+                    durationSeconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
             } catch {
-                self.metrics.incrementFollowerSend(success: false, error: .ensembledError)
+                let elapsed = ContinuousClock.now - sendStart
+                self.metrics.recordFollowerSend(
+                    rank: rank,
+                    success: false,
+                    durationSeconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
                 throw error
             }
+            PrismTracing.logCheckpoint(name: "Response received from peer")
         }
     }
 
@@ -233,6 +242,7 @@ extension EnsemblePorterLogic {
         }
 
         self.followerTokensFetched.withLock { fetched in
+            // TODO: Should this throw?
             if fetched {
                 self.logger.warning("""
                     EnsembleFollowerPorter instance UUIDs have already been fetched. \
@@ -316,6 +326,7 @@ extension EnsemblePorterLogic {
             })
         }
 
+        let sendStart = ContinuousClock.now
         do {
             _ = try await self.intraEnsembleTransponder.sendData(
                 appID: EnsemblePorterConstants.ensembledAppID,
@@ -323,6 +334,11 @@ extension EnsemblePorterLogic {
                 destination: rank,
                 timeout: 1.0)
 
+            let elapsed = ContinuousClock.now - sendStart
+            self.metrics.recordFollowerSend(
+                rank: rank,
+                success: true,
+                durationSeconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
             self.logger.log("""
                 Shutdown request sent successfully to follower. \
                 rank=\(rank) \
@@ -330,6 +346,11 @@ extension EnsemblePorterLogic {
                 span_id=\(PrismTracing.spanID, privacy: .public)
                 """)
         } catch {
+            let elapsed = ContinuousClock.now - sendStart
+            self.metrics.recordFollowerSend(
+                rank: rank,
+                success: false,
+                durationSeconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
             self.logger.error("""
                 Failed to send shutdown request to follower. \
                 rank=\(rank) \
@@ -337,8 +358,8 @@ extension EnsemblePorterLogic {
                 request_id=\(PrismTracing.requestID, privacy: .public) \
                 span_id=\(PrismTracing.spanID, privacy: .public)
                 """)
-            self.metrics.incrementFollowerSend(success: false, error: .ensembledError)
             throw error
         }
     }
+
 }

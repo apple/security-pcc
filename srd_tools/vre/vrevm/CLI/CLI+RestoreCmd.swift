@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -47,6 +47,12 @@ extension CLI {
                 transform: { try validateFilePath($0) })
         var txm: String?
 
+        @Option(name: [.customLong("prkit")],
+                help: ArgumentHelp("Path to PRKit plist for restore options.",
+                                   visibility: .customerHidden),
+                transform: { try validateFilePath($0) })
+        var prkitPath: String?
+
         @Option(name: [.customLong("variant")],
                 help: "Specify OS restore image variant.",
                 transform: { try validateOSVariant($0) })
@@ -93,7 +99,8 @@ extension CLI {
                                                    restoreVariant: restoreVariantName!,
                                                    kernelcacheOverride: kernelCache,
                                                    sptmOverride: sptm,
-                                                   txmOverride: txm)
+                                                   txmOverride: txm,
+                                                   prkitPath: prkitPath)
             do {
                 try await vm.restore(restoreOptions)
             } catch {

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,6 +13,7 @@
 // 10/02/2024
 
 
+#if !os(Linux)
 import Clibproc
 import Foundation
 
@@ -45,6 +46,45 @@ final class LibprocProcessEnumerator: ProcessEnumeratorProvider {
             }
         }
         return processNodes
+    }
+
+    func enumerateLiveProcesses() -> [(pid: Int64, startTime: Double)]? {
+        let pidListSize = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
+        guard pidListSize > 0 else {
+            return nil
+        }
+
+        let pidCount = pidListSize / Int32(MemoryLayout<pid_t>.size)
+        var pids = [pid_t](repeating: 0, count: Int(pidCount))
+
+        let actualSize = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, pidListSize)
+        guard actualSize > 0 else {
+            return nil
+        }
+
+        let actualCount = Int(actualSize / Int32(MemoryLayout<pid_t>.size))
+        var result: [(pid: Int64, startTime: Double)] = []
+        result.reserveCapacity(actualCount)
+
+        var bsdInfo = proc_bsdinfo()
+        let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+
+        for i in 0..<actualCount {
+            let pid = pids[i]
+            if pid <= 0 {
+                continue
+            }
+
+            let infoSize = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsdInfo, expectedSize)
+            guard infoSize == expectedSize else {
+                continue
+            }
+
+            let startTime = Double(bsdInfo.pbi_start_tvsec) + Double(bsdInfo.pbi_start_tvusec) / 1_000_000.0
+            result.append((pid: Int64(pid), startTime: startTime))
+        }
+
+        return result
     }
 
     private static func getProcessInfo(for pid: pid_t) -> EventNormalizer.NormalizedProcess? {
@@ -96,7 +136,7 @@ final class LibprocProcessEnumerator: ProcessEnumeratorProvider {
             return ""
         }
 
-        return String(cCharArray: pathBuffer)
+        return String(cString: pathBuffer)
     }
 
     private static func getCurrentWorkingDirectory(for pid: pid_t) -> String {
@@ -123,36 +163,35 @@ final class LibprocProcessEnumerator: ProcessEnumeratorProvider {
         }
 
         var args: [String] = []
-        var offset = MemoryLayout<Int32>.size // Skip argc
+        var offset = MemoryLayout<Int32>.size
 
-        while offset < buffer.count && buffer[offset] != 0 {
+        while offset < size && buffer[offset] != 0 {
             offset += 1
         }
-        offset += 1 // Skip the null terminator
+        offset += 1
 
-        while offset < buffer.count && buffer[offset] == 0 {
+        while offset < size && buffer[offset] == 0 {
             offset += 1
         }
 
-        var currentArg = ""
-        while offset < buffer.count {
-            if buffer[offset] == 0 {
-                if !currentArg.isEmpty {
-                    args.append(currentArg)
-                    currentArg = ""
+        while offset < size {
+            let start = offset
+            while offset < size && buffer[offset] != 0 {
+                offset += 1
+            }
+            if offset > start {
+                let arg = buffer[start..<offset].withUnsafeBufferPointer { buf in
+                    String(bytes: buf, encoding: .utf8) ?? ""
                 }
-                if offset + 1 >= buffer.count || buffer[offset + 1] == 0 {
-                    break
+                if !arg.isEmpty {
+                    args.append(arg)
                 }
-            } else {
-                let scalar = UnicodeScalar(buffer[offset])
-                currentArg += String(Character(scalar))
             }
             offset += 1
-        }
 
-        if !currentArg.isEmpty {
-            args.append(currentArg)
+            if offset >= size || buffer[offset] == 0 {
+                break
+            }
         }
 
         return args
@@ -176,3 +215,4 @@ final class LibprocProcessEnumerator: ProcessEnumeratorProvider {
     }
 }
 
+#endif

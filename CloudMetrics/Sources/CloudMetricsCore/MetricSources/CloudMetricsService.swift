@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -27,16 +27,19 @@ internal import os
 // swiftlint:disable function_parameter_count
 internal final class CloudMetricsService: CloudMetricsServerProtocol, Sendable {
     private let metricsStoreProvider: MetricsStoreProvider
+    private let aggregateStoreProvider: AggregateStoreProvider?
     private let metricsFilter: MetricsFilter
     private static let debugMetricPrefixes: OSAllocatedUnfairLock<[String]?> = .init(initialState: nil)
     private let logger = Logger(subsystem: kCloudMetricsLoggingSubsystem, category: "CloudMetricsService")
 
     internal init(
         metricsStoreProvider: MetricsStoreProvider,
-        metricsFilter: MetricsFilter
+        metricsFilter: MetricsFilter,
+        aggregateStoreProvider: AggregateStoreProvider? = nil
     ) {
         self.metricsFilter = metricsFilter
         self.metricsStoreProvider = metricsStoreProvider
+        self.aggregateStoreProvider = aggregateStoreProvider
     }
 
     internal func setConfiguration(_ configuration: CloudMetricsConfigurationDictionary, client: MetricsClient) throws {
@@ -256,14 +259,35 @@ internal final class CloudMetricsService: CloudMetricsServerProtocol, Sendable {
             logger: self.logger
         )
 
-        try self.metricsStoreProvider[client].histogramSet(
-            label: histogram.label,
-            dimensions: histogram.dimensions,
-            step: 10,
-            buckets: buckets,
-            value: Double(value),
-            timestamp: Date(timeIntervalSince1970: epoch)
-        )
+        if let aggregateStore = aggregateStoreProvider,
+           metricsFilter.isAggregateOnNode(for: histogram.label, client: client.name) {
+            try aggregateStore.getStore(clientName: client.name, metricLabel: histogram.label)
+                .histogramSet(
+                    label: histogram.label,
+                    dimensions: histogram.dimensions,
+                    step: 10,
+                    buckets: buckets,
+                    value: value,
+                    timestamp: Date(timeIntervalSince1970: epoch)
+                )
+            if metricsFilter.laplaceNoiseInjection(for: histogram.label, client: client.name) != nil {
+                // Laplace noise path: track per-bucket counts for threshold checks at publish time
+                let bucketIndex = buckets.firstIndex(where: { value <= $0 }) ?? buckets.count
+                metricsFilter.incrementBucketCount(metricLabel: histogram.label, clientName: client.name, bucket: bucketIndex)
+            } else {
+                // Deterministic path: track total record count
+                metricsFilter.incrementRecordedCount(metricLabel: histogram.label, clientName: client.name)
+            }
+        } else {
+            try self.metricsStoreProvider[client].histogramSet(
+                label: histogram.label,
+                dimensions: histogram.dimensions,
+                step: 10,
+                buckets: buckets,
+                value: Double(value),
+                timestamp: Date(timeIntervalSince1970: epoch)
+            )
+        }
     }
 
     internal func recordBuckets(

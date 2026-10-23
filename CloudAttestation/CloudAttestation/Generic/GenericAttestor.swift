@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -93,7 +93,7 @@ extension GenericAttestor.AssetProvider {
         let certs: [Data] = try await withCheckedThrowingContinuation { continuation in
             MAEIssueDCRTAllPlatformsWithCompletion(dispatchQueue, dcrtIssueOptions) { certs, error in
                 if let error {
-                    GenericAttestor.logger.error("failed to issue DCRT: \(error)")
+                    GenericAttestor.logger.error("failed to issue DCRT: \(error, privacy: .public)")
                     continuation.resume(throwing: error)
                     return
                 }

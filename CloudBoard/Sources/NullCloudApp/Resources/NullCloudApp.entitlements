@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Apple Inc. All Rights Reserved. -->
+<!-- Copyright © 2026 Apple Inc. All Rights Reserved. -->
 
 <!-- APPLE INC. -->
 <!-- PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT -->
@@ -25,11 +25,19 @@
 	<key>com.apple.security.exception.mach-lookup.global-name</key>
 	<array>
 		<string>com.apple.acdc.cloudmetricsd</string>
+		<string>com.apple.cloudos.cb_bridged</string>
 	</array>
 	<key>com.apple.security.exception.shared-preference.read-only</key>
 	<array>
 		<string>com.apple.acdc.cloudmetricsd</string>
 		<string>com.apple.cloudos.CloudBoardNullApp</string>
 	</array>
+	<key>com.apple.private.cloudos.cb_bridged.outbound_request</key>
+	<array>
+		<string>AppleSigningService</string>
+        <string>CipCompanionService</string>
+	</array>
+    <key>com.apple.private.cloudos.cb_jobhelper.outbound-tool-invocation-request</key>
+    <true/>
 </dict>
 </plist>

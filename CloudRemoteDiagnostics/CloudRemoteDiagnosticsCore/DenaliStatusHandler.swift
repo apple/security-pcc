@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -49,7 +49,19 @@ extension CloudRemoteDiagnosticsHandler {
             return nil
         }
         let client = DenaliDiagnosticClient()
-        let proto = NetworkProtocol(from: networkProtocol)
+        let proto: NetworkProtocol
+        switch networkProtocol {
+        case "UDP":
+            proto = .UDP
+        case "TCP":
+            proto = .TCP
+        case "TCP6":
+            proto = .TCP6
+        case "UDP6":
+            proto = .UDP6
+        default:
+            proto = .TCP
+        }
         let requestParams = DiagnosticsRequestOptionsParam(sourceIPAddress: sourceIPAddress,
                                                            destinationIPAddress: destinationIPAddress,
                                                            networkProtocol: proto,
@@ -87,22 +99,3 @@ extension CloudRemoteDiagnosticsHandler {
         return fileManager.fileExists(atPath: path)
     }
 }
-
-#if canImport(DenaliSEDiagnostics)
-internal extension NetworkProtocol {
-    init(from: String) {
-        switch (from) {
-        case "UDP":
-            self = .UDP
-        case "TCP":
-            self = .TCP
-        case "TCP6":
-            self = .TCP6
-        case "UDP6":
-            self = .UDP6
-        default:
-            self = .TCP
-        }
-    }
-}
-#endif

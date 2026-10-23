@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -49,7 +49,9 @@ struct PCCVREHelper {
         guard let toolsDir = toolsDMGs.first?.mountPoint else {
             throw CLIError("Unable to obtain Tools dmg mountpoint")
         }
-        return Self(path: pathInToolsDir(toolsDir), toolsDMGs: toolsDMGs)
+        let path = pathInToolsDir(toolsDir)
+        try HelperCodeSign.verify(path)
+        return Self(path: path, toolsDMGs: toolsDMGs)
     }
 
     static func configuredOrInToolsDir(_ toolsDir: URL) -> Self {
@@ -79,7 +81,7 @@ struct PCCVREHelper {
     }
 
     func _supports(feature: Feature) throws -> Bool {
-        guard FileManager.default.isExecutableFile(atPath: path) else {
+        guard Globals.computer.fileSystem.isExecutableFile(atPath: path) else {
             throw CLIError("helper not found")
         }
 

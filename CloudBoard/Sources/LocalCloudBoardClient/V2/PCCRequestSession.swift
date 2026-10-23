@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -64,7 +64,7 @@ extension PCCHarness {
                 while let pccResponseMessage = try await self.base.next() {
                     switch pccResponseMessage {
                     case .requestExecutionLogEntry, .responseID, .responseSummary, .payloadChunk,
-                         .subresponseOpen, .subresponseClose, .unknown:
+                         .subresponseOpen, .subresponseClose, .componentTimeMeasurement, .costToken, .unknown:
                         // Ignore
                         continue
                     case .payload(let payload):

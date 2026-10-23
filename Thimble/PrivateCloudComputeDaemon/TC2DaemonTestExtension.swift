@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,19 +24,26 @@ import Foundation_Private.NSXPCConnection
 import PrivateCloudCompute
 import os.log
 
+private let logger = Logger(for: .daemon)
+
 extension TC2Daemon {
     func prefetchCache() async -> [String] {
-        guard let attestationStore = self.attestationStore else {
-            logger.log("attestation store unavailable")
-            return []
-        }
-
         var ret: [String] = []
-        let attestations = await attestationStore.getAllNodesAndAttestations()
-        for (nodeID, attestation) in attestations {
-            ret.append(
-                "\(nodeID)    publicKey: \(String(describing: attestation.publicKey))\n    attestationExpiry: \(String(describing: attestation.attestationExpiry))\n    cloudOSVersion: \(attestation.attestation.cloudOSVersion),    cloudOSReleaseType: \(attestation.attestation.cloudOSReleaseType), unvalidatedCellID: \(String(describing: attestation.attestation.unvalidatedCellID)),\n    validatedCellID: \(String(describing: attestation.validatedCellID)),\n    ensembleID: \(String(describing: attestation.attestation.ensembleID))"
-            )
+        switch self.attestationStoreOrLegacyStore {
+        case .attestationStore(let attestationStore):
+            let attestations = await attestationStore.getAllAvailableNodes()
+            for attestation in attestations {
+                ret.append(
+                    "\(attestation.attestation.nodeID)    publicKey: \(String(describing: attestation.publicKey))\n    attestationExpiry: \(String(describing: attestation.attestationExpiry))\n    cloudOSVersion: \(attestation.attestation.cloudOSVersion),    cloudOSReleaseType: \(attestation.attestation.cloudOSReleaseType), unvalidatedCellID: \(String(describing: attestation.attestation.unvalidatedCellID)),\n    validatedCellID: \(String(describing: attestation.validatedCellID)),\n    ensembleID: \(String(describing: attestation.attestation.ensembleID))"
+                )
+            }
+        case .legacyStore(let legacyAttestationStore):
+            let attestations = await legacyAttestationStore.getAllNodesAndAttestations()
+            for (nodeID, attestation) in attestations {
+                ret.append(
+                    "\(nodeID)    publicKey: \(String(describing: attestation.publicKey))\n    attestationExpiry: \(String(describing: attestation.attestationExpiry))\n    cloudOSVersion: \(attestation.attestation.cloudOSVersion),    cloudOSReleaseType: \(attestation.attestation.cloudOSReleaseType), unvalidatedCellID: \(String(describing: attestation.attestation.unvalidatedCellID)),\n    validatedCellID: \(String(describing: attestation.validatedCellID)),\n    ensembleID: \(String(describing: attestation.attestation.ensembleID))"
+                )
+            }
         }
         return ret
     }
@@ -69,15 +76,17 @@ extension TC2Daemon {
     }
 
     func prefetchCacheReset() async -> Bool {
-        guard let attestationStore = self.attestationStore else {
-            logger.log("attestation store unavailable")
-            return false
+        switch self.attestationStoreOrLegacyStore {
+        case .attestationStore(let attestationStore):
+            do {
+                try await attestationStore.deleteAllAttestationStoreEntries()
+            } catch {
+                logger.error("Failed to reset V3 attestation store: \(error)")
+            }
+            return true
+        case .legacyStore(let legacyAttestationStore):
+            await legacyAttestationStore.deleteAllAttestationStoreEntries()
+            return true
         }
-        await attestationStore.deleteAllAttestationStoreEntries()
-
-        // Clear out the prefetch lru cache as well
-        self.prefetchActivity.parametersCache.deleteSavedState()
-
-        return true
     }
 }

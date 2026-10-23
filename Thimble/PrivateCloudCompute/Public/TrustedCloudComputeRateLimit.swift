@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -63,12 +63,28 @@ public struct TrustedCloudComputeRateLimit: Sendable, Codable, Hashable {
     /// be permitted, otherwise it will be denied.
     public var loggedCountSoFar: UInt
 
+    /// When the rate limit is active (`loggedCountSoFar >= count`), this is the date
+    /// at which the earliest request in the current window will fall off, and a new
+    /// request may be permitted. When the rate limit is not active, this is `nil`.
+    public var loggedCountRollDate: Date?
+
     /// The expiration of device-local knowledge of this limit. Note: this does not
     /// necessarily describe anything about how long the limit will actually be valid.
     /// Rather it describes how long the device may cache knowledge of the limit.
     public var ttlExpiration: Date
 
-    package init(bundleIdentifier: String? = nil, featureIdentifier: String? = nil, workloadType: String? = nil, workloadParameters: [WorkloadParameter], count: UInt, duration: TimeInterval, jitter: Double, ttlExpiration: Date, loggedCountSoFar: UInt) {
+    package init(
+        bundleIdentifier: String? = nil,
+        featureIdentifier: String? = nil,
+        workloadType: String? = nil,
+        workloadParameters: [WorkloadParameter],
+        count: UInt,
+        duration: TimeInterval,
+        jitter: Double,
+        ttlExpiration: Date,
+        loggedCountSoFar: UInt,
+        loggedCountRollDate: Date? = nil
+    ) {
         self.bundleIdentifier = bundleIdentifier
         self.featureIdentifier = featureIdentifier
         self.workloadType = workloadType
@@ -77,6 +93,7 @@ public struct TrustedCloudComputeRateLimit: Sendable, Codable, Hashable {
         self.duration = duration
         self.ttlExpiration = ttlExpiration
         self.loggedCountSoFar = loggedCountSoFar
+        self.loggedCountRollDate = loggedCountRollDate
     }
 }
 

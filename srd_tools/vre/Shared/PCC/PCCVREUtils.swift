@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -30,12 +30,7 @@ struct PCCVREError: Error, CustomStringConvertible {
 
 extension Main {
     private static func getSysctlByName(_ name: String) throws -> Int {
-        var val: Int64 = 0
-        var sizeOfVal = MemoryLayout<Int64>.size
-        guard sysctlbyname(name, &val, &sizeOfVal, nil, 0) == 0 else {
-            throw PCCVREError("Failed to call sysctl(\(name)) - errno \(errno)")
-        }
-        return Int(val)
+        try Globals.computer.sysctlValue(name)
     }
 
     private static func validateOSVersionRequirementForVRE() throws {

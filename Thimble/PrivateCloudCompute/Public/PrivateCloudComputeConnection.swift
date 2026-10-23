@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,12 +19,13 @@
 //  Copyright © 2025 Apple Inc. All rights reserved.
 //
 
+internal import AsyncAlgorithmsInternal
 private import AtomicsInternal
 @_spi(NWConnection) import Network
 import OSLog
 import Synchronization
 
-private let logger = tc2Logger(forCategory: .connection)
+private let logger = Logger(for: .connection)
 
 /// Describes a proxy used by `PrivateCloudComputeConnection.Request.Writer`
 /// and `PrivateCloudComputeConnection.Request.Response`.
@@ -39,7 +40,7 @@ public final class PrivateCloudComputeConnection: Sendable {
     public struct Configuration: Sendable {
         /// The connections's ID. Note this should not be sent to the server. It is the local
         /// identity for the connection (i.e., the caller's notion).
-        public var id: UUID
+        public var id: UUID = UUID()
 
         public var workloadType: String
         public var workloadParameters: [String: String]?
@@ -50,28 +51,37 @@ public final class PrivateCloudComputeConnection: Sendable {
         /// Optional bundle identifier that specifies which app contained the interaction that led to the inference request, which is potentially different from the bundleIdentifier.
         public var originatingBundleIdentifier: String?
 
+        /// Optional process identifier to resolve for bundle identifier attribution. Can only be passed if you have an entitlement.
+        public var onBehalfOfPID: Int32?
+
+        /// Optional process identifier to resolve for the parent bundle identifier. Specifies which app contained the interaction that led to the inference request.
+        public var parentOfOnBehalfOfPID: Int32?
+
+        /// Optional audit token of the caller on whose behalf this request is being made.
+        public var overrideAuditToken: audit_token_t?
+
         /// Optional feature identifier used for rate limiting and analytics.
         public var featureIdentifier: String?
 
         /// Optional session identifier used for rate limiting and analytics.
         public var sessionIdentifier: UUID?
 
+        /// Quality of Service.
+        /// If not set, the value is derived from the `Task.currentPriority`.
+        public var qos: QoS?
+
+        /// The network service class for the connection.
+        /// If not set, the default service class (best effort) is used.
+        public var serviceClass: NWParameters.ServiceClass?
+
         public init(
-            id: UUID,
             workloadType: String,
-            workloadParameters: [String: String]? = nil,
-            bundleIdentifier: String? = nil,
-            originatingBundleIdentifier: String? = nil,
-            featureIdentifier: String? = nil,
-            sessionIdentifier: UUID? = nil
+            workloadParameters: [String: String],
+            featureIdentifier: String,
         ) {
-            self.id = id
             self.workloadType = workloadType
             self.workloadParameters = workloadParameters
-            self.bundleIdentifier = bundleIdentifier
-            self.originatingBundleIdentifier = originatingBundleIdentifier
             self.featureIdentifier = featureIdentifier
-            self.sessionIdentifier = sessionIdentifier
         }
     }
 
@@ -80,12 +90,13 @@ public final class PrivateCloudComputeConnection: Sendable {
         public struct Writer: Sendable {
             private let logPrefix: String
             private let proxy: any PrivateCloudComputeConnectionSubrequestProxy
-            private let isChunkingEnabled: Bool
+            /// The chunk size to use. `nil` means chunking is disabled.
+            private let chunkSize: Int?
 
-            init(logPrefix: String, proxy: any PrivateCloudComputeConnectionSubrequestProxy, isChunkingEnabled: Bool) {
+            init(logPrefix: String, proxy: any PrivateCloudComputeConnectionSubrequestProxy, chunkSize: Int?) {
                 self.logPrefix = logPrefix
                 self.proxy = proxy
-                self.isChunkingEnabled = isChunkingEnabled
+                self.chunkSize = chunkSize
             }
 
             /// Writes the contents of the sequence to the request.
@@ -106,22 +117,7 @@ public final class PrivateCloudComputeConnection: Sendable {
             /// - Parameter data: The data to write to the request.
             @concurrent public func write(data: Data) async throws {
                 try await logger.logLifetime("write", logPrefix: self.logPrefix) {
-                    try await withTaskCancellationHandler {
-                        if self.isChunkingEnabled {
-                            // Chunk the data and send each chunk
-                            let chunker = try DataChunker(data: data)
-                            for chunk in chunker {
-                                try await self.proxy.send(data: chunk)
-                            }
-                        } else {
-                            // No chunking: use legacy behavior
-                            try await self.proxy.send(data: data)
-                        }
-                        try await self.proxy.finishSending()
-                    } onCancel: {
-                        logger.error("\(self.logPrefix) write cancelling proxy")
-                        self.proxy.cancel()
-                    }
+                    try await self.write(contentsOf: [data].async)
                 }
             }
 
@@ -132,31 +128,11 @@ public final class PrivateCloudComputeConnection: Sendable {
             /// - Parameter contentsOf: The asynchronous sequence of data to write to the request.
             @concurrent public func write<AS: AsyncSequence>(contentsOf sequence: AS) async throws where AS.Element == Data {
                 try await logger.logLifetime("write(contentsOf:)", logPrefix: self.logPrefix) {
-                    var it = sequence.makeAsyncIterator()
-
-                    // if the provided AsyncSequence throws, we cancel. We will
-                    // step through the iterator by hand because if the send throws,
-                    // we do not want to cancel.
-                    func nextWithCancel(_ it: inout AS.AsyncIterator) async throws -> Data? {
-                        do {
-                            return try await it.next()
-                        } catch {
-                            logger.error("\(self.logPrefix) write(contentsOf:) cancelling proxy due to iterator throw")
-                            self.proxy.cancel()
-                            throw error
-                        }
-                    }
+                    let pipeline = self.buildPipeline(sequence)
 
                     try await withTaskCancellationHandler {
-                        while let element = try await nextWithCancel(&it) {
-                            if self.isChunkingEnabled {
-                                let chunker = try DataChunker(data: element)
-                                for chunk in chunker {
-                                    try await self.proxy.send(data: chunk)
-                                }
-                            } else {
-                                try await self.proxy.send(data: element)
-                            }
+                        for try await chunk in pipeline {
+                            try await self.proxy.send(data: chunk)
                         }
                         try await self.proxy.finishSending()
                     } onCancel: {
@@ -165,19 +141,36 @@ public final class PrivateCloudComputeConnection: Sendable {
                     }
                 }
             }
+
+            private func buildPipeline<S: AsyncSequence>(
+                _ sequence: S
+            ) -> any AsyncSequence<Data, any Error> where S.Element == Data {
+                var pipeline: any AsyncSequence<Data, any Error> =
+                    sequence
+                    .mapError { [logPrefix = self.logPrefix, proxy = self.proxy] error in
+                        logger.error("\(logPrefix) write(contentsOf:) cancelling proxy due to iterator throw")
+                        proxy.cancel()
+                        return error
+                    }
+                if let chunkSize = self.chunkSize {
+                    pipeline = pipeline.chunked(chunkSize: chunkSize)
+                }
+                return pipeline
+            }
         }
 
         /// A struct representing the returned data for a subrequest.
         public struct Response: AsyncSequence {
             private let logPrefix: String
             private let proxy: any PrivateCloudComputeConnectionSubrequestProxy
-            private let isChunkingEnabled: Bool
+            /// The chunk size to use. `nil` means chunking is disabled.
+            private let chunkSize: Int?
             private let madeAsyncIteratorAtomic = ManagedAtomic(false)
 
-            init(logPrefix: String, proxy: any PrivateCloudComputeConnectionSubrequestProxy, isChunkingEnabled: Bool) {
+            init(logPrefix: String, proxy: any PrivateCloudComputeConnectionSubrequestProxy, chunkSize: Int?) {
                 self.logPrefix = logPrefix
                 self.proxy = proxy
-                self.isChunkingEnabled = isChunkingEnabled
+                self.chunkSize = chunkSize
             }
 
             public func makeAsyncIterator() -> AsyncIterator {
@@ -192,24 +185,24 @@ public final class PrivateCloudComputeConnection: Sendable {
                         """
                     )
                 }
-                return AsyncIterator(logPrefix: self.logPrefix, proxy: self.proxy, isChunkingEnabled: self.isChunkingEnabled)
+                return AsyncIterator(logPrefix: self.logPrefix, proxy: self.proxy, chunking: self.chunkSize != nil)
             }
 
             public struct AsyncIterator: AsyncIteratorProtocol {
                 private let logPrefix: String
                 private let proxy: any PrivateCloudComputeConnectionSubrequestProxy
                 private let concurrentNextCallsAtomic = ManagedAtomic(false)
-                private var assemblerIterator: DataAssembler<AsyncSequenceFromClosure<Data>>.AsyncIterator?
+                private var assemblerIterator: DataAssembler<AsyncThrowingStream<Data, any Error>>.AsyncIterator?
 
-                fileprivate init(logPrefix: String, proxy: any PrivateCloudComputeConnectionSubrequestProxy, isChunkingEnabled: Bool) {
+                fileprivate init(logPrefix: String, proxy: any PrivateCloudComputeConnectionSubrequestProxy, chunking: Bool) {
                     self.logPrefix = logPrefix
                     self.proxy = proxy
 
-                    if isChunkingEnabled {
-                        let proxyStream = AsyncSequenceFromClosure { [proxy] in
+                    if chunking {
+                        let proxyStream = AsyncThrowingStream { [proxy] in
                             try await proxy.next()
                         }
-                        let assembler = DataAssembler(proxyStream)
+                        let assembler = proxyStream.assembledChunkedPayloadData()
                         self.assemblerIterator = assembler.makeAsyncIterator()
                     } else {
                         self.assemblerIterator = nil
@@ -234,7 +227,7 @@ public final class PrivateCloudComputeConnection: Sendable {
                         }
                         return try await withTaskCancellationHandler {
                             if self.assemblerIterator != nil {
-                                return try await self.assemblerIterator?.next()
+                                return try await self.assemblerIterator?.next(isolation: #isolation)
                             }
                             return try await self.proxy.next()
                         } onCancel: { [logPrefix, proxy] in
@@ -343,25 +336,27 @@ public final class PrivateCloudComputeConnection: Sendable {
         }
     }
 
-    static func run(
+    nonisolated(nonsending) static func run(
         configuration: Configuration,
         xpcProxy: any XPCRequestProxyProtocol,
-        logPrefix: String,
         featureFlagChecker: any FeatureFlagCheckerProtocol,
+        logPrefix: String,
+        chunkSize: Int?,
         subrequestIdGenerator: @escaping @Sendable () -> UInt64 = randomSubrequestId,
         closure: (PrivateCloudComputeConnection) async throws -> Void
     ) async throws {
         let demultiplexer = ResponseDemultiplexer(
             logPrefix: logPrefix,
-            logger: logger,
-            producer: xpcProxy
+            producer: xpcProxy,
+            featureFlagChecker: featureFlagChecker
         )
         let connection = PrivateCloudComputeConnection(
             logPrefix: logPrefix,
             configuration: configuration,
             xpcProxy: xpcProxy,
-            responseDemultiplexer: demultiplexer,
             featureFlagChecker: featureFlagChecker,
+            responseDemultiplexer: demultiplexer,
+            chunkSize: chunkSize,
             subrequestIdGenerator: subrequestIdGenerator
         )
 
@@ -389,24 +384,27 @@ public final class PrivateCloudComputeConnection: Sendable {
 
     private let configuration: Configuration
     private let xpcProxy: any XPCRequestProxyProtocol
+    private let featureFlagChecker: any FeatureFlagCheckerProtocol
     private let responseDemultiplexer: ResponseDemultiplexer
     private let logPrefix: String
-    private let featureFlagChecker: any FeatureFlagCheckerProtocol
+    private let chunkSize: Int?
     private let subrequestIdGenerator: @Sendable () -> UInt64
 
     private init(
         logPrefix: String,
         configuration: Configuration,
         xpcProxy: any XPCRequestProxyProtocol,
-        responseDemultiplexer: ResponseDemultiplexer,
         featureFlagChecker: any FeatureFlagCheckerProtocol,
+        responseDemultiplexer: ResponseDemultiplexer,
+        chunkSize: Int?,
         subrequestIdGenerator: @escaping @Sendable () -> UInt64
     ) {
         self.configuration = configuration
         self.xpcProxy = xpcProxy
+        self.featureFlagChecker = featureFlagChecker
         self.logPrefix = logPrefix
         self.responseDemultiplexer = responseDemultiplexer
-        self.featureFlagChecker = featureFlagChecker
+        self.chunkSize = chunkSize
         self.subrequestIdGenerator = subrequestIdGenerator
     }
 
@@ -463,20 +461,14 @@ public final class PrivateCloudComputeConnection: Sendable {
         let subrequestLogPrefix = "\(self.logPrefix) <\(requestId)>"
         return try await logger.logLifetime("withRequest", logPrefix: subrequestLogPrefix) {
             let subrequestProxy = try await self.makeSubrequest(request: request, requestId: requestId, logPrefix: subrequestLogPrefix)
+            defer { await subrequestProxy.close() }
 
-            let isChunkingEnabled = self.featureFlagChecker.isEnabled(.applicationDataChunking)
-            let writer = Request.Writer(logPrefix: subrequestLogPrefix, proxy: subrequestProxy, isChunkingEnabled: isChunkingEnabled)
-            let response = Request.Response(logPrefix: subrequestLogPrefix, proxy: subrequestProxy, isChunkingEnabled: isChunkingEnabled)
+            let writer = Request.Writer(logPrefix: subrequestLogPrefix, proxy: subrequestProxy, chunkSize: self.chunkSize)
+            let response = Request.Response(logPrefix: subrequestLogPrefix, proxy: subrequestProxy, chunkSize: self.chunkSize)
 
-            let bodyResult = await Result {
-                return try await logger.logLifetime("withRequest body", logPrefix: self.logPrefix) {
-                    try await body(writer, response)
-                }
+            return try await logger.logLifetime("withRequest body", logPrefix: self.logPrefix) {
+                try await body(writer, response)
             }
-
-            await subrequestProxy.close()
-
-            return try bodyResult.get()
         }
     }
 
@@ -491,16 +483,6 @@ public final class PrivateCloudComputeConnection: Sendable {
         )
         try await subrequestProxy.open()
         return subrequestProxy
-    }
-}
-
-extension Result {
-    init(asyncCatching: @concurrent () async throws(Failure) -> Success) async {
-        do {
-            self = try await .success(asyncCatching())
-        } catch {
-            self = .failure(error)
-        }
     }
 }
 

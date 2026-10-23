@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,14 +17,15 @@
 //  DarwinInit
 //
 
+import DarwinInitConfig
 import Foundation
 
 struct DInitCryptexConfig {
     var url: URL
     var variant: String?
     var size: Int?
-    var sha256: DInitSHA256Digest?
-    var auth: DInitAuthorizationService?
+    var sha256: Sha256?
+    var auth: Config.Cryptex.Cryptex.SigningEnvironment?
     var dawToken: CredentialString?
     var oidcToken: CredentialString?
     var wgUsername: String?

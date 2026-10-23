@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -30,14 +30,15 @@ import PrivateCloudCompute
 import Synchronization
 import os
 
-private let logger = tc2Logger(forCategory: .trustedRequest)
+private let logger = Logger(for: .trustedRequest)
 
 final class RequestMetrics<
     Clock: _Concurrency.Clock,
+    LegacyAttestationStore: LegacyAttestationStoreProtocol,
     AttestationStore: AttestationStoreProtocol,
     SystemInfo: SystemInfoProtocol,
     BiomeReporter: BiomeReporterProtocol
->: TrustedRequestXPCEventsObserver, Sendable where Clock.Duration == Duration {
+>: Sendable where Clock.Duration == Duration {
     struct State: Sendable {
         let environment: String
         let logPrefix: String
@@ -73,7 +74,7 @@ final class RequestMetrics<
 
         enum DataStreamState: Sendable, CustomStringConvertible {
             case initialized
-            case authTokenSent
+            case openRequestPayloadSent
             case awaitingForReadyForMoreChunks(bytesSent: Int)
             case readyForMoreChunks(bytesSent: Int)
             case finished(bytesSent: Int)
@@ -83,8 +84,8 @@ final class RequestMetrics<
                 switch self {
                 case .initialized:
                     return "Initialized"
-                case .authTokenSent:
-                    return "AuthTokenSent"
+                case .openRequestPayloadSent:
+                    return "OpenRequestPayloadSent"
                 case .awaitingForReadyForMoreChunks(let bytesSent):
                     return "Connected (remaining budget: \(TrustedRequestConstants.maxDataToSendBeforeReadyForMoreChunksReceived - bytesSent))"
                 case .readyForMoreChunks:
@@ -144,7 +145,63 @@ final class RequestMetrics<
             case failed(any Error, Duration)
         }
 
-        enum AuthTokenSendState: Sendable {
+        enum WaitlistTokenFetchState: Sendable {
+            /// Means it's expected to be fetched, but hasn't been fetched yet.
+            case notStarted
+            /// Means token fetch failed. Doesn't mean it was sent to ROPES.
+            case succeeded(Duration)
+            /// Means we weren't able to fetch the token.
+            case failed(any Error, Duration)
+        }
+
+        enum ReputationTokenFetchState: Sendable {
+            /// Means it's expected to be fetched, but hasn't been fetched yet.
+            case notStarted
+            /// Means token fetch succeeded. Doesn't mean it was sent to ROPES.
+            case succeeded(Duration)
+            /// Means we weren't able to fetch the token.
+            case failed(any Error, Duration)
+        }
+
+        enum ReputationRefundState: Sendable {
+            case notStarted
+
+            case skippedDueToTokenFetchFailure
+
+            case tokenRequestGenerationFailed(any Error)
+            case tokenRequestGenerated
+
+            case tokenRequestSendFailed(any Error)
+            case tokenRequestSent
+
+            case tokenResponseSaveFailed(any Error)
+            /// We generated and sent token request, then we received token response and successfully saved it.
+            case succeeded
+
+            var telemetryString: EventValue {
+                switch self {
+                case .notStarted:
+                    "notStarted"
+                case .skippedDueToTokenFetchFailure:
+                    "skippedDueToTokenFetchFailure"
+                case .tokenRequestGenerationFailed:
+                    "tokenRequestGenerationFailed"
+                case .tokenRequestGenerated:
+                    "tokenRequestGenerated"
+                case .tokenRequestSendFailed:
+                    "tokenRequestSendFailed"
+                case .tokenRequestSent:
+                    "tokenRequestSent"
+                case .tokenResponseSaveFailed:
+                    "tokenResponseSaveFailed"
+                case .succeeded:
+                    "succeeded"
+                }
+            }
+        }
+
+        /// Reflects the state of sending of the very first message on the data stream which is always "OpenRequestPayload".
+        enum OpenRequestPayloadSendState: Sendable {
             case notStarted
             case succeeded(Duration)
             case failed(any Error, Duration)
@@ -159,13 +216,6 @@ final class RequestMetrics<
             case notSend
             case succeeded(Duration)
             case failed(any Error, Duration)
-        }
-
-        /// Auth token fetch state for subrequests (times relative to subrequest timebase)
-        enum SubrequestAuthTokenFetchState: Sendable {
-            case notStarted
-            case succeeded(startTime: Duration, finishTime: Duration)
-            case failed(startTime: Duration, finishTime: Duration, error: any Error)
         }
 
         enum KDataSendState: Sendable {
@@ -281,7 +331,6 @@ final class RequestMetrics<
             let durationFromStartUntilTimebase: Duration
 
             var priority: PrivateCloudComputeConnection.Request.Priority?
-            var authTokenFetchState: SubrequestAuthTokenFetchState = .notStarted
 
             // Outgoing message timings (relative to timebase)
             var durationFromTimebaseUntilOpenEnqueued: Duration?
@@ -384,10 +433,20 @@ final class RequestMetrics<
         var dataStreamState: DataStreamState = .initialized
         var responseState: ResponseState = .initialized
         var authTokenFetchState: AuthTokenFetchState = .notStarted
-        var authTokenSendState: AuthTokenSendState = .notStarted
+        /// Absence means it's not necessary, e.g. the feature is disabled via server config.
+        var waitlistTokenFetchState: WaitlistTokenFetchState?
+        /// Absence means it's not necessary for the given request.
+        var reputationTokenFetchState: ReputationTokenFetchState?
+
+        /// Absence means it's not necessary for the given request.
+        var reputationRefundState: ReputationRefundState?
+        var openRequestPayloadSendState: OpenRequestPayloadSendState = .notStarted
         var firstChunkSentState: FirstChunkSentState = .notSend
         var attestationsReceivedState: AttestationsReceivedState = .noAttestationReceived
         var kDataSendState: KDataSendState = .notSend
+
+        var inlineAttestationToConnectionInterval: OSSignpostIntervalState? = nil
+        var cachedAttestationToConnectionInterval: OSSignpostIntervalState? = nil
 
         var durationFromStartUntilReadyForMoreChunks: Duration? = nil
         var durationFromStartUntilLastPayloadChunkSent: Duration? = nil
@@ -403,6 +462,7 @@ final class RequestMetrics<
         var nodes: [String: NodeMetadata] = [:]
         var proxiedNodes: [ProxiedNodeMetadata] = []
         var executionAssets: [AssetMetadata] = []
+        var outboundCalls: [OutboundCallContext] = []
         /// Accumulates information about all subrequests in this TrustedRequest; queued until requestFinished
         var subrequests: [SpanID: SubrequestState] = [:]
         var cancellationReason: TrustedRequestCancellationReason?
@@ -416,16 +476,16 @@ final class RequestMetrics<
     private let serverRequestID: UUID
     private let startDate: Date
     private let startInstant: Clock.Instant
-    private let bundleID: String
-    private let originatingBundleID: String?
+    private let bundleID: BundleIdentifier
+    private let originatingBundleID: BundleIdentifier?
     private let featureID: String?
     private let sessionID: UUID?
     private let environment: String
     private let qos: ServerQoS
+    private let serviceClass: NWParameters.ServiceClass?
     private let parameters: Workload
 
     private let systemInfo: SystemInfo
-    private let locale: Locale
 
     private let logPrefix: String
     private let eventStreamContinuation: AsyncStream<ThimbledEvent>.Continuation
@@ -433,28 +493,31 @@ final class RequestMetrics<
     private let signposter: OSSignposter
     private let signpostID: OSSignpostID
     private let fullRequestInterval: OSSignpostIntervalState
+    private let inlineSignposter: OSSignposter
+    private let inlineSignpostID: OSSignpostID
 
     /// this is the requestID that will be used for Cloud Telemetry reporting
     /// In PROD, it needs to be different than requestID for privacy concerns
     let requestIDForEventReporting: UUID
-    private let attestationStore: AttestationStore?
+    private let attestationStoreOrLegacyStore: AttestationStoreOrLegacyStore<LegacyAttestationStore, AttestationStore>
     private let biomeReporter: BiomeReporter
     private let encoder = tc2JSONEncoder()
 
     init(
         clientRequestID: UUID,
         serverRequestID: UUID,
-        bundleID: String,
-        originatingBundleID: String?,
+        bundleID: BundleIdentifier,
+        originatingBundleID: BundleIdentifier?,
         featureID: String?,
         sessionID: UUID?,
         environment: String,
         qos: ServerQoS,
+        serviceClass: NWParameters.ServiceClass?,
         parameters: Workload,
         eventStreamContinuation: AsyncStream<ThimbledEvent>.Continuation,
         clock: Clock,
         startDate: Date = .now,
-        store: AttestationStore?,
+        attestationStoreOrLegacyStore: AttestationStoreOrLegacyStore<LegacyAttestationStore, AttestationStore>,
         systemInfo: SystemInfo,
         biomeReporter: BiomeReporter
     ) {
@@ -470,16 +533,22 @@ final class RequestMetrics<
         self.sessionID = sessionID
         self.environment = environment
         self.qos = qos
+        self.serviceClass = serviceClass
         self.parameters = parameters
 
         self.systemInfo = systemInfo
-        self.locale = Locale.current
 
         self.logPrefix = "\(serverRequestID):"
         self.eventStreamContinuation = eventStreamContinuation
         self.signposter = OSSignposter(logger: logger)
         self.signpostID = self.signposter.makeSignpostID()
         self.fullRequestInterval = self.signposter.beginInterval("FullTrustedRequest", id: self.signpostID)
+        self.inlineSignposter = OSSignposter(
+            logger: attestationStoreOrLegacyStore.isLegacy
+                ? Logger(for: .legacyAttestationStore)
+                : Logger(for: .attestationStore)
+        )
+        self.inlineSignpostID = self.inlineSignposter.makeSignpostID()
 
         if self.environment == TC2Environment.production.name {
             self.requestIDForEventReporting = UUID()
@@ -488,7 +557,7 @@ final class RequestMetrics<
             self.requestIDForEventReporting = self.serverRequestID
         }
 
-        self.attestationStore = store
+        self.attestationStoreOrLegacyStore = attestationStoreOrLegacyStore
         self.biomeReporter = biomeReporter
 
         self.state = Mutex(State(environment: environment, logPrefix: self.logPrefix))
@@ -547,10 +616,11 @@ final class RequestMetrics<
             serverRequestID: self.serverRequestID,
             environment: self.environment,
             creationDate: self.startDate,
-            bundleIdentifier: self.bundleID,
+            bundleIdentifier: self.bundleID.rawValue,
             featureIdentifier: self.featureID,
             sessionIdentifier: self.sessionID,
             qos: self.qos.rawValue,
+            serviceClass: self.serviceClass.map { String(describing: $0) },
             workloadName: self.parameters.type,
             workloadParameters: self.parameters.parameters,
             state: "\(state.ropesRequestState)",
@@ -559,6 +629,7 @@ final class RequestMetrics<
             responseState: "\(state.responseState)",
             responseCode: state.responseCode,
             ropesVersion: state.ropesVersion,
+            cancellationReason: state.cancellationReason.map { "\($0)" },
             endpoints: endpoints
         )
     }
@@ -568,13 +639,14 @@ final class RequestMetrics<
 
         return TrustedRequestMetric(
             eventTime: .now,
-            bundleID: self.bundleID,
+            bundleID: self.bundleID.redactedValue,
             environment: self.environment,
             systemInfo: self.systemInfo,
             featureID: self.featureID,
-            originatingBundleID: self.originatingBundleID,
-            locale: self.locale,
+            // originatingBundleID uses rawValue because it is redacted server-side
+            originatingBundleID: self.originatingBundleID?.rawValue,
             clientRequestId: self.requestIDForEventReporting,
+            qos: self.qos,
             requestMetricsState: stateCopy
         )
     }
@@ -718,19 +790,18 @@ final class RequestMetrics<
 
         let invokeResponseMetric = InvokeResponseMetric(
             eventTime: .now,
-            bundleID: self.bundleID,
+            bundleID: self.bundleID.redactedValue,
             clientRequestId: self.requestIDForEventReporting,
             environment: self.environment,
             systemInfo: self.systemInfo,
             featureID: featureID,
-            locale: self.locale,
             error: error
         )
 
         self.eventStreamContinuation.yield(.exportMetric(invokeResponseMetric))
     }
 
-    func requestFinished(error: PrivateCloudComputeError?) async {
+    func requestFinished(error: PrivateCloudComputeError?) {
         let durationFromStartUntilNow = self.startInstant.duration(to: self.clock.now)
 
         self.state.withLock { state in
@@ -757,12 +828,10 @@ final class RequestMetrics<
             state.subrequests.values.map { subrequestState in
                 return SubrequestMetric(
                     eventTime: subrequestState.eventTime(connectionStartTime: self.startDate) ?? self.startDate,
-                    bundleID: self.bundleID,
+                    bundleID: self.bundleID.redactedValue,
                     environment: self.environment,
                     systemInfo: self.systemInfo,
                     featureID: self.featureID,
-                    originatingBundleID: self.originatingBundleID,
-                    locale: self.locale,
                     clientRequestId: self.requestIDForEventReporting,
                     subrequestState: subrequestState
                 )
@@ -775,12 +844,10 @@ final class RequestMetrics<
         // Then emit the TrustedRequestMetric
         let requestEvent = self.makeFullRequestMetrics()
         self.eventStreamContinuation.yield(.exportMetric(requestEvent))
-
-        await self.logOSLogAndBiomeStreamRequestLog()
     }
 
     func observeAuthTokenFetch<Success: Sendable>(_ closure: () async throws -> Success) async throws -> Success {
-        let result = await self.signposter.withIntervalSignpost("FetchOTT", id: self.signpostID) {
+        let result = await self.signposter.withIntervalSignpost(.fetchOTT, id: self.signpostID) {
             await Result(asyncCatching: closure)
         }
 
@@ -804,67 +871,160 @@ final class RequestMetrics<
         return try result.get()
     }
 
-    /// Observes an auth token fetch for a subrequest.
-    func observeSubrequestAuthTokenFetch<Success: Sendable>(
-        subrequestId: UInt64,
-        _ closure: () async throws -> Success
-    ) async throws -> Success {
-        guard let spanId = SpanID(rawValue: UInt64(subrequestId)) else {
-            logger.warning("\(self.logPrefix) Invalid subrequestId \(subrequestId), cannot create SpanID")
-            return try await closure()
-        }
-
-        let startDuration = self.startInstant.duration(to: self.clock.now)
-        let result = await self.signposter.withIntervalSignpost("FetchOTT", id: self.signpostID) {
-            await Result(asyncCatching: closure)
-        }
-        let finishDuration = self.startInstant.duration(to: self.clock.now)
-
-        self.state.withLock { state in
-            var subrequest = state.getOrCreateSubrequestState(
-                subrequestId: spanId,
-                durationFromStartUntilTimebase: startDuration
-            )
-
-            let startTime = startDuration - subrequest.durationFromStartUntilTimebase
-            let finishTime = finishDuration - subrequest.durationFromStartUntilTimebase
-            switch result {
-            case .success:
-                subrequest.authTokenFetchState = .succeeded(startTime: startTime, finishTime: finishTime)
-            case .failure(let error):
-                subrequest.authTokenFetchState = .failed(startTime: startTime, finishTime: finishTime, error: error)
-            }
-            state.subrequests[spanId] = subrequest
-        }
-
-        return try result.get()
-    }
-
     func nodeSelected(ohttpContext: Int) {
         self.state.withLock {
             $0.selectedNodeOHTTPContext = ohttpContext
         }
     }
 
-    // MARK: - Data streams calls
+    // MARK: - Waitlist token
 
-    func observeAuthTokenSend<Success: Sendable>(_ closure: () async throws -> Success) async throws -> Success {
+    func waitlistTokenExpected(_ isExpected: Bool) {
+        self.state.withLock {
+            $0.waitlistTokenFetchState = isExpected ? .notStarted : nil
+        }
+    }
+
+    func observeWaitlistTokenFetch(_ closure: () async throws -> Data?) async throws -> Data? {
+        let result = await self.signposter.withIntervalSignpost(.fetchWaitlistToken, id: self.signpostID) {
+            await Result(asyncCatching: closure)
+        }
+
+        let duration = self.startInstant.duration(to: self.clock.now)
+        self.state.withLock {
+            switch result {
+            case .success(nil):
+                // Waitlist token isn't needed.
+                // $0.waitlistTokenFetchState should already be nil, set from `waitlistTokenExpected(_:)`
+                break
+            case .success:
+                $0.waitlistTokenFetchState = .succeeded(duration)
+            case .failure(let error):
+                if let trustedRequestError = error as? TrustedRequestError {
+                    $0.waitlistTokenFetchState = .failed(trustedRequestError.selfOrFirstUnderlying, duration)
+                } else {
+                    $0.waitlistTokenFetchState = .failed(error, duration)
+                }
+            }
+        }
+        return try result.get()
+    }
+
+    // MARK: - Reputation token
+
+    func reputationTokenExpected(_ isExpected: Bool) {
+        self.state.withLock {
+            $0.reputationTokenFetchState = isExpected ? .notStarted : nil
+            $0.reputationRefundState = isExpected ? .notStarted : nil
+        }
+    }
+
+    func observeReputationTokenFetch(_ closure: () async throws -> Data?) async throws -> Data? {
+        let result = await self.signposter.withIntervalSignpost(.fetchReputationToken, id: self.signpostID) {
+            await Result(asyncCatching: closure)
+        }
+
+        let duration = self.startInstant.duration(to: self.clock.now)
+        self.state.withLock {
+            switch result {
+            case .success(nil):
+                // Reputation token isn't needed.
+                // $0.reputationTokenFetchState should already be nil, set from `reputationTokenExpected(_:)`
+                break
+            case .success:
+                $0.reputationTokenFetchState = .succeeded(duration)
+            case .failure(let error):
+                if let trustedRequestError = error as? TrustedRequestError {
+                    $0.reputationTokenFetchState = .failed(trustedRequestError.selfOrFirstUnderlying, duration)
+                } else {
+                    $0.reputationTokenFetchState = .failed(error, duration)
+                }
+
+                // Token fetch and refund token request generation happen in parallel.
+                // Token request generation may have finished earlier either with success (.tokenRequestGenerated)
+                // or with an error (.tokenRequestGenerationFailed), override it.
+                $0.reputationRefundState = .skippedDueToTokenFetchFailure
+            }
+        }
+        return try result.get()
+    }
+
+    // MARK: - Reputation refund token request and response
+
+    func observeReputationRefundTokenGeneration(_ closure: () async throws -> Data?) async throws -> Data? {
         let result = await Result(asyncCatching: closure)
-        let durationSinceStartTillTokenGrantingTokenSent = self.startInstant.duration(to: self.clock.now)
+
+        self.state.withLock {
+            if case .skippedDueToTokenFetchFailure = $0.reputationRefundState {
+                // Token fetch and refund token request generation happen in parallel.
+                // Avoid overriding due to race between token fetch and token request generation.
+                return
+            }
+
+            switch result {
+            case .success(nil):
+                // Reputation token isn't needed.
+                // $0.reputationRefundState should already be nil, set from `reputationTokenExpected(_:)`
+                break
+            case .success:
+                $0.reputationRefundState = .tokenRequestGenerated
+            case .failure(let error):
+                if let trustedRequestError = error as? TrustedRequestError {
+                    $0.reputationRefundState = .tokenRequestGenerationFailed(trustedRequestError.selfOrFirstUnderlying)
+                } else {
+                    $0.reputationRefundState = .tokenRequestGenerationFailed(error)
+                }
+            }
+        }
+        return try result.get()
+    }
+
+    func observeReputationRefundTokenResponseSave<Success: Sendable>(_ closure: () async throws -> Success) async throws -> Success {
+        let result = await Result(asyncCatching: closure)
+
         self.state.withLock {
             switch result {
             case .success:
-                $0.authTokenSendState = .succeeded(durationSinceStartTillTokenGrantingTokenSent)
-                $0.dataStreamState = .authTokenSent
+                $0.reputationRefundState = .succeeded
             case .failure(let error):
-                $0.authTokenSendState = .failed(error, durationSinceStartTillTokenGrantingTokenSent)
+                if let trustedRequestError = error as? TrustedRequestError {
+                    $0.reputationRefundState = .tokenResponseSaveFailed(trustedRequestError.selfOrFirstUnderlying)
+                } else {
+                    $0.reputationRefundState = .tokenResponseSaveFailed(error)
+                }
+            }
+        }
+        return try result.get()
+    }
+
+    // MARK: - Data streams calls
+
+    func observeOpenRequestPayloadSend<Success: Sendable>(
+        reputationTokenRequestIncluded: Bool,
+        _ closure: () async throws -> Success
+    ) async throws -> Success {
+        let result = await Result(asyncCatching: closure)
+        let duration = self.startInstant.duration(to: self.clock.now)
+        self.state.withLock {
+            switch result {
+            case .success:
+                $0.openRequestPayloadSendState = .succeeded(duration)
+                $0.dataStreamState = .openRequestPayloadSent
+                if reputationTokenRequestIncluded {
+                    $0.reputationRefundState = .tokenRequestSent
+                }
+            case .failure(let error):
+                $0.openRequestPayloadSendState = .failed(error, duration)
                 $0.dataStreamState = .failed(error)
+                if reputationTokenRequestIncluded {
+                    $0.reputationRefundState = .tokenRequestSendFailed(error)
+                }
             }
         }
 
         if result.isSuccess {
-            self.signposter.emitEvent("OTTSent", id: self.signpostID)
-            logger.log("\(self.logPrefix) Sent auth message on data stream")
+            self.signposter.emitEvent("OpenRequestPayloadSent", id: self.signpostID)
+            logger.log("\(self.logPrefix) Sent open request payload on data stream")
         }
 
         return try result.get()
@@ -874,7 +1034,7 @@ final class RequestMetrics<
         let duration = self.startInstant.duration(to: self.clock.now)
         self.state.withLock {
             switch $0.dataStreamState {
-            case .initialized, .authTokenSent:
+            case .initialized, .openRequestPayloadSent:
                 $0.dataStreamState = .readyForMoreChunks(bytesSent: 0)
                 $0.durationFromStartUntilReadyForMoreChunks = duration
             case .awaitingForReadyForMoreChunks(let bytesSent):
@@ -901,9 +1061,9 @@ final class RequestMetrics<
         self.signposter.emitEvent("ReceivedOutgoingUserDataChunk", id: self.signpostID)
 
         switch outgoingUserData {
-        case .openSubrequest(let subrequestId, let priority, _):
-            guard let spanId = SpanID(rawValue: UInt64(subrequestId)) else {
-                logger.warning("\(self.logPrefix) Invalid subrequestId \(subrequestId), cannot create SpanID")
+        case .openSubrequest(let payload):
+            guard let spanId = SpanID(rawValue: UInt64(payload.subrequestId)) else {
+                logger.warning("\(self.logPrefix) Invalid subrequestId \(payload.subrequestId), cannot create SpanID")
                 return
             }
 
@@ -913,15 +1073,15 @@ final class RequestMetrics<
                     durationFromStartUntilTimebase: durationSinceStartTillNow
                 )
 
-                subrequest.priority = priority
+                subrequest.priority = payload.priority
                 subrequest.durationFromTimebaseUntilOpenEnqueued = durationSinceStartTillNow - subrequest.durationFromStartUntilTimebase
                 state.subrequests[spanId] = subrequest
             }
-            logger.debug("\(self.logPrefix) openSubrequest enqueued subrequestId=\(subrequestId)")
+            logger.debug("\(self.logPrefix) openSubrequest enqueued subrequestId=\(payload.subrequestId)")
 
-        case .subrequestData(let subrequestId, _):
-            guard let spanId = SpanID(rawValue: UInt64(subrequestId)) else {
-                logger.warning("\(self.logPrefix) Invalid subrequestId \(subrequestId), cannot create SpanID")
+        case .subrequestData(let payload):
+            guard let spanId = SpanID(rawValue: UInt64(payload.subrequestId)) else {
+                logger.warning("\(self.logPrefix) Invalid subrequestId \(payload.subrequestId), cannot create SpanID")
                 return
             }
 
@@ -948,9 +1108,9 @@ final class RequestMetrics<
 
         self.state.withLock { state in
             switch outgoingUserData {
-            case .openSubrequest(let subrequestId, _, _):
-                guard let spanId = SpanID(rawValue: UInt64(subrequestId)) else {
-                    logger.warning("\(self.logPrefix) Invalid subrequestId \(subrequestId), cannot create SpanID")
+            case .openSubrequest(let payload):
+                guard let spanId = SpanID(rawValue: UInt64(payload.subrequestId)) else {
+                    logger.warning("\(self.logPrefix) Invalid subrequestId \(payload.subrequestId), cannot create SpanID")
                     return
                 }
                 var subrequest = state.getOrCreateSubrequestState(
@@ -963,9 +1123,9 @@ final class RequestMetrics<
                 subrequest.setWriteExceededInitialBudget(!inBudget)
                 state.subrequests[spanId] = subrequest
 
-            case .subrequestData(let subrequestId, _):
-                guard let spanId = SpanID(rawValue: UInt64(subrequestId)) else {
-                    logger.warning("\(self.logPrefix) Invalid subrequestId \(subrequestId), cannot create SpanID")
+            case .subrequestData(let payload):
+                guard let spanId = SpanID(rawValue: UInt64(payload.subrequestId)) else {
+                    logger.warning("\(self.logPrefix) Invalid subrequestId \(payload.subrequestId), cannot create SpanID")
                     return
                 }
                 var subrequest = state.getOrCreateSubrequestState(
@@ -981,9 +1141,9 @@ final class RequestMetrics<
                 subrequest.setWriteExceededInitialBudget(!inBudget)
                 state.subrequests[spanId] = subrequest
 
-            case .closeSubrequest(let subrequestId):
-                guard let spanId = SpanID(rawValue: UInt64(subrequestId)) else {
-                    logger.warning("\(self.logPrefix) Invalid subrequestId \(subrequestId), cannot create SpanID")
+            case .closeSubrequest(let payload):
+                guard let spanId = SpanID(rawValue: UInt64(payload.subrequestId)) else {
+                    logger.warning("\(self.logPrefix) Invalid subrequestId \(payload.subrequestId), cannot create SpanID")
                     return
                 }
                 var subrequest = state.getOrCreateSubrequestState(
@@ -1008,9 +1168,9 @@ final class RequestMetrics<
 
         self.state.withLock { state in
             switch incomingUserData {
-            case .openSubresponse(let subrequestId):
-                guard let spanId = SpanID(rawValue: UInt64(subrequestId)) else {
-                    logger.warning("\(self.logPrefix) Invalid subrequestId \(subrequestId), cannot create SpanID")
+            case .openSubresponse(let payload):
+                guard let spanId = SpanID(rawValue: UInt64(payload.subrequestId)) else {
+                    logger.warning("\(self.logPrefix) Invalid subrequestId \(payload.subrequestId), cannot create SpanID")
                     return
                 }
                 var subrequest = state.getOrCreateSubrequestState(
@@ -1022,9 +1182,9 @@ final class RequestMetrics<
                 subrequest.durationFromTimebaseUntilOpenResponseReceived = relativeToTimebase
                 state.subrequests[spanId] = subrequest
 
-            case .subresponseData(let subrequestId, _):
-                guard let spanId = SpanID(rawValue: UInt64(subrequestId)) else {
-                    logger.warning("\(self.logPrefix) Invalid subrequestId \(subrequestId), cannot create SpanID")
+            case .subresponseData(let payload):
+                guard let spanId = SpanID(rawValue: UInt64(payload.subrequestId)) else {
+                    logger.warning("\(self.logPrefix) Invalid subrequestId \(payload.subrequestId), cannot create SpanID")
                     return
                 }
                 var subrequest = state.getOrCreateSubrequestState(
@@ -1040,9 +1200,9 @@ final class RequestMetrics<
 
                 state.subrequests[spanId] = subrequest
 
-            case .closeSubresponse(let subrequestId, let status):
-                guard let spanId = SpanID(rawValue: UInt64(subrequestId)) else {
-                    logger.warning("\(self.logPrefix) Invalid subrequestId \(subrequestId), cannot create SpanID")
+            case .closeSubresponse(let payload):
+                guard let spanId = SpanID(rawValue: UInt64(payload.subrequestId)) else {
+                    logger.warning("\(self.logPrefix) Invalid subrequestId \(payload.subrequestId), cannot create SpanID")
                     return
                 }
                 var subrequest = state.getOrCreateSubrequestState(
@@ -1052,7 +1212,7 @@ final class RequestMetrics<
 
                 subrequest.endWithServerClose(
                     durationFromConnectionStartUntilNow: durationSinceStartTillNow,
-                    responseStatus: status
+                    responseStatus: payload.status
                 )
                 state.subrequests[spanId] = subrequest
 
@@ -1076,7 +1236,7 @@ final class RequestMetrics<
                 switch $0.dataStreamState {
                 case .initialized:
                     fatalError("Invalid state: \($0.dataStreamState). Auth token must be sent first!")
-                case .authTokenSent:
+                case .openRequestPayloadSent:
                     $0.dataStreamState = .awaitingForReadyForMoreChunks(bytesSent: bytesToSend)
                     isFirstWrite = true
 
@@ -1097,7 +1257,7 @@ final class RequestMetrics<
 
             case .failure(let failure):
                 switch $0.dataStreamState {
-                case .initialized, .authTokenSent, .awaitingForReadyForMoreChunks, .readyForMoreChunks:
+                case .initialized, .openRequestPayloadSent, .awaitingForReadyForMoreChunks, .readyForMoreChunks:
                     $0.dataStreamState = .failed(failure)
                 case .finished, .failed:
                     break
@@ -1114,7 +1274,7 @@ final class RequestMetrics<
             switch $0.dataStreamState {
             case .initialized:
                 fatalError("Invalid state: \($0.dataStreamState). Auth token must be sent first!")
-            case .authTokenSent:
+            case .openRequestPayloadSent:
                 $0.dataStreamState = .finished(bytesSent: 0)
                 $0.durationFromStartUntilLastPayloadChunkSent = durationSinceStartTillNow
 
@@ -1138,7 +1298,7 @@ final class RequestMetrics<
     // MARK: - Node stream calls
 
     func observeLoadAttestationsFromCache(closure: () async -> [ValidatedAttestationOrAttestation]) async -> [ValidatedAttestationOrAttestation] {
-        let result = await self.signposter.withIntervalSignpost("LoadAttestationsFromCache", id: self.signpostID) {
+        let result = await self.signposter.withIntervalSignpost(.loadAttestationsFromCache, id: self.signpostID) {
             await Result(asyncCatching: closure)
         }
 
@@ -1173,12 +1333,20 @@ final class RequestMetrics<
                             maybeValidatedCellID: validatedAttestation.validatedCellID,
                             ensembleID: validatedAttestation.attestation.ensembleID
                         )
+                        if state.cachedAttestationToConnectionInterval == nil {
+                            state.cachedAttestationToConnectionInterval = self.inlineSignposter.beginInterval(
+                                "CachedAttestationToSentKey", id: self.inlineSignpostID)
+                        }
                     }
                 }
             }
         }
 
-        return result.get()
+        let attestations = result.get()
+        if attestations.isEmpty {
+            self.inlineSignposter.emitEvent("CacheMiss", id: self.inlineSignpostID)
+        }
+        return attestations
     }
 
     func attestationsReceived(_ attestations: some (Collection<ValidatedAttestationOrAttestation> & Sendable)) {
@@ -1222,6 +1390,10 @@ final class RequestMetrics<
 
                 case .inlineAttestation(let attestation, let ohttpContext):
                     guard state.nodes[attestation.nodeID] == nil else { continue }
+                    if state.inlineAttestationToConnectionInterval == nil {
+                        state.inlineAttestationToConnectionInterval = self.inlineSignposter.beginInterval(
+                            "InlineAttestationToFirstConnection", id: self.inlineSignpostID)
+                    }
                     if let bundle = attestation.attestationBundle {
                         state.nodes[attestation.nodeID] = .init(
                             state: .unverified,
@@ -1241,7 +1413,18 @@ final class RequestMetrics<
             return result
         }
         self.signposter.emitEvent("AttestationsReceivedFromRopes", id: self.signpostID)
+        if attestations.contains(where: { if case .inlineAttestation = $0 { true } else { false } }) {
+            self.inlineSignposter.emitEvent("InlineAttestationReceived", id: self.inlineSignpostID)
+        }
         maybeAttestationActivity?.complete(reason: .success)
+    }
+
+    func beginInlineStreamDrain() -> OSSignpostIntervalState {
+        self.inlineSignposter.beginInterval("InlineStreamDrain", id: self.inlineSignpostID)
+    }
+
+    func endInlineStreamDrain(_ interval: OSSignpostIntervalState) {
+        self.inlineSignposter.endInterval("InlineStreamDrain", interval)
     }
 
     func proxiedAttestationReceived(proxiedAttestation: ProxiedAttestation, proxiedBy: String) {
@@ -1259,6 +1442,12 @@ final class RequestMetrics<
     func executionAssetReceived(_ assetMetadata: AssetMetadata) {
         self.state.withLock { state in
             state.executionAssets.append(assetMetadata)
+        }
+    }
+
+    func executionOutboundCallReceived(_ outboundCall: OutboundCallContext) {
+        self.state.withLock { state in
+            state.outboundCalls.append(outboundCall)
         }
     }
 
@@ -1301,7 +1490,7 @@ final class RequestMetrics<
         // We are verifying attestations in parallel, so we need to create one signpostID for each verification.
         let attestationSignpostID = self.signposter.makeSignpostID()
         let startTime = self.clock.now
-        let result = await self.signposter.withIntervalSignpost("VerifyAttestation", id: attestationSignpostID) {
+        let result = await self.signposter.withIntervalSignpost(.verifyAttestation, id: attestationSignpostID) {
             await Result(asyncCatching: closure)
         }
         let duration = startTime.duration(to: self.clock.now)
@@ -1325,10 +1514,9 @@ final class RequestMetrics<
             let errorMetric = AttestationVerificationErrorMetric(
                 eventTime: .now,
                 clientRequestId: self.requestIDForEventReporting,
-                bundleID: self.bundleID,
+                bundleID: self.bundleID.redactedValue,
                 environment: self.environment,
                 systemInfo: self.systemInfo,
-                locale: self.locale,
                 // this is false because we are on request flow here
                 isPrefetchedAttestation: false,
                 nodeID: nodeID,
@@ -1342,12 +1530,11 @@ final class RequestMetrics<
 
         let verificationMetric = AttestationVerificationMetric(
             eventTime: .now,
-            bundleID: self.bundleID,
+            bundleID: self.bundleID.redactedValue,
             clientRequestId: self.requestIDForEventReporting,
             environment: self.environment,
             systemInfo: self.systemInfo,
             featureID: self.featureID,
-            locale: self.locale,
             attestationVerificationTime: duration,
             verificationResult: result,
             nodeID: nodeID
@@ -1365,9 +1552,8 @@ final class RequestMetrics<
             clientRequestId: self.requestIDForEventReporting,
             environment: self.environment,
             systemInfo: self.systemInfo,
-            bundleID: self.bundleID,
+            bundleID: self.bundleID.redactedValue,
             featureID: self.featureID,
-            locale: self.locale,
             result: result,
             nodeID: nodeID
         )
@@ -1401,6 +1587,14 @@ final class RequestMetrics<
             case .waitingToSendFirstKey(let firstTokenActivity):
                 let interval = self.signposter.beginInterval("SentKey", id: self.signpostID)
                 state.responseState = .waitingForNode(firstTokenActivity: firstTokenActivity, interval: interval)
+                if let inlineInterval = state.inlineAttestationToConnectionInterval {
+                    self.inlineSignposter.endInterval("InlineAttestationToFirstConnection", inlineInterval)
+                    state.inlineAttestationToConnectionInterval = nil
+                }
+                if let cachedInterval = state.cachedAttestationToConnectionInterval {
+                    self.inlineSignposter.endInterval("CachedAttestationToSentKey", cachedInterval)
+                    state.cachedAttestationToConnectionInterval = nil
+                }
                 return true
 
             case .waitingForNode, .receiving, .finished, .failed:
@@ -1439,12 +1633,11 @@ final class RequestMetrics<
     private func reportNodeResponseMetric(nodeID: String, error: (any Error)?) {
         let endpointResponseMetric = TrustedEndpointResponseMetric(
             eventTime: .now,
-            bundleID: self.bundleID,
+            bundleID: self.bundleID.redactedValue,
             clientRequestId: self.requestIDForEventReporting,
             environment: self.environment,
             systemInfo: self.systemInfo,
             featureID: self.featureID,
-            locale: self.locale,
             nodeID: nodeID,
             error: error
         )
@@ -1605,8 +1798,6 @@ final class RequestMetrics<
         }
     }
 
-    // MARK: - TrustedRequestXPCEventsObserver
-
     func willCancel(reason: TrustedRequestCancellationReason) {
         self.state.withLock {
             $0.cancellationReason = reason
@@ -1617,9 +1808,7 @@ final class RequestMetrics<
         // TODO: rdar://166639044 (Report telemetry on subrequests discarded by pccd)
     }
 
-    // MARK: - Private Method -
-
-    private func logOSLogAndBiomeStreamRequestLog() async {
+    func logOSLogAndBiomeStreamRequestLog() async {
         // log the metadata associated with this request for researcher logs:
         // 1. all the request parameters {model, arguments}
         // 2. a deserialization of all attestations, including failed nodes
@@ -1636,9 +1825,12 @@ final class RequestMetrics<
         let nodes = self.state.withLock(\.nodes)
 
         // Load bundles from store
-        var bundles: [String: Data] = [:]
-        if let store = self.attestationStore {
-            bundles = await store.getAttestationBundlesUsedByTrustedRequest(serverRequestID: self.serverRequestID)
+        let bundles: [String: Data]
+        switch attestationStoreOrLegacyStore {
+        case .legacyStore(let legacyAttestationStore):
+            bundles = await legacyAttestationStore.getAttestationBundlesUsedByTrustedRequest(serverRequestID: self.serverRequestID)
+        case .attestationStore(let attestationStore):
+            bundles = await attestationStore.getAttestationBundlesUsedByTrustedRequest(serverRequestID: self.serverRequestID)
         }
 
         var biomeAttestations: [PrivateCloudComputeRequestLog.Attestation] = []
@@ -1688,6 +1880,7 @@ final class RequestMetrics<
 
         let assetMetadata = self.state.withLock(\.executionAssets)
 
+        #if canImport(IntelligencePlatformLibrary, _version: "352")
         var biomeAssets: [PrivateCloudComputeRequestLog.AssetMetadata] = []
         biomeAssets.reserveCapacity(assetMetadata.count)
         for asset in assetMetadata {
@@ -1698,6 +1891,19 @@ final class RequestMetrics<
             biomeAsset.assetVersion = asset.version
             biomeAsset.assetHash = asset.hash
             biomeAssets.append(biomeAsset)
+        }
+        #endif
+
+        let outboundCalls = self.state.withLock(\.outboundCalls)
+
+        var biomeOutboundCalls: [PrivateCloudComputeRequestLog.OutboundCall] = []
+        biomeOutboundCalls.reserveCapacity(outboundCalls.count)
+        for outboundCall in outboundCalls {
+            logger.log("\(self.logPrefix) Request Log: Outbound Call: <\(outboundCall.serviceName) \(outboundCall.metadata)>")
+            var biomeOutboundCall: PrivateCloudComputeRequestLog.OutboundCall = .init()
+            biomeOutboundCall.node = outboundCall.nodeID
+            biomeOutboundCall.metadata = [outboundCall.serviceName, outboundCall.metadata]
+            biomeOutboundCalls.append(biomeOutboundCall)
         }
 
         // Log the request parameters to Biome stream
@@ -1711,7 +1917,10 @@ final class RequestMetrics<
                 $0.pipelineKind = self.parameters.type
                 $0.pipelineParameters = workloadParametersAsString
                 $0.nodes = biomeAttestations
+                #if canImport(IntelligencePlatformLibrary, _version: "352")
                 $0.assets = biomeAssets
+                #endif
+                $0.outboundCalls = biomeOutboundCalls
             }
 
             try self.biomeReporter.send(requestLog: event)
@@ -1734,18 +1943,6 @@ extension Result {
         case .success: nil
         case .failure(let failure): failure
         }
-    }
-}
-
-extension OSSignposter {
-    func withIntervalSignpost<T>(
-        _ name: StaticString,
-        id: OSSignpostID = .exclusive,
-        around task: () async throws -> T
-    ) async rethrows -> T {
-        let interval = self.beginInterval(name, id: id)
-        defer { self.endInterval(name, interval) }
-        return try await task()
     }
 }
 

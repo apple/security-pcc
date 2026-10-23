@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,7 +21,7 @@
 
 private import CryptoKit
 private import EnsembleWardenCommon
-internal import EnsembleWardenXPCAPI
+internal import EnsembleWardenXPC
 private import IOSurface
 private import os
 @_spiOnly import Security_Private.SecTaskPriv
@@ -65,16 +65,21 @@ package struct XPCHandler<UserHandler: EnsembleWardenServerHandler & Sendable, F
         let ensembleWardenCryptoHandles: EnsembleWardenCryptoHandles
         if let ensemblePorterConnection {
             ensembleWardenCryptoHandles = .init(
-                ensemblePorterIdentifier: .ensemblePorterHandle(
-                    ensemblePorterConnection))
+                ensemblePorterIdentifier: .ensemblePorterHandle(ensemblePorterConnection),
+                isMultiTurn: startMessage.isMultiTurn)
+        } else if let endpoint = startMessage.ensemblePorterEndpoint {
+            ensembleWardenCryptoHandles = .init(
+                ensemblePorterIdentifier: .ensemblePorterEndpoint(endpoint),
+                isMultiTurn: startMessage.isMultiTurn)
         } else if let followerToken = startMessage.followerToken {
             ensembleWardenCryptoHandles = .init(
-                ensemblePorterIdentifier: .followerToken(followerToken))
+                ensemblePorterIdentifier: .followerToken(followerToken),
+                isMultiTurn: startMessage.isMultiTurn)
         } else {
             return .failure(EnsembleWardenError.invalidStartMessage)
         }
         do {
-            return try await self.ensembleWardenMetrics.reportingXPCMetrics(operationName: "start") {
+            return try await self.ensembleWardenMetrics.reportingXPCMetrics(operationName: .start) {
                 let tokens = try await handler.start(ensembleWardenCryptoHandles: ensembleWardenCryptoHandles,
                                                      requestID: PrismTracing.requestID,
                                                      spanID: PrismTracing.spanID)
@@ -85,47 +90,11 @@ package struct XPCHandler<UserHandler: EnsembleWardenServerHandler & Sendable, F
         }
     }
 
-    private func handle(publishMessage: EnsembleWardenDaemonXPC.Publish) async -> EnsembleWardenDaemonXPC.Publish.Response {
-        do {
-            return try await PrismTracing.withResumed(requestID: publishMessage.requestID,
-                                                      spanID: publishMessage.spanID) {
-                return try await self.ensembleWardenMetrics.reportingXPCMetrics(operationName: "publish") {
-                    try await handler.onPublish(serializedXPCRequest: publishMessage.serializedXPCRequest,
-                                                privateData: publishMessage.ioSurfaces,
-                                                purpose: .init(xpcPurpose: publishMessage.purpose),
-                                                requestID: PrismTracing.requestID,
-                                                spanID: PrismTracing.spanID)
-                    return .success(.init())
-                }
-            }
-        } catch {
-            return self.handleError(operation: "publish", error: error) { .failure($0) }
-        }
-    }
-
-
-    private func handle(fetchMessage: EnsembleWardenDaemonXPC.Fetch) async -> EnsembleWardenDaemonXPC.Fetch.Response {
-        do {
-            return try await PrismTracing.withResumed(requestID: fetchMessage.requestID,
-                                                      spanID: fetchMessage.spanID) {
-                return try await self.ensembleWardenMetrics.reportingXPCMetrics(operationName: "fetch") {
-                    let ioSurfaces = try await handler.onFetch(serializedXPCRequest: fetchMessage.serializedXPCRequest,
-                                                               requestID: PrismTracing.requestID,
-                                                               spanID: .init(uint: PrismTracing.spanID))
-
-                    return .success(ioSurfaces)
-                }
-            }
-        } catch {
-            return self.handleError(operation: "fetch", error: error) { .failure($0) }
-        }
-    }
-
     private func handle(prefaultMessage: EnsembleWardenDaemonXPC.Prefault) async -> EnsembleWardenDaemonXPC.Prefault.Response {
         do {
             return try await PrismTracing.withResumed(requestID: prefaultMessage.requestID,
                                                       spanID: prefaultMessage.spanID) {
-                return try await self.ensembleWardenMetrics.reportingXPCMetrics(operationName: "prefault") {
+                return try await self.ensembleWardenMetrics.reportingXPCMetrics(operationName: .prefault) {
                     try await handler.onPrefault(ioSurfaces: prefaultMessage.ioSurfaces,
                                                  requestID: PrismTracing.requestID,
                                                  spanID: PrismTracing.spanID)
@@ -146,14 +115,18 @@ package struct XPCHandler<UserHandler: EnsembleWardenServerHandler & Sendable, F
                 case .empty: EnsembleWardenDaemonXPC.Empty.Response.init()
                 case .start(let startMessage):
                     await handle(startMessage: startMessage)
-                case .publish(let publishMessage):
-                    await handle(publishMessage: publishMessage)
-                case .fetch(let fetchMessage):
-                    await handle(fetchMessage: fetchMessage)
                 case .prefault(let prefaultMessage):
                     await handle(prefaultMessage: prefaultMessage)
                 case .dropAll(let dropAllMessage):
                     await handle(dropAllMessage: dropAllMessage)
+                case .publish2(let publish2Message):
+                    await handle(publish2Message: publish2Message)
+                case .fetch2(let fetch2Message):
+                    await handle(fetch2Message: fetch2Message)
+                case .fetchMetadata(let fetchMetadataMessage):
+                    await handle(fetchMetadataMessage: fetchMetadataMessage)
+                case .delete(let deleteMessage):
+                    await handle(deleteMessage: deleteMessage)
             }
             message.reply(response)
         }
@@ -163,7 +136,9 @@ package struct XPCHandler<UserHandler: EnsembleWardenServerHandler & Sendable, F
     package func handleCancellation(error: XPCRichError) {
         logger.log("XPC cancellation. error=\(error, privacy: .public)")
         do {
-            try handler.onCancellation()
+            try self.ensembleWardenMetrics.reportingSyncXPCMetrics(operationName: .finish) {
+                try handler.onCancellation()
+            }
         } catch {
             logger.error("""
                 Error handling cancellation. \
@@ -177,15 +152,16 @@ extension XPCHandler {
     private func handle(
         publish2Message: EnsembleWardenDaemonXPC.Publish2
     ) async -> EnsembleWardenDaemonXPC.Publish2.Response {
+        let purpose = KVCacheTransferPurpose(xpcPurpose: publish2Message.purpose)
         do {
             return try await self.ensembleWardenMetrics.reportingXPCMetrics(
-                operationName: "publish2") {
+                operationName: .publish2, purpose: purpose) {
                 try await handler.onPublish2(
                     identifier: publish2Message.identifier,
                     privateData: publish2Message.privateData,
                     privateMetadata: publish2Message.privateMetadata,
                     ttl: publish2Message.ttl,
-                    purpose: .init(xpcPurpose: publish2Message.purpose),
+                    purpose: purpose,
                     requestID: publish2Message.requestID,
                     spanID: publish2Message.spanID)
                 return .success(.init())
@@ -200,14 +176,14 @@ extension XPCHandler {
     ) async -> EnsembleWardenDaemonXPC.Fetch2.Response {
         do {
             return try await  self.ensembleWardenMetrics.reportingXPCMetrics(
-                operationName: "fetch2") {
-                let ioSurface = try await handler.onFetch2(
+                operationName: .fetch2) {
+                    let fetchedData = try await handler.onFetch2(
                     identifier: fetch2Message.identifier,
                     range: fetch2Message.range,
                     host: fetch2Message.host,
                     requestID: fetch2Message.requestID,
                     spanID: fetch2Message.spanID)
-                return .success(ioSurface)
+                return .success(fetchedData)
             }
         } catch {
             return self.handleError(operation: "fetch2", error: error) { .failure($0) }
@@ -219,7 +195,7 @@ extension XPCHandler {
     ) async -> EnsembleWardenDaemonXPC.FetchMetadata.Response {
         do {
             return try await  self.ensembleWardenMetrics.reportingXPCMetrics(
-                operationName: "fetchMetadata") {
+                operationName: .fetchMetadata) {
                 let ioSurfaces = try await handler.onFetchMetadata(
                     identifier: fetchMetadataMessage.identifier,
                     host: fetchMetadataMessage.host,
@@ -237,7 +213,7 @@ extension XPCHandler {
     ) async -> EnsembleWardenDaemonXPC.Delete.Response {
         do {
             return try await self.ensembleWardenMetrics.reportingXPCMetrics(
-                operationName: "delete") {
+                operationName: .delete) {
                 try await handler.onDelete(
                     identifier: deleteMessage.identifier,
                     host: deleteMessage.host,
@@ -255,7 +231,7 @@ extension XPCHandler {
     ) async -> EnsembleWardenDaemonXPC.DropAll.Response {
         do {
             return try await self.ensembleWardenMetrics.reportingXPCMetrics(
-                operationName: "dropAll") {
+                operationName: .dropAll) {
                 try await handler.onDropAll()
                 return .success(.init())
             }
@@ -287,6 +263,8 @@ fileprivate extension KVCacheTransferPurpose {
         switch xpcPurpose {
         case .ftET:
             self = .ftET
+        case .multiTurn:
+            self = .multiTurn
         }
     }
 }

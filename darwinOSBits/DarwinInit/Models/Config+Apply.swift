@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -17,40 +17,15 @@
 //  darwinOSBits
 //
 //
-import Foundation
-import System // FIXME: remove later
-
+import CryptexKit
+import DarwinInitConfig
 import FeatureFlags
 import FeatureFlagsSupport
+import Foundation
 import libnarrativecert
+import System // FIXME: remove later
 
 internal import DarwinInitBridging
-
-extension Config {
-
-    /// An critical error will stop the application of the Config.
-    enum CriticalError: Swift.Error {
-        /// Executing a script in the start section failed.
-        case startupScriptFailed(String)
-    }
-}
-
-extension Config.CriticalError: CustomStringConvertible {
-
-    var description: String {
-        switch self {
-        case .startupScriptFailed(let script):
-            return "start script failed (\(script))"
-        }
-    }
-}
-
-extension Config {
-    protocol Error {
-        var code: Int { get }
-        var description: String { get }
-    }
-}
 
 extension Config {
 
@@ -77,6 +52,11 @@ extension Config {
         // in future logs for debugging
         if let log {
             result.log = log.apply(on: computer)
+        }
+
+        // Configure sysctl settings early
+        if let sysctl {
+            result.sysctl = apply(sysctl: sysctl, on: computer)
         }
 
         result.analytics = Self.Analytics.apply(config: analytics, on: computer, reporter: reporter)
@@ -125,7 +105,7 @@ extension Config {
                 if manager.setup(user: user) {
                     return user
                 } else {
-                    // TODO: make UserManager expose concret errors so this becomes more useful
+                    // TODO: make UserManager expose concrete errors so this becomes more useful
                     if let userConfig = users[user.name] {
                         let applyError = ApplyError(location: userConfig.jsonPointer, code: 1, message: "Failed to setup user")
                         reporter.report(applyError)
@@ -201,8 +181,9 @@ extension Config {
         }
 
         if let featureFlags {
+            let policy = env.configSecurityPolicy.map { Config.SecurityPolicy(policy: $0) }
             result.featureFlags = featureFlags.compactMap { flag in
-                flag.apply(on: computer, configSecurityPolicy: configSecurityPolicy)
+                flag.apply(on: computer, configSecurityPolicy: policy)
             }
         }
 
@@ -307,7 +288,7 @@ extension Config {
         } else {
             logger.error("Creating cache volumes not available on this platform")
         }
-        return result.isEmpty ? nil : result
+        return result
     }
 
     func apply(tailspin: Either<Bool, Tailspin>) -> Either<Bool, Tailspin>? {
@@ -340,6 +321,27 @@ extension Config {
         return tailspin
     }
 
+    func apply(sysctl: [String: Sysctl], on computer: any Computer) -> [String: Sysctl]? {
+        logger.info("Applying sysctl configuration...")
+
+        var result: [String: Sysctl] = [:]
+        for (name, item) in sysctl {
+            do {
+                let (expected, actual) = try item.apply(name: name, on: computer)
+                if expected != actual {
+                    logger.error("Could not apply sysctl \(name)=\(item.value), got \(actual)")
+                    continue
+                }
+            } catch {
+                logger.error("Failed to apply sysctl \(name)=\(item.value): \(error)")
+                continue
+            }
+            result[name] = item
+        }
+
+        return result.isEmpty ? nil : result
+    }
+
 }
 
 extension UserManager.User {
@@ -348,9 +350,9 @@ extension UserManager.User {
         self.name = name
         self.uid = uid_t(user.uid)
         self.gid = gid_t(user.gid)
-        self.password = user.plaintextPassword
+        self.password = user.authentication?.plaintextPassword
         self.isAdmin = user.admin ?? false
-        self.sshAuthorizedKeys = user.sshAuthorizedKey
+        self.sshAuthorizedKeys = user.authentication?.sshAuthorizedKey
         self.passwordlessSudo = user.passwordlessSudo ?? false
         if let esc = user.authentication?.esc {
             self.esc = EngineeringSSHCA.Config(principals: esc.principals, groups: esc.groups)
@@ -361,6 +363,9 @@ extension UserManager.User {
             self.memento = MementoSSH.Config(users: memento.users,
                                              groups: memento.groups,
                                              ldapServer: memento.ldapServer)
+        }
+        if let ca = user.authentication?.ca {
+            self.ca = SSHCA.Config(principals: ca.principals)
         }
     }
 
@@ -724,32 +729,49 @@ extension Config.Network {
 
 // MARK: Cryptex+Apply
 extension Config.Cryptex {
-    struct CryptexApplyError: Config.Error {
-        enum ErrorKind: Int {
-            case failedToSetBandwidthLimit = 1
-            case failedToDepsolveCryptexes
-            case failedToDownloadCryptex
-            case failedToPersonalizeCryptex
-            case failedToInstallCryptex
+
+    /// Handles cryptex operation errors with consistent logging and reporting.
+    ///
+    /// This helper centralizes the error handling pattern used throughout cryptex
+    /// application. It:
+    /// - Wraps non-CryptexApplyError exceptions in unexpectedError
+    /// - Logs detailed error messages with cryptex identifier
+    /// - Reports errors to the ErrorReporter with JSON pointer context
+    /// - Logs internal consistency errors at critical level
+    ///
+    /// - Parameters:
+    ///   - error: The error that occurred during cryptex operation
+    ///   - identifier: The identifier of the cryptex being processed
+    ///   - operation: Description of the operation that failed (e.g., "get", "install")
+    ///   - cryptexes: Dictionary mapping identifiers to cryptex configs (for JSON pointer lookup)
+    ///   - reporter: The error reporter for tracking errors
+    ///   - logger: The logger to use for error messages
+    private static func handleCryptexError(
+        _ error: Error,
+        identifier: String,
+        operation: String,
+        cryptexes: [String: Config.Cryptex.Cryptex],
+        reporter: ErrorReporter,
+        logger: Logger
+    ) {
+        // Ensure we have a CryptexApplyError (wrap if needed)
+        let cryptexError: CryptexApplyError
+        if let error = error as? CryptexApplyError {
+            cryptexError = error
+        } else {
+            cryptexError = CryptexApplyError(kind: .unexpectedError(error), underlyingError: error)
         }
-        
-        let kind: ErrorKind
-        var code: Int { kind.rawValue }
-        
-        var description: String {
-            switch kind {
-            case .failedToSetBandwidthLimit:
-                return "Failed to set bandwidth limit for Mellanox interface. Will NOT download cryptexes."
-            case .failedToDepsolveCryptexes:
-                return "Failed to depsolve cryptexes"
-            case .failedToDownloadCryptex:
-                return "Failed to download cryptex"
-            case .failedToPersonalizeCryptex:
-                return "Failed to personalize cryptex"
-            case .failedToInstallCryptex:
-                return "Failed to install cryptex"
-            }
+
+        // Log the error with context
+        logger.error("Failed to \(operation) cryptex '\(identifier)': \(cryptexError.description)")
+
+        // Report to error tracking system
+        guard let cryptex = cryptexes[identifier] else {
+            logger.critical("Internal consistency error: cryptex '\(identifier)' not found in original configuration")
+            return
         }
+
+        reporter.report(cryptexError, at: cryptex.jsonPointer)
     }
 
     func apply(on computer: Computer,
@@ -801,28 +823,14 @@ extension Config.Cryptex {
         guard let cryptexes else { return result }
 
         let manager = CryptexManager(from: self, auth: auth, diavlo: diavloURL)
-        
-        // TODO: move this over to CryptexManager
-        let ordered: [String]
-        do {
-            ordered = try depsolvCryptexes()
-        } catch {
-            logger.error("Failed to depsolve cryptexes: \(error)")
-            let e = CryptexApplyError(kind: .failedToDepsolveCryptexes)
-            
-            reporter.report(e, at: $cryptexes.jsonPointer)
-            
-            return nil
+
+        logger.info("Installing \(cryptexes.count) cryptexes (BulkInstaller will resolve dependencies)")
+
+        let items: [CryptexConfig] = cryptexes.map { (id, cryptex) in
+            CryptexConfig(from: cryptex, identifier: id)
         }
 
-        logger.info("Installing cryptexes: \(ordered)")
-
-        let items: [CryptexManager.CryptexConfig] = ordered.compactMap { id in
-            guard let cryptex = cryptexes[id] else { return nil }
-            return CryptexManager.CryptexConfig(from: cryptex, identifier: id)
-        }
-
-        let personalized: [CryptexManager.PersonalizedCryptex]
+        let personalized: [PersonalizedCryptex]
 
         let cacheDelegate = CryptexCacheDelegate()
         if let cryptexCache = CryptexCache(at: CryptexCache.defaultCacheDirectoryPath,
@@ -838,52 +846,56 @@ extension Config.Cryptex {
                     theCache = nil
                 }
 
-				let personalizedCryptex = await manager.get(cryptex: item, using: theCache)
-                if personalizedCryptex == nil {
-                    // TODO: this is not so useful right now as it could caused by
-                    // a variety of unerlying errors.
-                    // CryptexManager should expose the error out for better error reporting
-                    let e = CryptexApplyError(kind: .failedToPersonalizeCryptex)
-                    if let cryptex = cryptexes[item.identifier] {
-                        reporter.report(e, at: cryptex.jsonPointer)
-                    }
+                do {
+                    return try await manager.get(cryptex: item, using: theCache)
+                } catch {
+                    Self.handleCryptexError(
+                        error,
+                        identifier: item.identifier,
+                        operation: "get",
+                        cryptexes: cryptexes,
+                        reporter: reporter,
+                        logger: logger
+                    )
+                    return nil
                 }
-                return personalizedCryptex
             }
 
         } else {
             logger.error("Failed to initialize CryptexCache; proceeding without caching")
             personalized = await items.asyncSerialCompactMap { item in
-                let personalizedCryptex = await manager.get(cryptex: item)
-                if personalizedCryptex == nil {
-                    // TODO: this is not so useful right now as it could caused by
-                    // a variety of unerlying errors.
-                    // CryptexManager should expose the error out for better error reporting
-                    let e = CryptexApplyError(kind: .failedToPersonalizeCryptex)
-                    if let cryptex = cryptexes[item.identifier] {
-                        reporter.report(e, at: cryptex.jsonPointer)
-                    }
+                do {
+                    return try await manager.get(cryptex: item)
+                } catch {
+                    Self.handleCryptexError(
+                        error,
+                        identifier: item.identifier,
+                        operation: "get",
+                        cryptexes: cryptexes,
+                        reporter: reporter,
+                        logger: logger
+                    )
+                    return nil
                 }
-                return personalizedCryptex
             }
         }
 
-        let applied = personalized.compactMap { item in
-            if item.install(limitLoadToREM: env.bootingIntoREM) {
-                return item.config
-            } else {
-                let e = CryptexApplyError(kind: .failedToInstallCryptex)
-                reporter.report(e, at: cryptexes[item.config.identifier]!.jsonPointer)
-
-                return nil
-            }
+        let applied: [CryptexConfig]
+        do {
+            applied = try await personalized.bulkInstall(
+                limitLoadToREM: env.bootingIntoREM,
+                cryptexes: cryptexes,
+                reporter: reporter,
+                cryptexesPointer: $cryptexes.jsonPointer
+            )
+        } catch {
+            // bulkInstall() already logged errors and reported to ErrorReporter
+            return nil
         }
 
-        // Get the original cryptex configuration for all cryptexes that
-        // have been applied
-        result.cryptexes = applied.reduce(into: [:], { result, cfg in
+        result.cryptexes = applied.reduce(into: [:]) { result, cfg in
             result[cfg.identifier] = cryptexes[cfg.identifier]
-        })
+        }
 
         // Reset the bandwidth limit on the Mellanox interface after cryptex downloads
         // If we fail to reset the bandwidth limit, we consider this an apply failure
@@ -995,13 +1007,30 @@ extension Config.Identification {
 // MARK: CARoots+Apply
 extension Config.CARoots {
     func apply(on computer: Computer) -> Config.CARoots? {
+        var result = Config.CARoots()
+
         if appleCorporateRoot == true {
-            guard CorporateRoot.apply() else {
+            let success: Bool
+
+            logger.info("Installing Corporate Root CAs based on region code")
+            success = CorporateRoot.install()
+
+            guard success else {
                 return nil
             }
+            result.appleCorporateRoot = self.appleCorporateRoot
         }
 
-        return Config.CARoots(appleCorporateRoot: self.appleCorporateRoot)
+        if let customRoots = customRoots {
+            if !customRoots.isEmpty {
+                guard CustomRoots.apply(customRoots.map(\.certificate)) else {
+                    return nil
+                }
+            }
+            result.customRoots = customRoots
+        }
+
+        return result
     }
 }
 
@@ -1021,6 +1050,14 @@ extension Config.SSH {
             try computer.fileSystem.append(text: config,
                                            to: kDInitSSHConfig)
             result.pwauth = pwauth
+        }
+
+        if let ca {
+            if SSHCA.setCAPublicKey(key: ca, on: computer) {
+                if SSHCA.setup(on: computer) {
+                    result.ca = ca
+                }
+            }
         }
 
         result.enabled = enabled
@@ -1164,20 +1201,21 @@ extension Config.Package {
 // MARK: Finish+Apply
 extension Config.Finish {
 
-    static func print(logText: String) -> Bool {
-        logger.log("darwin-init: \(logText, privacy: .public)")
+    static func message(logText: String, on computer: Computer) -> Bool {
+        logger.log("darwin-init to message: \(logText, privacy: .public)")
         let banner = """
 ==== darwin-init ==============================================================
 \(logText)
 ===============================================================================\n
 """
+        let file = computer.console ?? stderr
         do {
             try nothingOrErrno(retryOnInterrupt: true) {
-                fputs(banner.cString(using: .utf8), stderr)
+                fputs(banner.cString(using: .utf8), file)
             }.get()
             return true
         } catch {
-            logger.error("Failed to write to stderr: \(error.localizedDescription)")
+            logger.error("Failed to write to console/stderr: \(error.localizedDescription)")
             return false
         }
     }
@@ -1210,7 +1248,7 @@ extension Config.Finish {
         }
 
         if let message {
-            if Self.print(logText: message) {
+            if Self.message(logText: message, on: computer) {
                 result.message = message
             }
         }
@@ -1285,4 +1323,36 @@ extension Config.Tailspin {
         }
     }
 
+}
+
+// MARK: Sysctl+Apply
+extension Config.Sysctl {
+    func apply(name: String, on computer: any Computer) throws -> (expected: [UInt8], actual: [UInt8]) {
+        let bytes: [UInt8]
+
+        switch kind {
+        case .uint32:
+            guard let cValue = UInt32(value) else {
+                throw Errno.invalidArgument
+            }
+            bytes = withUnsafeBytes(of: cValue, Array.init)
+
+        case .uint64:
+            guard let cValue = UInt64(value) else {
+                throw Errno.invalidArgument
+            }
+            bytes = withUnsafeBytes(of: cValue, Array.init)
+
+        case .string:
+            guard let cValue = value.cString(using: .utf8) else {
+                throw Errno.invalidArgument
+            }
+            bytes = cValue.map { UInt8(bitPattern: $0) }
+        }
+
+        try computer.set(sysctl: name, value: bytes)
+
+        let actual = try computer.get(sysctl: name)
+        return (bytes, actual)
+    }
 }

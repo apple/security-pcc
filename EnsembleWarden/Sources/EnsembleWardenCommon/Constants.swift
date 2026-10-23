@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -20,7 +20,6 @@
 //
 
 package let kEnsembleWardenAPIXPCLocalServiceName = "com.apple.cloudos.ensemblewarden"
-package let kvCacheXPCServiceName = "com.apple.thimble.inference.service.tie-kvcache-transfer-ensemblewarden"
 /// Required to communicate ensemblewardend -> tie-kvcache-transfer
 package let kEnsembleWardenServerEntitlement = "com.apple.cloudos.ensemblewarden.server"
 /// Required to communicate ensemblewarden.framework -> ensemblewardend

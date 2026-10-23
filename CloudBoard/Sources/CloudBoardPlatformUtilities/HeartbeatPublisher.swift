@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -66,6 +66,7 @@ public actor HeartbeatPublisher {
     private let hotProperties: HotPropertiesController
     private let metrics: MetricsSystem
     private let additionalProperties: [String: String]?
+    private let monitoringBridgeService: SecureConfig.BridgeServiceMonitoringConfig
     private var publishingMetrics: OperationMetrics {
         .init(
             metricsSystem: self.metrics,
@@ -84,13 +85,28 @@ public actor HeartbeatPublisher {
     private var daemonStatus: DaemonStatus = .uninitialized
     private let isHealthy: ManagedAtomic<Bool> = .init(false)
 
+    /// Closure awaited once at startup before the node may report healthy.
+    ///
+    /// When present, the first `isUp == true` is gated on this completing, ensuring the
+    /// control plane isn't told the node is up until per-app initial assets are fetched.
+    private let initialAssetsReady: (@Sendable () async throws -> Void)?
+
+    /// One-way latch flipped to `true` once initial assets are fetched.
+    ///
+    /// Starts `false` only when `initialAssetsReady` is provided; otherwise starts `true`
+    /// to preserve behavior for callers that don't gate. Never flips back to `false`, so
+    /// later maintenance windows continue reporting UP (accepted stickiness).
+    private let initialAssetsFetched: ManagedAtomic<Bool>
+
     public init(
         configuration: CloudBoardDConfiguration.Heartbeat,
         identifier: String,
         nodeInfo: NodeInfo?,
         statusMonitor: StatusMonitor,
         hotProperties: HotPropertiesController,
-        metrics: MetricsSystem
+        metrics: MetricsSystem,
+        monitoringBridgeService: SecureConfig.BridgeServiceMonitoringConfig = .disabled,
+        initialAssetsReady: (@Sendable () async throws -> Void)? = nil
     ) throws {
         try self.init(
             configuration: .init(configuration),
@@ -100,7 +116,9 @@ public actor HeartbeatPublisher {
             client: HeartbeatHTTPClient(configuration: .init(configuration)),
             hotProperties: hotProperties,
             metrics: metrics,
-            additionalProperties: configuration.additionalProperties
+            additionalProperties: configuration.additionalProperties,
+            monitoringBridgeService: monitoringBridgeService,
+            initialAssetsReady: initialAssetsReady
         )
     }
 
@@ -109,7 +127,8 @@ public actor HeartbeatPublisher {
         identifier: String = ProcessInfo.processInfo.hostName,
         nodeInfo: NodeInfo?,
         hotProperties: HotPropertiesController,
-        metrics: MetricsSystem
+        metrics: MetricsSystem,
+        monitoringBridgeService: SecureConfig.BridgeServiceMonitoringConfig = .disabled
     ) throws {
         // Use this initializer for an always-healthy source.
         let (stream, continuation) = AsyncStream<DaemonStatus>.makeStream()
@@ -122,7 +141,8 @@ public actor HeartbeatPublisher {
             client: HeartbeatHTTPClient(configuration: .init(configuration)),
             hotProperties: hotProperties,
             metrics: metrics,
-            additionalProperties: configuration.additionalProperties
+            additionalProperties: configuration.additionalProperties,
+            monitoringBridgeService: monitoringBridgeService
         )
     }
 
@@ -139,7 +159,9 @@ public actor HeartbeatPublisher {
         client: any HeartbeatPublisherClientProtocol,
         hotProperties: HotPropertiesController,
         metrics: MetricsSystem,
-        additionalProperties: [String: String]?
+        additionalProperties: [String: String]?,
+        monitoringBridgeService: SecureConfig.BridgeServiceMonitoringConfig = .disabled,
+        initialAssetsReady: (@Sendable () async throws -> Void)? = nil
     ) {
         self.configuration = configuration
         self.identifier = identifier
@@ -149,6 +171,17 @@ public actor HeartbeatPublisher {
         self.hotProperties = hotProperties
         self.metrics = metrics
         self.additionalProperties = additionalProperties
+        self.monitoringBridgeService = monitoringBridgeService
+        self.initialAssetsReady = initialAssetsReady
+        self.initialAssetsFetched = .init(initialAssetsReady == nil)
+    }
+
+    /// Identifies which task in `run()`'s group finished, letting the one-shot initial-assets gate be told apart
+    /// from the long-lived publish tasks whose exit should tear the group down.
+    private enum RunningTask: Sendable, Equatable {
+        case initialAssetsGate
+        case healthUpdates
+        case timer
     }
 
     public func run() async throws {
@@ -156,12 +189,29 @@ public actor HeartbeatPublisher {
             let hotProperties = self.hotProperties
             try await hotProperties.waitForFirstUpdate()
             Self.logger.debug("First hot property update already received, starting the task group.")
-            try await withThrowingTaskGroup(of: Void.self) { group in
+
+            try await waitForBridgeService(setting: self.monitoringBridgeService, logger: Self.logger)
+
+            try await withThrowingTaskGroup(of: RunningTask.self) { group in
+                if let initialAssetsReady = self.initialAssetsReady {
+                    group.addTaskWithLogging(
+                        operation: "initialAssetsGate",
+                        sensitiveError: false,
+                        logger: Self.logger
+                    ) {
+                        try await initialAssetsReady()
+                        await self.markInitialAssetsFetched()
+                        // Publish so the UP transition doesn't wait for the next tick.
+                        try await self.publish()
+                        return .initialAssetsGate
+                    }
+                }
                 group.addTaskWithLogging(operation: "healthUpdates", sensitiveError: false, logger: Self.logger) {
                     for try await status in self.statusUpdates.removeDuplicatesGeneralized() {
                         await self.updateStatus(status)
                         try await self.publish()
                     }
+                    return .healthUpdates
                 }
                 group.addTaskWithLogging(operation: "timer", sensitiveError: false, logger: Self.logger) {
                     let timerSequence = AsyncTimerSequence(
@@ -172,8 +222,10 @@ public actor HeartbeatPublisher {
                     for try await _ in timerSequence {
                         try await self.publish()
                     }
+                    return .timer
                 }
-                _ = try await group.next()
+                // The gate is a one-shot; ignore its completion and tear down once a long-lived task exits.
+                while let finished = try await group.next(), finished == .initialAssetsGate {}
                 group.cancelAll()
             }
         }
@@ -184,17 +236,24 @@ public actor HeartbeatPublisher {
         self.updateHealth()
     }
 
+    /// Flips the one-way initial-assets latch and recomputes health.
+    private func markInitialAssetsFetched() {
+        self.initialAssetsFetched.store(true, ordering: .relaxed)
+        self.updateHealth()
+    }
+
     private func updateHealth() {
-        let isHealthy = switch self.daemonStatus {
+        let daemonHealthy = switch self.daemonStatus {
         case .serviceDiscoveryUpdateSuccess:
             true
-        case .uninitialized, .initializing, .waitingForFirstAttestationFetch, .waitingForFirstKeyFetch,
+        case .uninitialized, .initializing, .waitingForFirstAttestationFetch,
              .waitingForFirstHotPropertyUpdate, .waitingForWorkloadRegistration,
              .componentsFailedToRun, .serviceDiscoveryUpdateFailure,
              .serviceDiscoveryPublisherDraining, .daemonDrained,
              .daemonExitingOnError:
             false
         }
+        let isHealthy = daemonHealthy && self.initialAssetsFetched.load(ordering: .relaxed)
         self.isHealthy.store(isHealthy, ordering: .relaxed)
     }
 
@@ -218,7 +277,7 @@ public actor HeartbeatPublisher {
                 try await self.client.sendHeartbeat(
                     .init(
                         identifier: identifier,
-                        isUp: self.isHealthy.load(ordering: .relaxed),
+                        isUp: isHealthy,
                         status: status,
                         source: .cloudboardd,
                         senderType: .node,
@@ -274,8 +333,6 @@ extension Heartbeat.Status {
             .initializing
         case .waitingForFirstAttestationFetch:
             .waitingForFirstAttestationFetch
-        case .waitingForFirstKeyFetch:
-            .waitingForFirstKeyFetch
         case .waitingForFirstHotPropertyUpdate:
             .waitingForFirstHotPropertyUpdate
         case .waitingForWorkloadRegistration:

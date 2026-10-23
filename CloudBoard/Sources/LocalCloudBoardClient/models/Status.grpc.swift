@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,7 @@
 internal import InternalGRPC
 internal import InternalSwiftProtobuf
 internal import NIO
-internal  import NIOConcurrencyHelpers
+internal import NIOConcurrencyHelpers
 
 
 /// Usage: instantiate `Cloudboard_Status_V1_StatusClient`, then call methods of this protocol to make API calls.

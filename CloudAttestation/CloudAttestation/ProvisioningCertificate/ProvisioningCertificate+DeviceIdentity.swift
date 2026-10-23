@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -74,11 +74,11 @@ extension ProvisioningCertificate.DeviceIdentity {
             self.properties = [:]
         }
 
-        public init(derEncoded rootNode: ASN1Node) throws {
+        public init(derEncoded rootNode: ASN1Node) throws(ThrownASN1Error) {
             self.properties = [:]
             let octetString = try ASN1OctetString(derEncoded: rootNode)
             let seqNode = try DER.parse(octetString.bytes)
-            try DER.sequence(seqNode, identifier: .sequence) { nodes in
+            try DER.sequence(seqNode, identifier: .sequence) { nodes throws(ThrownASN1Error) in
                 while let node = nodes.next() {
                     let tag = node.identifier.tagNumber
                     guard case .constructed(let content) = node.content else {

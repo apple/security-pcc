@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -62,11 +62,11 @@ struct Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_StartupResponse: Sendable
 
   /// Optional error message if failed
   var errorMessage: String {
-    get {return _errorMessage ?? String()}
+    get {_errorMessage ?? String()}
     set {_errorMessage = newValue}
   }
   /// Returns true if `errorMessage` has been explicitly set.
-  var hasErrorMessage: Bool {return self._errorMessage != nil}
+  var hasErrorMessage: Bool {self._errorMessage != nil}
   /// Clears the value of `errorMessage`. Subsequent reads from it will return its default value.
   mutating func clearErrorMessage() {self._errorMessage = nil}
 
@@ -155,6 +155,7 @@ struct Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_ControllerEvent: Sendable
     case workload(Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_RegisterWorkload)
     /// Signal that output stream has ended successfully
     case updateHealthStatus(Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_UpdateHealthStatus)
+
   }
 
   init() {}
@@ -189,11 +190,11 @@ struct Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_UpdateHealthStatus: Senda
   // methods supported on all messages.
 
   var state: Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_WorkloadControllerState {
-    get {return _state ?? Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_WorkloadControllerState()}
+    get {_state ?? Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_WorkloadControllerState()}
     set {_state = newValue}
   }
   /// Returns true if `state` has been explicitly set.
-  var hasState: Bool {return self._state != nil}
+  var hasState: Bool {self._state != nil}
   /// Clears the value of `state`. Subsequent reads from it will return its default value.
   mutating func clearState() {self._state = nil}
 
@@ -282,11 +283,11 @@ struct Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_Busy: Sendable {
   // methods supported on all messages.
 
   var reason: String {
-    get {return _reason ?? String()}
+    get {_reason ?? String()}
     set {_reason = newValue}
   }
   /// Returns true if `reason` has been explicitly set.
-  var hasReason: Bool {return self._reason != nil}
+  var hasReason: Bool {self._reason != nil}
   /// Clears the value of `reason`. Subsequent reads from it will return its default value.
   mutating func clearReason() {self._reason = nil}
 
@@ -303,11 +304,11 @@ struct Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_Error: Sendable {
   // methods supported on all messages.
 
   var message: String {
-    get {return _message ?? String()}
+    get {_message ?? String()}
     set {_message = newValue}
   }
   /// Returns true if `message` has been explicitly set.
-  var hasMessage: Bool {return self._message != nil}
+  var hasMessage: Bool {self._message != nil}
   /// Clears the value of `message`. Subsequent reads from it will return its default value.
   mutating func clearMessage() {self._message = nil}
 
@@ -406,10 +407,7 @@ fileprivate let _protobuf_package = "com.apple.cloudboard.shadowtunnel.controlle
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_StartupInfo: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".StartupInfo"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "cloud_app_name"),
-    2: .standard(proto: "instance_uuid"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}cloud_app_name\0\u{3}instance_uuid\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -444,10 +442,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_StartupInfo: InternalS
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_StartupResponse: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".StartupResponse"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "success"),
-    2: .standard(proto: "error_message"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}success\0\u{3}error_message\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -486,10 +481,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_StartupResponse: Inter
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_StateTransition: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".StateTransition"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "connected"),
-    2: .same(proto: "disconnected"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}connected\0\u{1}disconnected\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -556,10 +548,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_StateTransition: Inter
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_ControllerEvent: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".ControllerEvent"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "workload"),
-    2: .standard(proto: "update_health_status"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}workload\0\u{3}update_health_status\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -664,9 +653,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_Disconnected: Internal
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_UpdateHealthStatus: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".UpdateHealthStatus"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "state")
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}state\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -700,12 +687,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_UpdateHealthStatus: In
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_WorkloadControllerState: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".WorkloadControllerState"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "initializing"),
-    2: .same(proto: "ready"),
-    3: .same(proto: "busy"),
-    4: .same(proto: "error"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}initializing\0\u{1}ready\0\u{1}busy\0\u{1}error\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -844,9 +826,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_Ready: InternalSwiftPr
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_Busy: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".Busy"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "reason")
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}reason\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -880,9 +860,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_Busy: InternalSwiftPro
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_Error: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".Error"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "message")
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}message\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -916,13 +894,8 @@ extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_Error: InternalSwiftPr
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_RegisterWorkload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".RegisterWorkload"
-    static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-      1: .standard(proto: "workload_name"),
-      2: .standard(proto: "max_batch_size"),
-      3: .standard(proto: "optimal_batch_size"),
-      4: .standard(proto: "workload_tags")
-    ]
-    
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}workload_name\0\u{4}\u{2}max_batch_size\0\u{3}optimal_batch_size\0\u{4}\u{2}workload_tags\0")
+
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
@@ -966,9 +939,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_RegisterWorkload: Inte
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_RoutingTagValueList: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".RoutingTagValueList"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "values"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}values\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -998,9 +969,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_RoutingTagValueList: I
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_RoutingTagValueSingle: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".RoutingTagValueSingle"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-      1: .same(proto: "value"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}value\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1030,10 +999,7 @@ extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_RoutingTagValueSingle:
 
 extension Com_Apple_Cloudboard_Shadowtunnel_Controller_V1_RoutingTagValue: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".RoutingTagValue"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "single"),
-    2: .same(proto: "list"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}single\0\u{1}list\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {

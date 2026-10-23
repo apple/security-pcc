@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -13,12 +13,16 @@
 // 10/02/2024
 
 
+import Foundation
+
 public final class EventNormalizer: EHTransform, AllEventsIterable {
     public static let allEvents: [any EHUEFEvent.Type] = [
         NormalizedProcess.self,
         NormalizedNetwork.self,
         NormalizedDns.self,
-        NormalizedDevice.self
+        NormalizedDevice.self,
+        NormalizedSSH.self,
+        NormalizedFile.self
     ]
 
     public let name = "EventNormalizer"
@@ -39,6 +43,7 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
         var n_non_normalizable: [String: EHValueType] { get }
         var n_tty: String { get }
         var n_uid: UInt32 { get }
+        var n_euid: UInt32 { get }
         var n_gid: UInt32 { get }
         var n_p_exe: String { get }
         var n_fd_count: UInt32 { get }
@@ -114,12 +119,64 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
         var n_non_normalizable: [String: EHValueType] { get }
     }
 
-    protocol NormalizableEvent: EHUEFEvent, RuleTagger.CustomFieldMatcher {
+
+    public protocol SSHNormalizable: EHUEFEvent {
+        var n_start_time: Double { get }
+
+        var n_src_addr: String { get }
+
+        var n_username: String { get }
+
+        var n_success: Bool { get }
+
+        var n_uid: UInt32 { get }
+
+        var n_pid: Int64 { get }
+
+        var n_tty: String { get }
+
+        var n_session_id: String { get }
+
+        var n_action: String { get }
+
+        var n_session_duration: Double { get }
+
+        var n_non_normalizable: [String: EHValueType] { get }
+    }
+
+
+    public protocol FileNormalizable: EHUEFEvent {
+        var n_action: String { get }
+
+        var n_timestamp: Double { get }
+
+        var n_path: String { get }
+
+        var n_size: Int64 { get }
+
+        var n_flags: Int32 { get }
+
+        var n_exe: String { get }
+
+        var n_pid: Int64 { get }
+
+        var n_ppid: Int64 { get }
+
+        var n_uid: UInt32 { get }
+
+        var n_non_normalizable: [String: EHValueType] { get }
+    }
+
+    protocol NormalizableEvent: EHUEFEvent {
         var non_normalizable: [String: EHValueType] { get }
     }
 
 
     public struct NormalizedProcess: NormalizableEvent, UsernameEnricher.UsernameEnrichable, GroupnameEnricher.GroupnameEnrichable {
+        public enum Tags: String {
+            case fork_only
+        }
+
         public func gid_properties() -> ([String]?, [String]?) {
             return (nil, ["gid", "p_gid"])
         }
@@ -128,19 +185,20 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
             return (nil, ["uid"])
         }
 
-        public init(tags: Set<String> = Set<String>(), event_category: EHUEFCategory = .process, event_type: String = "normalized_process", fields: [String: EHValueType] = [:], non_normalizable: [String: EHValueType] = [:], start_time: Double = 0, cwd: String = "", args: [String] = [], exe: String = "", tty: String = "", pid: Int64 = 0, uid: UInt32 = 0, gid: UInt32 = 0, ppid: Int64 = 0, p_exe: String = "", fd_count: UInt32 = 0, fd_pipe_ids: [UInt64] = [], p_start_time: Double = 0, p_gid: UInt32 = 0) {
-            self.tags = tags
+        public init(tags: Set<String> = Set<String>(), event_category: EHUEFCategory = .process, event_type: String = "normalized_process", fields: [String: EHValueType] = [:], non_normalizable: [String: EHValueType] = [:], start_time: Double = 0, cwd: String = "", args: [String] = [], exe: String = "", tty: String = "", pid: Int64 = 0, uid: UInt32 = 0, euid: UInt32 = 0, gid: UInt32 = 0, ppid: Int64 = 0, p_exe: String = "", fd_count: UInt32 = 0, fd_pipe_ids: [UInt64] = [], p_start_time: Double = 0, p_gid: UInt32 = 0) {
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
             self.event_category = event_category
             self.event_type = event_type
-            self.fields = fields
             self.non_normalizable = non_normalizable
             self.start_time = start_time
             self.cwd = cwd
             self.args = args
+            self._cmdline = args.joined(separator: " ")
             self.exe = exe
             self.tty = tty
             self.pid = pid
             self.uid = uid
+            self.euid = euid
             self.gid = gid
             self.ppid = ppid
             self.p_exe = p_exe
@@ -152,15 +210,16 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
 
         public init() {}
         public init(_ from: any ProcessNormalizable) {
-            self.tags = from.tags
-            self.fields = from.fields
+            self.metadata = from.metadata
             self.start_time = from.n_start_time
             self.cwd = from.n_cwd
             self.args = from.n_args
+            self._cmdline = from.n_args.joined(separator: " ")
             self.exe = from.n_exe
             self.tty = from.n_tty
             self.pid = from.n_pid
             self.uid = from.n_uid
+            self.euid = from.n_euid
             self.gid = from.n_gid
             self.ppid = from.n_ppid
             self.p_exe = from.n_p_exe
@@ -168,18 +227,54 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
             self.fd_count = from.n_fd_count
             self.fd_pipe_ids = from.n_fd_pipe_ids
         }
-        public var tags = Set<String>()
+        public var metadata = EHEventMetadata()
         public var event_category: EHUEFCategory = .process
         public var event_type: String = "normalized_process"
 
-        public var fields: [String: EHValueType] = [:]
         public var non_normalizable: [String: EHValueType] = [:]
 
         public var start_time: Double = 0
 
         public var cwd: String = ""
 
-        public var args: [String] = []
+        public var args: [String] = [] {
+            didSet {
+                _cmdline = args.joined(separator: " ")
+            }
+        }
+
+        @CodableIgnored private var _cmdline: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case metadata, event_category, event_type, non_normalizable
+            case start_time, cwd, args, exe, tty, pid, uid, euid, gid
+            case ppid, p_exe, fd_count, fd_pipe_ids, p_start_time, p_gid
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.metadata = try c.decodeIfPresent(EHEventMetadata.self, forKey: .metadata) ?? EHEventMetadata()
+            self.event_category = try c.decodeIfPresent(EHUEFCategory.self, forKey: .event_category) ?? .process
+            self.event_type = try c.decodeIfPresent(String.self, forKey: .event_type) ?? "normalized_process"
+            self.non_normalizable = try c.decodeIfPresent([String: EHValueType].self, forKey: .non_normalizable) ?? [:]
+            self.start_time = try c.decodeIfPresent(Double.self, forKey: .start_time) ?? 0
+            self.cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+            let decodedArgs = try c.decodeIfPresent([String].self, forKey: .args) ?? []
+            self.args = decodedArgs
+            self._cmdline = decodedArgs.joined(separator: " ")
+            self.exe = try c.decodeIfPresent(String.self, forKey: .exe) ?? ""
+            self.tty = try c.decodeIfPresent(String.self, forKey: .tty) ?? ""
+            self.pid = try c.decodeIfPresent(Int64.self, forKey: .pid) ?? 0
+            self.uid = try c.decodeIfPresent(UInt32.self, forKey: .uid) ?? 0
+            self.euid = try c.decodeIfPresent(UInt32.self, forKey: .euid) ?? 0
+            self.gid = try c.decodeIfPresent(UInt32.self, forKey: .gid) ?? 0
+            self.ppid = try c.decodeIfPresent(Int64.self, forKey: .ppid) ?? 0
+            self.p_exe = try c.decodeIfPresent(String.self, forKey: .p_exe) ?? ""
+            self.fd_count = try c.decodeIfPresent(UInt32.self, forKey: .fd_count) ?? 0
+            self.fd_pipe_ids = try c.decodeIfPresent([UInt64].self, forKey: .fd_pipe_ids) ?? []
+            self.p_start_time = try c.decodeIfPresent(Double.self, forKey: .p_start_time) ?? 0
+            self.p_gid = try c.decodeIfPresent(UInt32.self, forKey: .p_gid) ?? 0
+        }
 
         public var exe: String = ""
 
@@ -188,6 +283,8 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
         public var pid: Int64 = 0
 
         public var uid: UInt32 = 0
+
+        public var euid: UInt32 = 0
 
         public var gid: UInt32 = 0
 
@@ -205,12 +302,15 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
 
 
         public var cmdline: String {
-            self.args.joined(separator: " ")
+            if let cached = _cmdline {
+                return cached
+            }
+            return args.joined(separator: " ")
         }
     }
 
 
-    public struct NormalizedNetwork: NormalizableEvent, UsernameEnricher.UsernameEnrichable {
+    public struct NormalizedNetwork: NormalizableEvent, UsernameEnricher.UsernameEnrichable, EHProcessTreeEnrichable {
         public func uid_properties() -> ([String]?, [String]?) {
             return (nil, ["uid"])
         }
@@ -235,12 +335,12 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
             pid_start_time: Double = 0,
             p_pid: Int64 = 0,
             p_pid_start_time: Double = 0,
-            p_exe: String = ""
+            p_exe: String = "",
+            exe: String = ""
         ) {
-            self.tags = tags
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
             self.event_category = event_category
             self.event_type = event_type
-            self.fields = fields
             self.non_normalizable = non_normalizable
             self.start_time = start_time
             self.pid = pid
@@ -255,11 +355,11 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
             self.p_pid = p_pid
             self.p_pid_start_time = p_pid_start_time
             self.p_exe = p_exe
+            self.exe = exe
         }
 
         public init(_ from: any NetworkNormalizable) {
-            self.tags = from.tags
-            self.fields = from.fields
+            self.metadata = from.metadata
             self.non_normalizable = from.n_non_normalizable
             self.start_time = from.n_start_time
             self.pid = from.n_pid
@@ -272,11 +372,10 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
             self.uid = from.n_uid
         }
 
-        public var tags = Set<String>()
+        public var metadata = EHEventMetadata()
         public var event_category: EHUEFCategory = .network
         public var event_type: String = "normalized_network"
 
-        public var fields: [String: EHValueType] = [:]
         public var non_normalizable: [String: EHValueType] = [:]
 
         public var start_time: Double = 0
@@ -304,6 +403,8 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
         public var p_pid_start_time: Double = 0
 
         public var p_exe: String = ""
+
+        public var exe: String = ""
 
 
         public var remote_endpoint: String {
@@ -337,10 +438,9 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
             subqname: String = "",
             subqname_entropy: Double = 0
         ) {
-            self.tags = tags
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
             self.event_category = event_category
             self.event_type = event_type
-            self.fields = fields
             self.non_normalizable = non_normalizable
             self.start_time = start_time
             self.pid = pid
@@ -356,8 +456,7 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
         }
 
         public init(_ from: any DnsNormalizable) {
-            self.tags = from.tags
-            self.fields = from.fields
+            self.metadata = from.metadata
             self.non_normalizable = from.n_non_normalizable
             self.start_time = from.n_start_time
             self.pid = from.n_pid
@@ -372,11 +471,10 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
             self.subqname_entropy = from.n_subqname_entropy
         }
 
-        public var tags = Set<String>()
+        public var metadata = EHEventMetadata()
         public var event_category: EHUEFCategory = .network
         public var event_type: String = "normalized_dns"
 
-        public var fields: [String: EHValueType] = [:]
         public var non_normalizable: [String: EHValueType] = [:]
 
         public var start_time: Double = 0
@@ -441,10 +539,9 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
             device_major: UInt32? = nil,
             device_minor: UInt32? = nil
         ) {
-            self.tags = tags
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
             self.event_category = event_category
             self.event_type = event_type
-            self.fields = fields
             self.non_normalizable = non_normalizable
             self.timestamp = timestamp
             self.pid = pid
@@ -456,8 +553,7 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
         }
 
         public init(_ from: any DeviceOpenNormalizable) {
-            self.tags = from.tags
-            self.fields = from.fields
+            self.metadata = from.metadata
             self.non_normalizable = from.n_non_normalizable
             self.timestamp = from.n_timestamp
             self.pid = from.n_pid
@@ -468,11 +564,10 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
             self.device_minor = from.n_device_minor
         }
 
-        public var tags = Set<String>()
+        public var metadata = EHEventMetadata()
         public var event_category: EHUEFCategory = .resource
         public var event_type: String = "normalized_device"
 
-        public var fields: [String: EHValueType] = [:]
         public var non_normalizable: [String: EHValueType] = [:]
 
         public var timestamp: Double = 0
@@ -491,19 +586,351 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
     }
 
 
+    public struct NormalizedSSH: NormalizableEvent, UsernameEnricher.UsernameEnrichable {
+        public func uid_properties() -> ([String]?, [String]?) {
+            return (nil, ["uid"])
+        }
+
+        public init() {}
+
+        public init(
+            tags: Set<String> = Set<String>(),
+            event_category: EHUEFCategory = .system,
+            event_type: String = "normalized_ssh",
+            fields: [String: EHValueType] = [:],
+            non_normalizable: [String: EHValueType] = [:],
+            start_time: Double = 0,
+            src_addr: String = "",
+            username: String = "",
+            success: Bool = false,
+            uid: UInt32 = 0,
+            pid: Int64 = 0,
+            tty: String = "",
+            session_id: String = "",
+            action: String = "",
+            session_duration: Double = 0
+        ) {
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
+            self.event_category = event_category
+            self.event_type = event_type
+            self.non_normalizable = non_normalizable
+            self.start_time = start_time
+            self.src_addr = src_addr
+            self.username = username
+            self.success = success
+            self.uid = uid
+            self.pid = pid
+            self.tty = tty
+            self.session_id = session_id
+            self.action = action
+            self.session_duration = session_duration
+        }
+
+        public init(_ from: any SSHNormalizable) {
+            self.metadata = from.metadata
+            self.non_normalizable = from.n_non_normalizable
+            self.start_time = from.n_start_time
+            self.src_addr = from.n_src_addr
+            self.username = from.n_username
+            self.success = from.n_success
+            self.uid = from.n_uid
+            self.pid = from.n_pid
+            self.tty = from.n_tty
+            self.session_id = from.n_session_id
+            self.action = from.n_action
+            self.session_duration = from.n_session_duration
+        }
+
+        public var metadata = EHEventMetadata()
+        public var event_category: EHUEFCategory = .system
+        public var event_type: String = "normalized_ssh"
+
+        public var non_normalizable: [String: EHValueType] = [:]
+
+        public var start_time: Double = 0
+
+        public var src_addr: String = ""
+
+        public var username: String = ""
+
+        public var success: Bool = false
+
+        public var uid: UInt32 = 0
+
+        public var pid: Int64 = 0
+
+        public var tty: String = ""
+
+        public var session_id: String = ""
+
+        public var action: String = ""
+
+        public var session_duration: Double = 0
+    }
+
+
+    public struct NormalizedFile: NormalizableEvent, UsernameEnricher.UsernameEnrichable {
+        public enum Action: String {
+            case open
+            case unlink
+            case rename
+            case create
+            case write
+            case chmod
+        }
+
+        public func uid_properties() -> ([String]?, [String]?) {
+            return (nil, ["uid"])
+        }
+
+        public init() {}
+
+        public init(
+            tags: Set<String> = Set<String>(),
+            event_category: EHUEFCategory = .file,
+            event_type: String = "normalized_file",
+            fields: [String: EHValueType] = [:],
+            non_normalizable: [String: EHValueType] = [:],
+            action: String = Action.open.rawValue,
+            timestamp: Double = 0,
+            path: String = "",
+            size: Int64 = 0,
+            flags: Int32 = 0,
+            exe: String = "",
+            pid: Int64 = 0,
+            ppid: Int64 = 0,
+            uid: UInt32 = 0
+        ) {
+            self.metadata = EHEventMetadata(fields: fields, tags: tags)
+            self.event_category = event_category
+            self.event_type = event_type
+            self.non_normalizable = non_normalizable
+            self.action = action
+            self.timestamp = timestamp
+            self.path = path
+            self.size = size
+            self.flags = flags
+            self.exe = exe
+            self.pid = pid
+            self.ppid = ppid
+            self.uid = uid
+        }
+
+        public init(_ from: any FileNormalizable) {
+            self.metadata = from.metadata
+            self.non_normalizable = from.n_non_normalizable
+            self.action = from.n_action
+            self.timestamp = from.n_timestamp
+            self.path = from.n_path
+            self.size = from.n_size
+            self.flags = from.n_flags
+            self.exe = from.n_exe
+            self.pid = from.n_pid
+            self.ppid = from.n_ppid
+            self.uid = from.n_uid
+        }
+
+        public var metadata = EHEventMetadata()
+        public var event_category: EHUEFCategory = .file
+        public var event_type: String = "normalized_file"
+
+        public var non_normalizable: [String: EHValueType] = [:]
+
+        public var action: String = Action.open.rawValue
+
+        public var timestamp: Double = 0
+
+        public var path: String = ""
+
+        public var size: Int64 = 0
+
+        public var flags: Int32 = 0
+
+        public var exe: String = ""
+
+        public var pid: Int64 = 0
+
+        public var ppid: Int64 = 0
+
+        public var uid: UInt32 = 0
+    }
+
+
     public enum Normalizations: CaseIterable, Sendable {
         case process
         case network
         case dns
         case device
+        case ssh
+        case file
     }
 
     let normalizations: Set<Normalizations>
+
+
+    public typealias NormalizerFunc = @Sendable (any EHUEFEvent) -> (any EHUEFEvent)?
+
+    private let dispatchTable: [String: (Normalizations, NormalizerFunc)]
+
+    public static func buildDispatchTable() -> [String: (Normalizations, NormalizerFunc)] {
+        var table: [String: (Normalizations, NormalizerFunc)] = [:]
+
+        table[ESClient.ESClientProcExecEvent().event_type] = (.process, { event in
+            guard let e = event as? ESClient.ESClientProcExecEvent else {
+                return nil
+            }
+            return NormalizedProcess(e)
+        })
+        table[ESClient.ESClientProcForkEvent().event_type] = (.process, { event in
+            guard let e = event as? ESClient.ESClientProcForkEvent else {
+                return nil
+            }
+            return NormalizedProcess(e)
+        })
+
+        table[ESClient.ESClientIOKitOpenEvent().event_type] = (.device, { event in
+            guard let e = event as? ESClient.ESClientIOKitOpenEvent else {
+                return nil
+            }
+            return NormalizedDevice(e)
+        })
+
+        table[ESClient.ESClientSSHLoginEvent().event_type] = (.ssh, { event in
+            guard let e = event as? ESClient.ESClientSSHLoginEvent else {
+                return nil
+            }
+            return NormalizedSSH(e)
+        })
+        table[ESClient.ESClientSSHLogoutEvent().event_type] = (.ssh, { event in
+            guard let e = event as? ESClient.ESClientSSHLogoutEvent else {
+                return nil
+            }
+            return NormalizedSSH(e)
+        })
+
+        table[ESClient.ESClientFileOpenEvent().event_type] = (.file, { event in
+            guard let e = event as? ESClient.ESClientFileOpenEvent else {
+                return nil
+            }
+            return NormalizedFile(e)
+        })
+        table[ESClient.ESClientFileWriteEvent().event_type] = (.file, { event in
+            guard let e = event as? ESClient.ESClientFileWriteEvent else {
+                return nil
+            }
+            return NormalizedFile(e)
+        })
+        table[ESClient.ESClientFileCreateEvent().event_type] = (.file, { event in
+            guard let e = event as? ESClient.ESClientFileCreateEvent else {
+                return nil
+            }
+            return NormalizedFile(e)
+        })
+        table[ESClient.ESClientFileUnlinkEvent().event_type] = (.file, { event in
+            guard let e = event as? ESClient.ESClientFileUnlinkEvent else {
+                return nil
+            }
+            return NormalizedFile(e)
+        })
+
+        table[ESClient.ESClientProcExitEvent().event_type] = (.process, { _ in nil })
+
+        table[EhprobeGenerator.EhprobeNetworkEvent().event_type] = (.network, { event in
+            guard let e = event as? EhprobeGenerator.EhprobeNetworkEvent else {
+                return nil
+            }
+            return NormalizedNetwork(e)
+        })
+
+        table[EhprobeGenerator.EhprobeIcmpEvent().event_type] = (.network, { event in
+            guard let e = event as? EhprobeGenerator.EhprobeIcmpEvent else {
+                return nil
+            }
+            return NormalizedNetwork(e)
+        })
+
+        table[EhprobeGenerator.EhprobeDnsEvent().event_type] = (.dns, { event in
+            guard let e = event as? EhprobeGenerator.EhprobeDnsEvent else {
+                return nil
+            }
+            return NormalizedDns(e)
+        })
+
+        table[EhprobeGenerator.EhprobeDeviceOpenEvent().event_type] = (.device, { event in
+            guard let e = event as? EhprobeGenerator.EhprobeDeviceOpenEvent else {
+                return nil
+            }
+            return NormalizedDevice(e)
+        })
+
+        table[EhprobeGenerator.EhprobeSSHLoginEvent().event_type] = (.ssh, { event in
+            guard let e = event as? EhprobeGenerator.EhprobeSSHLoginEvent else {
+                return nil
+            }
+            return NormalizedSSH(e)
+        })
+        table[EhprobeGenerator.EhprobeSSHLogoutEvent().event_type] = (.ssh, { event in
+            guard let e = event as? EhprobeGenerator.EhprobeSSHLogoutEvent else {
+                return nil
+            }
+            return NormalizedSSH(e)
+        })
+
+        table[EhprobeGenerator.EhprobeProcForkEvent().event_type] = (.process, { event in
+            guard let e = event as? EhprobeGenerator.EhprobeProcForkEvent else {
+                return nil
+            }
+            return NormalizedProcess(e)
+        })
+
+        table[EhprobeGenerator.EhprobeFileOpenEvent().event_type] = (.file, { event in
+            guard let e = event as? EhprobeGenerator.EhprobeFileOpenEvent else {
+                return nil
+            }
+            return NormalizedFile(e)
+        })
+        table[EhprobeGenerator.EhprobeFileWriteEvent().event_type] = (.file, { event in
+            guard let e = event as? EhprobeGenerator.EhprobeFileWriteEvent else {
+                return nil
+            }
+            return NormalizedFile(e)
+        })
+        table[EhprobeGenerator.EhprobeFileUnlinkEvent().event_type] = (.file, { event in
+            guard let e = event as? EhprobeGenerator.EhprobeFileUnlinkEvent else {
+                return nil
+            }
+            return NormalizedFile(e)
+        })
+
+        table[EhprobeGenerator.EhprobeSetuidEvent().event_type] = (.process, { _ in nil })
+        table[EhprobeGenerator.EhprobeSetgidEvent().event_type] = (.process, { _ in nil })
+        table[EhprobeGenerator.EhprobeBlockKillEvent().event_type] = (.process, { _ in nil })
+        table[EhprobeGenerator.EhprobeNewFsExecEvent().event_type] = (.process, { _ in nil })
+        table[EhprobeGenerator.EhprobeBlockedExecEvent().event_type] = (.process, { _ in nil })
+        table[EhprobeGenerator.EhprobePacketDataEvent().event_type] = (.network, { _ in nil })
+
+        return table
+    }
+
     public init(_ normalizations: Set<Normalizations> = Set(Normalizations.allCases)) {
         self.normalizations = normalizations
+        self.dispatchTable = Self.buildDispatchTable()
     }
 
     public func process(_ event: any EHUEFEvent) async -> EHTransformReturn {
+        if let (normalizationType, normalizer) = dispatchTable[event.event_type] {
+            if normalizations.contains(normalizationType) {
+                if let normalizedEvent = normalizer(event) {
+                    return (.proceed_mutated, [normalizedEvent], nil, nil)
+                }
+            }
+            return (.proceed, [event], nil, nil)
+        }
+
+        return fallbackNormalize(event)
+    }
+
+    private func fallbackNormalize(_ event: any EHUEFEvent) -> EHTransformReturn {
         for normalization in normalizations {
             switch normalization {
             case .process:
@@ -522,58 +949,485 @@ public final class EventNormalizer: EHTransform, AllEventsIterable {
                 if let event = event as? DeviceOpenNormalizable {
                     return (.proceed_mutated, [NormalizedDevice(event)], nil, nil)
                 }
+            case .ssh:
+                if let event = event as? SSHNormalizable {
+                    return (.proceed_mutated, [NormalizedSSH(event)], nil, nil)
+                }
+            case .file:
+                if let event = event as? FileNormalizable {
+                    return (.proceed_mutated, [NormalizedFile(event)], nil, nil)
+                }
             }
         }
-        return (.proceed, nil, nil, nil)
+        return (.proceed, [event], nil, nil)
     }
 
-    public func configure() throws {
+    public func configure() async throws {
     }
 }
 
 
 extension EventNormalizer.NormalizedProcess: EHEventSimilarityValue {
-    public var similarityHash: String {
-        return "\(self.exe)_\(self.cwd)_\(self.uid)_\(self.args)"
+    public var similarityHash: Int {
+        var hasher = Hasher()
+        hasher.combine(exe)
+        hasher.combine(cwd)
+        hasher.combine(uid)
+        for arg in args { hasher.combine(arg) }
+        return hasher.finalize()
     }
 }
 
 extension EventNormalizer.NormalizedNetwork: EHEventSimilarityValue {
-    public var similarityHash: String {
-        return "\(self.pid)_\(self.proc_name)_\(self.remote_addr)_\(self.remote_port)_\(self.protocol)"
+    public var similarityHash: Int {
+        var hasher = Hasher()
+        hasher.combine(pid)
+        hasher.combine(proc_name)
+        hasher.combine(remote_addr)
+        hasher.combine(remote_port)
+        hasher.combine(self.protocol)
+        return hasher.finalize()
     }
 }
 
 extension EventNormalizer.NormalizedDns: EHEventSimilarityValue {
-    public var similarityHash: String {
-        return "\(self.pid)_\(self.proc_name)_\(self.qname)_\(self.qtype)_\(self.rowtype)"
+    public var similarityHash: Int {
+        var hasher = Hasher()
+        hasher.combine(pid)
+        hasher.combine(proc_name)
+        hasher.combine(qname)
+        hasher.combine(qtype)
+        hasher.combine(rowtype)
+        return hasher.finalize()
     }
 }
 
 extension EventNormalizer.NormalizedDevice: EHEventSimilarityValue {
-    public var similarityHash: String {
-        return "\(self.pid)_\(self.executable)_\(self.device_identifier)_\(self.device_path)"
+    public var similarityHash: Int {
+        var hasher = Hasher()
+        hasher.combine(pid)
+        hasher.combine(executable)
+        hasher.combine(device_identifier)
+        hasher.combine(device_path)
+        return hasher.finalize()
     }
 }
 
-extension EventNormalizer.NormalizableEvent {
-    func getValueFromField(field: String) -> Any? {
-        if let e = self as? EventNormalizer.NormalizedProcess, field == "cmdline" {
-            return e.cmdline
-        }
+extension EventNormalizer.NormalizedSSH: EHEventSimilarityValue {
+    public var similarityHash: Int {
+        var hasher = Hasher()
+        hasher.combine(start_time)
+        hasher.combine(src_addr)
+        hasher.combine(username)
+        hasher.combine(session_id)
+        hasher.combine(action)
+        return hasher.finalize()
+    }
+}
 
-        if let val = self.non_normalizable[field] {
-            if let sval = val.stringValue {
-                return sval
-            } else if let ival = val.intValue {
-                return ival
-            } else if let ival = val.doubleValue {
-                return ival
-            } else if let bval = val.boolValue {
-                return bval
+extension EventNormalizer.NormalizedFile: EHEventSimilarityValue {
+    public var similarityHash: Int {
+        var hasher = Hasher()
+        hasher.combine(pid)
+        hasher.combine(exe)
+        hasher.combine(path)
+        hasher.combine(action)
+        hasher.combine(flags)
+        return hasher.finalize()
+    }
+}
+
+
+extension EventNormalizer.NormalizedProcess: EHFieldExtractable {
+    public func fieldValue(for fieldName: String) -> Any? {
+        switch fieldName {
+        case "pid": return pid
+        case "ppid": return ppid
+        case "uid": return uid
+        case "euid": return euid
+        case "gid": return gid
+        case "exe": return exe
+        case "args": return args
+        case "cwd": return cwd
+        case "start_time": return start_time
+        case "tty": return tty
+        case "fd_count": return fd_count
+        case "fd_pipe_ids": return fd_pipe_ids
+        case "p_exe": return p_exe
+        case "p_start_time": return p_start_time
+        case "p_gid": return p_gid
+        case "cmdline": return cmdline
+        case "non_normalizable": return non_normalizable
+        case "event_type": return event_type
+        case "event_category": return event_category
+        case "metadata": return metadata
+        case "fields": return fields
+        case "tags": return tags
+        default:
+            if let value = non_normalizable[fieldName] {
+                return value.stringValue ?? value.intValue ?? value.doubleValue ?? value.boolValue
             }
+            return nil
         }
+    }
+}
 
-        return nil
+extension EventNormalizer.NormalizedNetwork: EHFieldExtractable {
+    public func fieldValue(for fieldName: String) -> Any? {
+        switch fieldName {
+        case "pid": return pid
+        case "uid": return uid
+        case "start_time": return start_time
+        case "proc_name": return proc_name
+        case "remote_addr": return remote_addr
+        case "remote_port": return remote_port
+        case "local_port": return local_port
+        case "direction": return direction
+        case "protocol": return `protocol`
+        case "pid_start_time": return pid_start_time
+        case "p_pid": return p_pid
+        case "p_pid_start_time": return p_pid_start_time
+        case "p_exe": return p_exe
+        case "exe": return exe
+        case "remote_endpoint": return remote_endpoint
+        case "is_ipv6": return is_ipv6
+        case "non_normalizable": return non_normalizable
+        case "event_type": return event_type
+        case "event_category": return event_category
+        case "metadata": return metadata
+        case "fields": return fields
+        case "tags": return tags
+        default:
+            if let value = non_normalizable[fieldName] {
+                return value.stringValue ?? value.intValue ?? value.doubleValue ?? value.boolValue
+            }
+            return nil
+        }
+    }
+}
+
+extension EventNormalizer.NormalizedDns: EHFieldExtractable {
+    public func fieldValue(for fieldName: String) -> Any? {
+        switch fieldName {
+        case "pid": return pid
+        case "start_time": return start_time
+        case "proc_name": return proc_name
+        case "rowtype": return rowtype
+        case "qname": return qname
+        case "qtype": return qtype
+        case "rcode": return rcode
+        case "rdata": return rdata
+        case "qname_entropy": return qname_entropy
+        case "subqname": return subqname
+        case "subqname_entropy": return subqname_entropy
+        case "non_normalizable": return non_normalizable
+        case "event_type": return event_type
+        case "event_category": return event_category
+        case "metadata": return metadata
+        case "fields": return fields
+        case "tags": return tags
+        default:
+            if let value = non_normalizable[fieldName] {
+                return value.stringValue ?? value.intValue ?? value.doubleValue ?? value.boolValue
+            }
+            return nil
+        }
+    }
+}
+
+extension EventNormalizer.NormalizedDevice: EHFieldExtractable {
+    public func fieldValue(for fieldName: String) -> Any? {
+        switch fieldName {
+        case "pid": return pid
+        case "timestamp": return timestamp
+        case "executable": return executable
+        case "device_identifier": return device_identifier
+        case "device_path": return device_path
+        case "device_major": return device_major
+        case "device_minor": return device_minor
+        case "non_normalizable": return non_normalizable
+        case "event_type": return event_type
+        case "event_category": return event_category
+        case "metadata": return metadata
+        case "fields": return fields
+        case "tags": return tags
+        default:
+            if let value = non_normalizable[fieldName] {
+                return value.stringValue ?? value.intValue ?? value.doubleValue ?? value.boolValue
+            }
+            return nil
+        }
+    }
+}
+
+extension EventNormalizer.NormalizedSSH: EHFieldExtractable {
+    public func fieldValue(for fieldName: String) -> Any? {
+        switch fieldName {
+        case "start_time": return start_time
+        case "src_addr": return src_addr
+        case "username": return username
+        case "success": return success
+        case "uid": return uid
+        case "pid": return pid
+        case "tty": return tty
+        case "session_id": return session_id
+        case "action": return action
+        case "session_duration": return session_duration
+        case "non_normalizable": return non_normalizable
+        case "event_type": return event_type
+        case "event_category": return event_category
+        case "metadata": return metadata
+        case "fields": return fields
+        case "tags": return tags
+        default:
+            if let value = non_normalizable[fieldName] {
+                return value.stringValue ?? value.intValue ?? value.doubleValue ?? value.boolValue
+            }
+            return nil
+        }
+    }
+}
+
+extension EventNormalizer.NormalizedFile: EHFieldExtractable {
+    public func fieldValue(for fieldName: String) -> Any? {
+        switch fieldName {
+        case "action": return action
+        case "timestamp": return timestamp
+        case "path": return path
+        case "size": return size
+        case "flags": return flags
+        case "exe": return exe
+        case "pid": return pid
+        case "ppid": return ppid
+        case "uid": return uid
+        case "non_normalizable": return non_normalizable
+        case "event_type": return event_type
+        case "event_category": return event_category
+        case "metadata": return metadata
+        case "fields": return fields
+        case "tags": return tags
+        default:
+            if let value = non_normalizable[fieldName] {
+                return value.stringValue ?? value.intValue ?? value.doubleValue ?? value.boolValue
+            }
+            return nil
+        }
+    }
+}
+
+
+import AST
+
+private enum RK {
+    static let event_type: AST.RegoValue = .string("event_type")
+    static let event_category: AST.RegoValue = .string("event_category")
+    static let tags: AST.RegoValue = .string("tags")
+    static let fields: AST.RegoValue = .string("fields")
+    static let non_normalizable: AST.RegoValue = .string("non_normalizable")
+    static let start_time: AST.RegoValue = .string("start_time")
+    static let timestamp: AST.RegoValue = .string("timestamp")
+    static let cwd: AST.RegoValue = .string("cwd")
+    static let args: AST.RegoValue = .string("args")
+    static let exe: AST.RegoValue = .string("exe")
+    static let tty: AST.RegoValue = .string("tty")
+    static let pid: AST.RegoValue = .string("pid")
+    static let uid: AST.RegoValue = .string("uid")
+    static let euid: AST.RegoValue = .string("euid")
+    static let gid: AST.RegoValue = .string("gid")
+    static let ppid: AST.RegoValue = .string("ppid")
+    static let p_exe: AST.RegoValue = .string("p_exe")
+    static let fd_count: AST.RegoValue = .string("fd_count")
+    static let fd_pipe_ids: AST.RegoValue = .string("fd_pipe_ids")
+    static let p_start_time: AST.RegoValue = .string("p_start_time")
+    static let p_gid: AST.RegoValue = .string("p_gid")
+    static let cmdline: AST.RegoValue = .string("cmdline")
+    static let proc_name: AST.RegoValue = .string("proc_name")
+    static let remote_addr: AST.RegoValue = .string("remote_addr")
+    static let remote_port: AST.RegoValue = .string("remote_port")
+    static let local_port: AST.RegoValue = .string("local_port")
+    static let direction: AST.RegoValue = .string("direction")
+    static let `protocol`: AST.RegoValue = .string("protocol")
+    static let pid_start_time: AST.RegoValue = .string("pid_start_time")
+    static let p_pid: AST.RegoValue = .string("p_pid")
+    static let p_pid_start_time: AST.RegoValue = .string("p_pid_start_time")
+    static let rowtype: AST.RegoValue = .string("rowtype")
+    static let qname: AST.RegoValue = .string("qname")
+    static let qtype: AST.RegoValue = .string("qtype")
+    static let rcode: AST.RegoValue = .string("rcode")
+    static let rdata: AST.RegoValue = .string("rdata")
+    static let qname_entropy: AST.RegoValue = .string("qname_entropy")
+    static let subqname: AST.RegoValue = .string("subqname")
+    static let subqname_entropy: AST.RegoValue = .string("subqname_entropy")
+    static let executable: AST.RegoValue = .string("executable")
+    static let device_identifier: AST.RegoValue = .string("device_identifier")
+    static let device_path: AST.RegoValue = .string("device_path")
+    static let device_major: AST.RegoValue = .string("device_major")
+    static let device_minor: AST.RegoValue = .string("device_minor")
+    static let src_addr: AST.RegoValue = .string("src_addr")
+    static let username: AST.RegoValue = .string("username")
+    static let success: AST.RegoValue = .string("success")
+    static let session_id: AST.RegoValue = .string("session_id")
+    static let action: AST.RegoValue = .string("action")
+    static let session_duration: AST.RegoValue = .string("session_duration")
+    static let path: AST.RegoValue = .string("path")
+    static let size: AST.RegoValue = .string("size")
+    static let flags: AST.RegoValue = .string("flags")
+    static let exe_basename: AST.RegoValue = .string("exe_basename")
+    static let p_exe_basename: AST.RegoValue = .string("p_exe_basename")
+}
+
+public func exeBasename(_ exe: String) -> String {
+    guard let lastSlash = exe.lastIndex(of: "/") else {
+        return exe
+    }
+    let afterSlash = exe.index(after: lastSlash)
+    return String(exe[afterSlash...])
+}
+
+extension EventNormalizer.NormalizedProcess: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = Dictionary(minimumCapacity: 22)
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.non_normalizable] = non_normalizable.toRegoValue()
+        obj[RK.start_time] = .number(RegoNumber(decimal: Decimal(start_time)))
+        obj[RK.cwd] = .string(cwd)
+        obj[RK.args] = .array(args.map { .string($0) })
+        obj[RK.exe] = .string(exe)
+        obj[RK.tty] = .string(tty)
+        obj[RK.pid] = .number(RegoNumber(int: pid))
+        obj[RK.uid] = .number(RegoNumber(int: Int64(uid)))
+        obj[RK.euid] = .number(RegoNumber(int: Int64(euid)))
+        obj[RK.gid] = .number(RegoNumber(int: Int64(gid)))
+        obj[RK.ppid] = .number(RegoNumber(int: ppid))
+        obj[RK.p_exe] = .string(p_exe)
+        obj[RK.fd_count] = .number(RegoNumber(int: Int64(fd_count)))
+        obj[RK.fd_pipe_ids] = .array(fd_pipe_ids.map { .number(RegoNumber(value: $0)) })
+        obj[RK.p_start_time] = .number(RegoNumber(decimal: Decimal(p_start_time)))
+        obj[RK.p_gid] = .number(RegoNumber(int: Int64(p_gid)))
+        obj[RK.cmdline] = .string(cmdline)
+        obj[RK.exe_basename] = .string(exeBasename(exe))
+        obj[RK.p_exe_basename] = .string(exeBasename(p_exe))
+        return .object(obj)
+    }
+}
+
+extension EventNormalizer.NormalizedNetwork: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = Dictionary(minimumCapacity: 22)
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.non_normalizable] = non_normalizable.toRegoValue()
+        obj[RK.start_time] = .number(RegoNumber(decimal: Decimal(start_time)))
+        obj[RK.pid] = .number(RegoNumber(int: pid))
+        obj[RK.proc_name] = .string(proc_name)
+        obj[RK.remote_addr] = .string(remote_addr)
+        obj[RK.remote_port] = .number(RegoNumber(int: Int64(remote_port)))
+        obj[RK.local_port] = .number(RegoNumber(int: Int64(local_port)))
+        obj[RK.direction] = .string(direction)
+        obj[RK.protocol] = .string(`protocol`)
+        obj[RK.uid] = .number(RegoNumber(int: Int64(uid)))
+        obj[RK.pid_start_time] = .number(RegoNumber(decimal: Decimal(pid_start_time)))
+        obj[RK.p_pid] = .number(RegoNumber(int: p_pid))
+        obj[RK.p_pid_start_time] = .number(RegoNumber(decimal: Decimal(p_pid_start_time)))
+        obj[RK.p_exe] = .string(p_exe)
+        obj[RK.p_exe_basename] = .string(exeBasename(p_exe))
+        obj[RK.exe] = .string(exe)
+        obj[RK.exe_basename] = .string(exeBasename(exe))
+        return .object(obj)
+    }
+}
+
+extension EventNormalizer.NormalizedDns: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = Dictionary(minimumCapacity: 14)
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.non_normalizable] = non_normalizable.toRegoValue()
+        obj[RK.start_time] = .number(RegoNumber(decimal: Decimal(start_time)))
+        obj[RK.pid] = .number(RegoNumber(int: pid))
+        obj[RK.proc_name] = .string(proc_name)
+        obj[RK.rowtype] = .string(rowtype)
+        obj[RK.qname] = .string(qname)
+        obj[RK.qtype] = .string(qtype)
+        obj[RK.rcode] = .string(rcode)
+        obj[RK.rdata] = .string(rdata)
+        obj[RK.qname_entropy] = .number(RegoNumber(decimal: Decimal(qname_entropy)))
+        obj[RK.subqname] = .string(subqname)
+        obj[RK.subqname_entropy] = .number(RegoNumber(decimal: Decimal(subqname_entropy)))
+        return .object(obj)
+    }
+}
+
+extension EventNormalizer.NormalizedDevice: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = Dictionary(minimumCapacity: 12)
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.non_normalizable] = non_normalizable.toRegoValue()
+        obj[RK.timestamp] = .number(RegoNumber(decimal: Decimal(timestamp)))
+        obj[RK.pid] = .number(RegoNumber(int: pid))
+        obj[RK.executable] = .string(executable)
+        obj[RK.device_identifier] = .string(device_identifier)
+        obj[RK.device_path] = .string(device_path)
+        if let device_major {
+            obj[RK.device_major] = .number(RegoNumber(int: Int64(device_major)))
+        }
+        if let device_minor {
+            obj[RK.device_minor] = .number(RegoNumber(int: Int64(device_minor)))
+        }
+        return .object(obj)
+    }
+}
+
+extension EventNormalizer.NormalizedSSH: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = Dictionary(minimumCapacity: 14)
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.non_normalizable] = non_normalizable.toRegoValue()
+        obj[RK.start_time] = .number(RegoNumber(decimal: Decimal(start_time)))
+        obj[RK.src_addr] = .string(src_addr)
+        obj[RK.username] = .string(username)
+        obj[RK.success] = .boolean(success)
+        obj[RK.uid] = .number(RegoNumber(int: Int64(uid)))
+        obj[RK.pid] = .number(RegoNumber(int: pid))
+        obj[RK.tty] = .string(tty)
+        obj[RK.session_id] = .string(session_id)
+        obj[RK.action] = .string(action)
+        obj[RK.session_duration] = .number(RegoNumber(decimal: Decimal(session_duration)))
+        return .object(obj)
+    }
+}
+
+extension EventNormalizer.NormalizedFile: EHRegoConvertible {
+    public func toRegoValue() -> AST.RegoValue {
+        var obj: [AST.RegoValue: AST.RegoValue] = Dictionary(minimumCapacity: 12)
+        obj[RK.event_type] = .string(event_type)
+        obj[RK.event_category] = .string(event_category.rawValue)
+        obj[RK.tags] = tags.toRegoValue()
+        obj[RK.fields] = fields.toRegoValue()
+        obj[RK.non_normalizable] = non_normalizable.toRegoValue()
+        obj[RK.action] = .string(action)
+        obj[RK.timestamp] = .number(RegoNumber(decimal: Decimal(timestamp)))
+        obj[RK.path] = .string(path)
+        obj[RK.size] = .number(RegoNumber(int: size))
+        obj[RK.flags] = .number(RegoNumber(int: Int64(flags)))
+        obj[RK.exe] = .string(exe)
+        obj[RK.exe_basename] = .string(exeBasename(exe))
+        obj[RK.pid] = .number(RegoNumber(int: pid))
+        obj[RK.ppid] = .number(RegoNumber(int: ppid))
+        obj[RK.uid] = .number(RegoNumber(int: Int64(uid)))
+        return .object(obj)
     }
 }

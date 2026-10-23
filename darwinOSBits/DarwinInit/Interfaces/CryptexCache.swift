@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,7 +21,7 @@
 import Foundation
 import System
 import CryptoKit
-import DarwinPrivate.os.variant
+internal import DarwinPrivate.os.variant
 import os
 
 typealias CryptexCache = Cache<CryptexCacheDelegate>

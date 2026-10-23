@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -31,7 +31,7 @@ package final class MockEnsembleTransponder: EnsembleTransponder, Sendable {
     private let messages: [Data]
     private let continuations: Mutex<[AsyncThrowingStream<Data, Error>.Continuation]> = .init([])
     private let responses: [Int: Data]
-    private let messageHandlers: Mutex<[String: @Sendable (Int, Data) -> Data]> = .init([:])
+    private let messageHandlers: Mutex<[String: @Sendable (Int, Data) async throws -> Data]> = .init([:])
 
     /// Info about the current node we're executing on.
     package let nodeInfo: EnsembleNodeInfo
@@ -55,11 +55,13 @@ package final class MockEnsembleTransponder: EnsembleTransponder, Sendable {
         package let appID: String
         package let data: Data
         package let destination: Int
+        package let includeTracingContext: Bool
 
-        package init(appID: String, data: Data, destination: Int) {
+        package init(appID: String, data: Data, destination: Int, includeTracingContext: Bool) {
             self.appID = appID
             self.data = data
             self.destination = destination
+            self.includeTracingContext = includeTracingContext
         }
     }
 
@@ -97,13 +99,25 @@ package final class MockEnsembleTransponder: EnsembleTransponder, Sendable {
         _sendDataCalls.withLock { $0 }
     }
 
-    package func registerMessageHandler(appID: String, handler: @escaping @Sendable (Int, Data) -> Data) throws {
-        messageHandlers.withLock { handlers in
+    package var nonHeartbeatSendDataCalls: [SendDataCall] {
+        self.sendDataCalls.filter { call in
+            guard let message = try? Protos.PorterMessage(serializedBytes: call.data) else {
+                return true
+            }
+            if case .heartbeat = message.messageType {
+                return false
+            }
+            return true
+        }
+    }
+
+    package func registerMessageHandler(appID: String, handler: @escaping @Sendable (Int, Data) async throws -> Data) async throws {
+        self.messageHandlers.withLock { handlers in
             handlers[appID] = handler
         }
 
         for message in self.messages {
-            handler(0, message)
+            _ = try await handler(0, message)
         }
     }
 
@@ -118,7 +132,7 @@ package final class MockEnsembleTransponder: EnsembleTransponder, Sendable {
         peerInfo
     }
 
-    package func sendData(appID: String, data: Data, destination: Int, timeout: TimeInterval) async throws -> Data {
+    package func sendData(appID: String, data: Data, destination: Int, timeout: TimeInterval, includeTracingContext: Bool) async throws -> Data {
         if let error = sendDataError, let errorMessageType = sendDataErrorOnMessageType {
             // Parse the incoming data as a PorterMessage to check its type
             if let porterMessage = try? Protos.PorterMessage(serializedData: data) {
@@ -128,7 +142,8 @@ package final class MockEnsembleTransponder: EnsembleTransponder, Sendable {
                      (.startNewProcess, .startNewProcess),
                      (.startNewProcessReply, .startNewProcessReply),
                      (.perProcessMessage, .perProcessMessage),
-                     (.shutdown, .shutdown):
+                     (.shutdown, .shutdown),
+                     (.heartbeat, .heartbeat):
                     throw error
                 default:
                     break
@@ -137,10 +152,10 @@ package final class MockEnsembleTransponder: EnsembleTransponder, Sendable {
         }
 
         _sendDataCalls.withLock { calls in
-            calls.append(SendDataCall(appID: appID, data: data, destination: destination))
+            calls.append(SendDataCall(appID: appID, data: data, destination: destination, includeTracingContext: includeTracingContext))
         }
 
-        logger.log("Sending data. destination=\(destination, privacy: .public)")
+        logger.trace("Sending data. destination=\(destination, privacy: .public)")
 
         // Apply delay if configured to simulate slow network
         if let delay = responseDelay {
@@ -148,9 +163,16 @@ package final class MockEnsembleTransponder: EnsembleTransponder, Sendable {
         }
 
         // Invoke the registered message handler for this appID
-        let handler = messageHandlers.withLock { $0[appID] }
+        let handler = self.messageHandlers.withLock { $0[appID] }
         if let handler {
-            return handler(nodeInfo.rank, data)
+            return try await handler(nodeInfo.rank, data)
+        }
+
+        // If no handler is registered, return a successful HeartbeatResponse for heartbeat messages
+        // to simulate the controller acknowledging the heartbeat.
+        if let porterMessage = try? Protos.PorterMessage(serializedData: data),
+           case .heartbeat = porterMessage.messageType {
+            return try Protos.HeartbeatResponse.with { $0.success = true }.serializedData()
         }
 
         // Forward the data to all subscribers.

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -61,21 +61,31 @@ extension CLI {
 
             let index: UInt64
             let dataHash: String
-            let seed: Bool
+            let releaseType: ATReleaseType
+            var seed: Bool { releaseType == .seed }
             let insertTime: UInt64 // unix epoch time
             let expireTime: UInt64 // unix epoch time
-            let tickets: Tickets
+            let tickets: Tickets?
+            let v2Release: String? // raw JSON for v2 leaves; nil for v1
 
             let rawData: Data?
             var metadataJson: String? { try? metadata?.jsonString() }
             let isDownloadable: Bool
-            let parsedDescription: String? // Image4 manifest properties of tickets
+            let parsedDescription: String? // Image4 manifest properties of tickets (v1 only)
 
             func encode(to encoder: Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
-                try container.encode(tickets, forKey: .tickets)
+                try container.encodeIfPresent(tickets, forKey: .tickets)
+                // Always emit `v2Release` for v2 entries — as JSON `null` when
+                // the helper couldn't parse it — so consumers can key off its
+                // presence to distinguish v1 (tickets) from v2 (v2Release)
+                // regardless of whether the helper was available.
+                if tickets == nil {
+                    try container.encode(v2Release, forKey: .v2Release)
+                }
                 try container.encode(index, forKey: .index)
                 try container.encode(dataHash, forKey: .dataHash)
+                try container.encode(releaseType.description, forKey: .releaseType)
                 try container.encode(insertTime, forKey: .insertTime)
                 try container.encode(expireTime, forKey: .expireTime)
                 try container.encode(rawData, forKey: .rawData)
@@ -87,7 +97,7 @@ extension CLI {
             }
 
             private enum CodingKeys: String, CodingKey {
-                case tickets, index, dataHash, seed, insertTime, expireTime, rawData, metadata, applicationName, downloadable, parsedDescription, buildVersion
+                case tickets, v2Release, index, dataHash, releaseType, insertTime, expireTime, rawData, metadata, applicationName, downloadable, parsedDescription, buildVersion
             }
 
             private var metadata: SWReleaseMetadata? = nil
@@ -97,6 +107,9 @@ extension CLI {
             }
 
             var buildVersion: String? {
+                if let bv = metadata?.metadata.buildVersion, !bv.isEmpty {
+                    return bv
+                }
                 guard
                     let darwinInitString = metadata?.darwinInitString,
                     let darwinInit = try? DarwinInitConfigV1(jsonString: darwinInitString)
@@ -113,7 +126,7 @@ extension CLI {
             init(_ rel: SWRelease) async {
                 self.index = rel.index
                 self.dataHash = rel.dataHash.hexString
-                self.seed = rel.nodeData.releaseType == .seed
+                self.releaseType = rel.nodeData.releaseType
                 if let insertTime = rel.nodeData.insertionTime {
                     self.insertTime = insertTime / 1000
                 } else {
@@ -123,23 +136,36 @@ extension CLI {
                 }
                 self.expireTime = rel.nodeData.expiryMs / 1000
                 self.rawData = rel.rawData
-                self.parsedDescription = rel.tickets?.debugDescription
 
-                var relTickets = ReleaseInfo.Tickets(
-                    ap: rel.apManifest!.description
-                )
+                switch rel.contents {
+                case .v1(let tickets):
+                    self.parsedDescription = tickets.debugDescription
 
-                if let cryptexManifests = rel.cryptexManifests {
-                    for cM in cryptexManifests {
-                        if cM.isDataOnly() {
-                            relTickets.data.append(cM.description)
-                        } else {
-                            relTickets.code.append(cM.description)
+                    var relTickets = ReleaseInfo.Tickets(
+                        ap: rel.apManifest!.description
+                    )
+
+                    if let cryptexManifests = rel.cryptexManifests {
+                        for cM in cryptexManifests {
+                            if cM.isDataOnly() {
+                                relTickets.data.append(cM.description)
+                            } else {
+                                relTickets.code.append(cM.description)
+                            }
                         }
                     }
+
+                    self.tickets = relTickets
+                    self.v2Release = nil
+
+                case .v2(let envelope):
+                    self.tickets = nil
+                    self.v2Release = envelope?.detail
+                    // parsedDescription is the v1 Image4-manifest dump; v2's
+                    // structured equivalent is `v2Release` (helper detail JSON).
+                    self.parsedDescription = nil
                 }
 
-                self.tickets = relTickets
                 self.metadata = rel.metadata
                 self.isDownloadable = (try? await rel.metadata?.isDownloadable) ?? false
             }
@@ -151,6 +177,10 @@ extension CLI {
             var statusDescription: String {
                 let isTerminalWide = Terminal.size.columns >= 98
                 var result = [String]()
+
+                if seed {
+                    result.append(isTerminalWide ? "seed" : "S")
+                }
 
                 if isDownloadable {
                     result.append(isTerminalWide ? "downloadable" : "D")
@@ -178,19 +208,41 @@ extension CLI {
                 builder += prefix + "Inserted: \(dateAsString(insertTime))\n"
                 builder += prefix + "Expires:  \(dateAsString(expireTime))\n"
 
-                builder += prefix + "Tickets:\n"
-                builder += prefix + "      OS: \(tickets.ap)\n"
-                if !tickets.code.isEmpty || !tickets.data.isEmpty {
-                    builder += prefix + "    Cryptexes\n"
-                    for c in tickets.code {
-                        builder += prefix + "    Code: \(c)\n"
+                if let tickets {
+                    builder += prefix + "Tickets:\n"
+                    builder += prefix + "      OS: \(tickets.ap)\n"
+                    if !tickets.code.isEmpty || !tickets.data.isEmpty {
+                        builder += prefix + "    Cryptexes\n"
+                        for c in tickets.code {
+                            builder += prefix + "    Code: \(c)\n"
+                        }
+                        for c in tickets.data {
+                            builder += prefix + "    Data: \(c)\n"
+                        }
                     }
-                    for c in tickets.data {
-                        builder += prefix + "    Data: \(c)\n"
+                } else if let v2Release {
+                    builder += prefix + "Release (v2):\n"
+                    for line in Self.prettyJSON(v2Release).split(separator: "\n", omittingEmptySubsequences: false) {
+                        builder += prefix + "    " + line + "\n"
                     }
+                } else {
+                    builder += prefix + "Release (v2): unparsed — pccvre-attestation-helper unavailable\n"
                 }
 
                 return builder
+            }
+
+            /// Re-serialize a compact JSON string with pretty-printing for
+            /// human display. Falls back to the original on decode failure.
+            private static func prettyJSON(_ compact: String) -> String {
+                guard let data = compact.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data),
+                      let pretty = try? JSONSerialization.data(
+                          withJSONObject: obj,
+                          options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                      )
+                else { return compact }
+                return String(decoding: pretty, as: UTF8.self)
             }
         }
     }

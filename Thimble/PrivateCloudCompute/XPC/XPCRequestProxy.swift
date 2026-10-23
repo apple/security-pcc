@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -21,9 +21,15 @@
 
 import os.log
 
+private let logger = Logger(for: .client)
+
 // We require that XPCRequestProxyProtocol are also Sendable because
 // they are used from onCancel blocks, which are Sendable.
 package protocol XPCRequestProxyProtocol: Sendable {
+    func prepare() async throws -> RequestSetupConfiguration
+    /// With `.requestCancellationV2` feature flag on, this doesn't cancel Swift Task right away, but
+    /// rather indicates to the daemon to start finishing up and can drop any responses that may still be coming
+    /// from the server.
     func cancel()
     func close()
     func send(data: Data, isComplete: Bool) async throws
@@ -35,9 +41,10 @@ package protocol XPCRequestProxyProtocol: Sendable {
     func createSubrequest(_ subrequest: XPCSubrequest) async throws
 
     func nextProgress() async throws -> PrivateCloudComputeConnection.Progress?
-}
 
-private let logger = tc2Logger(forCategory: .client)
+    /// Waits until Swift Task running PCC request on the daemon side finishes and will cancel that Swift Task if it takes too long.
+    func waitForRequestCompletion() async throws
+}
 
 struct XPCRequestProxy<
     Proxy: TC2XPCTrustedRequestProtocol,
@@ -51,6 +58,10 @@ struct XPCRequestProxy<
         self.connectionID = connectionID
         self.proxy = proxy
         self.wrapper = wrapper
+    }
+
+    func prepare() async throws -> RequestSetupConfiguration {
+        try await self.wrapper.prepare(proxy: self.proxy, connectionID: self.connectionID)
     }
 
     func cancel() {
@@ -67,7 +78,7 @@ struct XPCRequestProxy<
 
     /// Used for non multi-turn requests.
     func send(data: Data, isComplete: Bool) async throws {
-        try await self.wrapper.send(connectionID: self.connectionID, proxy: self.proxy, message: .data(data, isComplete))
+        try await self.wrapper.send(connectionID: self.connectionID, proxy: self.proxy, message: .data(.init(data: data, isComplete: isComplete)))
     }
 
     /// Used for non multi-turn requests.
@@ -78,8 +89,8 @@ struct XPCRequestProxy<
                 // These messages shouldn't be received for non multi-turn requests.
                 logger.error("Unexpectedly received a multi-turn message, ignoring. message=\(String(describing: message))")
                 break
-            case .data(let data):
-                return data
+            case .data(let payload):
+                return payload.data
             }
         }
 
@@ -101,5 +112,9 @@ struct XPCRequestProxy<
 
     func nextProgress() async throws -> PrivateCloudComputeConnection.Progress? {
         try await self.wrapper.nextProgress(connectionID: self.connectionID, proxy: self.proxy)
+    }
+
+    func waitForRequestCompletion() async throws {
+        try await self.wrapper.waitForRequestCompletion(connectionID: self.connectionID, proxy: self.proxy)
     }
 }

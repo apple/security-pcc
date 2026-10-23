@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -15,6 +15,8 @@
 import Foundation
 #if canImport(LoggingSupport)
 import LoggingSupport
+#elseif canImport(os)
+import os
 #endif
 import Synchronization
 
@@ -24,6 +26,7 @@ public struct ProcessTreeNode: Hashable, Sendable {
 
     private let normalizedProcess: EventNormalizer.NormalizedProcess
     private var exitEvent: ESClient.ESClientProcExitEvent?
+    private var syntheticExitTime: Double?
 
     init(normalizedProcess: EventNormalizer.NormalizedProcess) {
         self.normalizedProcess = normalizedProcess
@@ -41,6 +44,14 @@ public struct ProcessTreeNode: Hashable, Sendable {
         normalizedProcess.gid
     }
 
+    public var uid: UInt32 {
+        normalizedProcess.uid
+    }
+
+    public var cwd: String {
+        normalizedProcess.cwd
+    }
+
     public var name: String {
         normalizedProcess.exe
     }
@@ -50,7 +61,7 @@ public struct ProcessTreeNode: Hashable, Sendable {
     }
 
     public var exitTime: Double? {
-        exitEvent?.timestamp
+        exitEvent?.timestamp ?? syntheticExitTime
     }
 
     public func isChild(childPid: Int64) -> Bool {
@@ -69,6 +80,12 @@ public struct ProcessTreeNode: Hashable, Sendable {
         return true
     }
 
+    mutating func markStaleExit(timestamp: Double) {
+        if exitTime == nil {
+            syntheticExitTime = timestamp
+        }
+    }
+
 
     public static func == (lhs: ProcessTreeNode, rhs: ProcessTreeNode) -> Bool {
         lhs.pid == rhs.pid && lhs.startTime == rhs.startTime
@@ -83,10 +100,13 @@ public struct ProcessTreeNode: Hashable, Sendable {
 
 public final actor ProcessTree {
     static let maxTotalEntries = 32768
-    static let maxPidEntries = 32
+    static let maxPidEntries = 8
 
-    struct PidNodes {
-        private var storage: [Double: ProcessTreeNode] = [:]
+    public static let exitSweepIntervalSeconds: Double = 60
+    public static let exitRetentionSeconds: Double = 60
+
+    final class PidNodes {
+        private var storage: [Double: ProcessTreeNode] = Dictionary(minimumCapacity: 2)
 
         subscript (startTime: Double) -> ProcessTreeNode? {
             get {
@@ -110,6 +130,10 @@ public final actor ProcessTree {
             return Array(storage.values)
         }
 
+        var entries: [Double: ProcessTreeNode] {
+            return storage
+        }
+
         func latest(startBeforeTime: Double? = nil) -> ProcessTreeNode? {
             if let startBeforeTime = startBeforeTime {
                 return storage.filter { $0.key <= startBeforeTime }.max(by: { $0.key < $1.key })?.value
@@ -118,10 +142,40 @@ public final actor ProcessTree {
             }
         }
 
-        mutating func purgeIfFull() {
+        func purgeIfFull() {
             if storage.count >= ProcessTree.maxPidEntries {
                 let removeKeys = storage.keys.sorted().prefix(ProcessTree.maxPidEntries >> 1)
                 removeKeys.forEach { storage.removeValue(forKey: $0) }
+            }
+        }
+
+        @discardableResult
+        func removeExitedOlderThan(threshold: Double) -> Int {
+            let keysToRemove = storage.compactMap { startTime, node -> Double? in
+                guard let exitTime = node.exitTime, exitTime < threshold else {
+                    return nil
+                }
+                return startTime
+            }
+            for key in keysToRemove {
+                storage.removeValue(forKey: key)
+            }
+            return storage.count
+        }
+
+        func markStaleProcesses(liveProcesses: [Int64: Double], timestamp: Double) {
+            for (startTime, node) in storage where node.exitTime == nil {
+                if let liveStartTime = liveProcesses[node.pid] {
+                    if abs(liveStartTime - node.startTime) > 0.5 {
+                        var staleNode = node
+                        staleNode.markStaleExit(timestamp: timestamp)
+                        storage[startTime] = staleNode
+                    }
+                } else {
+                    var staleNode = node
+                    staleNode.markStaleExit(timestamp: timestamp)
+                    storage[startTime] = staleNode
+                }
             }
         }
     }
@@ -184,6 +238,97 @@ public final actor ProcessTree {
         grandParentOf(pid: node.pid, startTime: node.startTime)
     }
 
+    public func isAncestor(
+        ancestorPid: Int64,
+        ancestorStartTime: Double? = nil,
+        of descendantPid: Int64,
+        descendantStartTime: Double,
+        maxDepth: Int = 10
+    ) -> Bool {
+        var currentPid = descendantPid
+        var currentStartTime = descendantStartTime
+
+        for _ in 0..<maxDepth {
+            guard let currentNode = self[currentPid, currentStartTime] else {
+                return false
+            }
+
+            if currentNode.pid == ancestorPid {
+                if let ancestorStartTime = ancestorStartTime {
+                    let timeDiff = abs(currentNode.startTime - ancestorStartTime)
+                    if timeDiff < 0.001 {
+                        return true
+                    } else {
+                        return false
+                    }
+                }
+                return true
+            }
+
+            guard let parentNode = self.parentOf(node: currentNode) else {
+                return false
+            }
+
+            currentPid = parentNode.pid
+            currentStartTime = parentNode.startTime
+        }
+
+        return false
+    }
+
+    public func findAncestor(
+        of pid: Int64,
+        startTime: Double,
+        maxDepth: Int = 10,
+        matching namePredicate: (String) -> Bool
+    ) -> ProcessTreeNode? {
+        var currentPid = pid
+        var currentStartTime = startTime
+
+        for _ in 0..<maxDepth {
+            guard let currentNode = self[currentPid, currentStartTime] else {
+                return nil
+            }
+
+            if namePredicate(currentNode.name) {
+                return currentNode
+            }
+
+            guard let parentNode = self.parentOf(node: currentNode) else {
+                return nil
+            }
+
+            currentPid = parentNode.pid
+            currentStartTime = parentNode.startTime
+        }
+
+        return nil
+    }
+
+    public func sweepExitedProcesses(retentionSeconds: Double = exitRetentionSeconds, liveProcesses: [Int64: Double]? = nil) {
+        let now = Date().timeIntervalSince1970
+
+        if let liveProcesses {
+            for (_, pidNodes) in processCache {
+                pidNodes.markStaleProcesses(liveProcesses: liveProcesses, timestamp: now)
+            }
+        }
+
+        let threshold = now - retentionSeconds
+        var pidsToRemove: [Int64] = []
+
+        for (pid, pidNodes) in processCache {
+            let remaining = pidNodes.removeExitedOlderThan(threshold: threshold)
+            if remaining == 0 {
+                pidsToRemove.append(pid)
+            }
+        }
+
+        for pid in pidsToRemove {
+            processCache[pid] = nil
+        }
+    }
+
     public func debugStateDescription() -> String {
         let totalEntries = entries
         var pidDistribution: [Int64: Int] = [:]
@@ -211,6 +356,9 @@ public final actor ProcessTree {
     }
 
     public func logSnapshot() {
+        guard EHLog.isDebugEnabled(log) else {
+            return
+        }
         let stateDescription = self.debugStateDescription()
         os_log(.debug, log: log, """
             ProcessTree: state:
@@ -290,17 +438,44 @@ public final actor ProcessTree {
     }
 
     public func addNormalizedProcess(process: EventNormalizer.NormalizedProcess) {
-        var pidNodes = processCache[process.pid] ?? PidNodes()
-        pidNodes[process.start_time] = ProcessTreeNode(normalizedProcess: process)
-        processCache[process.pid] = pidNodes
+        let pidNodes: PidNodes
+        if let existing = processCache[process.pid] {
+            pidNodes = existing
+        } else {
+            pidNodes = PidNodes()
+            processCache[process.pid] = pidNodes
+        }
 
-        if let parent = findProcessNodeStartedBefore(pid: process.ppid, startBeforeTime: process.start_time) {
-            var updatedParent = parent
-            updatedParent.addChild(childPid: process.pid)
+        var existingStartTime: Double?
+        for (startTime, node) in pidNodes.entries {
+            let timeDiff = abs(startTime - process.start_time)
 
-            var parentPidNodes = processCache[parent.pid]!
-            parentPidNodes[parent.startTime] = updatedParent
-            processCache[parent.pid] = parentPidNodes
+            if timeDiff <= 0.5 && node.ppid == process.ppid {
+                existingStartTime = startTime
+                break
+            }
+        }
+
+        if let oldStartTime = existingStartTime {
+            var updatedProcess = process
+            updatedProcess.start_time = oldStartTime
+            updatedProcess.non_normalizable = [:]
+
+            pidNodes[oldStartTime] = nil
+            pidNodes[oldStartTime] = ProcessTreeNode(normalizedProcess: updatedProcess)
+        } else {
+            var storedProcess = process
+            storedProcess.non_normalizable = [:]
+            pidNodes[process.start_time] = ProcessTreeNode(normalizedProcess: storedProcess)
+        }
+
+        if existingStartTime == nil {
+            if let parent = findProcessNodeStartedBefore(pid: process.ppid, startBeforeTime: process.start_time),
+               let parentPidNodes = processCache[parent.pid] {
+                var updatedParent = parent
+                updatedParent.addChild(childPid: process.pid)
+                parentPidNodes[parent.startTime] = updatedParent
+            }
         }
     }
 
@@ -319,18 +494,22 @@ public final actor ProcessTree {
             }
 
             return (true, nil)
-        } else if let e = event as? EventNormalizer.NormalizedNetwork {
+        } else if var e = event as? (any EHProcessTreeEnrichable) {
 
             if let pidNode = self[e.pid] {
-                var m_e = e
-                m_e.pid_start_time = pidNode.startTime
+                e.pid_start_time = pidNode.startTime
+                e.exe = pidNode.name
+                e.uid = pidNode.uid
+                if e.proc_name.isEmpty {
+                    e.proc_name = exeBasename(pidNode.name)
+                }
 
                 if let parent = findProcessNodeStartedBefore(pid: pidNode.ppid, startBeforeTime: pidNode.startTime) {
-                    m_e.p_pid = parent.pid
-                    m_e.p_pid_start_time = parent.startTime
-                    m_e.p_exe = parent.name
+                    e.p_pid = parent.pid
+                    e.p_pid_start_time = parent.startTime
+                    e.p_exe = parent.name
                 }
-                return (true, m_e)
+                return (true, e)
             }
 
             return (true, nil)
@@ -344,12 +523,16 @@ public final actor ProcessTree {
                 return (false, nil)
             }
 
-            var pidNodes = processCache[node.pid]!
-            pidNodes[node.startTime] = updatedNode
-            processCache[node.pid] = pidNodes
+            if let pidNodes = processCache[node.pid] {
+                pidNodes[node.startTime] = updatedNode
+            }
 
             return (true, nil)
         }
         return (true, nil)
+    }
+
+    public func getPidNodesCount(_ pid: Int64) -> Int {
+        return processCache[pid]?.count ?? 0
     }
 }

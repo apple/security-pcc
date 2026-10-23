@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,7 +25,11 @@
 ///
 /// HTTP service provided by ROPES.
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import InternalSwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -107,6 +111,31 @@ package struct Proto_Ropes_HttpService_InvokeRequest: Sendable {
     /// This is a list rather than a single value to future-proof the protocol.
     package var trustedProxyResponseBypassOhttpContexts: [UInt32] = []
 
+    /// Used by the client to send additional messages, such as "terminate".
+    package var controlOhttpContext: UInt32 {
+      get {_controlOhttpContext ?? 0}
+      set {_controlOhttpContext = newValue}
+    }
+    /// Returns true if `controlOhttpContext` has been explicitly set.
+    package var hasControlOhttpContext: Bool {self._controlOhttpContext != nil}
+    /// Clears the value of `controlOhttpContext`. Subsequent reads from it will return its default value.
+    package mutating func clearControlOhttpContext() {self._controlOhttpContext = nil}
+
+    /// The minimum number of inline attestations, if any are provided, required for this request
+    /// If fewer than this count is received:
+    /// If capabilities.anti_targetability_min_attestation_enforcement == true, the response will be rejected.
+    /// Otherwise it will emit a silent error.
+    package var requiredInlineAttestationsCountIfAny: UInt32 {
+      get {_requiredInlineAttestationsCountIfAny ?? 0}
+      set {_requiredInlineAttestationsCountIfAny = newValue}
+    }
+    /// Returns true if `requiredInlineAttestationsCountIfAny` has been explicitly set.
+    package var hasRequiredInlineAttestationsCountIfAny: Bool {self._requiredInlineAttestationsCountIfAny != nil}
+    /// Clears the value of `requiredInlineAttestationsCountIfAny`. Subsequent reads from it will return its default value.
+    package mutating func clearRequiredInlineAttestationsCountIfAny() {self._requiredInlineAttestationsCountIfAny = nil}
+
+    package var privateTokens: [Proto_Ropes_HttpService_PrivateToken] = []
+
     package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
     package struct AttestationMapping: Sendable {
@@ -127,7 +156,21 @@ package struct Proto_Ropes_HttpService_InvokeRequest: Sendable {
 
     fileprivate var _capabilities: Proto_Ropes_Common_Capabilities? = nil
     fileprivate var _trustedProxyRequestPayload: Data? = nil
+    fileprivate var _controlOhttpContext: UInt32? = nil
+    fileprivate var _requiredInlineAttestationsCountIfAny: UInt32? = nil
   }
+
+  package init() {}
+}
+
+package struct Proto_Ropes_HttpService_PrivateToken: Sendable {
+  // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  package var token: Data = Data()
+
+  package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
   package init() {}
 }
@@ -350,6 +393,8 @@ package struct Proto_Ropes_HttpService_PrefetchRequest: Sendable {
   package mutating func clearCapabilities() {self._capabilities = nil}
 
   /// ROPES will return min(prefetch-k, client_requested_attestation_count) attestations in response.
+  /// If fewer than this count is received and 
+  /// capabilities.anti_targetability_min_attestation_enforcement == true, the response will be rejected 
   package var clientRequestedAttestationCount: UInt32 {
     get {_clientRequestedAttestationCount ?? 0}
     set {_clientRequestedAttestationCount = newValue}
@@ -521,6 +566,16 @@ package struct Proto_Ropes_HttpService_AdminApiResponse: Sendable {
   /// Clears the value of `hashOfSupportedWorkloads`. Subsequent reads from it will return its default value.
   package mutating func clearHashOfSupportedWorkloads() {self._hashOfSupportedWorkloads = nil}
 
+  /// Traffic weight (0-100) for load balancing across cells.
+  package var trafficWeight: UInt32 {
+    get {_trafficWeight ?? 0}
+    set {_trafficWeight = newValue}
+  }
+  /// Returns true if `trafficWeight` has been explicitly set.
+  package var hasTrafficWeight: Bool {self._trafficWeight != nil}
+  /// Clears the value of `trafficWeight`. Subsequent reads from it will return its default value.
+  package mutating func clearTrafficWeight() {self._trafficWeight = nil}
+
   package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
   package struct RoutingParamValue: Sendable {
@@ -570,6 +625,12 @@ package struct Proto_Ropes_HttpService_AdminApiResponse: Sendable {
       case unset // = 5
       case osVersionEquals // = 6
       case internalBuildEquals // = 7
+      case greaterThanEquals // = 8
+      case lessThanEquals // = 9
+      case greaterThan // = 10
+      case lessThan // = 11
+      case notEquals // = 12
+      case notContains // = 13
       case UNRECOGNIZED(Int)
 
       package init() {
@@ -586,6 +647,12 @@ package struct Proto_Ropes_HttpService_AdminApiResponse: Sendable {
         case 5: self = .unset
         case 6: self = .osVersionEquals
         case 7: self = .internalBuildEquals
+        case 8: self = .greaterThanEquals
+        case 9: self = .lessThanEquals
+        case 10: self = .greaterThan
+        case 11: self = .lessThan
+        case 12: self = .notEquals
+        case 13: self = .notContains
         default: self = .UNRECOGNIZED(rawValue)
         }
       }
@@ -600,6 +667,12 @@ package struct Proto_Ropes_HttpService_AdminApiResponse: Sendable {
         case .unset: return 5
         case .osVersionEquals: return 6
         case .internalBuildEquals: return 7
+        case .greaterThanEquals: return 8
+        case .lessThanEquals: return 9
+        case .greaterThan: return 10
+        case .lessThan: return 11
+        case .notEquals: return 12
+        case .notContains: return 13
         case .UNRECOGNIZED(let i): return i
         }
       }
@@ -614,6 +687,12 @@ package struct Proto_Ropes_HttpService_AdminApiResponse: Sendable {
         .unset,
         .osVersionEquals,
         .internalBuildEquals,
+        .greaterThanEquals,
+        .lessThanEquals,
+        .greaterThan,
+        .lessThan,
+        .notEquals,
+        .notContains,
       ]
 
     }
@@ -629,6 +708,18 @@ package struct Proto_Ropes_HttpService_AdminApiResponse: Sendable {
 
       package init() {}
     }
+
+    package init() {}
+  }
+
+  package struct MatchingRules: Sendable {
+    // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    package var rules: [Proto_Ropes_HttpService_AdminApiResponse.RoutingParamValue] = []
+
+    package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
     package init() {}
   }
@@ -665,6 +756,9 @@ package struct Proto_Ropes_HttpService_AdminApiResponse: Sendable {
 
     package var debugID: UInt32 = 0
 
+    /// cost is a function of second hop latency, if the workload exists in a remote cell accessible from the current ROPES cell.
+    package var cost: UInt32 = 0
+
     package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
     /// Routing parameters
@@ -680,7 +774,14 @@ package struct Proto_Ropes_HttpService_AdminApiResponse: Sendable {
 
       /// For examples, {"model": {"foo", "EQUALS"}, "$HEADER.apple-clientinfo": {"iPhone OS;18.1", "CONTAINS"}},
       /// {"adapter": {"bar", "EQUALS"}, "$HEADER.apple-routing-group-alias": {"prcosB", "EQUALS"}}
+      ///
+      /// NOTE: This field was marked as deprecated in the .proto file.
       package var extendedParams: Dictionary<String,Proto_Ropes_HttpService_AdminApiResponse.RoutingParamValue> = [:]
+
+      /// Allow a header/workload parameter to have multiple matching rules.
+      /// All rules have to pass to be considered as a match.
+      /// e.g., {"$HEADER.apple-clientinfo": [{"iPhone OS;18.1", "CONTAINS"}, {";seed", "NOT_CONTAINS"}]}
+      package var multiMap: Dictionary<String,Proto_Ropes_HttpService_AdminApiResponse.MatchingRules> = [:]
 
       package var unknownFields = InternalSwiftProtobuf.UnknownStorage()
 
@@ -708,6 +809,7 @@ package struct Proto_Ropes_HttpService_AdminApiResponse: Sendable {
   package init() {}
 
   fileprivate var _hashOfSupportedWorkloads: String? = nil
+  fileprivate var _trafficWeight: UInt32? = nil
 }
 
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
@@ -783,7 +885,7 @@ extension Proto_Ropes_HttpService_InvokeRequest: InternalSwiftProtobuf.Message, 
 
 extension Proto_Ropes_HttpService_InvokeRequest.SetupRequest: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = Proto_Ropes_HttpService_InvokeRequest.protoMessageName + ".SetupRequest"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}encrypted_request_ohttp_context\0\u{3}attestation_mappings\0\u{1}capabilities\0\u{3}trusted_proxy_request_payload\0\u{3}trusted_proxy_response_bypass_ohttp_contexts\0")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}encrypted_request_ohttp_context\0\u{3}attestation_mappings\0\u{1}capabilities\0\u{3}trusted_proxy_request_payload\0\u{3}trusted_proxy_response_bypass_ohttp_contexts\0\u{3}control_ohttp_context\0\u{3}required_inline_attestations_count_if_any\0\u{3}private_tokens\0")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -796,6 +898,9 @@ extension Proto_Ropes_HttpService_InvokeRequest.SetupRequest: InternalSwiftProto
       case 3: try { try decoder.decodeSingularMessageField(value: &self._capabilities) }()
       case 4: try { try decoder.decodeSingularBytesField(value: &self._trustedProxyRequestPayload) }()
       case 5: try { try decoder.decodeRepeatedUInt32Field(value: &self.trustedProxyResponseBypassOhttpContexts) }()
+      case 6: try { try decoder.decodeSingularUInt32Field(value: &self._controlOhttpContext) }()
+      case 7: try { try decoder.decodeSingularUInt32Field(value: &self._requiredInlineAttestationsCountIfAny) }()
+      case 8: try { try decoder.decodeRepeatedMessageField(value: &self.privateTokens) }()
       default: break
       }
     }
@@ -821,6 +926,15 @@ extension Proto_Ropes_HttpService_InvokeRequest.SetupRequest: InternalSwiftProto
     if !self.trustedProxyResponseBypassOhttpContexts.isEmpty {
       try visitor.visitPackedUInt32Field(value: self.trustedProxyResponseBypassOhttpContexts, fieldNumber: 5)
     }
+    try { if let v = self._controlOhttpContext {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 6)
+    } }()
+    try { if let v = self._requiredInlineAttestationsCountIfAny {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 7)
+    } }()
+    if !self.privateTokens.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.privateTokens, fieldNumber: 8)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -830,6 +944,9 @@ extension Proto_Ropes_HttpService_InvokeRequest.SetupRequest: InternalSwiftProto
     if lhs._capabilities != rhs._capabilities {return false}
     if lhs._trustedProxyRequestPayload != rhs._trustedProxyRequestPayload {return false}
     if lhs.trustedProxyResponseBypassOhttpContexts != rhs.trustedProxyResponseBypassOhttpContexts {return false}
+    if lhs._controlOhttpContext != rhs._controlOhttpContext {return false}
+    if lhs._requiredInlineAttestationsCountIfAny != rhs._requiredInlineAttestationsCountIfAny {return false}
+    if lhs.privateTokens != rhs.privateTokens {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -865,6 +982,36 @@ extension Proto_Ropes_HttpService_InvokeRequest.SetupRequest.AttestationMapping:
   package static func ==(lhs: Proto_Ropes_HttpService_InvokeRequest.SetupRequest.AttestationMapping, rhs: Proto_Ropes_HttpService_InvokeRequest.SetupRequest.AttestationMapping) -> Bool {
     if lhs.nodeIdentifier != rhs.nodeIdentifier {return false}
     if lhs.ohttpContext != rhs.ohttpContext {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Proto_Ropes_HttpService_PrivateToken: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  package static let protoMessageName: String = _protobuf_package + ".PrivateToken"
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}token\0")
+
+  package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularBytesField(value: &self.token) }()
+      default: break
+      }
+    }
+  }
+
+  package func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.token.isEmpty {
+      try visitor.visitSingularBytesField(value: self.token, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  package static func ==(lhs: Proto_Ropes_HttpService_PrivateToken, rhs: Proto_Ropes_HttpService_PrivateToken) -> Bool {
+    if lhs.token != rhs.token {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1243,7 +1390,7 @@ extension Proto_Ropes_HttpService_InvokeResponse.RevokedAttestationList: Interna
 
 extension Proto_Ropes_HttpService_PrefetchRequest: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = _protobuf_package + ".PrefetchRequest"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}capabilities\0\u{3}client_requested_attestation_count\0")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}capabilities\0\u{3}client_requested_attestation_count\0\u{c}\u{3}\u{1}")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1502,7 +1649,7 @@ extension Proto_Ropes_HttpService_ConfigResponse: InternalSwiftProtobuf.Message,
 
 extension Proto_Ropes_HttpService_AdminApiResponse: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = _protobuf_package + ".AdminApiResponse"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}supported_workloads\0\u{3}public_api_endpoints\0\u{3}hash_of_supported_workloads\0")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}supported_workloads\0\u{3}public_api_endpoints\0\u{3}hash_of_supported_workloads\0\u{3}traffic_weight\0")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1513,6 +1660,7 @@ extension Proto_Ropes_HttpService_AdminApiResponse: InternalSwiftProtobuf.Messag
       case 1: try { try decoder.decodeRepeatedMessageField(value: &self.supportedWorkloads) }()
       case 2: try { try decoder.decodeRepeatedMessageField(value: &self.publicApiEndpoints) }()
       case 3: try { try decoder.decodeSingularStringField(value: &self._hashOfSupportedWorkloads) }()
+      case 4: try { try decoder.decodeSingularUInt32Field(value: &self._trafficWeight) }()
       default: break
       }
     }
@@ -1532,6 +1680,9 @@ extension Proto_Ropes_HttpService_AdminApiResponse: InternalSwiftProtobuf.Messag
     try { if let v = self._hashOfSupportedWorkloads {
       try visitor.visitSingularStringField(value: v, fieldNumber: 3)
     } }()
+    try { if let v = self._trafficWeight {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 4)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1539,6 +1690,7 @@ extension Proto_Ropes_HttpService_AdminApiResponse: InternalSwiftProtobuf.Messag
     if lhs.supportedWorkloads != rhs.supportedWorkloads {return false}
     if lhs.publicApiEndpoints != rhs.publicApiEndpoints {return false}
     if lhs._hashOfSupportedWorkloads != rhs._hashOfSupportedWorkloads {return false}
+    if lhs._trafficWeight != rhs._trafficWeight {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1612,7 +1764,7 @@ extension Proto_Ropes_HttpService_AdminApiResponse.RoutingParamValue: InternalSw
 }
 
 extension Proto_Ropes_HttpService_AdminApiResponse.RoutingParamValue.ParseType: InternalSwiftProtobuf._ProtoNameProviding {
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0EQUALS\0\u{1}CONTAINS\0\u{1}STARTS_WITH\0\u{1}MINIMUM_VERSION_NUMBER\0\u{1}HALF_OPEN_VERSION_RANGE\0\u{1}UNSET\0\u{1}OS_VERSION_EQUALS\0\u{1}INTERNAL_BUILD_EQUALS\0")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0EQUALS\0\u{1}CONTAINS\0\u{1}STARTS_WITH\0\u{1}MINIMUM_VERSION_NUMBER\0\u{1}HALF_OPEN_VERSION_RANGE\0\u{1}UNSET\0\u{1}OS_VERSION_EQUALS\0\u{1}INTERNAL_BUILD_EQUALS\0\u{1}GREATER_THAN_EQUALS\0\u{1}LESS_THAN_EQUALS\0\u{1}GREATER_THAN\0\u{1}LESS_THAN\0\u{1}NOT_EQUALS\0\u{1}NOT_CONTAINS\0")
 }
 
 extension Proto_Ropes_HttpService_AdminApiResponse.RoutingParamValue.Values: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
@@ -1645,9 +1797,39 @@ extension Proto_Ropes_HttpService_AdminApiResponse.RoutingParamValue.Values: Int
   }
 }
 
+extension Proto_Ropes_HttpService_AdminApiResponse.MatchingRules: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
+  package static let protoMessageName: String = Proto_Ropes_HttpService_AdminApiResponse.protoMessageName + ".MatchingRules"
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}rules\0")
+
+  package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.rules) }()
+      default: break
+      }
+    }
+  }
+
+  package func traverse<V: InternalSwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.rules.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.rules, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  package static func ==(lhs: Proto_Ropes_HttpService_AdminApiResponse.MatchingRules, rhs: Proto_Ropes_HttpService_AdminApiResponse.MatchingRules) -> Bool {
+    if lhs.rules != rhs.rules {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
 extension Proto_Ropes_HttpService_AdminApiResponse.Workload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = Proto_Ropes_HttpService_AdminApiResponse.protoMessageName + ".Workload"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}workload_type\0\u{3}mandatory_keys\0\u{4}\u{2}routing_parameters\0\u{1}utilization\0\u{1}priority\0\u{3}debug_id\0\u{c}\u{3}\u{1}")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}workload_type\0\u{3}mandatory_keys\0\u{4}\u{2}routing_parameters\0\u{1}utilization\0\u{1}priority\0\u{3}debug_id\0\u{1}cost\0\u{c}\u{3}\u{1}")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1661,6 +1843,7 @@ extension Proto_Ropes_HttpService_AdminApiResponse.Workload: InternalSwiftProtob
       case 5: try { try decoder.decodeSingularDoubleField(value: &self.utilization) }()
       case 6: try { try decoder.decodeSingularUInt32Field(value: &self.priority) }()
       case 7: try { try decoder.decodeSingularUInt32Field(value: &self.debugID) }()
+      case 8: try { try decoder.decodeSingularUInt32Field(value: &self.cost) }()
       default: break
       }
     }
@@ -1689,6 +1872,9 @@ extension Proto_Ropes_HttpService_AdminApiResponse.Workload: InternalSwiftProtob
     if self.debugID != 0 {
       try visitor.visitSingularUInt32Field(value: self.debugID, fieldNumber: 7)
     }
+    if self.cost != 0 {
+      try visitor.visitSingularUInt32Field(value: self.cost, fieldNumber: 8)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1699,6 +1885,7 @@ extension Proto_Ropes_HttpService_AdminApiResponse.Workload: InternalSwiftProtob
     if lhs.utilization != rhs.utilization {return false}
     if lhs.priority != rhs.priority {return false}
     if lhs.debugID != rhs.debugID {return false}
+    if lhs.cost != rhs.cost {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1706,7 +1893,7 @@ extension Proto_Ropes_HttpService_AdminApiResponse.Workload: InternalSwiftProtob
 
 extension Proto_Ropes_HttpService_AdminApiResponse.Workload.Parameters: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   package static let protoMessageName: String = Proto_Ropes_HttpService_AdminApiResponse.Workload.protoMessageName + ".Parameters"
-  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}params\0\u{3}extended_params\0")
+  package static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}params\0\u{3}extended_params\0\u{3}multi_map\0")
 
   package mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1716,6 +1903,7 @@ extension Proto_Ropes_HttpService_AdminApiResponse.Workload.Parameters: Internal
       switch fieldNumber {
       case 1: try { try decoder.decodeMapField(fieldType: InternalSwiftProtobuf._ProtobufMap<InternalSwiftProtobuf.ProtobufString,InternalSwiftProtobuf.ProtobufString>.self, value: &self.params) }()
       case 2: try { try decoder.decodeMapField(fieldType: InternalSwiftProtobuf._ProtobufMessageMap<InternalSwiftProtobuf.ProtobufString,Proto_Ropes_HttpService_AdminApiResponse.RoutingParamValue>.self, value: &self.extendedParams) }()
+      case 3: try { try decoder.decodeMapField(fieldType: InternalSwiftProtobuf._ProtobufMessageMap<InternalSwiftProtobuf.ProtobufString,Proto_Ropes_HttpService_AdminApiResponse.MatchingRules>.self, value: &self.multiMap) }()
       default: break
       }
     }
@@ -1728,12 +1916,16 @@ extension Proto_Ropes_HttpService_AdminApiResponse.Workload.Parameters: Internal
     if !self.extendedParams.isEmpty {
       try visitor.visitMapField(fieldType: InternalSwiftProtobuf._ProtobufMessageMap<InternalSwiftProtobuf.ProtobufString,Proto_Ropes_HttpService_AdminApiResponse.RoutingParamValue>.self, value: self.extendedParams, fieldNumber: 2)
     }
+    if !self.multiMap.isEmpty {
+      try visitor.visitMapField(fieldType: InternalSwiftProtobuf._ProtobufMessageMap<InternalSwiftProtobuf.ProtobufString,Proto_Ropes_HttpService_AdminApiResponse.MatchingRules>.self, value: self.multiMap, fieldNumber: 3)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   package static func ==(lhs: Proto_Ropes_HttpService_AdminApiResponse.Workload.Parameters, rhs: Proto_Ropes_HttpService_AdminApiResponse.Workload.Parameters) -> Bool {
     if lhs.params != rhs.params {return false}
     if lhs.extendedParams != rhs.extendedParams {return false}
+    if lhs.multiMap != rhs.multiMap {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

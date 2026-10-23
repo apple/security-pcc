@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Apple Inc. All Rights Reserved. -->
+<!-- Copyright © 2026 Apple Inc. All Rights Reserved. -->
 
 <!-- APPLE INC. -->
 <!-- PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT -->
@@ -16,6 +16,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>com.apple.private.cloudos.PrivateFilterClientRouter</key>
+	<true/>
 	<key>com.apple.private.LocalAuthentication.NonDisposableContextPool</key>
 	<true/>
 	<key>com.apple.acdc.cloudmetrics.client</key>
@@ -38,6 +40,7 @@
 	</array>
 	<key>com.apple.security.exception.mach-lookup.global-name</key>
 	<array>
+		<string>com.apple.cloudos.PrivateFilterClientRouter</string>
 		<string>com.apple.thimble.inference.proxy.cloudboard-endpoint</string>
 		<string>com.apple.securityd</string>
 		<string>com.apple.thimble.inference.service.cloudboard-endpoint</string>
@@ -54,6 +57,8 @@
 		<string>com.apple.cloudos.PCCAgentWorkerApp.endpoint</string>
 		<string>com.apple.CipherMLSE</string>
 		<string>com.apple.cloudos.ensembleporter.keyproviderclient</string>
+		<string>com.apple.cloudos.CIPCloudApp.endpoint</string>
+		<string>com.apple.cloudos.PCCMediaDecoder.endpoint</string>
 	</array>
 	<key>com.apple.private.sandbox.profile:embedded</key>
 	<string>apple-cloud</string>
@@ -62,8 +67,6 @@
 	<key>com.apple.private.cloudos.cloudboardjobsupport</key>
 	<true/>
 	<key>com.apple.private.cloudos.cb_attestationd</key>
-	<true/>
-	<key>com.apple.private.cloudos.cb_bridged</key>
 	<true/>
 	<key>com.apple.private.cloudos.cb_attestationd.keyaccess</key>
 	<true/>
@@ -91,5 +94,12 @@
 	</array>
 	<key>com.apple.private.AppleComputeEnsembler.read</key>
 	<true/>
+	<key>com.apple.developer.kernel.extended-virtual-addressing</key>
+	<true/>
+	<key>com.apple.private.cloudos.cb_bridged.outbound_request</key>
+	<array>
+		<string>PrivateInformationRetrieval</string>
+		<string>ToolInvocation</string>
+	</array>
 </dict>
 </plist>

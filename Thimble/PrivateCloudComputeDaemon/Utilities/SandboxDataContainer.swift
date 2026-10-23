@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,14 +22,39 @@
 import Foundation
 import PrivateCloudCompute
 import SandboxPrivate
+internal import StorageContainersPrivate
 import containermanager
 import os.log
 
-#if os(macOS)
+private let logger = Logger(for: .sandbox)
 
-private let logger = tc2Logger(forCategory: .sandbox)
-
+/// Acquires a sandbox data container and executes the provided body with access to the container URL.
+/// The data container provides isolated storage that persists across app launches.
 nonisolated(nonsending) package func withSandboxDataContainer<T: Sendable>(
+    _ body: (URL) async -> T
+) async -> T {
+    if shouldUseProtectedSystemContainer(featureFlags: FeatureFlagChecker()) {
+        return await withProtectedSystemDataContainer(body)
+    } else {
+        return await withDaemonDataContainer(body)
+    }
+}
+
+/// Decides whether to store the daemon's state in a Protected System container rather than the
+/// legacy Internal Daemon Data container.
+private func shouldUseProtectedSystemContainer(featureFlags: some FeatureFlagCheckerProtocol) -> Bool {
+    #if os(macOS)
+    return featureFlags.isEnabled(.protectedSystemContainerMacOS)
+    #else
+    return featureFlags.isEnabled(.protectedSystemContainerEmbedded)
+    #endif
+}
+
+// MARK: - Legacy Internal Daemon Data container
+
+/// Acquires the legacy Internal Daemon Data container and executes the provided body with access to
+/// the container URL.
+nonisolated(nonsending) package func withDaemonDataContainer<T: Sendable>(
     _ body: (URL) async -> T
 ) async -> T {
     let (url, handle) = acquireContainerHandle()
@@ -37,6 +62,8 @@ nonisolated(nonsending) package func withSandboxDataContainer<T: Sendable>(
     return await body(url)
 }
 
+/// Acquires a container handle, optionally crashing on failure.
+/// - Returns: The container URL and sandbox extension handle.
 private func acquireContainerHandle() -> (url: URL, handle: Int64) {
     let query = container_query_create()
     defer { container_query_free(query) }
@@ -84,6 +111,12 @@ private func acquireContainerHandle() -> (url: URL, handle: Int64) {
     }
     logger.debug("sandbox_extension_consume returned handle=\(extensionHandle)")
 
+    let accessResult = access(path, R_OK | W_OK)
+    guard accessResult == 0 else {
+        let error = String(cString: strerror(errno))
+        fatalError("no read/write access to container path: \(error)")
+    }
+
     return (url: url, handle: extensionHandle)
 }
 
@@ -96,4 +129,76 @@ private func releaseContainerHandle(handle extensionHandle: Int64) {
     logger.debug("sandbox_extension_release succeeded handle=\(extensionHandle)")
 }
 
-#endif
+// MARK: - Protected System container
+
+/// Acquires the daemon's Protected System container and executes the provided body with access to
+/// the container URL.
+///
+/// A Protected System container is data-vaulted on all platforms including macOS: even processes
+/// granted Full Disk Access cannot reach it. Only this daemon, which carries the
+/// `com.apple.private.security.protected-system-container` entitlement, can. Before handing the
+/// container to `body`, we delete the daemon's older Internal Daemon Data container.
+nonisolated(nonsending) package func withProtectedSystemDataContainer<T: Sendable>(
+    _ body: (URL) async -> T
+) async -> T {
+    let container: Container.Owned
+    do {
+        container = try Container.Owned(of: .protectedSystem(), persona: .primary)
+    } catch {
+        fatalError("failed to create protected system container: \(error)")
+    }
+    logger.debug("created protected system container handle")
+
+    // Access to the container path is only valid while access is granted; hold it for the lifetime of this function.
+    do {
+        try container.grantAccess(required: true)
+    } catch {
+        fatalError("failed to grant access to protected system container: \(error)")
+    }
+    defer {
+        container.revokeAccess()
+        logger.debug("revoked access to protected system container")
+    }
+    logger.debug("granted access to protected system container")
+
+    guard let path = container.path, let url = URL(filePath: path, directoryHint: .isDirectory) else {
+        fatalError("protected system container path unavailable")
+    }
+    logger.debug("resolved protected system container path, url=\(url)")
+    logger.log("acquired protected system container, url=\(url)")
+
+    excludeFromBackup(url)
+    deleteLegacyDaemonContainer()
+
+    return await body(url)
+}
+
+private func excludeFromBackup(_ containerURL: URL) {
+    do {
+        var url = containerURL
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try url.setResourceValues(values)
+        logger.debug("excluded container from backup, url=\(url)")
+    } catch {
+        logger.error("failed to exclude container from backup, url=\(containerURL), error=\(error)")
+    }
+}
+
+/// Deletes the daemon's legacy Internal Daemon Data container (the one used before the switch to a
+/// Protected System container).
+private func deleteLegacyDaemonContainer() {
+    do {
+        let legacyContainers = try Containers(of: .daemon, persona: .primary)
+        guard let legacy = legacyContainers.first else {
+            logger.log("no legacy daemon container found; nothing to delete")
+            return
+        }
+        try legacy.delete()
+        logger.log("deleted legacy daemon container")
+    } catch Query.QueryError.noMatchingContainers {
+        logger.log("no legacy daemon container found; nothing to delete")
+    } catch {
+        logger.error("failed to delete legacy daemon container, error=\(error)")
+    }
+}

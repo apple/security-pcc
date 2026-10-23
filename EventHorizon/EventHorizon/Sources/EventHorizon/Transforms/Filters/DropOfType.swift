@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -30,6 +30,6 @@ public final class DropOfType: EHTransform {
         return (.proceed, nil, nil, nil)
     }
 
-    public func configure() throws {
+    public func configure() async throws {
     }
 }

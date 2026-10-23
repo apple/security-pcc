@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -44,6 +44,22 @@ package actor WorkloadControllerServer {
     /// Maps XPC connection ID to their associated workload controllers for request routing.
     private var connectionToControllerMap: [Int: WorkloadController] = [:]
 
+    /// Callback invoked when a persistent service registration arrives.
+    /// The daemon provides this to wire up a `PersistentServiceManager`.
+    private var persistentServiceRegistrationHandler: (
+        @Sendable (PersistentServiceConfig, WorkloadProperties) async throws -> Void
+    )?
+
+    /// Callback invoked when a persistent service reports terminal failure.
+    /// The daemon provides this to drive the owning `PersistentServiceManager`'s health monitor terminal.
+    private var persistentServiceTerminalFailureHandler: (
+        @Sendable (_ serviceId: String, _ reason: String) async -> Void
+    )?
+
+    package var numberOfConnections: Int {
+        self.connectionToControllerMap.count
+    }
+
     /// The standard app name used for follower instances.
     package static let kFollowerAppName: String = "FollowerApp"
 
@@ -75,6 +91,30 @@ package actor WorkloadControllerServer {
         self.server = CloudBoardControllerAPIXPCServer.localListener()
         await self.server?.connect(listenerDelegate: self, serverDelegate: self)
         Self.log.info("WorkloadController server started")
+    }
+
+    /// Registers a handler for persistent service registrations.
+    ///
+    /// When a controller calls `registerWorkload` with a `.persistentService` config,
+    /// the registration is routed to this handler instead of to a `WorkloadController`.
+    ///
+    /// - Parameter handler: Async closure invoked with the persistent service config and workload properties.
+    package func onPersistentServiceRegistration(
+        handler: @escaping @Sendable (PersistentServiceConfig, WorkloadProperties) async throws -> Void
+    ) {
+        self.persistentServiceRegistrationHandler = handler
+    }
+
+    /// Registers a handler for persistent service terminal-failure reports.
+    ///
+    /// When a persistent-service controller calls `reportTerminalFailure`, the report is routed to this handler
+    /// (keyed by `serviceId`) so the owning manager can drive its health monitor terminal.
+    ///
+    /// - Parameter handler: Async closure invoked with the failing service's ID and a human-readable reason.
+    package func onPersistentServiceTerminalFailure(
+        handler: @escaping @Sendable (_ serviceId: String, _ reason: String) async -> Void
+    ) {
+        self.persistentServiceTerminalFailureHandler = handler
     }
 
     /// Runs a specific workload controller with the provided configuration and handlers.
@@ -162,9 +202,31 @@ extension WorkloadControllerServer: CloudBoardControllerAPIServerDelegateProtoco
         config: InternalWorkloadConfig,
         properties: WorkloadProperties
     ) async throws {
+        // Persistent service registrations are routed to a dedicated handler
+        // rather than to a WorkloadController.
+        if case .persistentService(let persistentConfig) = config {
+            guard let handler = self.persistentServiceRegistrationHandler else {
+                Self.log.error(
+                    "Received persistent service registration but no handler is configured"
+                )
+                throw WorkloadControllerServerError.unknownCloudApp(cloudApp: persistentConfig.serviceId)
+            }
+            Self.log.log(
+                "Routing persistent service registration for serviceId=\(persistentConfig.serviceId, privacy: .public)"
+            )
+            try await handler(persistentConfig, properties)
+            return
+        }
+
         let cloudAppName = self.isLeader ? properties.cloudAppName : WorkloadControllerServer.kFollowerAppName
         guard let controller = self.workloadControllerMap[cloudAppName] else {
             throw WorkloadControllerServerError.unknownCloudApp(cloudApp: cloudAppName)
+        }
+        guard !controller.inMemoryMode else {
+            Self.log.log(
+                "cloudApp=\(cloudAppName, privacy: .public) using in memory controller. Ignoring registration message."
+            )
+            return
         }
         Self.log.log(
             "Received register workload for cloudApp=\(cloudAppName, privacy: .public), connectionIdentifier=\(connectionIdentifier, privacy: .public)"
@@ -220,6 +282,27 @@ extension WorkloadControllerServer: CloudBoardControllerAPIServerDelegateProtoco
         }
         Self.log.log("Received restartPrewarmedInstances for cloudApp=\(controller.cloudAppName, privacy: .public)")
         try await controller.restartPrewarmedInstances()
+    }
+
+    /// Routes a persistent service terminal-failure report to the registered handler.
+    ///
+    /// Routed by `serviceId` rather than connection identifier: a persistent service can fail terminally before it
+    /// ever registers a workload, so there may be no connection→controller mapping to key off.
+    package func reportPersistentServiceTerminalFailure(
+        connectionIdentifier: Int,
+        serviceId: String,
+        reason: String
+    ) async throws {
+        Self.log.error(
+            "Received persistent service terminal failure for serviceId=\(serviceId, privacy: .public), connectionIdentifier=\(connectionIdentifier, privacy: .public): \(reason, privacy: .public)"
+        )
+        guard let handler = self.persistentServiceTerminalFailureHandler else {
+            Self.log.error(
+                "No persistent service terminal failure handler configured; dropping report for serviceId=\(serviceId, privacy: .public)"
+            )
+            return
+        }
+        await handler(serviceId, reason)
     }
 }
 

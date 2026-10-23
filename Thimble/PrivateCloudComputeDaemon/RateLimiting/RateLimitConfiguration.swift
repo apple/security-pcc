@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,7 +19,6 @@
 //  Copyright © 2024 Apple Inc. All rights reserved.
 //
 
-internal import CollectionsInternal
 import Foundation
 import InternalSwiftProtobuf
 import PrivateCloudCompute
@@ -33,6 +32,7 @@ import PrivateCloudCompute
 struct RateLimitFilter: Sendable, Equatable, Hashable, Codable {
     var bundleID: String?
     var featureID: String?
+    var qos: ServerQoS?
     var workloadType: String?
     var workloadTags: [WorkloadTag]
 
@@ -42,17 +42,31 @@ struct RateLimitFilter: Sendable, Equatable, Hashable, Codable {
         var value: String
     }
 
-    init(bundleID: String?, featureID: String?, workloadType: String?, workloadTags: [WorkloadTag]) {
+    init(
+        bundleID: String?,
+        featureID: String?,
+        qos: ServerQoS?,
+        workloadType: String?,
+        workloadTags: [WorkloadTag]
+    ) {
         self.bundleID = bundleID
         self.featureID = featureID
+        self.qos = qos
         self.workloadType = workloadType
         self.workloadTags = workloadTags
     }
 
-    init(bundleID: String?, featureID: String?, workloadType: String?, workloadParams: [String: String]) {
+    init(
+        bundleID: String?,
+        featureID: String?,
+        qos: ServerQoS?,
+        workloadType: String?,
+        workloadParams: [String: String]
+    ) {
         self.init(
             bundleID: bundleID,
             featureID: featureID,
+            qos: qos,
             workloadType: workloadType,
             workloadTags: workloadParams.map { WorkloadTag(key: $0.key, value: $0.value) }
         )
@@ -63,6 +77,7 @@ extension RateLimitFilter {
     func matches(_ requestMetadata: RateLimiterRequestMetadata) -> Bool {
         return matchesBundleID(requestMetadata.bundleID)
             && matchesFeatureID(requestMetadata.featureID)
+            && matchesQoS(requestMetadata.qos)
             && matchesWorkloadType(requestMetadata.workloadType)
             && matchesWorkloadTags(requestMetadata.workloadTags)
     }
@@ -98,10 +113,18 @@ extension RateLimitFilter {
         if self.featureID == nil || self.featureID == value {
             return true
         }
-        if let featureID, let i = value.firstIndex(of: ".") {
-            return featureID == value.prefix(upTo: i)
+        if let featureID {
+            return FeatureIdPattern(featureID) ~= value
         }
         return false
+    }
+
+    /// For a filter match, either the filter does not specify a qos, or it specifies the same or higher priority value.
+    private func matchesQoS(_ value: ServerQoS) -> Bool {
+        guard let qos = self.qos else {
+            return true
+        }
+        return qos >= value
     }
 
     // For a filter match, either the filter does not specify a workload type, or it specifies the same workload type.
@@ -119,11 +142,6 @@ extension RateLimitFilter {
         }
         return true
     }
-}
-
-extension RateLimitFilter {
-    // This filter matches every request
-    static let universalFilter = RateLimitFilter(bundleID: nil, featureID: nil, workloadType: nil, workloadTags: [])
 }
 
 // MARK: - RateLimitTimingDetails
@@ -162,18 +180,30 @@ struct RateLimitTimingDetails: Sendable, Equatable, Hashable, Codable {
     }
 }
 
+extension RateLimitTimingDetails {
+    var deniesAllRequests: Bool {
+        count == 0
+    }
+}
+
 // MARK: - RateLimitConfiguration
 
 // A configuration arises from a combination of the filter and the timing
 // details, and we often have to carry them together, so this is basically
 // a tuple and that's it.
 struct RateLimitConfiguration: Sendable, Equatable, Hashable, Codable {
+    var source: RateLimitSource
     var filter: RateLimitFilter
     var timing: RateLimitTimingDetails
 }
 
 extension RateLimitConfiguration {
-    init?(now: Date, proto: Proto_Ropes_RateLimit_RateLimitConfiguration, config: any Configuration) {
+    init?(
+        now: Date,
+        source: RateLimitSource,
+        proto: Proto_Ropes_RateLimit_RateLimitConfiguration,
+        config: any Configuration
+    ) {
         // rdar://125117845 (Use new RequestType in rate limit config from server)
         guard proto.requestType == .invoke else {
             return nil
@@ -186,9 +216,11 @@ extension RateLimitConfiguration {
         // ungroup. That's what the flatmap is doing. It's not sensible to change to thie view
         // of list (key, list (value)) model unless everything does in the Thimble framework.
         self.init(
+            source: source,
             filter: RateLimitFilter(
                 bundleID: proto.bundleID.isEmpty ? nil : proto.bundleID,
                 featureID: proto.featureID.isEmpty ? nil : proto.featureID,
+                qos: .init(proto.qos),
                 workloadType: proto.workloadType.isEmpty ? nil : proto.workloadType,
                 workloadTags: proto.params.flatMap { (key, params) in params.value.map { RateLimitFilter.WorkloadTag(key: key, value: $0) } }),
             timing: RateLimitTimingDetails(
@@ -199,6 +231,11 @@ extension RateLimitConfiguration {
                 jitterRatio: proto.jitter,
                 config: config))
     }
+
+    /// True when the config doesn't allow any requests.
+    var deniesAllRequests: Bool {
+        timing.deniesAllRequests
+    }
 }
 
 // MARK: - RateLimitConfigurationSet
@@ -208,7 +245,7 @@ extension RateLimitConfiguration {
 // has all the useful operations--finding matches, updating configs,
 // expiring old ones, etc.
 struct RateLimitConfigurationSet: Sendable, Codable {
-    private var configurations: [RateLimitFilter: RateLimitTimingDetails] = [:]
+    private var configurations: [RateLimitConfiguration] = []
 }
 
 extension RateLimitConfigurationSet {
@@ -222,21 +259,19 @@ extension RateLimitConfigurationSet {
             }
         }
 
-        return self.configurations.compactMap {
-            if $0.value.ttlExpiration < now {
+        return self.configurations.filter {
+            if $0.timing.ttlExpiration < now {
                 sawExpired = true
-                return nil
-            } else if $0.key.matches(requestMetadata) {
-                return RateLimitConfiguration(filter: $0.key, timing: $0.value)
+                return false
             } else {
-                return nil
+                return $0.filter.matches(requestMetadata)
             }
         }
     }
 
     func hasMatching(now: Date, _ requestMetadata: RateLimiterRequestMetadata) -> Bool {
-        for configuration in self.configurations where configuration.value.ttlExpiration >= now {
-            if configuration.key.matches(requestMetadata) {
+        for configuration in self.configurations where configuration.timing.ttlExpiration >= now {
+            if configuration.filter.matches(requestMetadata) {
                 return true
             }
         }
@@ -251,26 +286,41 @@ extension RateLimitConfigurationSet {
             }
         }
 
-        return self.configurations.compactMap { (key, value) in
-            if value.ttlExpiration < now {
+        return self.configurations.filter { configuration in
+            if configuration.timing.ttlExpiration < now {
                 sawExpired = true
-                return nil
-            } else if key.mightApplyWhen(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier) {
-                return RateLimitConfiguration(filter: key, timing: value)
+                return false
             } else {
-                return nil
+                return configuration.filter.mightApplyWhen(bundleIdentifier: bundleIdentifier, featureIdentifier: featureIdentifier)
             }
         }
     }
 
-    // This adds a RateLimitConfig to the set. Or, updates it if it exists.
+    /// This adds a RateLimitConfig to the set. Or, updates one for the same filter.
+    /// If there are multiple configs with the same filter, but different sources, the
+    /// last one wins.
     mutating func add(_ rateLimitConfiguration: RateLimitConfiguration) {
-        self.configurations[rateLimitConfiguration.filter] = rateLimitConfiguration.timing
+        if let index = self.configurations.firstIndex(where: { $0.filter == rateLimitConfiguration.filter }) {
+            self.configurations[index] = rateLimitConfiguration
+        } else {
+            self.configurations.append(rateLimitConfiguration)
+        }
+    }
+
+    mutating func add(_ rateLimitConfigurations: [RateLimitConfiguration], replacing source: RateLimitSource) {
+        // Delete existing
+        self.configurations = self.configurations.filter {
+            $0.source != source
+        }
+        // Add new
+        for configuration in rateLimitConfigurations {
+            self.add(configuration)
+        }
     }
 
     mutating func trimExpired(now: Date) {
-        self.configurations = self.configurations.compactMapValues {
-            ($0.ttlExpiration < now) ? nil : $0
+        self.configurations = self.configurations.filter {
+            $0.timing.ttlExpiration >= now
         }
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,8 +12,12 @@
 // EA1937
 // 10/02/2024
 
-#if canImport(CipherMLSE)
+#if RC_IS_CLOUDOS_ENABLED && os(iOS)
 import CipherMLSE
+#elseif canImport(CipherMLSE)
+import CipherMLSE
+#else
+#warning("CipherMLSE not available at compile time")
 #endif
 import CloudBoardCommon
 import CloudBoardDomain
@@ -56,7 +60,7 @@ final class PIRHelper: PIRHelperProtocol {
     }
 
     func warmup(assetsMetadata: [AssetMetadata]) async throws {
-        Self.logger.info("Warming up CipherML with assets \(assetsMetadata, privacy: .public)")
+        Self.logger.log("Warming up CipherML with assets \(assetsMetadata, privacy: .public)")
         let cipherMLAssets: [CipherMLSEActor.AssetMetadata] = assetsMetadata.map {
             .init(usecaseName: $0.id, configFolder: $0.path, assetVersion: $0.version)
         }
@@ -66,7 +70,7 @@ final class PIRHelper: PIRHelperProtocol {
             Self.logger.error("Failed to warmup CipherML: \(String(unredacted: error), privacy: .public)")
             throw error
         }
-        Self.logger.info("Warmed up CipherML with assets \(assetsMetadata, privacy: .public)")
+        Self.logger.log("Warmed up CipherML with assets \(assetsMetadata, privacy: .public)")
     }
 
     func makeRequest(requestPayload: Data, traceContext: PIRRequestTraceContext) async throws -> Data {

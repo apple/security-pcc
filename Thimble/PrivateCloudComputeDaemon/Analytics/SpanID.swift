@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -18,6 +18,8 @@
 //
 //  Copyright © 2025 Apple Inc. All rights reserved.
 //
+
+import Foundation
 
 /// A span identifier conforming to the W3C TraceContext specification (§3.2.2.4 parent-id).
 ///
@@ -57,5 +59,32 @@ extension SpanID: LosslessStringConvertible {
             return nil
         }
         self.rawValue = value
+    }
+}
+
+extension SpanID {
+    /// Returns a UUID with the SpanID's 8-byte raw value embedded in the low 8 bytes.
+    /// The high 8 bytes are zero.
+    var uuid: UUID {
+        UUID(high: 0, low: rawValue)
+    }
+}
+
+extension SpanID: Codable {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let string = try container.decode(String.self)
+        guard let id = SpanID(string) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid SpanID: expected 16 lowercase hex characters, got '\(string)'"
+            )
+        }
+        self = id
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(description)
     }
 }

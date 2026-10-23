@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,6 +23,7 @@ option java_outer_classname = "AuditProto";
 
 import "Transparency.proto";
 import "KtClientApi.proto";
+import "ATServiceApi.proto";
 
 // Preliminary protobuf definitions for the Audit client interface
 // Note that parts the Audit API shared with the device API are defined in ktClientApi.proto
@@ -93,6 +94,10 @@ message LogLeavesRequest {
     string requestUuid = 6; // Used for logging
     uint32 startMergeGroup = 7;
     uint32 endMergeGroup   = 8;
+
+    // Only permitted when querying AT_LOG trees.
+    // When this is included the returned leaves will be filtered for just the specified type.
+    ATLogDataType dataType = 50;
 }
 
 message LogLeavesResponse {

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -34,7 +34,6 @@ struct KDataSendMetric: CloudTelemetryReportable {
         case clientInfo = "appleClientInfo"
         case featureID = "appleFeatureid"
         case bundleID = "appleBundleid"
-        case locale = "appleLocale"
         case clientRequestId = "clientRequestId"
 
         case kDataSendSuccess = "kdataSendSuccess"
@@ -53,7 +52,6 @@ struct KDataSendMetric: CloudTelemetryReportable {
         systemInfo: SystemInfo,
         bundleID: String,
         featureID: String?,
-        locale: Locale,
         result: Result<Success, Failure>,
         nodeID: String
     ) {
@@ -63,7 +61,6 @@ struct KDataSendMetric: CloudTelemetryReportable {
             .environment: .string(environment),
             .clientInfo: .string(systemInfo.osInfoWithDeviceModel),
             .bundleID: .string(bundleID),
-            .locale: .string(locale.identifier),
         ]
 
         switch result {

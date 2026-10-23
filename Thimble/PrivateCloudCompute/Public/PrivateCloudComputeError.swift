@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -117,6 +117,7 @@ extension PrivateCloudComputeError {
         case privacyProxyTDMFailure = 32_039
         case privacyProxyInvalidResponse = 32_040
         case privacyProxyFailed = 32_041
+        /// No longer used.
         case failedToValidateAllAttestations = 32_043
         case responseSummaryIndicatesFailure = 32_044
         case responseSummaryIndicatesUnauthenticated = 32_045
@@ -155,12 +156,62 @@ extension PrivateCloudComputeError {
 
         /// Not enough nodes to satisfy demand
         case notEnoughNodes = 32_072
+
+        case deniedDueToUserDeviceRateLimit = 32_073
+        /// Indicates a similar request previously failed due to an availability concern with
+        /// a `retryAfter` value. The current retry attempt is too early.
+        case deniedDueToEarlierAvailabilityConcern = 32_074
+
+        ///  Thrown when we couldn't determine issue for the given workload and feature.
+        case unableToCreateTokenFetcher = 32_075
+
+        /// Thrown when server-driven config indicates the given bundleId is blocked.
+        case bundleIdBlocked = 32_076
+
+        /// Thrown when the server returns status code 3005, `MAX_TURNS_LIMIT_REACHED`, multi-turn turn limit reached.
+        case maxTurnsLimitReached = 32_077
+
+        /// Thrown when the server returns status code 4010, `NO_MATCHING_POLICY`, no matching routing policy.
+        case noMatchingPolicy = 32_078
+
+        case failedToValidateInlineAttestations = 32_079
+
+        case cancelledDueToFrameworkCancellation = 32_080
+        case cancelledDueToXPCInvalidation = 32_081
+
+        case duplicateUDIDInBatch = 32_082
+        case insufficientInlineAttestations = 32_083
+        case eligibilityCheckFailed = 32_084
+
+        case missingAttestationUDID = 32_085
+        case failedToExtractAttestationUDID = 32_086
+
+        /// The request was rejected because the daemon was reached before the device was unlocked,
+        // meaning Class C file data will not be readable under device protection.
+        case unavailableBeforeFirstUnlock = 32_087
+
+        /// The request needed more attestations than the server could provide.
+        case insufficientAttestations = 32_088
+        /// The request timed out waiting for OTT validation.
+        case ottValidationTimeout = 32_089
+        /// Cloudboard connection closed unexpectely.
+        case cloudboardConnectionClosed = 32_090
+        /// Unexpected status code from Cloudboard.
+        case cloudboardUnexpectedStatusCode = 32_091
+
+        case failedToDecompressRequestExecutionLogEntry = 32_092
+
+        case missingTrailingMetadata = 32_093
+
+        /// Thrown when request is torn down by pccd due to inactivity.
+        case cancelledDueToInactivityTimeout = 32_094
     }
 }
 
 extension PrivateCloudComputeError {
     public enum Category: Sendable {
         case availability
+        case cancelled
         case clientError
         case forbidden
         case internalError
@@ -191,6 +242,8 @@ extension PrivateCloudComputeError {
         case .tenantBlocked: .forbidden
         case .unauthorizedError: .forbidden
         case .workloadBlocked: .forbidden
+        case .bundleIdBlocked: .forbidden
+        case .eligibilityCheckFailed: .forbidden
 
         case .attestationKindMismatch: .internalError
         case .expectedResponseOnBypass: .internalError
@@ -231,6 +284,8 @@ extension PrivateCloudComputeError {
         case .networkFailure: .network
 
         case .deniedDueToRateLimit: .rateLimited
+        case .deniedDueToUserDeviceRateLimit: .rateLimited
+        case .deniedDueToEarlierAvailabilityConcern: .rateLimited
 
         case .serverError: .serverError
 
@@ -253,6 +308,29 @@ extension PrivateCloudComputeError {
 
         case .connectionNoLongerRunning: .clientError
         case .subrequestDiscardedDueToEarlierDiscard: .availability
+
+        case .unableToCreateTokenFetcher: .clientError
+        case .unavailableBeforeFirstUnlock: .clientError
+
+        case .maxTurnsLimitReached: .rateLimited
+        case .noMatchingPolicy: .availability
+
+        case .failedToValidateInlineAttestations: .internalError
+
+        case .cancelledDueToXPCInvalidation: .cancelled
+        case .cancelledDueToFrameworkCancellation: .cancelled
+
+        case .duplicateUDIDInBatch: .internalError
+        case .insufficientInlineAttestations: .internalError
+        case .missingAttestationUDID: .internalError
+        case .failedToExtractAttestationUDID: .internalError
+        case .insufficientAttestations: .availability
+        case .ottValidationTimeout: .timeout
+        case .cloudboardConnectionClosed: .serverError
+        case .cloudboardUnexpectedStatusCode: .serverError
+        case .failedToDecompressRequestExecutionLogEntry: .internalError
+        case .missingTrailingMetadata: .internalError
+        case .cancelledDueToInactivityTimeout: .timeout
         }
     }
 }
@@ -336,6 +414,7 @@ extension PrivateCloudComputeError: AppleIntelligenceError {
     public var category: AppleIntelligenceErrorCategory {
         switch self.errorCategory {
         case .availability: return .availability
+        case .cancelled: return .cancelled
         case .clientError: return .clientError
         case .forbidden: return .forbidden
         case .internalError: return .internalError
@@ -432,8 +511,12 @@ extension PrivateCloudComputeError {
                 self.init(code: .nodesOverUtilized, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
             case .notEnoughNodes:
                 self.init(code: .notEnoughNodes, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .noMatchingPolicy:
+                self.init(code: .noMatchingPolicy, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
             case .rateLimitReached:
                 self.init(code: .deniedDueToRateLimit, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .maxTurnsLimitReached:
+                self.init(code: .maxTurnsLimitReached, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
             case .requestChunkTimeout:
                 self.init(code: .requestChunkTimeout, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
             case .setupRequestTimeout:
@@ -448,6 +531,14 @@ extension PrivateCloudComputeError {
                 self.init(code: .workloadBlocked, debugMessage: debugMessage)
             case .workloadNotFound:
                 self.init(code: .workloadNotFound, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .insufficientAttestations:
+                self.init(code: .insufficientAttestations, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .ottValidationTimeout:
+                self.init(code: .ottValidationTimeout, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .cloudboardConnectionClosed:
+                self.init(code: .cloudboardConnectionClosed, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
+            case .cloudboardUnexpectedStatusCode:
+                self.init(code: .cloudboardUnexpectedStatusCode, retryAfterDate: responseMetadata.retryAfterDate, debugMessage: debugMessage)
             default:
                 self.init(code: .serverError, telemetrySuffix: telemetrySuffix, debugMessage: debugMessage)
             }

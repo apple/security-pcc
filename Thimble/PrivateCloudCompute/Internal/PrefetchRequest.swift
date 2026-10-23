@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -33,7 +33,6 @@ package struct Prefetch: Sendable {
                 case validationNotNeeded
                 case expiryTooLarge
                 case validatedExpiryTooLarge
-                case noUniqueIdentifier
             }
 
             /// Unlike `udid`, this identifier changes over time.

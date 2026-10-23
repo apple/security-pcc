@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,6 +25,7 @@ import OSLog
 import Security_Private
 import Security_Private.SecCertificateRequest
 import Security_Private.SecIdentityPriv
+@_spi(Daemon) import AppleComputeEnsembler
 
 private let logger = Logger(subsystem: kEnsemblerPrefix, category: "TLSChannelClient")
 
@@ -41,6 +42,64 @@ extension ClientError: LocalizedError {
 	}
 }
 
+// MARK: - Client Protocol
+
+/// Protocol defining the public interface for TLS client connections
+public protocol Client: AnyObject {
+	/// Current connection state
+	var state: NWConnection.State { get }
+	
+	/// The target node rank this client connects to
+	var target: Int { get }
+
+	/// Start the client connection
+	func start()
+	
+	/// Stop the client connection
+	func stop()
+
+	/// Permanently cancel the client connection, preventing any further retry attempts
+	func cancel()
+	
+	/// Send a message without waiting for acknowledgment (fire and forget)
+	/// - Parameter message: The control data to send
+	func send(message: EnsembleControlData)
+	
+	/// Send a message and wait for acknowledgment
+	/// - Parameters:
+	///   - message: The control data to send
+	///   - maxRetries: Maximum number of retry attempts
+	func sendAndWaitForAck(message: EnsembleControlData, maxRetries: Int)
+	
+	/// Send a message and wait for a response
+	/// - Parameters:
+	///   - appID: Application identifier for routing
+	///   - data: The data to send
+	///   - currentNode: The rank of the current node
+	///   - timeout: Timeout interval (default: 2.0 seconds)
+	///   - completion: Completion handler with Result containing response data or error
+	func sendAndWaitForResponse(
+		appID: String,
+		data: Data,
+		currentNode: Int,
+		timeout: TimeInterval,
+		completion: @escaping (Result<Data, Error>) -> Void
+	)
+}
+
+// MARK: - Client Protocol Extension
+
+extension Client {
+	/// Convenience method for sendAndWaitForAck with default retry count of 1000
+	/// - Parameters:
+	///   - message: The control data to send
+	func sendAndWaitForAck(message: EnsembleControlData) {
+		self.sendAndWaitForAck(message: message, maxRetries: 1000)
+	}
+}
+
+// MARK: - ClientImpl
+
 // Leader and follower node can boot up at different time
 // For example leader can come up first and the followed by followers
 // leader can come up after followers. when a followers boot first, and then connect
@@ -49,25 +108,49 @@ extension ClientError: LocalizedError {
 // going on. At 30 minute time interval, fleet management will find the ensemble
 // is in failure state and reboot the nodes.
 
-public class Client {
-	private var connection: NWConnection?
+public class ClientImpl: Client {
+	internal var connection: NWConnection?
 	private var retryAttempts = 0
+	private let readySemaphore = DispatchSemaphore(value: 0)
+
+	private let isCancelledLock = OSAllocatedUnfairLock(initialState: false)
+	private var isCancelled: Bool {
+		get { isCancelledLock.withLock { $0 } }
+		set(value) { isCancelledLock.withLock { $0 = value } }
+	}
 	// we will try to reconnect every 2 seconds for up to 20 minutes
 	private let maxRetryAttempts = kEnsemblerTimeout /
 		kDefaultRetryInterval // we will retry up for 600*2 = 1200 seconds = 20 minutes
 	let host: NWEndpoint.Host
 	let port: NWEndpoint.Port
-	var state: NWConnection.State
+	public var state: NWConnection.State
 	let tlsOptions: NWProtocolTLS.Options
-	let target: Int
+	public let target: Int
 	let delegate: ClientConnectionDelegate
+
+    // Per-client queue for NWConnection callbacks. Replaces the global tlsOutboundQ so
+    // concurrent responses from different followers are delivered in parallel rather than
+    // serialising through one shared serial queue.
+    private let connectionQueue: DispatchQueue
+    
+    let startReceiveLoopOnConnect: Bool
+    
+    // Variables to parse incoming responses and call appropriate completion callback.
+    var pendingCompletion: [String: (Result<Data, Error>) -> Void] = [:]
+    var pendingTimeouts: [String: DispatchWorkItem] = [:]
+    // Tracks the appID for each in-flight request so timeout errors can name the app.
+    var pendingAppIDs: [String: String] = [:]
+    let pendingCompletionLock = DispatchQueue(label: "com.apple.cloudos.applecomputensembler.recievemsg.lock")
+    let parsingQueue = DispatchQueue(label: "com.apple.cloudos.applecomputensembler.parser")
+    var recieveBuffer = Data()
 
 	init(
 		host: String,
 		port: UInt16,
 		tlsOptions: NWProtocolTLS.Options,
 		node: Int,
-		delegate: ClientConnectionDelegate
+		delegate: ClientConnectionDelegate,
+        startReceiveLoopOnConnect: Bool,
 	) {
 		self.host = NWEndpoint.Host(host)
 		self.port = NWEndpoint.Port(rawValue: port)!
@@ -75,18 +158,28 @@ public class Client {
         self.state = .setup
 		self.target = node
 		self.delegate = delegate
+        self.connectionQueue = DispatchQueue(
+            label: "\(kEnsemblerPrefix).conn.queue.\(node)",
+            qos: .userInteractive
+        )
+        self.startReceiveLoopOnConnect = startReceiveLoopOnConnect
 	}
 
 	private func stateDidChange(to newState: NWConnection.State) {
 		self.state = newState
 		switch newState {
 		case .ready:
-			self.retryAttempts = 0 // Reset retry count on successful co
+			self.retryAttempts = 0 // Reset retry count on successful connection
+			self.readySemaphore.signal()
 			logger
 				.info(
 					"client connection to rank: \(self.target, privacy: .public) hostname:\(self.host.debugDescription, privacy: .public):\(self.port.rawValue, privacy: .public)  ready"
 				)
 			self.delegate.onClientConnectionChange(node: self.target, state: self.state)
+			if startReceiveLoopOnConnect {
+				logger.info("ClientImpl: restarting receive loop after connect to rank \(self.target, privacy: .public)")
+				self.startReceiveLoop()
+			}
 		case .waiting(let error):
 			logger
 				.warning(
@@ -116,6 +209,7 @@ public class Client {
 	}
 
 	private func attemptConnection() {
+		guard !isCancelled else { return }
 		let tcpOptions = NWProtocolTCP.Options()
 		// enable TCP keep-alive feature
 		tcpOptions.enableKeepalive = true
@@ -134,10 +228,11 @@ public class Client {
 				"client connection to rank:\(self.target, privacy: .public) Attempt: \(self.retryAttempts, privacy: .public) client connection to  rank:\(self.target, privacy: .public) \(self.host.debugDescription, privacy: .public):\(self.port.rawValue, privacy: .public)"
 			)
 		self.connection?.stateUpdateHandler = self.stateDidChange
-		self.connection?.start(queue: tlsOutboundQ)
+		self.connection?.start(queue: connectionQueue)
 	}
 
 	func retryConnection(retryAfter: TimeInterval = TimeInterval(kDefaultRetryInterval)) {
+		guard !isCancelled else { return }
 		self.stop()
 		guard self.retryAttempts < self.maxRetryAttempts else {
 			logger.warning("Max retry attempts reached. Giving up.")
@@ -157,11 +252,15 @@ public class Client {
 			)
 		DispatchQueue.global(qos: .userInitiated)
 			.asyncAfter(deadline: .now() + retryAfter) { [weak self] in
-				self?.attemptConnection()
+				guard let self = self else {
+					logger.error("Client deallocated during retry delay - connection attempt abandoned")
+					return
+				}
+				self.attemptConnection()
 			}
 	}
 
-	func start() {
+	public func start() {
 		logger
 			.info(
 				"client connection to rank:\(self.target, privacy: .public) hostname:\(self.host.debugDescription, privacy: .public):\(self.port.rawValue, privacy: .public)starting the connection."
@@ -169,7 +268,7 @@ public class Client {
 		self.attemptConnection()
 	}
 
-	func stop() {
+	public func stop() {
 		logger
 			.info(
 				"client connection to rank:\(self.target, privacy: .public) hostname:\(self.host.debugDescription, privacy: .public):\(self.port.rawValue, privacy: .public) stopping the connection."
@@ -179,8 +278,16 @@ public class Client {
 		self.connection = nil
 	}
 
+	public func cancel() {
+		isCancelled = true
+		self.connection?.stateUpdateHandler = nil
+		self.connection?.forceCancel()
+		self.connection = nil
+		readySemaphore.signal()
+	}
+
 	// send without waiting for any ack ( send and foreget )
-	func send(message: EnsembleControlData) {
+	public func send(message: EnsembleControlData) {
 		do {
 			let encoder = JSONEncoder()
 			let data = try encoder.encode(message)
@@ -196,7 +303,6 @@ public class Client {
 					logger.error("client connection to rank:\(self.target, privacy: .public) failed to send data: \(error, privacy: .public)")
 					self.delegate.sendCallback(node: self.target, message: message.data, error: error)
 				} else {
-					logger.info("client connection to rank:\(self.target, privacy: .public) data sent successfully")
 					self.delegate.sendCallback(node: self.target, message: message.data, error: nil)
 				}
 			})
@@ -207,37 +313,32 @@ public class Client {
 
 	private func waitForConnectionReady() -> Bool {
 		if self.state == .ready {
-			logger.info("State is ready. Dont need to wait")
+			logger.debug("State is ready. Dont need to wait")
 			return true
 		}
 
-		let dispatchGroup = DispatchGroup()
-		dispatchGroup.enter()
-
-		DispatchQueue.global().async {
-			// Periodically check the state
-			while self.state != .ready {
-				// Simulate a small delay before rechecking
-				Thread.sleep(forTimeInterval: 1)
+		let overallDeadline = DispatchTime.now() + .seconds(kEnsemblerTimeout)
+		while true {
+			_ = readySemaphore.wait(timeout: .now() + .seconds(1))
+			if self.state == .ready {
+				logger.debug("State is ready. Proceeding with action.")
+				return true
 			}
-			dispatchGroup.leave()
-		}
-
-		let waitResult = dispatchGroup.wait(timeout: .now() + .seconds(kEnsemblerTimeout))
-
-		if waitResult == .success, self.state == .ready {
-			logger.info("State is ready. Proceeding with action.")
-			return true
-		} else {
-			logger.error("Timeout of \(kEnsemblerTimeout, privacy: .public) expired. State is not ready.")
-			return false
+			if isCancelled {
+				logger.info("waitForConnectionReady: client cancelled, returning false immediately")
+				return false
+			}
+			if DispatchTime.now() >= overallDeadline {
+				logger.error("Timeout of \(kEnsemblerTimeout, privacy: .public) expired. State is not ready.")
+				return false
+			}
+			// Either stale signal or 1s wait expired — loop and wait again
 		}
 	}
-
+    
 	private func attemptSend(messageData: Data, controlData: Data, attempts: Int, maxRetries: Int) {
 		logger.debug("Client.attemptSend: Attempt \(attempts, privacy: .public) to send message")
 
-		logger.warning("Client.attemptSend: Waiting for connection to be in .ready state")
 		// wait for connection to be ready before attempting to send.
 		// In good case scenario, connection will be established in the start,
 		// and unless network connection is lost or crash on the other node happens
@@ -271,7 +372,11 @@ public class Client {
 				// so for any failure in sending message,we need to retry in milliseconds.
 				let timeDelay: DispatchTimeInterval = .milliseconds(10)
 				EnsemblerTLS.fromBackendQ.asyncAfter(deadline: .now() + timeDelay) { [weak self] in
-					self?.attemptSend(
+					guard let self = self else {
+						logger.warning("Client deallocated during send retry delay - message send abandoned")
+						return
+					}
+					self.attemptSend(
 						messageData: messageData,
 						controlData: controlData,
 						attempts: attempts + 1,
@@ -281,10 +386,8 @@ public class Client {
 
 				return
 			} else {
-				logger.info("Client.attemptSend: Message sent, waiting for acknowledgment using framed receive")
 				self.receiveAcknowledgment { success in
 					if success {
-						logger.info("Client.attemptSend: Received acknowledge")
 						self.delegate.sendCallback(node: self.target, message: controlData, error: nil)
 						return
 					} else {
@@ -293,7 +396,11 @@ public class Client {
 						logger.debug("Client.attemptSend Retrying: \(attempts + 1, privacy: .public)...")
 						let timeDelay: DispatchTimeInterval = .milliseconds(10)
 						EnsemblerTLS.fromBackendQ.asyncAfter(deadline: .now() + timeDelay) { [weak self] in
-							self?.attemptSend(
+							guard let self = self else {
+								logger.warning("Client deallocated during acknowledgment retry delay - message send abandoned")
+								return
+							}
+							self.attemptSend(
 								messageData: messageData,
 								controlData: controlData,
 								attempts: attempts + 1,
@@ -305,199 +412,8 @@ public class Client {
 			}
 		})
 	}
-
-	// send message and wait for acknowledge message from the server
-	func sendAndWaitForAck(message: EnsembleControlData, maxRetries: Int = 1000) {
-		do {
-			let encoder = JSONEncoder()
-			let data = try encoder.encode(message)
-			var lengthPrefix = UInt32(data.count).bigEndian
-			let lengthData = Data(bytes: &lengthPrefix, count: 4)
-
-			var messageData = Data()
-			messageData.append(lengthData)
-			messageData.append(data)
-
-			self.attemptSend(
-				messageData: messageData,
-				controlData: message.data,
-				attempts: 0,
-				maxRetries: maxRetries
-			)
-		} catch {
-			logger.error("sendAndWaitForAck: error sending message \(error, privacy: .public)")
-		}
-	}
-}
-
-extension Client {
-    // send message and wait for response data from the server
-    func sendAndWaitForResponse(
-        appID: String,
-        data: Data,
-        currentNode: Int,
-        timeout: TimeInterval = 2.0,
-        completion: @escaping (Result<Data, Error>) -> Void
-    ) {
-        do {
-            
-            let messageID = UUID()
-            let msg = EnsembleControlMessage.dataMessage(appID: appID, data: data, requestID: messageID)
-            let msgData = try JSONEncoder().encode(msg)
-            let controlData = EnsembleControlData(rank: currentNode, data: msgData)
-            
-            let encoder = JSONEncoder()
-            let data = try encoder.encode(controlData)
-            var lengthPrefix = UInt32(data.count).bigEndian
-            let lengthData = Data(bytes: &lengthPrefix, count: 4)
-
-            var messageData = Data()
-            messageData.append(lengthData)
-            messageData.append(data)
-            
-            self.attemptSendForResponse(
-                messageData: messageData,
-                controlData: msgData,
-                rank: currentNode,
-                timeout: timeout,
-                completion: completion
-            )
-        } catch {
-            logger.error("sendAndWaitForResponse: error sending message \(error, privacy: .public)")
-            completion(.failure(error))
-        }
-    }
-
-    private func attemptSendForResponse(
-        messageData: Data,
-        controlData: Data,
-        rank:Int,
-        timeout: TimeInterval,
-        completion: @escaping (Result<Data, Error>) -> Void
-    ) {
-        logger.debug("Client.attemptSendForResponse: Sending message and waiting for response")
-
-        guard self.waitForConnectionReady() else {
-            let error = ClientError
-                .ClientError(
-                    message: "Cannot send data, since connection to \(self.target) is not in ready state."
-                )
-            completion(.failure(error))
-            return
-        }
-        
-        var didComplete = false
-        let lockQueue = DispatchQueue(label: "completion.lock.queue")
-        var timeoutItem: DispatchWorkItem!
-
-        func complete(_ result: Result<Data, Error>) {
-            lockQueue.sync {
-                guard !didComplete else { return }
-                
-                if let timeoutItem = timeoutItem, !timeoutItem.isCancelled {
-                    timeoutItem.cancel()
-                }
-                
-                didComplete = true
-                completion(result)
-            }
-        }
-        
-        // Set up timeout
-        timeoutItem = DispatchWorkItem {
-            logger.error("Client.attemptSendForResponse: Timeout waiting for response")
-            complete(.failure(ClientError.ClientError(message: "Timeout waiting for response, after waiting \(timeout) seconds")))
-        }
-        
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutItem)
-        
-        self.connection?.send(content: messageData, completion: .contentProcessed { error in
-            if let error {
-                logger.error("Client.attemptSendForResponse: error sending message: \(error, privacy: .public)")
-                complete(.failure(error))
-                return
-            }
-
-            logger.info("Client.attemptSendForResponse: Message sent, waiting for response using framed receive")
-            self.receiveFramedResponse { result in
-                complete(result)
-            }
-         })
-    }
-    
-    private func receiveFramedResponse(completion: @escaping (Result<Data, Error>) -> Void) {
-        // First, read the 4-byte length prefix
-        self.connection?.receive(minimumIncompleteLength: 4, maximumLength: 4) { lengthData, _, _, lengthError in
-            DispatchQueue.global(qos: .userInitiated).async {
-                
-                if let lengthError {
-                    logger.error("Client.receiveFramedResponse: Error receiving length prefix: \(lengthError, privacy: .public)")
-                    completion(.failure(lengthError))
-                    return
-                }
-                
-                guard let lengthData = lengthData, lengthData.count == 4 else {
-                    logger.error("Client.receiveFramedResponse: Invalid length prefix received")
-                    completion(.failure(ClientError.ClientError(message: "Invalid length prefix received")))
-                    return
-                }
-                
-                let messageLength = lengthData.withUnsafeBytes { $0.load(as: UInt32.self) }.bigEndian
-                
-                guard messageLength > 0 && messageLength <= 65536 else {
-                    logger.error("Client.receiveFramedResponse: Invalid message length: \(messageLength)")
-                    completion(.failure(ClientError.ClientError(message: "Invalid message length: \(messageLength)")))
-                    return
-                }
-                
-                logger.info("Client.receiveFramedResponse: Expecting message of length \(messageLength)")
-                
-                // Now read the actual message data
-                self.connection?.receive(minimumIncompleteLength: Int(messageLength), maximumLength: Int(messageLength)) { messageData, _, _, messageError in
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        
-                        if let messageError {
-                            logger.error("Client.receiveFramedResponse: Error receiving message data: \(messageError, privacy: .public)")
-                            completion(.failure(messageError))
-                            return
-                        }
-                        
-                        guard let messageData = messageData, messageData.count == Int(messageLength) else {
-                            logger.error("Client.receiveFramedResponse: Received incomplete message data")
-                            completion(.failure(ClientError.ClientError(message: "Received incomplete message data")))
-                            return
-                        }
-                        
-                        logger.info("Client.receiveFramedResponse: Received complete message of \(messageData.count) bytes, now decoding")
-                        
-                        // Now decode the actual control message (server sends raw EnsembleControlMessage)
-                        let controlMsg: EnsembleControlMessage
-                        do {
-                            controlMsg = try JSONDecoder().decode(EnsembleControlMessage.self, from: messageData)
-                            switch controlMsg {
-                            case .dataMessage(let appID, let data, let requestID):
-                                logger.info("Client.receiveFramedResponse: Received data response for appID \(appID), and requestID: \(requestID)")
-                                completion(.success(data))
-                                return
-                            case .acknowledge:
-                                logger.info("Client.receiveFramedResponse: Received acknowledge - no registered handler")
-                                completion(.failure(ClientError.ClientError(message: "Data was sent successfully, but there was no registered handler and hence no response from \(self.target)")))
-                            default:
-                                logger.warning("Client.receiveFramedResponse: Got a different message other than response or acknowledge")
-                                completion(.failure(ClientError.ClientError(message: "Got a different message other than response or acknowledge")))
-                            }
-                        } catch {
-                            logger.warning("Client.receiveFramedResponse: Control message decoding failed: \(error, privacy: .public)")
-                            completion(.failure(ClientError.ClientError(message: "Control message decoding failed: \(error)")))
-                        }
-                    }
-                }
-            }
-        }
-    }
     
     private func receiveAcknowledgment(completion: @escaping (Bool) -> Void) {
-        logger.info("Client.receiveAcknowledgment: Expecting acknowledgment")
         
         // Now read the actual message data
         self.connection?.receive(minimumIncompleteLength: 0, maximumLength: 4096) { messageData, _, _, messageError in
@@ -517,10 +433,9 @@ extension Client {
                 
                 // Now decode the actual control message
                 do {
-                    let controlMsg = try JSONDecoder().decode(EnsembleControlMessage.self, from: messageData)
+                    let controlMsg = try EnsembleControlMessage.decode(from: messageData)
                     switch controlMsg {
                     case .acknowledge:
-                        logger.info("Client.receiveAcknowledgment: Received proper acknowledge")
                         completion(true)
                         return
                     default:
@@ -534,14 +449,39 @@ extension Client {
             }
         }
     }
+    
+    // send message and wait for acknowledge message from the server
+    public func sendAndWaitForAck(message: EnsembleControlData, maxRetries: Int = 1000) {
+        do {
+            let encoder = JSONEncoder()
+            let data = try encoder.encode(message)
+            var lengthPrefix = UInt32(data.count).bigEndian
+            let lengthData = Data(bytes: &lengthPrefix, count: 4)
+
+            var messageData = Data()
+            messageData.append(lengthData)
+            messageData.append(data)
+
+            self.attemptSend(
+                messageData: messageData,
+                controlData: message.data,
+                attempts: 0,
+                maxRetries: maxRetries
+            )
+        } catch {
+            logger.error("sendAndWaitForAck: error sending message \(error, privacy: .public)")
+        }
+    }
+    
 }
 
 public func getClient(
 	server: String,
 	port: UInt16,
 	node: Int,
-	delegate: ClientConnectionDelegate
-) throws -> Client? {
+	delegate: ClientConnectionDelegate,
+    startReceiveLoopOnConnect: Bool = false
+) throws -> Client {
 	// get the tls options with appropriate options set.
 	let tlsOptions = getTlsOptions()
 
@@ -549,12 +489,13 @@ public func getClient(
 	let secIdentity = try getSecIdentity()
 	sec_protocol_options_set_local_identity(tlsOptions.securityProtocolOptions, secIdentity)
 
-	let client = Client(
+	let client = ClientImpl(
 		host: server,
 		port: port,
 		tlsOptions: tlsOptions,
 		node: node,
-		delegate: delegate
+		delegate: delegate,
+        startReceiveLoopOnConnect: startReceiveLoopOnConnect
 	)
 
 	return client

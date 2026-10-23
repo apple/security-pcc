@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -24,7 +24,6 @@ package enum ClientConfigurationKey: String, CaseIterable {
     case expiredBuildNotificationDisplayInterval
     case ignoreCertificateErrors
     case rateLimitRequestPath
-    case rateLimitRequestMinimumSpacing
     case rateLimitUnmatchedRequestStorageTimeout
     case prefetchRequestPath
     case trustedRequestPath
@@ -53,6 +52,9 @@ package enum ClientConfigurationKey: String, CaseIterable {
     case enforceWorkloadParametersFiltering
     case proposedLiveOnEnvironment
     case bootFixedLiveOnEnvironment
+    case forceTokenFetcherTestOptions
+    case applicationDataChunkingSize
+    case networkConnectionReadSize
 
     package var domain: String {
         switch self {
@@ -88,7 +90,6 @@ extension ConfigurationIndex {
     package static var ignoreCertificateErrors: ConfigurationIndex<Bool> { .init(key: .ignoreCertificateErrors, defaultValue: false) }
 
     package static var rateLimitRequestPath: ConfigurationIndex<String> { .init(key: .rateLimitRequestPath, defaultValue: "/ratelimits") }
-    package static var rateLimitRequestMinimumSpacing: ConfigurationIndex<Double> { .init(key: .rateLimitRequestMinimumSpacing, defaultValue: 60.0) }
 
     package static var prefetchRequestPath: ConfigurationIndex<String> { .init(key: .prefetchRequestPath, defaultValue: "/prefetch") }
 
@@ -98,6 +99,10 @@ extension ConfigurationIndex {
 
     package static var lttIssuer: ConfigurationIndex<String> { .init(key: .lttIssuer, defaultValue: "tis.gateway.icloud.com") }
     package static var ottIssuer: ConfigurationIndex<String> { .init(key: .ottIssuer, defaultValue: "rts.gateway.icloud.com") }
+    /// When set to `true`, a `device-csf-bypass=true` will be appended to the issuer strings.
+    /// Applicable for token fetcher used to fetch token for a request as well as the one used for fetching
+    /// device configuration from the vault.
+    package static var forceTokenFetcherTestOptions: ConfigurationIndex<Bool> { .init(key: .forceTokenFetcherTestOptions, defaultValue: false) }
 
     package static var prewarmAttestationsValidityInSeconds: ConfigurationIndex<Double> { .init(key: .prewarmAttestationsValidityInSeconds, defaultValue: 30.0 * 60.0) }
 
@@ -150,5 +155,16 @@ extension ConfigurationIndex {
             key: .expiredBuildNotificationDisplayInterval,
             defaultValue: 60.0 * 60.0 * 24.0  // 24 hours
         )
+    }
+
+    /// The size of each chunking when application data chunking is enabled.
+    /// If set to 0, chunking shall be disabled.
+    package static var applicationDataChunkingSize: ConfigurationIndex<Int> {
+        .init(key: .applicationDataChunkingSize, defaultValue: 61440)
+    }
+
+    /// Maximum number of bytes to read per NWConnection.receive call.
+    package static var networkConnectionReadSize: ConfigurationIndex<Int> {
+        .init(key: .networkConnectionReadSize, defaultValue: 256 * 1024)
     }
 }

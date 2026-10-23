@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,6 +25,7 @@ import Foundation
 import OSLog
 @_weakLinked import SecureConfigDB
 import Security
+import MobileGestaltPrivate
 
 @_spi(Daemon) import AppleComputeEnsembler // _spi interface used for mach service name, protocol
 
@@ -56,6 +57,7 @@ struct EnsemblerService {
 	static let logger = Logger(subsystem: kEnsemblerPrefix, category: "Service")
 	let kEnsembleActivationPreferenceKey = "AutoActivation"
 	let kEnsembleAutoRestartPreferenceKey = "AutoRestartForDevOnly"
+    let kEnsembleUseCIOFusionBackendPreferenceKey = "UseCIOFusion"
 	let kSkipDarwinInitCheckPreferenceKey = "SkipDarwinInitCheck"
 	let kSkipWaitingForDenaliPreferenceKey = "SkipWaitingForDenali"
 	let kDarwinInitTimeoutPreferenceKey = "DarwinInitTimeout"
@@ -82,7 +84,26 @@ struct EnsemblerService {
 		}
 		return activate
 	}
-
+    
+    func checkPrefsForCIOFusionBackend() -> Bool {
+        guard let useCIOFusion = CFPreferencesCopyValue(
+            kEnsembleUseCIOFusionBackendPreferenceKey as CFString,
+            kEnsemblerPrefix as CFString,
+            kCFPreferencesAnyUser,
+            kCFPreferencesAnyHost
+        ) as? Bool else {
+            EnsemblerService.logger.info(
+                """
+                Did not find \(self.kEnsembleUseCIOFusionBackendPreferenceKey, privacy: .public) preference, \
+                defaulting to false...
+                """
+            )
+            return false
+        }
+      
+        return useCIOFusion
+    }
+    
 	func checkPrefsForAutoRestart() -> Bool {
 		guard let enableAutoRestart = CFPreferencesCopyValue(
 			kEnsembleAutoRestartPreferenceKey as CFString,
@@ -192,9 +213,10 @@ struct EnsemblerService {
     
     func checkPrefsForTraceID() throws -> String {
         let traceIDSecureConfig = "com.apple.cloudos.tracing.traceID"
-        let configParams = try SecureConfigParameters.loadContents()
+       
         
         do {
+            let configParams = try SecureConfigParameters.loadContents()
             // Pull the configuration value down
             let traceID = try configParams.unvalidatedStringParameter(traceIDSecureConfig)
             return traceID
@@ -212,9 +234,9 @@ struct EnsemblerService {
 
     func checkPrefsForSpanID() throws -> String {
         let spanIDSecureConfig = "com.apple.cloudos.tracing.spanID"
-        let configParams = try SecureConfigParameters.loadContents()
         
         do {
+            let configParams = try SecureConfigParameters.loadContents()
             // Pull the configuration value down
             let spanID = try configParams.unvalidatedStringParameter(spanIDSecureConfig)
             return spanID
@@ -287,10 +309,10 @@ struct EnsemblerService {
 	}
 
 	private func checkforAllowDefaultOneNodeConfig() throws -> Bool {
-		let secureConfigParameters = try SecureConfigParameters.loadContents()
-		// for customer policy this parameter can only be set to true if the code is running in VRE
-		let disableAppleInfrastructureEnforcementForResearch =
-			secureConfigParameters.research_disableAppleInfrastrucutureEnforcement ?? false
+        let secureConfigParameters = try SecureConfigParameters.loadContents()
+                // for customer policy this parameter can only be set to true if the code is running in VRE
+                let disableAppleInfrastructureEnforcementForResearch =
+                    secureConfigParameters.research_disableAppleInfrastrucutureEnforcement ?? false
 
 		// we should allow default one node config if either the secure config is set or if it is internal
 		// variant.
@@ -300,6 +322,14 @@ struct EnsemblerService {
 			)
 	}
 
+    private func getHWModelStr() throws -> String {
+        guard let hwModelStr = MGGetStringAnswer("HWModelStr" as CFString) as? String else {
+            throw EnsembleError.internalError(error: "cannot find HWModelStr")
+        }
+        return hwModelStr
+    }
+
+    
 	init() {
 		EnsemblerService.logger.info("Initializing EnsemblerService.")
 
@@ -310,28 +340,66 @@ struct EnsemblerService {
 		do {
 			let autoRestart = self.checkPrefsForAutoRestart()
 			let skipDarwinInitCheck = self.checkPrefsForSkipDarwinInitCheck()
-			let skipWaitingForDenali = try self.checkPrefsForSkipWaitingForDenali() ?? false
+            let skipWaitingForDenali = try self.checkPrefsForSkipWaitingForDenali() ?? false
 			let darwinInitTimeout = self.checkPrefsForDarwinInitTimeout()
 			let useStubAttestation = self.checkPrefsForUseStubAttestation()
-			let allowDefaultOneNodeConfig = try self.checkforAllowDefaultOneNodeConfig()
+            let allowDefaultOneNodeConfig = try self.checkforAllowDefaultOneNodeConfig()
 			let dataKeyDeleteTimeout = self.checkPrefsForDataKeyDeleteTimeout()
 			let ensemblerTimeout = self.checkPrefsForEnsemberTimeout()
             let traceID = try self.checkPrefsForTraceID()
             let spanID = try self.checkPrefsForSpanID()
+            let useCIOBackend = self.checkPrefsForCIOFusionBackend()
+            let hwModelStr = try self.getHWModelStr()
             
             EnsemblerService.logger.info("Initializing EnsemblerService which uses mTLS.")
-            EnsemblerService.ensembler = try EnsemblerTLS(
-                autoRestart: autoRestart,
-                skipDarwinInitCheckOpt: skipDarwinInitCheck,
-                darwinInitTimeout: darwinInitTimeout,
-                useStubAttestation: useStubAttestation,
-                allowDefaultOneNodeConfig: allowDefaultOneNodeConfig,
-                dataKeyDeleteTimeout: dataKeyDeleteTimeout,
-                skipWaitingForDenali: skipWaitingForDenali,
-                ensemblerTimeout: ensemblerTimeout,
-                traceID: traceID,
-                spanID: spanID
-            )
+            EnsemblerService.logger.info("HW Platform detected is \(hwModelStr).")
+            
+            // Load CIOFusion for 226
+            if hwModelStr.uppercased() == "J226CAP" {
+                EnsemblerService.logger.info("Detected J226CAP. Initializing EnsemblerService with CIOFusion backend")
+                EnsemblerService.ensembler = try EnsemblerTLSCIOFusion(
+                    autoRestart: autoRestart,
+                    skipDarwinInitCheckOpt: skipDarwinInitCheck,
+                    darwinInitTimeout: darwinInitTimeout,
+                    useStubAttestation: useStubAttestation,
+                    allowDefaultOneNodeConfig: allowDefaultOneNodeConfig,
+                    dataKeyDeleteTimeout: dataKeyDeleteTimeout,
+                    skipWaitingForDenali: skipWaitingForDenali,
+                    ensemblerTimeout: ensemblerTimeout,
+                    traceID: traceID,
+                    spanID: spanID
+                )
+            }
+            else if hwModelStr.uppercased() == "J236CAP"{
+                EnsemblerService.logger.info("Detected J236CAP. Initializing EnsemblerService with CIOMesh backend")
+                EnsemblerService.ensembler = try EnsemblerTLSCIO(
+                    autoRestart: autoRestart,
+                    skipDarwinInitCheckOpt: skipDarwinInitCheck,
+                    darwinInitTimeout: darwinInitTimeout,
+                    useStubAttestation: useStubAttestation,
+                    allowDefaultOneNodeConfig: allowDefaultOneNodeConfig,
+                    dataKeyDeleteTimeout: dataKeyDeleteTimeout,
+                    skipWaitingForDenali: skipWaitingForDenali,
+                    ensemblerTimeout: ensemblerTimeout,
+                    traceID: traceID,
+                    spanID: spanID
+                )
+            }
+            else { // default handling, include VRE use case
+                EnsemblerService.logger.info("Default: Initializing EnsemblerService with CIOMesh backend")
+                EnsemblerService.ensembler = try EnsemblerTLSCIO(
+                    autoRestart: autoRestart,
+                    skipDarwinInitCheckOpt: skipDarwinInitCheck,
+                    darwinInitTimeout: darwinInitTimeout,
+                    useStubAttestation: useStubAttestation,
+                    allowDefaultOneNodeConfig: allowDefaultOneNodeConfig,
+                    dataKeyDeleteTimeout: dataKeyDeleteTimeout,
+                    skipWaitingForDenali: skipWaitingForDenali,
+                    ensemblerTimeout: ensemblerTimeout,
+                    traceID: traceID,
+                    spanID: spanID
+                )
+            }
 			
 			if self.checkPrefsForActivation() == true {
 				try EnsemblerService.ensembler?.activate()
@@ -344,9 +412,10 @@ struct EnsemblerService {
 		}
 	}
 
-	struct SessionHandler: XPCPeerHandler {
-        
+	class SessionHandler: XPCPeerHandler {
+
         private var session: XPCSession?
+        private var registeredAppIDs: [String] = []
 
         init(session: XPCSession) {
             self.session = session
@@ -361,20 +430,20 @@ struct EnsemblerService {
 				return EnsemblerResponse(result: true, status: .uninitialized)
 			}
 			// If the ensembler is initialized, we fetch the status
-			EnsemblerService.logger.info("Found ensembler, returning status: \(status)")
+			EnsemblerService.logger.debug("Found ensembler, returning status: \(status)")
 			return EnsemblerResponse(result: true, status: status)
 		}
 
 		/// Get the draining state of the ensemble
 		/// This information can be provided regardless of whether a configuration has been loaded
 		func getDraining() -> Encodable {
-			EnsemblerService.logger.info("Fetching draining state")
+			EnsemblerService.logger.debug("Fetching draining state")
 			guard EnsemblerService.ensembler != nil else {
 				EnsemblerService.logger.error("Ensembler NOT configured! Initialization error?")
 				return EnsemblerResponse(result: false, draining: nil)
 			}
 			// If the ensembler is initialized, we fetch the draining state
-			EnsemblerService.logger.info("Found ensembler, returning draining state...")
+			EnsemblerService.logger.debug("Found ensembler, returning draining state...")
 			return EnsemblerResponse(result: true, draining: EnsemblerService.ensembler?.getDraninigStatus())
 		}
 
@@ -442,13 +511,13 @@ struct EnsemblerService {
 
 		/// Get maxBuffersPerKey
 		func getMaxBuffersPerKey() -> Encodable {
-			EnsemblerService.logger.info("Fetching max buffers per key")
+			EnsemblerService.logger.debug("Fetching max buffers per key")
 			guard let ensembler = EnsemblerService.ensembler else {
 				EnsemblerService.logger.error("Ensembler NOT configured! Initialization error?")
 				return EnsemblerResponse(result: false, status: .uninitialized)
 			}
 
-			EnsemblerService.logger.info("Found ensembler, getting max buffers per key...")
+			EnsemblerService.logger.debug("Found ensembler, getting max buffers per key...")
 			do {
 				return try EnsemblerResponse(result: true, maxBuffersPerKey: ensembler.getMaxBuffersPerKey())
 			} catch {
@@ -459,13 +528,13 @@ struct EnsemblerService {
 
 		/// Get maxSecsPerKey
 		func getMaxSecsPerKey() -> Encodable {
-			EnsemblerService.logger.info("Fetching max seconds per key")
+			EnsemblerService.logger.debug("Fetching max seconds per key")
 			guard let ensembler = EnsemblerService.ensembler else {
 				EnsemblerService.logger.error("Ensembler NOT configured! Initialization error?")
 				return EnsemblerResponse(result: false, status: .uninitialized)
 			}
 
-			EnsemblerService.logger.info("Found ensembler, getting max seconds per key...")
+			EnsemblerService.logger.debug("Found ensembler, getting max seconds per key...")
 			do {
 				return try EnsemblerResponse(result: true, maxSecsPerKey: ensembler.getMaxSecondsPerKey())
 			} catch {
@@ -523,7 +592,7 @@ struct EnsemblerService {
 
 		/// Get Authcode for the data
 		func getAuthCode(data: Data) -> Encodable {
-			EnsemblerService.logger.info("Getting the auth code")
+			EnsemblerService.logger.debug("Getting the auth code")
 			guard let ensembler = EnsemblerService.ensembler else {
 				EnsemblerService.logger.error("Ensembler NOT configured! Initialization error?")
 				return EnsemblerResponse(result: false, status: .uninitialized)
@@ -574,7 +643,7 @@ struct EnsemblerService {
 			EnsemblerService.logger.info("Attempting to reload configuration")
 			// We have no legal re-configuration model for a running ensemble at this time
 			guard EnsemblerService.ensembler == nil else {
-				EnsemblerService.logger.info("Ensembler already initialized, cannot reconfigure")
+				EnsemblerService.logger.error("Ensembler already initialized, cannot reconfigure")
 				// While not technically success, we are configured and should return true
 				return EnsemblerResponse(result: true)
 			}
@@ -584,7 +653,7 @@ struct EnsemblerService {
 				EnsemblerService.logger.error("Failed to reload configuration: \(error, privacy: .public)")
 				return EnsemblerResponse(result: false)
 			}
-			EnsemblerService.logger.info("Configuration loaded.")
+			EnsemblerService.logger.debug("Configuration loaded.")
 			return EnsemblerResponse(result: true)
 		}
 
@@ -618,7 +687,7 @@ struct EnsemblerService {
 		}
 
 		func getHealthState() -> Encodable {
-			EnsemblerService.logger.info("Attempting to get ensembler health state")
+			EnsemblerService.logger.debug("Attempting to get ensembler health state")
 			let health = EnsemblerService.ensembler?.getHealth()
 			return EnsemblerResponse(result: true, health: health)
 		}
@@ -643,27 +712,53 @@ struct EnsemblerService {
 			}
 
 			// Register a default callback that handles the message processing
-			ensembler.registerDataCallback(appID: appID) { sender, data in
-                
-                EnsemblerService.logger.info("Received data from other node")
+			ensembler.registerDataCallback(appID: appID) { [weak self] sender, data in
+                guard let self = self else {
+                    EnsemblerService.logger.error("Received data from other node, but error in referencing self for appID: \(appID, privacy: .public)")
+                    throw DataMessageError.internalError(appID: appID, reason: "EnsemblerService instance was deallocated")
+                }
+
+                EnsemblerService.logger.debug("Received data from other node for appID: \(appID, privacy: .public)")
                 let receivedData = EnsemblerRequest.recievedData(sender, callbackID, data)
-                do {
-                    guard let session = self.session else {
-                        EnsemblerService.logger.error("There is no session to send data to")
-                        return Data()
+
+                guard let session = self.session else {
+                    EnsemblerService.logger.error("There is no session to send data to")
+                    throw DataMessageError.internalError(appID: appID, reason: "XPC session is not available")
+                }
+
+                // Use async send so the Task suspends during the XPC round-trip to the client
+                // app rather than blocking an ensembled GCD thread. This prevents thread-pool
+                // exhaustion when slow or sync-callback clients (e.g. porter) share the pool.
+                EnsemblerService.logger.debug("Sending the data to registered app with appID: \(appID, privacy: .public).")
+                let reply = try await withCheckedThrowingContinuation { continuation in
+                    do {
+                        try session.send(receivedData, replyHandler: continuation.resume(with:))
+                    } catch {
+                        continuation.resume(throwing: error)
                     }
-                    EnsemblerService.logger.info("Sending the data to caller.")
-                    let response = try session.sendSync(receivedData)
-                    let responseData = try response.decode(as: Data.self)
-                    EnsemblerService.logger.info("Got response back from the caller, sending it back to sender.")
-                    return responseData
                 }
-                catch {
-                    EnsemblerService.logger.error("Ensembler error receiving response \(error)")
+                let response = try reply.decode(as: EnsemblerResponse.self)
+
+                // result == false means the app explicitly reported failure (e.g. no registered callback).
+                // This is distinct from a send throw (XPC/transport failure).
+                guard response.result == true else {
+                    let reason = response.error ?? "App callback returned result=false"
+                    EnsemblerService.logger
+                        .error(
+                            "App callback reported failure for appID: \(appID, privacy: .public), error: \(String(describing: response.error), privacy: .public)"
+                        )
+                    throw DataMessageError.internalError(appID: appID, reason: reason)
                 }
-                return Data()
+                guard let responseData = response.responseData else {
+                    EnsemblerService.logger.error("App callback returned nil response data for appID: \(appID, privacy: .public)")
+                    throw DataMessageError.internalError(appID: appID, reason: "App callback returned nil response data")
+                }
+
+                EnsemblerService.logger.debug("Got response back from the registered app handler for appID: \(appID, privacy: .public), sending it back to sender.")
+                return responseData
 			}
-			
+
+            registeredAppIDs.append(appID)
 			return EnsemblerResponse(result: true)
 		}
         
@@ -684,7 +779,7 @@ struct EnsemblerService {
 
 		/// Send data and get response from destination
 		func sendDataAndGetResponse(appID: String, data: Data, destination: Int, timeout: TimeInterval) async -> Encodable {
-            EnsemblerService.logger.info("Sending data to destination: \(destination, privacy: .public), appID: \(appID, privacy: .public)")
+            EnsemblerService.logger.debug("Sending data to destination: \(destination, privacy: .public), appID: \(appID, privacy: .public)")
 			guard let ensembler = EnsemblerService.ensembler else {
 				EnsemblerService.logger.error("Ensembler NOT configured! Initialization error?")
 				return EnsemblerResponse(result: false, status: .uninitialized)
@@ -693,31 +788,35 @@ struct EnsemblerService {
             let status = ensembler.getStatus()
             guard  status == .ready else {
                 EnsemblerService.logger.error("Ensembler NOT in ready state, current state is \(status). Cannot send data to \(destination, privacy: .public), appID: \(appID, privacy: .public)")
-                return EnsemblerResponse(result: false, status: status, error: String("Cannot send data when ensembled is in \(status)"))
+                let notReady = DataMessageError.notReady(appID: appID, currentStatus: String(describing: status))
+                return EnsemblerResponse(result: false, status: status,
+                                         error: notReady.description,
+                                         dataMessageError: try? JSONEncoder().encode(notReady))
             }
             
             // Use proper async/await without blocking any threads
-            do {
-                let response = await withCheckedContinuation { continuation in
-                    ensembler.sendDataAndGetResponse(appID: appID, data: data, destination: destination, timeout: timeout) { result in
-                        continuation.resume(returning: result)
-                    }
+            let response = await withCheckedContinuation { continuation in
+                ensembler.sendDataAndGetResponse(appID: appID, data: data, destination: destination, timeout: timeout) { result in
+                    continuation.resume(returning: result)
                 }
-                
-                switch response {
-                case .success(let responseData):
-                    EnsemblerService.logger.info("Successfully sent the data to destination: \(destination, privacy: .public), appID: \(appID, privacy: .public) and got the response back")
-                    return EnsemblerResponse(result: true, responseData: responseData)
-                case .failure(let error):
-                    EnsemblerService.logger.error("Failed to send data and get response: \(error, privacy: .public)")
-                    return EnsemblerResponse(result: false, error: String(describing: error))
-                }
+            }
+
+            switch response {
+            case .success(let responseData):
+                EnsemblerService.logger.debug("Successfully sent the data to destination: \(destination, privacy: .public), appID: \(appID, privacy: .public) and got the response back")
+                return EnsemblerResponse(result: true, responseData: responseData)
+            case .failure(let error):
+                EnsemblerService.logger.error("Failed to send data and get response for appID: \(appID, privacy: .public), destination: \(destination, privacy: .public), error: \(error, privacy: .public)")
+                let dataError = error as? DataMessageError
+                return EnsemblerResponse(result: false,
+                                         error: String(describing: error),
+                                         dataMessageError: dataError.flatMap { try? JSONEncoder().encode($0) })
             }
 		}
 		
 		/// Send data to all followers and get responses
 		func sendDataToAllFollowers(appID: String, data: Data, timeout: TimeInterval) async -> Encodable {
-			EnsemblerService.logger.info("Sending data to all followers, appID: \(appID)")
+			EnsemblerService.logger.debug("Sending data to all followers, appID: \(appID, privacy: .public)")
 			guard let ensembler = EnsemblerService.ensembler else {
 				EnsemblerService.logger.error("Ensembler NOT configured! Initialization error?")
 				return EnsemblerResponse(result: false, status: .uninitialized)
@@ -726,25 +825,29 @@ struct EnsemblerService {
             let status = ensembler.getStatus()
             guard  status == .ready else {
                 EnsemblerService.logger.error("Ensembler NOT in ready state, current state is \(status)")
-                return EnsemblerResponse(result: false, status: status, error: String("Cannot send data when ensembled is in \(status)"))
+                let notReady = DataMessageError.notReady(appID: appID, currentStatus: String(describing: status))
+                return EnsemblerResponse(result: false, status: status,
+                                         error: notReady.description,
+                                         dataMessageError: try? JSONEncoder().encode(notReady))
             }
             
 
             // Use proper async/await without blocking any threads
-            do {
-                let response = await withCheckedContinuation { continuation in
-                    ensembler.sendDataToAllFollowers(appID: appID, data: data, timeout: timeout) { result in
-                        continuation.resume(returning: result)
-                    }
+            let response = await withCheckedContinuation { continuation in
+                ensembler.sendDataToAllFollowers(appID: appID, data: data, timeout: timeout) { result in
+                    continuation.resume(returning: result)
                 }
-                
-                switch response {
-                case .success(let responses):
-                    return EnsemblerResponse(result: true, allFollowersResponseData: responses)
-                case .failure(let error):
-                    EnsemblerService.logger.error("Failed to send data to all followers: \(error, privacy: .public)")
-                    return EnsemblerResponse(result: false, error: error.localizedDescription)
-                }
+            }
+
+            switch response {
+            case .success(let responses):
+                return EnsemblerResponse(result: true, allFollowersResponseData: responses)
+            case .failure(let error):
+                EnsemblerService.logger.error("Failed to send data to all followers: \(error, privacy: .public)")
+                let dataError = error as? DataMessageError
+                return EnsemblerResponse(result: false,
+                                         error: String(describing: error),
+                                         dataMessageError: dataError.flatMap { try? JSONEncoder().encode($0) })
             }
 		}
         
@@ -863,7 +966,7 @@ struct EnsemblerService {
 					// Use handoffReply for async processing without blocking the XPC thread
                     return message.handoffReply(to: .global(qos: .userInitiated)) {
                         Task(priority: .userInitiated) {
-                                   let result = await sendDataAndGetResponse(
+                            let result = await self.sendDataAndGetResponse(
                                        appID: appID,
                                        data: data,
                                        destination: destination,
@@ -875,8 +978,8 @@ struct EnsemblerService {
 				case .sendDataToAllFollowers(let appID, let data, let timeout):
 					// Use handoffReply for async processing without blocking the XPC thread  
                     return message.handoffReply(to: .global(qos: .userInitiated)) {
-                        Task(priority: .userInitiated) {
-                                   let result = await sendDataToAllFollowers(
+                        Task(priority: .userInitiated) { 
+                            let result = await self.sendDataToAllFollowers(
                                        appID: appID,
                                        data: data,
                                        timeout: timeout
@@ -957,6 +1060,16 @@ struct EnsemblerService {
 
 		func handleCancellation(error: XPCRichError) {
 			EnsemblerService.logger.debug("Received session cancellation: \(error, privacy: .public)")
+            for appID in registeredAppIDs {
+                EnsemblerService.logger.info("handleCancellation: unregistering callback for appID: \(appID, privacy: .public)")
+                EnsemblerService.ensembler?.unregisterDataCallback(appID: appID)
+            }
+            registeredAppIDs.removeAll()
+			// Nil out session to break any retain cycle between SessionHandler and XPCSession.
+			// SessionHandler is the owner of the session (strong reference); when the XPC connection
+			// ends this is the right time to release it, rather than using a weak reference which
+			// risks the session being prematurely deallocated.
+			self.session = nil
 		}
 	}
 

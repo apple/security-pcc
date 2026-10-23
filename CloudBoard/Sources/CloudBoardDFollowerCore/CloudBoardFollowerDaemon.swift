@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -19,8 +19,12 @@ import CloudBoardMetrics
 import CloudBoardPlatformUtilities
 import Foundation
 import os
-#if canImport(SystemServiceMonitor)
+#if RC_IS_CLOUDOS_ENABLED && os(iOS)
+import SystemServiceMonitor
+#elseif canImport(SystemServiceMonitor)
 @_weakLinked import SystemServiceMonitor
+#else
+#warning("SystemServiceMonitor not available at compile time")
 #endif
 
 /// Long-lived daemon only running on follower nodes in distributed inferencing ensembles, responsible for reporting
@@ -80,7 +84,7 @@ public actor CloudBoardFollowerDaemon {
 
         self.healthMonitor = ServiceHealthMonitor(cloudApp: WorkloadControllerServer.kFollowerAppName)
         self.healthReporter = Self.initializeHealthReporter(config: leaderConfig)
-        self.healthServer = HealthServer(healthReporter: self.healthReporter)
+        self.healthServer = HealthServer(healthReporter: self.healthReporter, monitoringBridgeService: .disabled)
 
         if let heartbeat = leaderConfig.heartbeat {
             CloudBoardFollowerDaemon.logger.info("Heartbeat publisher was successfully configured")
@@ -88,7 +92,8 @@ public actor CloudBoardFollowerDaemon {
                 configuration: heartbeat,
                 nodeInfo: nodeInfo,
                 hotProperties: hotProperties,
-                metrics: metricsSystem
+                metrics: metricsSystem,
+                monitoringBridgeService: .disabled
             )
         } else {
             CloudBoardFollowerDaemon.logger.error("Heartbeat publisher not configured")
@@ -137,9 +142,9 @@ public actor CloudBoardFollowerDaemon {
 
         try await self.lifecycleManager.managed {
             let identityManager = IdentityManager(
-                useSelfSignedCert: false,
                 metricsSystem: self.metricsSystem,
-                metricProcess: "cloudboardd_follower"
+                metricProcess: "cloudboardd_follower",
+                identityBackendType: .narrative()
             )
             if identityManager.identity != nil {
                 Self.logger.log("Loaded a TLS identity, will send heartbeats with mTLS.")
@@ -180,7 +185,7 @@ public actor CloudBoardFollowerDaemon {
                         group.addTaskWithLogging(
                             operation: "healthServer", sensitiveError: false
                         ) {
-                            await healthServer.run(healthPublishers: [self.healthMonitor])
+                            try await healthServer.run(healthPublishers: [self.healthMonitor])
                         }
                     }
 

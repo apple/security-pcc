@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -109,7 +109,7 @@ extension AttestedTLS {
             let key = try keyType.createKey()
             let cert = try await Certificate(for: key, using: self.attestor, lifetime: lifetime)
 
-            guard let identity = SecIdentityCreate(nil, cert.certificate, key)?.takeRetainedValue() else {
+            guard let identity = SecIdentityCreate(nil, cert.certificate, key) else {
                 throw Error.identityGenerationFailure
             }
 
@@ -127,7 +127,7 @@ extension AttestedTLS {
                 return true
             } catch {
                 // TODO: log failure
-                logger.error("SecTrust verification failed: \(error)")
+                logger.error("SecTrust verification failed: \(error, privacy: .public)")
                 return false
             }
         }

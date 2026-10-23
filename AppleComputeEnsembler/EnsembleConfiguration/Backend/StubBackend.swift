@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -25,7 +25,7 @@ import OSLog
 
 private let logger = Logger(subsystem: kEnsemblerPrefix, category: "StubBackend")
 
-final class StubBackend: Backend {
+final class StubBackend: CIOBackendProtocol {
 	let configuration: BackendConfiguration
 	// Start Small
 	var activated: Bool

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -28,6 +28,7 @@ extension VM {
         var kernelcacheOverride: String? = nil // pathnames
         var sptmOverride: String? = nil
         var txmOverride: String? = nil
+        var prkitPath: String? = nil
     }
 
     // RestoreContext is passed into deviceConnectedCallback
@@ -72,7 +73,16 @@ extension VM {
 
         try run(dfuMode: true)
 
-        var restoreConfig = AMRestorableDeviceCopyDefaultRestoreOptions() as! [String: Any]
+        var restoreConfig: [String: Any]
+        if let prkitPath = restoreOptions.prkitPath {
+            let prkitURL = URL(filePath: prkitPath) as CFURL
+            guard let copiedDict = AMRestorableDeviceCopyRestoreOptionsFromDocument(prkitURL, nil) else {
+                throw VMError("failed to load restore options from PRKit: \(prkitPath)")
+            }
+            restoreConfig = CFDictionaryCreateMutableCopy(nil, 0, copiedDict) as! [String: Any]
+        } else {
+            restoreConfig = AMRestorableDeviceCopyDefaultRestoreOptions() as! [String: Any]
+        }
         if let bootArgs = restoreConfig[kAMRestoreOptionsRestoreBootArgs] as? String {
             restoreConfig[kAMRestoreOptionsRestoreBootArgs] = bootArgs + " serial=3"
         } else {
@@ -180,7 +190,7 @@ extension VM {
 //  RestoreContext.logDir is set, log output files are setup for host/device/serial streams (in
 //  addition to stdout)
 private func deviceConnectedCallback(
-    _ deviceRef: AMRestorableDeviceRef?,
+    _ deviceRef: AMRestorableDevice?,
     _ event: AMRestorableDeviceEvent,
     _ context: UnsafeMutableRawPointer? // &RestoreContext
 ) {
@@ -201,7 +211,8 @@ private func deviceConnectedCallback(
 
     VM.logger.log("restore: connected to VM")
     if getAMRDeviceState(deviceRef) == kAMRestorableDeviceStateBootedOS {
-        let error: AMDError = AMDeviceEnterRecovery(deviceRef)
+        let amDeviceRef = AMRestorableDeviceCopyAMDevice(deviceRef)
+        let error: AMDError = AMDeviceEnterRecovery(amDeviceRef)
         if error != 0 {
             let errStr = AMDCopyErrorText(error).takeRetainedValue() as String? ?? "Error code: \(error)"
             contextRef.context.status.setResult(state: .failed,
@@ -269,7 +280,7 @@ private func deviceConnectedCallback(
 //  the restore process and upon completion (successfull or otherwise); RestoreContext.status is
 //  set with the result and .completion semaphore - during the operation, progress is output to stdout
 private func restoreProgressCallback(
-    _ deviceRef: AMRestorableDeviceRef?,
+    _ deviceRef: AMRestorableDevice?,
     _ restoreInfo: CFDictionary?,
     _ context: UnsafeMutableRawPointer? // &RestoreContext
 ) {
@@ -322,7 +333,7 @@ private func restoreProgressCallback(
     contextRef.context.completion.signal()
 }
 
-private func getAMRDeviceState(_ deviceRef: AMRestorableDeviceRef) -> AMRestorableDeviceState {
+private func getAMRDeviceState(_ deviceRef: AMRestorableDevice) -> AMRestorableDeviceState {
     return AMRestorableDeviceGetStateWithVersion(deviceRef,
                                                  OpaquePointer(getAMRestorableDeviceStateVersion2()))
 }

@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -34,6 +34,9 @@ public struct InvokeWorkloadRequestMetaData: Sendable {
     /// Passed through all the way to the cloud app
     public var workloadParameters: [String: [String]] = [:]
 
+    /// PAT issuer identifier for cost token generation
+    public var patIssuer: String = "test-resource-pool"
+
     // not included here because this was already included in the API
     // public var requestID: String
 
@@ -43,7 +46,21 @@ public struct InvokeWorkloadRequestMetaData: Sendable {
         workloadType: String = "",
         workloadParameters: [String: [String]] = [:]
     ) {
+        self.init(
+            workloadType: workloadType,
+            workloadParameters: workloadParameters,
+            patIssuer: "test-resource-pool"
+        )
+    }
+
+    /// Overloaded for ABI compatibility
+    public init(
+        workloadType: String = "",
+        workloadParameters: [String: [String]] = [:],
+        patIssuer: String = "test-resource-pool"
+    ) {
         self.workloadType = workloadType
         self.workloadParameters = workloadParameters
+        self.patIssuer = patIssuer
     }
 }

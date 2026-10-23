@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -27,6 +27,14 @@ internal enum SelectionNegotiationSetup {
         subsystem: "com.apple.cloudos.cloudboard",
         category: "SelectionNegotiationSetup"
     )
+
+    /// The scale factor the proxy advertises by default: ROPES may scale the announced ratio up to
+    /// this multiple. This is the policy default applied to every pick unless overridden by config.
+    internal static let defaultPickRatioCanScaleTo = 2
+
+    /// The largest scale factor permitted under Apple infrastructure (customer) policy. Config may
+    /// not raise the advertised value above this; attempts to do so are clamped with a warning.
+    internal static let maxPickRatioCanScaleToUnderCustomerPolicy = 3
 
     /// Specific modes of operation that are fundamentally driven by the business feature
     /// being used.
@@ -135,7 +143,8 @@ internal enum SelectionNegotiationSetup {
         /// we have absolutely no constraints and will accept a single option.
         pick: PickOptions(
             requiredEnsemblesFromROPES: 1,
-            allowedEnsemblesFromProxy: 1
+            allowedEnsemblesFromProxy: 1,
+            ratioCanScaleTo: Self.defaultPickRatioCanScaleTo
         ),
         // it's irrelevant - the normal pick is as relaxed as possible
         pickWhenRestricted: nil,
@@ -152,7 +161,8 @@ internal enum SelectionNegotiationSetup {
         /// minimum to properly do the pick
         pick: PickOptions(
             requiredEnsemblesFromROPES: 2,
-            allowedEnsemblesFromProxy: 1
+            allowedEnsemblesFromProxy: 1,
+            ratioCanScaleTo: Self.defaultPickRatioCanScaleTo
         ),
         // We deliberately do not loosen this, since almost all ephemeral use is "restricted"
         // and the intention of this setup bundle is to force a non trivial pick
@@ -206,14 +216,16 @@ internal enum SelectionNegotiationSetup {
                 // This is deliberately left at 1 now so that increasing this number can be
                 // driven in the workload by SRE
                 requiredEnsemblesFromROPES: 1,
-                allowedEnsemblesFromProxy: 1
+                allowedEnsemblesFromProxy: 1,
+                ratioCanScaleTo: Self.defaultPickRatioCanScaleTo
             )
             // We don't provide a means for configuring this.
             // There is no intent to use antyhing higher than this and it solves having to check if it is
             // being weakened or not for little benefit.
             let pickWhenRestricted = PickOptions(
                 requiredEnsemblesFromROPES: 1,
-                allowedEnsemblesFromProxy: 1
+                allowedEnsemblesFromProxy: 1,
+                ratioCanScaleTo: Self.defaultPickRatioCanScaleTo
             )
             policyRules = Self.cloudAppSpecificSelectionNegotiationRules(
                 cloudAppName: cloudAppName, pick: pick, pickWhenRestricted: pickWhenRestricted,
@@ -222,7 +234,8 @@ internal enum SelectionNegotiationSetup {
             // The magic numbers here may NOT be changed without approval from Privacy
             let pick = PickOptions(
                 requiredEnsemblesFromROPES: 15,
-                allowedEnsemblesFromProxy: 1
+                allowedEnsemblesFromProxy: 1,
+                ratioCanScaleTo: Self.defaultPickRatioCanScaleTo
             )
             policyRules = Self.cloudAppSpecificSelectionNegotiationRules(
                 cloudAppName: cloudAppName, pick: pick, pickWhenRestricted: nil
@@ -291,16 +304,41 @@ internal enum SelectionNegotiationSetup {
                 maxTrustedEnsembleInstances: 0,
                 trustingEnsembleImpliesTrustingRack: false
             )
+        // This is not a privacy risk. TestProxyApp and variants are only used in MockIntegrationTests
+        // and do not exist in customer builds. Secureconfig in production would never contain
+        // this cloudapp name - it would fail validation
         case "TestProxyApp":
-            // This is not a privacy risk. TestProxyApp is only used in MockIntegrationTests
-            // and does not exist in customer builds. Secureconfig in production would never contain
-            // this cloudapp name - it would fail validation and throw unknownCloudApp during startup.
             return SelectionNegotiationSetup.Rules(
                 operatingMode: .assumeTargetable,
                 multiGroup: false,
                 pick: pick,
                 pickWhenRestricted: pickWhenRestricted,
                 maxTrustedEnsembleInstances: 2,
+                trustingEnsembleImpliesTrustingRack: false
+            )
+        /// Configuration designed to allow testing of the trust/rack trust
+        /// The first free choice is designed to make it simple to establish
+        /// a trust state, then iterate from there.
+        /// Disabling all pick makes the state management simpler
+        case "TestProxyApp_RackTrust":
+            return SelectionNegotiationSetup.Rules(
+                operatingMode: .firstGroupIsFreeChoiceIfNoReuse,
+                multiGroup: false,
+                pick: .none,
+                pickWhenRestricted: .none,
+                maxTrustedEnsembleInstances: .max,
+                trustingEnsembleImpliesTrustingRack: true
+            )
+        case "TrampolineProxyApp":
+            // We currently have one use case of trampoline which is not targetable,
+            // Before we add any other use case to the trampoline we must first allow setting
+            // NegotiationRules per service on the Proxy App.
+            return SelectionNegotiationSetup.Rules(
+                operatingMode: .alwaysFreeChoice,
+                multiGroup: false,
+                pick: pick,
+                pickWhenRestricted: pickWhenRestricted,
+                maxTrustedEnsembleInstances: 1,
                 trustingEnsembleImpliesTrustingRack: false
             )
         default:
@@ -366,6 +404,39 @@ internal enum SelectionNegotiationSetup {
                 )
             }
             original = replacement
+        }
+        // Companion to `onOverride` for numeric values where *raising* the configured value is not a
+        // policy weakening (so it is never rejected), but the value must still be capped under Apple
+        // infrastructure (customer) policy. The cap is applied with a warning rather than a throw.
+        // Returns whether the effective value ended up different from `original`.
+        func onBoundedOverride(
+            _ key: String,
+            original: inout Int,
+            replacement: Int?,
+            maxUnderEnforcedPolicy: Int
+        ) -> Bool {
+            let originalValue = original
+            if let replacement, replacement != original {
+                self.logger.info(
+                    """
+                    Allowing override config for \(key, privacy: .public) \
+                    from \(originalValue, privacy: .public) to \(replacement, privacy: .public).
+                    """
+                )
+                original = replacement
+            }
+            if secureConfig.shouldEnforceAppleInfrastructureSecurityConfig, original > maxUnderEnforcedPolicy {
+                let beforeClamp = original
+                self.logger.warning(
+                    """
+                    Bounding \(key, privacy: .public) from \(beforeClamp, privacy: .public) to \
+                    \(maxUnderEnforcedPolicy, privacy: .public) under policy \
+                    \(secureConfig.securityPolicy, privacy: .public).
+                    """
+                )
+                original = maxUnderEnforcedPolicy
+            }
+            return original != originalValue
         }
         var policyRules = policyRules
         if let replacement = cloudAppConfig.maxTrustedEnsembleInstances {
@@ -467,10 +538,26 @@ internal enum SelectionNegotiationSetup {
                 }
             )
         }
+        // ROPES may scale the announced ratio up to this factor. Raising it is *not* a privacy
+        // weakening (the ratio is preserved), so config may raise it freely outside customer; under
+        // customer policy it is capped via onBoundedOverride rather than rejected. The fallback
+        // matches the policy default so a pick enabled purely via config gets the same default scaling
+        // as a policy-defined pick. Whether a pick exists at all is decided by the required/allowed
+        // counts below, so this value is only consumed when those are non-zero.
+        var ratioCanScaleTo = policyRules.pick?.ratioCanScaleTo ?? Self.defaultPickRatioCanScaleTo
+        var changedRatioCanScaleTo = false
+        if requiredEnsemblesFromROPES != 0, allowedEnsemblesFromProxy != 0 {
+            changedRatioCanScaleTo = onBoundedOverride(
+                "ratioCanScaleTo",
+                original: &ratioCanScaleTo,
+                replacement: cloudAppConfig.pickRatioCanScaleTo,
+                maxUnderEnforcedPolicy: Self.maxPickRatioCanScaleToUnderCustomerPolicy
+            )
+        }
         // We rely 0 being illegal values for either value in pickOptions
         // this is tricky - it's possible to shoot yourself in the foot only chaning one
         // if that happenes we want to tell you it happened nicely
-        if changedRequiredEnsemblesFromROPES || changedAllowedEnsemblesFromProxy {
+        if changedRequiredEnsemblesFromROPES || changedAllowedEnsemblesFromProxy || changedRatioCanScaleTo {
             let originalPickDescription = policyRules.pick.map { $0.description } ?? "disabled"
             // this is tricky - it's possible to shoot yourself in the foot only chaning one
             // if that happenes we want to tell you it happened nicely
@@ -496,7 +583,8 @@ internal enum SelectionNegotiationSetup {
                     )
                 policyRules.pick = PickOptions(
                     requiredEnsemblesFromROPES: requiredEnsemblesFromROPES,
-                    allowedEnsemblesFromProxy: allowedEnsemblesFromProxy
+                    allowedEnsemblesFromProxy: allowedEnsemblesFromProxy,
+                    ratioCanScaleTo: ratioCanScaleTo
                 )
             }
         }

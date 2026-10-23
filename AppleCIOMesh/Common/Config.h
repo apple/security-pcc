@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -33,7 +33,7 @@ const uint32_t kControlInterruptStride = 32;
 const size_t kCIOPageAlignmentLeadingZeroBits  = 14;
 const size_t kCIOFrameAlignmentLeadingZeroBits = 12;
 
-const size_t kMaxAssignmentCount = 512;
+const size_t kMaxAssignmentCount = 256;
 
 // The real trailer size.
 const uint32_t kTrailerSize = 256;

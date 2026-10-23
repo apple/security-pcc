@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -12,13 +12,18 @@
 // EA1937
 // 10/02/2024
 
-#if canImport(CipherMLSE)
+#if RC_IS_CLOUDOS_ENABLED && os(iOS)
 import CipherMLSE
+#elseif canImport(CipherMLSE)
+import CipherMLSE
+#else
+#warning("CipherMLSE not available at compile time")
 #endif
 import CloudBoardCommon
 internal import CloudBoardDomain
 import CloudBoardIdentity
 import CloudBoardLogging
+import CloudBoardMetrics
 import Foundation
 import GRPCCoreInternal
 import GRPCURLSessionTransportInternal
@@ -83,12 +88,20 @@ final class PIRServiceGRPCClient: RunnablePIRServiceClientProtocol {
     private let lastActivityTime: SharedMutex<ContinuousClock.Instant>
     private let grpcClient: GRPCClient<URLSessionTransport>
     private let client: Apple_Parsec_Encryptedvisualsearch_V1_EncryptedVisualSearch.ClientProtocol
+    private let attemptCount: Int
+    private let retryDelay: Duration
+    private let requestTimeout: Duration
+    private let metricsSystem: MetricsSystem
 
     init(
         serverURL: URL,
         kfedService: String?,
         identityManager: IdentityManager?,
-        keepaliveInterval: Duration?
+        keepaliveInterval: Duration?,
+        attemptCount: Int = 1,
+        retryDelay: Duration = .milliseconds(100),
+        requestTimeout: Duration = .seconds(10),
+        metricsSystem: MetricsSystem
     ) {
         let methodConfig = MethodConfig(
             // applies to all methods
@@ -115,13 +128,24 @@ final class PIRServiceGRPCClient: RunnablePIRServiceClientProtocol {
             urlSession = URLSession(configuration: .ephemeral)
         }
 
+        let oneMiB = 1024 * 1024
         let transport = URLSessionTransport.urlSession(
             baseURL: serverURL,
             serviceConfig: serviceConfig,
-            session: urlSession
+            session: urlSession,
+            config: .defaults(configure: { config in
+                config.requestBackpressureLowWatermark = 4 * oneMiB
+                config.requestBackpressureHighWatermark = 8 * oneMiB
+                config.responseBackpressureLowWatermark = 4 * oneMiB
+                config.responseBackpressureHighWatermark = 8 * oneMiB
+            })
         )
 
         self.keepaliveInterval = keepaliveInterval
+        self.attemptCount = max(1, attemptCount)
+        self.retryDelay = retryDelay
+        self.requestTimeout = requestTimeout
+        self.metricsSystem = metricsSystem
         self.lastActivityTime = .init(.now)
         let interceptors: [ClientInterceptor] = [
             MetadataInjector(kfedService: kfedService),
@@ -207,26 +231,67 @@ final class PIRServiceGRPCClient: RunnablePIRServiceClientProtocol {
         let gRPCRequest = try Apple_Parsec_Encryptedvisualsearch_V1_EncryptedVisualSearchRequest(
             from: encryptedRequest
         )
-        PIRServiceClientCheckpoint(
-            message: "Sending PIR gRPC request to the server",
-            traceContext: traceContext
-        ).log(to: Self.tracingLogger, level: .default)
-        let gRPCResponse: Apple_Parsec_Encryptedvisualsearch_V1_EncryptedVisualSearchResponse
+        let maxRetries = self.attemptCount - 1
+        var retryStrategy = MaxAttemptsRetryStrategy(
+            maxRetries: maxRetries,
+            delay: self.retryDelay
+        )
+        let start = ContinuousClock.now
         do {
-            gRPCResponse = try await self.client.encryptedVisualSearch(gRPCRequest)
+            let response = try await executeWithRetries(retryStrategy: retryStrategy) {
+                PIRServiceClientCheckpoint(
+                    message: "Sending PIR gRPC request to the server",
+                    traceContext: traceContext
+                ).log(to: Self.tracingLogger, level: .default, attemptCount: self.attemptCount)
+                var options = CallOptions.defaults
+                options.timeout = self.requestTimeout
+                do {
+                    let gRPCResponse = try await self.client.encryptedVisualSearch(gRPCRequest, options: options)
+                    PIRServiceClientCheckpoint(
+                        message: "Received PIR gRPC response from the server",
+                        traceContext: traceContext
+                    ).log(to: Self.tracingLogger, level: .default, pirServiceTraceID: gRPCResponse.traceID)
+                    return try PIREncryptedResponse(from: gRPCResponse)
+                } catch {
+                    PIRServiceClientCheckpoint(
+                        message: "Failed to get PIR gRPC response",
+                        error: error,
+                        traceContext: traceContext
+                    ).log(to: Self.tracingLogger, level: .error)
+                    throw error
+                }
+            }
+            self.emitMetrics(duration: ContinuousClock.now - start, result: .success)
+            return response
         } catch {
-            PIRServiceClientCheckpoint(
-                message: "Failed to get PIR gRPC response",
-                error: error,
-                traceContext: traceContext
-            ).log(to: Self.tracingLogger, level: .error)
+            self.emitMetrics(duration: ContinuousClock.now - start, result: .failure)
             throw error
         }
-        PIRServiceClientCheckpoint(
-            message: "Received PIR gRPC response from the server",
-            traceContext: traceContext
-        ).log(to: Self.tracingLogger, level: .default, pirServiceTraceID: gRPCResponse.traceID)
-        return try .init(from: gRPCResponse)
+    }
+
+    private func emitMetrics(
+        duration: Duration,
+        result: Metrics.PIRService.ResultValue
+    ) {
+        self.metricsSystem.emit(Metrics.PIRService.RequestTotalCounter(
+            action: .increment(by: 1),
+            result: result
+        ))
+        self.metricsSystem.emit(Metrics.PIRService.RequestDurationHistogram(
+            duration: duration,
+            result: result
+        ))
+    }
+}
+
+private struct MaxAttemptsRetryStrategy: RetryStrategy {
+    let maxRetries: Int
+    let delay: Duration
+
+    func shouldRetry(error: Error, retryCount: Int) -> RetryConfiguration {
+        if error is CancellationError { return .stop(error: error) }
+        if retryCount >= self.maxRetries { return .stop(error: error) }
+        return .continue(retryDelay: self.delay)
     }
 }
 
@@ -385,6 +450,27 @@ struct PIRServiceClientCheckpoint: RequestCheckpoint {
         pir.request.uuid=\(self.pirRequestID, privacy: .public)
         pir.encryptedRequest.uuid=\(self.pirEncryptedRequestID, privacy: .public)
         pir.encryptedRequest.serverTraceID=\(pirServiceTraceID, privacy: .public)
+        """)
+    }
+
+    func log(to logger: Logger, level: OSLogType = .default, attemptCount: Int) {
+        logger.log(level: level, """
+        ttl=\(self.type, privacy: .public)
+        request.uuid=\(self.requestID ?? "", privacy: .public)
+        tracing.name=\(self.operationName, privacy: .public)
+        tracing.span_id=\(self.spanID.hexEncoded, privacy: .public)
+        tracing.trace_id=\(self.traceID.traceIDString, privacy: .public)
+        tracing.type=\(self.type, privacy: .public)
+        service.name=\(self.serviceName, privacy: .public)
+        service.namespace=\(self.namespace, privacy: .public)
+        status=\(status?.rawValue ?? "", privacy: .public)
+        error.type=\(self.error.map { String(describing: Swift.type(of: $0)) } ?? "", privacy: .public)
+        error.description=\(self.error.map { String(reportable: $0) } ?? "", privacy: .public)
+        error.detailed=\(self.error.map { String(describing: $0) } ?? "", privacy: .private)
+        message=\(self.message, privacy: .public)
+        pir.request.uuid=\(self.pirRequestID, privacy: .public)
+        pir.encryptedRequest.uuid=\(self.pirEncryptedRequestID, privacy: .public)
+        attemptCount=\(attemptCount, privacy: .public)
         """)
     }
 }

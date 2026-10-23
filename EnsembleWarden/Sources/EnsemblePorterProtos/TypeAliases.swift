@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -23,5 +23,6 @@ package enum Protos {
     package typealias EmptyMessage = Com_Apple_Cloudos_Ensembleporter_Empty
     package typealias PorterMessage = Com_Apple_Cloudos_Ensembleporter_PorterMessage
     package typealias PerProcessMessage = Com_Apple_Cloudos_Ensembleporter_PerProcessMessage
-
+    package typealias Heartbeat = Com_Apple_Cloudos_Ensembleporter_Heartbeat
+    package typealias HeartbeatResponse = Com_Apple_Cloudos_Ensembleporter_HeartbeatResponse
 }

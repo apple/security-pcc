@@ -1,4 +1,4 @@
-// Copyright © 2025 Apple Inc. All Rights Reserved.
+// Copyright © 2026 Apple Inc. All Rights Reserved.
 
 // APPLE INC.
 // PRIVATE CLOUD COMPUTE SOURCE CODE INTERNAL USE LICENSE AGREEMENT
@@ -22,7 +22,11 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import InternalSwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -82,47 +86,47 @@ struct Proto_Ropes_Common_TenantInfo: Sendable {
   // methods supported on all messages.
 
   var bundleID: String {
-    get {return _bundleID ?? String()}
+    get {_bundleID ?? String()}
     set {_bundleID = newValue}
   }
   /// Returns true if `bundleID` has been explicitly set.
-  var hasBundleID: Bool {return self._bundleID != nil}
+  var hasBundleID: Bool {self._bundleID != nil}
   /// Clears the value of `bundleID`. Subsequent reads from it will return its default value.
   mutating func clearBundleID() {self._bundleID = nil}
 
   var bundleVersion: String {
-    get {return _bundleVersion ?? String()}
+    get {_bundleVersion ?? String()}
     set {_bundleVersion = newValue}
   }
   /// Returns true if `bundleVersion` has been explicitly set.
-  var hasBundleVersion: Bool {return self._bundleVersion != nil}
+  var hasBundleVersion: Bool {self._bundleVersion != nil}
   /// Clears the value of `bundleVersion`. Subsequent reads from it will return its default value.
   mutating func clearBundleVersion() {self._bundleVersion = nil}
 
   var featureID: String {
-    get {return _featureID ?? String()}
+    get {_featureID ?? String()}
     set {_featureID = newValue}
   }
   /// Returns true if `featureID` has been explicitly set.
-  var hasFeatureID: Bool {return self._featureID != nil}
+  var hasFeatureID: Bool {self._featureID != nil}
   /// Clears the value of `featureID`. Subsequent reads from it will return its default value.
   mutating func clearFeatureID() {self._featureID = nil}
 
   var clientInfo: String {
-    get {return _clientInfo ?? String()}
+    get {_clientInfo ?? String()}
     set {_clientInfo = newValue}
   }
   /// Returns true if `clientInfo` has been explicitly set.
-  var hasClientInfo: Bool {return self._clientInfo != nil}
+  var hasClientInfo: Bool {self._clientInfo != nil}
   /// Clears the value of `clientInfo`. Subsequent reads from it will return its default value.
   mutating func clearClientInfo() {self._clientInfo = nil}
 
   var automatedDeviceGroup: String {
-    get {return _automatedDeviceGroup ?? String()}
+    get {_automatedDeviceGroup ?? String()}
     set {_automatedDeviceGroup = newValue}
   }
   /// Returns true if `automatedDeviceGroup` has been explicitly set.
-  var hasAutomatedDeviceGroup: Bool {return self._automatedDeviceGroup != nil}
+  var hasAutomatedDeviceGroup: Bool {self._automatedDeviceGroup != nil}
   /// Clears the value of `automatedDeviceGroup`. Subsequent reads from it will return its default value.
   mutating func clearAutomatedDeviceGroup() {self._automatedDeviceGroup = nil}
 
@@ -165,7 +169,7 @@ struct Proto_Ropes_Common_Workload: Sendable {
   init() {}
 }
 
-struct Proto_Ropes_Common_DecryptionKey: @unchecked Sendable {
+struct Proto_Ropes_Common_DecryptionKey: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -179,7 +183,7 @@ struct Proto_Ropes_Common_DecryptionKey: @unchecked Sendable {
   init() {}
 }
 
-struct Proto_Ropes_Common_Chunk: @unchecked Sendable {
+struct Proto_Ropes_Common_Chunk: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -193,7 +197,7 @@ struct Proto_Ropes_Common_Chunk: @unchecked Sendable {
   init() {}
 }
 
-struct Proto_Ropes_Common_Attestation: @unchecked Sendable {
+struct Proto_Ropes_Common_Attestation: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -206,11 +210,11 @@ struct Proto_Ropes_Common_Attestation: @unchecked Sendable {
 
   /// Not set if attestation is sent for caching purposes only.
   var ohttpContext: UInt32 {
-    get {return _ohttpContext ?? 0}
+    get {_ohttpContext ?? 0}
     set {_ohttpContext = newValue}
   }
   /// Returns true if `ohttpContext` has been explicitly set.
-  var hasOhttpContext: Bool {return self._ohttpContext != nil}
+  var hasOhttpContext: Bool {self._ohttpContext != nil}
   /// Clears the value of `ohttpContext`. Subsequent reads from it will return its default value.
   mutating func clearOhttpContext() {self._ohttpContext = nil}
 
@@ -218,49 +222,49 @@ struct Proto_Ropes_Common_Attestation: @unchecked Sendable {
   ///
   /// NOTE: This field was marked as deprecated in the .proto file.
   var expirationTime: InternalSwiftProtobuf.Google_Protobuf_Timestamp {
-    get {return _expirationTime ?? InternalSwiftProtobuf.Google_Protobuf_Timestamp()}
+    get {_expirationTime ?? InternalSwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_expirationTime = newValue}
   }
   /// Returns true if `expirationTime` has been explicitly set.
-  var hasExpirationTime: Bool {return self._expirationTime != nil}
+  var hasExpirationTime: Bool {self._expirationTime != nil}
   /// Clears the value of `expirationTime`. Subsequent reads from it will return its default value.
   mutating func clearExpirationTime() {self._expirationTime = nil}
 
-  var cloudosVersion: String {
-    get {return _cloudosVersion ?? String()}
-    set {_cloudosVersion = newValue}
+  var nodeBuildVersion: String {
+    get {_nodeBuildVersion ?? String()}
+    set {_nodeBuildVersion = newValue}
   }
-  /// Returns true if `cloudosVersion` has been explicitly set.
-  var hasCloudosVersion: Bool {return self._cloudosVersion != nil}
-  /// Clears the value of `cloudosVersion`. Subsequent reads from it will return its default value.
-  mutating func clearCloudosVersion() {self._cloudosVersion = nil}
+  /// Returns true if `nodeBuildVersion` has been explicitly set.
+  var hasNodeBuildVersion: Bool {self._nodeBuildVersion != nil}
+  /// Clears the value of `nodeBuildVersion`. Subsequent reads from it will return its default value.
+  mutating func clearNodeBuildVersion() {self._nodeBuildVersion = nil}
 
-  var cloudosReleaseType: String {
-    get {return _cloudosReleaseType ?? String()}
-    set {_cloudosReleaseType = newValue}
+  var nodeReleaseType: String {
+    get {_nodeReleaseType ?? String()}
+    set {_nodeReleaseType = newValue}
   }
-  /// Returns true if `cloudosReleaseType` has been explicitly set.
-  var hasCloudosReleaseType: Bool {return self._cloudosReleaseType != nil}
-  /// Clears the value of `cloudosReleaseType`. Subsequent reads from it will return its default value.
-  mutating func clearCloudosReleaseType() {self._cloudosReleaseType = nil}
+  /// Returns true if `nodeReleaseType` has been explicitly set.
+  var hasNodeReleaseType: Bool {self._nodeReleaseType != nil}
+  /// Clears the value of `nodeReleaseType`. Subsequent reads from it will return its default value.
+  mutating func clearNodeReleaseType() {self._nodeReleaseType = nil}
 
   /// Client must verify cleartext cell_id against the cell_id encoded in attestation_bundle by CloudBoard,
   /// and drop the attestation if mismatch.
   var cellID: String {
-    get {return _cellID ?? String()}
+    get {_cellID ?? String()}
     set {_cellID = newValue}
   }
   /// Returns true if `cellID` has been explicitly set.
-  var hasCellID: Bool {return self._cellID != nil}
+  var hasCellID: Bool {self._cellID != nil}
   /// Clears the value of `cellID`. Subsequent reads from it will return its default value.
   mutating func clearCellID() {self._cellID = nil}
 
   var ensembleID: String {
-    get {return _ensembleID ?? String()}
+    get {_ensembleID ?? String()}
     set {_ensembleID = newValue}
   }
   /// Returns true if `ensembleID` has been explicitly set.
-  var hasEnsembleID: Bool {return self._ensembleID != nil}
+  var hasEnsembleID: Bool {self._ensembleID != nil}
   /// Clears the value of `ensembleID`. Subsequent reads from it will return its default value.
   mutating func clearEnsembleID() {self._ensembleID = nil}
 
@@ -270,8 +274,8 @@ struct Proto_Ropes_Common_Attestation: @unchecked Sendable {
 
   fileprivate var _ohttpContext: UInt32? = nil
   fileprivate var _expirationTime: InternalSwiftProtobuf.Google_Protobuf_Timestamp? = nil
-  fileprivate var _cloudosVersion: String? = nil
-  fileprivate var _cloudosReleaseType: String? = nil
+  fileprivate var _nodeBuildVersion: String? = nil
+  fileprivate var _nodeReleaseType: String? = nil
   fileprivate var _cellID: String? = nil
   fileprivate var _ensembleID: String? = nil
 }
@@ -315,7 +319,7 @@ struct Proto_Ropes_Common_AttestationList: Sendable {
 /// Deprecated: use HTTP compression instead.
 ///
 /// NOTE: This message was marked as deprecated in the .proto file.
-struct Proto_Ropes_Common_CompressedAttestationList: @unchecked Sendable {
+struct Proto_Ropes_Common_CompressedAttestationList: Sendable {
   // InternalSwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -343,11 +347,11 @@ struct Proto_Ropes_Common_ClientTerminate: Sendable {
   var code: Proto_Ropes_Common_ClientTerminate.Code = .undefined
 
   var reason: String {
-    get {return _reason ?? String()}
+    get {_reason ?? String()}
     set {_reason = newValue}
   }
   /// Returns true if `reason` has been explicitly set.
-  var hasReason: Bool {return self._reason != nil}
+  var hasReason: Bool {self._reason != nil}
   /// Clears the value of `reason`. Subsequent reads from it will return its default value.
   mutating func clearReason() {self._reason = nil}
 
@@ -406,11 +410,11 @@ struct Proto_Ropes_Common_DiagnosticInformation: Sendable {
   // methods supported on all messages.
 
   var denyReason: Proto_Ropes_Common_DiagnosticInformation.DenyReason {
-    get {return _denyReason ?? .undefined}
+    get {_denyReason ?? .undefined}
     set {_denyReason = newValue}
   }
   /// Returns true if `denyReason` has been explicitly set.
-  var hasDenyReason: Bool {return self._denyReason != nil}
+  var hasDenyReason: Bool {self._denyReason != nil}
   /// Clears the value of `denyReason`. Subsequent reads from it will return its default value.
   mutating func clearDenyReason() {self._denyReason = nil}
 
@@ -565,22 +569,12 @@ struct Proto_Ropes_Common_RequestExecutionError: Sendable {
 fileprivate let _protobuf_package = "com.apple.ropes.common.v1"
 
 extension Proto_Ropes_Common_CompressionAlgorithm: InternalSwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "NONE"),
-    1: .same(proto: "BROTLI"),
-    2: .same(proto: "ZSTD"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0NONE\0\u{1}BROTLI\0\u{1}ZSTD\0")
 }
 
 extension Proto_Ropes_Common_TenantInfo: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".TenantInfo"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "bundle_id"),
-    2: .standard(proto: "bundle_version"),
-    3: .standard(proto: "feature_id"),
-    4: .standard(proto: "client_info"),
-    5: .standard(proto: "automated_device_group"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}bundle_id\0\u{3}bundle_version\0\u{3}feature_id\0\u{3}client_info\0\u{3}automated_device_group\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -634,10 +628,7 @@ extension Proto_Ropes_Common_TenantInfo: InternalSwiftProtobuf.Message, Internal
 
 extension Proto_Ropes_Common_Workload: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".Workload"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "type"),
-    3: .same(proto: "param"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{2}\u{2}param\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -672,10 +663,7 @@ extension Proto_Ropes_Common_Workload: InternalSwiftProtobuf.Message, InternalSw
 
 extension Proto_Ropes_Common_Workload.Parameter: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = Proto_Ropes_Common_Workload.protoMessageName + ".Parameter"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "key"),
-    2: .same(proto: "value"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}key\0\u{1}value\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -710,10 +698,7 @@ extension Proto_Ropes_Common_Workload.Parameter: InternalSwiftProtobuf.Message, 
 
 extension Proto_Ropes_Common_DecryptionKey: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".DecryptionKey"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "encrypted_payload"),
-    3: .standard(proto: "key_id"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}encrypted_payload\0\u{4}\u{2}key_id\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -748,10 +733,7 @@ extension Proto_Ropes_Common_DecryptionKey: InternalSwiftProtobuf.Message, Inter
 
 extension Proto_Ropes_Common_Chunk: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".Chunk"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "encrypted_payload"),
-    2: .standard(proto: "is_final"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}encrypted_payload\0\u{3}is_final\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -786,16 +768,7 @@ extension Proto_Ropes_Common_Chunk: InternalSwiftProtobuf.Message, InternalSwift
 
 extension Proto_Ropes_Common_Attestation: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".Attestation"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "attestation_bundle"),
-    2: .standard(proto: "node_identifier"),
-    3: .standard(proto: "ohttp_context"),
-    4: .standard(proto: "expiration_time"),
-    5: .standard(proto: "cloudos_version"),
-    6: .standard(proto: "cloudos_release_type"),
-    7: .standard(proto: "cell_id"),
-    8: .standard(proto: "ensemble_id"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}attestation_bundle\0\u{3}node_identifier\0\u{3}ohttp_context\0\u{3}expiration_time\0\u{3}node_build_version\0\u{3}node_release_type\0\u{3}cell_id\0\u{3}ensemble_id\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -807,8 +780,8 @@ extension Proto_Ropes_Common_Attestation: InternalSwiftProtobuf.Message, Interna
       case 2: try { try decoder.decodeSingularStringField(value: &self.nodeIdentifier) }()
       case 3: try { try decoder.decodeSingularUInt32Field(value: &self._ohttpContext) }()
       case 4: try { try decoder.decodeSingularMessageField(value: &self._expirationTime) }()
-      case 5: try { try decoder.decodeSingularStringField(value: &self._cloudosVersion) }()
-      case 6: try { try decoder.decodeSingularStringField(value: &self._cloudosReleaseType) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self._nodeBuildVersion) }()
+      case 6: try { try decoder.decodeSingularStringField(value: &self._nodeReleaseType) }()
       case 7: try { try decoder.decodeSingularStringField(value: &self._cellID) }()
       case 8: try { try decoder.decodeSingularStringField(value: &self._ensembleID) }()
       default: break
@@ -833,10 +806,10 @@ extension Proto_Ropes_Common_Attestation: InternalSwiftProtobuf.Message, Interna
     try { if let v = self._expirationTime {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
     } }()
-    try { if let v = self._cloudosVersion {
+    try { if let v = self._nodeBuildVersion {
       try visitor.visitSingularStringField(value: v, fieldNumber: 5)
     } }()
-    try { if let v = self._cloudosReleaseType {
+    try { if let v = self._nodeReleaseType {
       try visitor.visitSingularStringField(value: v, fieldNumber: 6)
     } }()
     try { if let v = self._cellID {
@@ -853,8 +826,8 @@ extension Proto_Ropes_Common_Attestation: InternalSwiftProtobuf.Message, Interna
     if lhs.nodeIdentifier != rhs.nodeIdentifier {return false}
     if lhs._ohttpContext != rhs._ohttpContext {return false}
     if lhs._expirationTime != rhs._expirationTime {return false}
-    if lhs._cloudosVersion != rhs._cloudosVersion {return false}
-    if lhs._cloudosReleaseType != rhs._cloudosReleaseType {return false}
+    if lhs._nodeBuildVersion != rhs._nodeBuildVersion {return false}
+    if lhs._nodeReleaseType != rhs._nodeReleaseType {return false}
     if lhs._cellID != rhs._cellID {return false}
     if lhs._ensembleID != rhs._ensembleID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -864,12 +837,7 @@ extension Proto_Ropes_Common_Attestation: InternalSwiftProtobuf.Message, Interna
 
 extension Proto_Ropes_Common_Capabilities: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".Capabilities"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "compression_algorithm"),
-    2: .standard(proto: "attestation_streaming"),
-    3: .standard(proto: "trusted_proxy_request_nack"),
-    4: .standard(proto: "trusted_proxy_duplicate_first_request_chunk"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}compression_algorithm\0\u{3}attestation_streaming\0\u{3}trusted_proxy_request_nack\0\u{3}trusted_proxy_duplicate_first_request_chunk\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -914,9 +882,7 @@ extension Proto_Ropes_Common_Capabilities: InternalSwiftProtobuf.Message, Intern
 
 extension Proto_Ropes_Common_AttestationList: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AttestationList"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "attestation"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}attestation\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -946,11 +912,7 @@ extension Proto_Ropes_Common_AttestationList: InternalSwiftProtobuf.Message, Int
 
 extension Proto_Ropes_Common_CompressedAttestationList: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".CompressedAttestationList"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "compression_algorithm"),
-    2: .standard(proto: "compressed_bytes"),
-    3: .standard(proto: "uncompressed_length_hint"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}compression_algorithm\0\u{3}compressed_bytes\0\u{3}uncompressed_length_hint\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -990,10 +952,7 @@ extension Proto_Ropes_Common_CompressedAttestationList: InternalSwiftProtobuf.Me
 
 extension Proto_Ropes_Common_ClientTerminate: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".ClientTerminate"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "code"),
-    2: .same(proto: "reason"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}code\0\u{1}reason\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1031,18 +990,12 @@ extension Proto_Ropes_Common_ClientTerminate: InternalSwiftProtobuf.Message, Int
 }
 
 extension Proto_Ropes_Common_ClientTerminate.Code: InternalSwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "UNDEFINED"),
-    1: .same(proto: "CRYPTO_ERROR"),
-    2: .same(proto: "APPLICATION_ERROR"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0UNDEFINED\0\u{1}CRYPTO_ERROR\0\u{1}APPLICATION_ERROR\0")
 }
 
 extension Proto_Ropes_Common_DiagnosticInformation: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".DiagnosticInformation"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "deny_reason"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}deny_reason\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1075,23 +1028,12 @@ extension Proto_Ropes_Common_DiagnosticInformation: InternalSwiftProtobuf.Messag
 }
 
 extension Proto_Ropes_Common_DiagnosticInformation.DenyReason: InternalSwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "UNDEFINED"),
-    1: .same(proto: "TENANT_BLOCKED"),
-    2: .same(proto: "WORKLOAD_BLOCKED"),
-    3: .same(proto: "FEATUREID_BLOCKED"),
-    4: .same(proto: "SOFTWARE_BLOCKED"),
-    5: .same(proto: "CLIENT_RATE_LIMIT_THROTTLED"),
-    6: .same(proto: "SERVER_RATE_LIMIT_THROTTLED"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0UNDEFINED\0\u{1}TENANT_BLOCKED\0\u{1}WORKLOAD_BLOCKED\0\u{1}FEATUREID_BLOCKED\0\u{1}SOFTWARE_BLOCKED\0\u{1}CLIENT_RATE_LIMIT_THROTTLED\0\u{1}SERVER_RATE_LIMIT_THROTTLED\0")
 }
 
 extension Proto_Ropes_Common_EnsembleInstanceId: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".EnsembleInstanceId"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .standard(proto: "ensemble_id"),
-    2: .standard(proto: "boot_id"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{3}ensemble_id\0\u{3}boot_id\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1126,11 +1068,7 @@ extension Proto_Ropes_Common_EnsembleInstanceId: InternalSwiftProtobuf.Message, 
 
 extension Proto_Ropes_Common_RequestExecutionError: InternalSwiftProtobuf.Message, InternalSwiftProtobuf._MessageImplementationBase, InternalSwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".RequestExecutionError"
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    1: .same(proto: "source"),
-    2: .standard(proto: "error_message"),
-    3: .standard(proto: "error_code"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{1}source\0\u{3}error_message\0\u{3}error_code\0")
 
   mutating func decodeMessage<D: InternalSwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1169,11 +1107,5 @@ extension Proto_Ropes_Common_RequestExecutionError: InternalSwiftProtobuf.Messag
 }
 
 extension Proto_Ropes_Common_RequestExecutionError.Source: InternalSwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap: InternalSwiftProtobuf._NameMap = [
-    0: .same(proto: "UNDEFINED"),
-    1: .same(proto: "CLOUD_APP"),
-    2: .same(proto: "CLOUD_APP_FRAMEWORK"),
-    3: .same(proto: "JOB_HELPER"),
-    4: .same(proto: "CLOUDBOARDD"),
-  ]
+  static let _protobuf_nameMap = InternalSwiftProtobuf._NameMap(bytecode: "\0\u{2}\0UNDEFINED\0\u{1}CLOUD_APP\0\u{1}CLOUD_APP_FRAMEWORK\0\u{1}JOB_HELPER\0\u{1}CLOUDBOARDD\0")
 }
